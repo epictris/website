@@ -57,11 +57,12 @@ export function soundService(): Plugin {
             return send(res, 200, { assets: readAssets(root), bank: readBank(root) });
           }
           if (req.method === "POST" && path === "/") {
-            const name = new URL(req.url ?? "/", "http://x").searchParams.get("name") ?? "sound";
+            const query = new URL(req.url ?? "/", "http://x").searchParams;
+            const name = query.get("name") ?? "sound";
             readBytes(req).then(
               (bytes) => {
                 try {
-                  send(res, 200, ingest(server, name, bytes));
+                  send(res, 200, ingest(server, name, bytes, query.get("keepLeading") === "true", query.get("stereo") === "true"));
                 } catch (e) {
                   send(res, 400, { error: e instanceof Error ? e.message : String(e) });
                 }
@@ -202,7 +203,7 @@ function validBank(raw: unknown, assets: Record<string, SoundAsset>): SoundBank 
   return out;
 }
 
-function ingest(server: ViteDevServer, name: string, bytes: Buffer): { key: string; asset: SoundAsset } {
+function ingest(server: ViteDevServer, name: string, bytes: Buffer, keepLeading = false, stereo = false): { key: string; asset: SoundAsset } {
   const root = server.config.root;
   if (spawnSync("which", ["ffmpeg"]).status !== 0) {
     throw new Error("ffmpeg is required to add a sound; install it and retry.");
@@ -216,8 +217,8 @@ function ingest(server: ViteDevServer, name: string, bytes: Buffer): { key: stri
       "ffmpeg",
       [
         "-hide_banner", "-loglevel", "error", "-i", raw,
-        "-af", "silenceremove=start_periods=1:start_threshold=-60dB",
-        "-ac", "1", "-ar", "48000", "-c:a", "libopus", "-b:a", BITRATE,
+        ...(keepLeading ? [] : ["-af", "silenceremove=start_periods=1:start_threshold=-60dB"]),
+        "-ac", stereo ? "2" : "1", "-ar", "48000", "-c:a", "libopus", "-b:a", BITRATE,
         // Bit-exact: Ogg gives every stream a RANDOM serial number, so without
         // this the same file transcodes to different bytes every time and the
         // dedupe below (and the key's promise of one recording) never holds.
@@ -291,8 +292,10 @@ function writeAssets(server: ViteDevServer, root: string, assets: Record<string,
 // page load; open pages hear of it from the menu (`broadcastSounds`).
 function writeJson(server: ViteDevServer, path: string, value: unknown): void {
   const text = JSON.stringify(value, null, 2) + "\n";
-  if (existsSync(path) && readFileSync(path, "utf8") === text) return;
-  writeFileSync(path, text);
+  if (!existsSync(path) || readFileSync(path, "utf8") !== text) writeFileSync(path, text);
+  // The bank can also be edited by offline authoring tools. A same-value PUT
+  // must still invalidate Vite's cached JSON; disk equality says nothing about
+  // what the module graph currently serves to a newly opened page.
   for (const env of Object.values(server.environments)) {
     for (const mod of env.moduleGraph.getModulesByFile(path) ?? []) env.moduleGraph.invalidateModule(mod);
   }

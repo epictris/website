@@ -14,6 +14,8 @@
 // group's title), marked with a dotted underline, and shown in a popup beside
 // the panel while the pointer rests on that name and at no other time.
 
+import { uiIcon } from "./uiIcons";
+
 const STORAGE_KEY = "rope.editor.openSections";
 
 const openSections: Set<string> = (() => {
@@ -39,8 +41,9 @@ function rememberOpen(key: string, open: boolean): void {
 
 function setOpen(sec: HTMLElement, open: boolean): void {
   sec.classList.toggle("open", open);
+  sec.querySelector(":scope > .ed-sec-head")?.setAttribute("aria-expanded", String(open));
   const twist = sec.querySelector(":scope > .ed-sec-head > .ed-sec-twist");
-  if (twist) twist.textContent = open ? "▾" : "▸";
+  if (twist) twist.innerHTML = uiIcon("chevron");
 }
 
 // A collapsible section appended to `parent`, returning the element its
@@ -55,7 +58,8 @@ export function section(parent: HTMLElement, key: string, title: string, top = f
   const sec = document.createElement("div");
   sec.className = top ? "ed-sec top" : "ed-sec";
   sec.dataset["key"] = key;
-  const head = document.createElement("div");
+  const head = document.createElement("button");
+  head.type = "button";
   head.className = "ed-sec-head";
   const twist = document.createElement("span");
   twist.className = "ed-sec-twist";

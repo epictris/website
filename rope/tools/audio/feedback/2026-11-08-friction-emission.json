@@ -1,0 +1,4 @@
+{
+  "request": "The creak does not sound realistic. Change emission to improve realism and add sound when chain wraps geometry while taut.",
+  "change": "Replace continuous randomly phased creak loop with separate short movement-triggered phrases. Emit geometry contact/friction at actual scenery wrap points under load, grouped by stable shape identity with distance-based retriggering and cooldown."
+}

@@ -1,0 +1,4315 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "source-1",
+      "name": "foley-impact-earth-dirt-scatter-01.mp3",
+      "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+      "seconds": 0.5224489795918368,
+      "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-2",
+      "name": "metal-bounce-samsterbirdies.wav",
+      "file": "sources/metal-bounce-samsterbirdies.wav",
+      "seconds": 1.2596825396825397,
+      "source": "User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "samsterbirdies (filename attribution)",
+      "license": ""
+    },
+    {
+      "id": "source-3",
+      "name": "heavy-chain-movement-209329.mp3",
+      "file": "sources/heavy-chain-movement-209329.mp3",
+      "seconds": 158.87673469387755,
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-4",
+      "name": "rock-impact-heavy-314632.mp3",
+      "file": "sources/rock-impact-heavy-314632.mp3",
+      "seconds": 0.7575510204081632,
+      "source": "User-provided download: 314632-Rock_impact_-single_stone_5.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-5",
+      "name": "rock-impact-medium-314625.mp3",
+      "file": "sources/rock-impact-medium-314625.mp3",
+      "seconds": 0.8620408163265306,
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-6",
+      "name": "hammer-concrete-1108.wav",
+      "file": "sources/hammer-concrete-1108.wav",
+      "seconds": 1.28775,
+      "source": "https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "source-7",
+      "name": "wood-tap-0005.wav",
+      "file": "sources/wood-tap-0005.wav",
+      "seconds": 10.40469387755102,
+      "source": "https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+      "author": "Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "source-8",
+      "name": "heavy-chain-movement-01kj.mp3",
+      "file": "sources/heavy-chain-movement-01kj.mp3",
+      "seconds": 18.585395833333333,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-9",
+      "name": "cannonball_drops.m4a",
+      "file": "sources/cannonball_drops.m4a",
+      "seconds": 41.28508333333333,
+      "source": "User-provided download: cannonball_drops.m4a",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-10",
+      "name": "cannonball_rolls.m4a",
+      "file": "sources/cannonball_rolls.m4a",
+      "seconds": 21.942875,
+      "source": "User-provided download: cannonball_rolls.m4a",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-11",
+      "name": "cannonball-roll-dry-v25.wav",
+      "file": "sources/cannonball-roll-dry-v25.wav",
+      "seconds": 4.8,
+      "source": "User-provided download: cannonball_rolls.m4a (8.6\u201313.4 s; narrow tonal resonance reduction)",
+      "author": "",
+      "license": ""
+    }
+  ],
+  "projects": [
+    {
+      "id": "attach--attach-dirt-scatter-iron-v15-e816e970",
+      "name": "attach-dirt-scatter-iron-v15",
+      "slot": "attach",
+      "assetKey": "attach-dirt-scatter-iron-v15-e816e970",
+      "seconds": 0.51,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "dirt-impact-scatter",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.5224489795918368,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.011805927919218,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.005,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.085,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -16.478129718834005,
+            "pitch": -15,
+            "pan": 0,
+            "highpass": 70,
+            "lowpass": 1400,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0004,
+            "fadeOut": 0.018,
+            "decay": 0.025,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "deploy--chain-deploy-recorded-heavy-v17-907c09b2",
+      "name": "chain-deploy-recorded-heavy-v17",
+      "slot": "deploy",
+      "assetKey": "chain-deploy-recorded-heavy-v17-907c09b2",
+      "seconds": 0.72,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-links-1",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.00545,
+              "pitch": 0,
+              "gain": 0.79
+            },
+            {
+              "id": "clip-2",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.11823,
+              "pitch": 0,
+              "gain": 0.972
+            },
+            {
+              "id": "clip-3",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.24015,
+              "pitch": 0,
+              "gain": 0.907
+            },
+            {
+              "id": "clip-4",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.34688,
+              "pitch": 0,
+              "gain": 0.957
+            },
+            {
+              "id": "clip-5",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.47088,
+              "pitch": 0,
+              "gain": 0.785
+            },
+            {
+              "id": "clip-6",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.58156,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "id": "clip-7",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.675,
+              "pitch": 0,
+              "gain": 0.99
+            }
+          ],
+          "effects": {
+            "gainDb": -11.753783175574174,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "heavy-links-2",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.03782,
+              "pitch": 0,
+              "gain": 0.959
+            },
+            {
+              "id": "clip-2",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.14572,
+              "pitch": 0,
+              "gain": 0.974
+            },
+            {
+              "id": "clip-3",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.26517,
+              "pitch": 0,
+              "gain": 0.714
+            },
+            {
+              "id": "clip-4",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.37568,
+              "pitch": 0,
+              "gain": 0.596
+            },
+            {
+              "id": "clip-5",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.49537,
+              "pitch": 0,
+              "gain": 0.614
+            },
+            {
+              "id": "clip-6",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.61277,
+              "pitch": 0,
+              "gain": 0.63
+            }
+          ],
+          "effects": {
+            "gainDb": -11.753783175574174,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-3",
+          "name": "heavy-links-3",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.06302,
+              "pitch": 0,
+              "gain": 0.727
+            },
+            {
+              "id": "clip-2",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.18142,
+              "pitch": 0,
+              "gain": 0.988
+            },
+            {
+              "id": "clip-3",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.29285,
+              "pitch": 0,
+              "gain": 0.913
+            },
+            {
+              "id": "clip-4",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.40542,
+              "pitch": 0,
+              "gain": 0.964
+            },
+            {
+              "id": "clip-5",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.5229,
+              "pitch": 0,
+              "gain": 0.617
+            },
+            {
+              "id": "clip-6",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.63842,
+              "pitch": 0,
+              "gain": 0.753
+            }
+          ],
+          "effects": {
+            "gainDb": -11.753783175574174,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-4",
+          "name": "heavy-links-4",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.09711,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "id": "clip-2",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.21068,
+              "pitch": 0,
+              "gain": 0.941
+            },
+            {
+              "id": "clip-3",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.32101,
+              "pitch": 0,
+              "gain": 0.956
+            },
+            {
+              "id": "clip-4",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.43608,
+              "pitch": 0,
+              "gain": 0.968
+            },
+            {
+              "id": "clip-5",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.5481,
+              "pitch": 0,
+              "gain": 0.633
+            },
+            {
+              "id": "clip-6",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.66835,
+              "pitch": 0,
+              "gain": 0.696
+            }
+          ],
+          "effects": {
+            "gainDb": -11.753783175574174,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-heavy--land-heavy-trimmed-iron-v15-409d5fc2",
+      "name": "land-heavy-trimmed-iron-v15",
+      "slot": "land-heavy",
+      "assetKey": "land-heavy-trimmed-iron-v15-409d5fc2",
+      "seconds": 0.15,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "stone-impact",
+          "sourceId": "source-4",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.024,
+              "end": 0.165,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.729311841636448,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.02,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.085,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -16.478193796392873,
+            "pitch": -15,
+            "pan": 0,
+            "highpass": 70,
+            "lowpass": 1400,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0004,
+            "fadeOut": 0.018,
+            "decay": 0.025,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-light--land-light-soft-stone-iron-v15-10a6d943",
+      "name": "land-light-soft-stone-iron-v15",
+      "slot": "land-light",
+      "assetKey": "land-light-soft-stone-iron-v15-10a6d943",
+      "seconds": 0.15,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "soft-stone-impact",
+          "sourceId": "source-5",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.02,
+              "end": 0.16,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -0.8621199487108915,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 2800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.004,
+            "fadeOut": 0.02,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.085,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -16.478218811903357,
+            "pitch": -15,
+            "pan": 0,
+            "highpass": 70,
+            "lowpass": 1400,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0004,
+            "fadeOut": 0.018,
+            "decay": 0.025,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-medium--land-medium-iron-v15-66eab7ae",
+      "name": "land-medium-iron-v15",
+      "slot": "land-medium",
+      "assetKey": "land-medium-iron-v15-66eab7ae",
+      "seconds": 0.85,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "stone-impact",
+          "sourceId": "source-5",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.02,
+              "end": 0.8620408163265306,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.3256485625696919,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.005,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.085,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -16.478170957769624,
+            "pitch": -15,
+            "pan": 0,
+            "highpass": 70,
+            "lowpass": 1400,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0004,
+            "fadeOut": 0.018,
+            "decay": 0.025,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "slack--chain-slack-recorded-heavy-v17-0b01170f",
+      "name": "chain-slack-recorded-heavy-v17",
+      "slot": "slack",
+      "assetKey": "chain-slack-recorded-heavy-v17-0b01170f",
+      "seconds": 2.4,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-links-1",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.02635,
+              "pitch": 0,
+              "gain": 0.939
+            },
+            {
+              "id": "clip-2",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0.54729,
+              "pitch": 0,
+              "gain": 0.804
+            },
+            {
+              "id": "clip-3",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 1.01367,
+              "pitch": 0,
+              "gain": 0.58
+            },
+            {
+              "id": "clip-4",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 1.52258,
+              "pitch": 0,
+              "gain": 0.595
+            },
+            {
+              "id": "clip-5",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 2.04169,
+              "pitch": 0,
+              "gain": 0.925
+            }
+          ],
+          "effects": {
+            "gainDb": -11.895024380434695,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "heavy-links-2",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.13641,
+              "pitch": 0,
+              "gain": 0.584
+            },
+            {
+              "id": "clip-2",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0.65337,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "id": "clip-3",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 1.1612,
+              "pitch": 0,
+              "gain": 0.901
+            },
+            {
+              "id": "clip-4",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 1.67753,
+              "pitch": 0,
+              "gain": 0.694
+            },
+            {
+              "id": "clip-5",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 2.15144,
+              "pitch": 0,
+              "gain": 0.821
+            }
+          ],
+          "effects": {
+            "gainDb": -11.895024380434695,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-3",
+          "name": "heavy-links-3",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.27984,
+              "pitch": 0,
+              "gain": 0.66
+            },
+            {
+              "id": "clip-2",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0.77595,
+              "pitch": 0,
+              "gain": 0.97
+            },
+            {
+              "id": "clip-3",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 1.29365,
+              "pitch": 0,
+              "gain": 0.909
+            },
+            {
+              "id": "clip-4",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 1.78558,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "id": "clip-5",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 2.355,
+              "pitch": 0,
+              "gain": 0.988
+            }
+          ],
+          "effects": {
+            "gainDb": -11.895024380434695,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-4",
+          "name": "heavy-links-4",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.42264,
+              "pitch": 0,
+              "gain": 0.852
+            },
+            {
+              "id": "clip-2",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0.88692,
+              "pitch": 0,
+              "gain": 0.953
+            },
+            {
+              "id": "clip-3",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 1.4149,
+              "pitch": 0,
+              "gain": 0.775
+            },
+            {
+              "id": "clip-4",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 1.90861,
+              "pitch": 0,
+              "gain": 0.746
+            }
+          ],
+          "effects": {
+            "gainDb": -11.895024380434695,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "taut--chain-taut-recorded-heavy-v17-5430679b",
+      "name": "chain-taut-recorded-heavy-v17",
+      "slot": "taut",
+      "assetKey": "chain-taut-recorded-heavy-v17-5430679b",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-chain-catch",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.91576,
+              "end": 6.03576,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-heavy-1-v17-46858c25",
+      "name": "wind-chain-heavy-1-v17",
+      "slot": "wind",
+      "assetKey": "wind-chain-heavy-1-v17-46858c25",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.23104,
+              "end": 1.3510399999999998,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -12.247,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-heavy-2-v17-4ff3ed17",
+      "name": "wind-chain-heavy-2-v17",
+      "slot": "wind",
+      "assetKey": "wind-chain-heavy-2-v17-4ff3ed17",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -9.901299999999999,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-heavy-3-v17-318eadc6",
+      "name": "wind-chain-heavy-3-v17",
+      "slot": "wind",
+      "assetKey": "wind-chain-heavy-3-v17-318eadc6",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.08875,
+              "end": 5.20875,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -11.4884,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap--chain-wrap-links-recorded-heavy-v17-06ef22c4",
+      "name": "chain-wrap-links-recorded-heavy-v17",
+      "slot": "wrap",
+      "assetKey": "chain-wrap-links-recorded-heavy-v17-06ef22c4",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.1183,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_brick--chain-wrap-stone-recorded-heavy-v17-c8335587",
+      "name": "chain-wrap-stone-recorded-heavy-v17",
+      "slot": "wrap.brick",
+      "assetKey": "chain-wrap-stone-recorded-heavy-v17-c8335587",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.166599999999999,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "stone-contact",
+          "sourceId": "source-6",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.2115,
+              "end": 0.246,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.665374732166,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 6500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_metal--chain-wrap-metal-recorded-heavy-v17-d0e576d6",
+      "name": "chain-wrap-metal-recorded-heavy-v17",
+      "slot": "wrap.metal",
+      "assetKey": "chain-wrap-metal-recorded-heavy-v17-d0e576d6",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.442,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_moss--chain-wrap-earth-recorded-heavy-v17-23482098",
+      "name": "chain-wrap-earth-recorded-heavy-v17",
+      "slot": "wrap.moss",
+      "assetKey": "chain-wrap-earth-recorded-heavy-v17-23482098",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -9.809358619263751,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "earth-contact",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.064,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -11.612891226245509,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 2800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_mud--chain-wrap-soft-recorded-heavy-v17-8bbb58b9",
+      "name": "chain-wrap-soft-recorded-heavy-v17",
+      "slot": "wrap.mud",
+      "assetKey": "chain-wrap-soft-recorded-heavy-v17-8bbb58b9",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -9.753793466952557,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "soft-contact",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.064,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -11.557326073934316,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 900,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_rubber--chain-wrap-soft-recorded-heavy-v17-8bbb58b9",
+      "name": "chain-wrap-soft-recorded-heavy-v17",
+      "slot": "wrap.rubber",
+      "assetKey": "chain-wrap-soft-recorded-heavy-v17-8bbb58b9",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -9.753793466952557,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "soft-contact",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.064,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -11.557326073934316,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 900,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_stone--chain-wrap-stone-recorded-heavy-v17-c8335587",
+      "name": "chain-wrap-stone-recorded-heavy-v17",
+      "slot": "wrap.stone",
+      "assetKey": "chain-wrap-stone-recorded-heavy-v17-c8335587",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.166599999999999,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "stone-contact",
+          "sourceId": "source-6",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.2115,
+              "end": 0.246,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.665374732166,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 6500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_vine--chain-wrap-wood-recorded-heavy-v17-1144c4d1",
+      "name": "chain-wrap-wood-recorded-heavy-v17",
+      "slot": "wrap.vine",
+      "assetKey": "chain-wrap-wood-recorded-heavy-v17-1144c4d1",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.397083453814265,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "wood-contact",
+          "sourceId": "source-7",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.822,
+              "end": 1.863,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.957657925819136,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 4500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_wood--chain-wrap-wood-recorded-heavy-v17-1144c4d1",
+      "name": "chain-wrap-wood-recorded-heavy-v17",
+      "slot": "wrap.wood",
+      "assetKey": "chain-wrap-wood-recorded-heavy-v17-1144c4d1",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-3",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.30011,
+              "end": 3.42011,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.397083453814265,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "wood-contact",
+          "sourceId": "source-7",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.822,
+              "end": 1.863,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.957657925819136,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 4500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "deploy--chain-deploy-new-source-v18-799a2e13",
+      "name": "chain-deploy-new-source-v18",
+      "slot": "deploy",
+      "assetKey": "chain-deploy-new-source-v18-799a2e13",
+      "seconds": 0.72,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-links-1",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.00545,
+              "pitch": 0,
+              "gain": 0.79
+            },
+            {
+              "id": "clip-2",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.11823,
+              "pitch": 0,
+              "gain": 0.972
+            },
+            {
+              "id": "clip-3",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.24015,
+              "pitch": 0,
+              "gain": 0.907
+            },
+            {
+              "id": "clip-4",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.34688,
+              "pitch": 0,
+              "gain": 0.957
+            },
+            {
+              "id": "clip-5",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.47088,
+              "pitch": 0,
+              "gain": 0.785
+            },
+            {
+              "id": "clip-6",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.58156,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "id": "clip-7",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.675,
+              "pitch": 0,
+              "gain": 0.99
+            }
+          ],
+          "effects": {
+            "gainDb": -7.3438281081511985,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "heavy-links-2",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.03782,
+              "pitch": 0,
+              "gain": 0.959
+            },
+            {
+              "id": "clip-2",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.14572,
+              "pitch": 0,
+              "gain": 0.974
+            },
+            {
+              "id": "clip-3",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.26517,
+              "pitch": 0,
+              "gain": 0.714
+            },
+            {
+              "id": "clip-4",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.37568,
+              "pitch": 0,
+              "gain": 0.596
+            },
+            {
+              "id": "clip-5",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.49537,
+              "pitch": 0,
+              "gain": 0.614
+            },
+            {
+              "id": "clip-6",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.61277,
+              "pitch": 0,
+              "gain": 0.63
+            }
+          ],
+          "effects": {
+            "gainDb": -7.3438281081511985,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-3",
+          "name": "heavy-links-3",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.06302,
+              "pitch": 0,
+              "gain": 0.727
+            },
+            {
+              "id": "clip-2",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.18142,
+              "pitch": 0,
+              "gain": 0.988
+            },
+            {
+              "id": "clip-3",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.29285,
+              "pitch": 0,
+              "gain": 0.913
+            },
+            {
+              "id": "clip-4",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.40542,
+              "pitch": 0,
+              "gain": 0.964
+            },
+            {
+              "id": "clip-5",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.5229,
+              "pitch": 0,
+              "gain": 0.617
+            },
+            {
+              "id": "clip-6",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.63842,
+              "pitch": 0,
+              "gain": 0.753
+            }
+          ],
+          "effects": {
+            "gainDb": -7.3438281081511985,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-4",
+          "name": "heavy-links-4",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.09711,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "id": "clip-2",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.21068,
+              "pitch": 0,
+              "gain": 0.941
+            },
+            {
+              "id": "clip-3",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.32101,
+              "pitch": 0,
+              "gain": 0.956
+            },
+            {
+              "id": "clip-4",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.43608,
+              "pitch": 0,
+              "gain": 0.968
+            },
+            {
+              "id": "clip-5",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.5481,
+              "pitch": 0,
+              "gain": 0.633
+            },
+            {
+              "id": "clip-6",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.66835,
+              "pitch": 0,
+              "gain": 0.696
+            }
+          ],
+          "effects": {
+            "gainDb": -7.3438281081511985,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "slack--chain-slack-new-source-v18-9a686a7b",
+      "name": "chain-slack-new-source-v18",
+      "slot": "slack",
+      "assetKey": "chain-slack-new-source-v18-9a686a7b",
+      "seconds": 2.4,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-links-1",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.02635,
+              "pitch": 0,
+              "gain": 0.939
+            },
+            {
+              "id": "clip-2",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0.54729,
+              "pitch": 0,
+              "gain": 0.804
+            },
+            {
+              "id": "clip-3",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 1.01367,
+              "pitch": 0,
+              "gain": 0.58
+            },
+            {
+              "id": "clip-4",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 1.52258,
+              "pitch": 0,
+              "gain": 0.595
+            },
+            {
+              "id": "clip-5",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 2.04169,
+              "pitch": 0,
+              "gain": 0.925
+            }
+          ],
+          "effects": {
+            "gainDb": -7.9917346853248965,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "heavy-links-2",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.13641,
+              "pitch": 0,
+              "gain": 0.584
+            },
+            {
+              "id": "clip-2",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0.65337,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "id": "clip-3",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 1.1612,
+              "pitch": 0,
+              "gain": 0.901
+            },
+            {
+              "id": "clip-4",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 1.67753,
+              "pitch": 0,
+              "gain": 0.694
+            },
+            {
+              "id": "clip-5",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 2.15144,
+              "pitch": 0,
+              "gain": 0.821
+            }
+          ],
+          "effects": {
+            "gainDb": -7.9917346853248965,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-3",
+          "name": "heavy-links-3",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.27984,
+              "pitch": 0,
+              "gain": 0.66
+            },
+            {
+              "id": "clip-2",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0.77595,
+              "pitch": 0,
+              "gain": 0.97
+            },
+            {
+              "id": "clip-3",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 1.29365,
+              "pitch": 0,
+              "gain": 0.909
+            },
+            {
+              "id": "clip-4",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 1.78558,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "id": "clip-5",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 2.355,
+              "pitch": 0,
+              "gain": 0.988
+            }
+          ],
+          "effects": {
+            "gainDb": -7.9917346853248965,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-4",
+          "name": "heavy-links-4",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.42264,
+              "pitch": 0,
+              "gain": 0.852
+            },
+            {
+              "id": "clip-2",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0.88692,
+              "pitch": 0,
+              "gain": 0.953
+            },
+            {
+              "id": "clip-3",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 1.4149,
+              "pitch": 0,
+              "gain": 0.775
+            },
+            {
+              "id": "clip-4",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 1.90861,
+              "pitch": 0,
+              "gain": 0.746
+            }
+          ],
+          "effects": {
+            "gainDb": -7.9917346853248965,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "taut--chain-taut-new-source-v18-67695267",
+      "name": "chain-taut-new-source-v18",
+      "slot": "taut",
+      "assetKey": "chain-taut-new-source-v18-67695267",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-chain-catch",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.71892,
+              "end": 8.83892,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-heavy-1-v18-48f3e88f",
+      "name": "wind-chain-heavy-1-v18",
+      "slot": "wind",
+      "assetKey": "wind-chain-heavy-1-v18-48f3e88f",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-heavy-2-v18-f5190674",
+      "name": "wind-chain-heavy-2-v18",
+      "slot": "wind",
+      "assetKey": "wind-chain-heavy-2-v18-f5190674",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-heavy-3-v18-99cec948",
+      "name": "wind-chain-heavy-3-v18",
+      "slot": "wind",
+      "assetKey": "wind-chain-heavy-3-v18-99cec948",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.35596,
+              "end": 8.475959999999999,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -10.9026,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap--wind-chain-heavy-2-v18-f5190674",
+      "name": "wind-chain-heavy-2-v18",
+      "slot": "wrap",
+      "assetKey": "wind-chain-heavy-2-v18-f5190674",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_brick--chain-wrap-stone-new-source-v18-286ccb89",
+      "name": "chain-wrap-stone-new-source-v18",
+      "slot": "wrap.brick",
+      "assetKey": "chain-wrap-stone-new-source-v18-286ccb89",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "stone-contact",
+          "sourceId": "source-6",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.2115,
+              "end": 0.246,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -4.436974732166,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 6500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_metal--wind-chain-heavy-2-v18-f5190674",
+      "name": "wind-chain-heavy-2-v18",
+      "slot": "wrap.metal",
+      "assetKey": "wind-chain-heavy-2-v18-f5190674",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_moss--chain-wrap-earth-new-source-v18-301e3594",
+      "name": "chain-wrap-earth-new-source-v18",
+      "slot": "wrap.moss",
+      "assetKey": "chain-wrap-earth-new-source-v18-301e3594",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.4507,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "earth-contact",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.064,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.25423260698176,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 2800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_mud--chain-wrap-soft-new-source-v18-c5026a77",
+      "name": "chain-wrap-soft-new-source-v18",
+      "slot": "wrap.mud",
+      "assetKey": "chain-wrap-soft-new-source-v18-c5026a77",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.3787,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "soft-contact",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.064,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.18223260698176,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 900,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_rubber--chain-wrap-soft-new-source-v18-c5026a77",
+      "name": "chain-wrap-soft-new-source-v18",
+      "slot": "wrap.rubber",
+      "assetKey": "chain-wrap-soft-new-source-v18-c5026a77",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.3787,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "soft-contact",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.064,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -8.18223260698176,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 900,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_stone--chain-wrap-stone-new-source-v18-286ccb89",
+      "name": "chain-wrap-stone-new-source-v18",
+      "slot": "wrap.stone",
+      "assetKey": "chain-wrap-stone-new-source-v18-286ccb89",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "stone-contact",
+          "sourceId": "source-6",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.2115,
+              "end": 0.246,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -4.436974732166,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 6500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_vine--chain-wrap-wood-new-source-v18-34fada0a",
+      "name": "chain-wrap-wood-new-source-v18",
+      "slot": "wrap.vine",
+      "assetKey": "chain-wrap-wood-new-source-v18-34fada0a",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.0483000000000002,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "wood-contact",
+          "sourceId": "source-7",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.822,
+              "end": 1.863,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.6088744720048718,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 4500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wrap_wood--chain-wrap-wood-new-source-v18-34fada0a",
+      "name": "chain-wrap-wood-new-source-v18",
+      "slot": "wrap.wood",
+      "assetKey": "chain-wrap-wood-new-source-v18-34fada0a",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.0483000000000002,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "wood-contact",
+          "sourceId": "source-7",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.822,
+              "end": 1.863,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.6088744720048718,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 100,
+            "lowpass": 4500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0002,
+            "fadeOut": 0.006,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach--attach-dirt-scatter-subtle-iron-v19-ba72ca7a",
+      "name": "attach-dirt-scatter-subtle-iron-v19",
+      "slot": "attach",
+      "assetKey": "attach-dirt-scatter-subtle-iron-v19-ba72ca7a",
+      "seconds": 0.51,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "dirt-impact-scatter",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.5224489795918368,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.011876605334723,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.005,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.0753596974479756,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -26.93577530185626,
+            "pitch": -19,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0015,
+            "fadeOut": 0.018,
+            "decay": 0.02,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-heavy--land-heavy-trimmed-subtle-iron-v19-ef8d0726",
+      "name": "land-heavy-trimmed-subtle-iron-v19",
+      "slot": "land-heavy",
+      "assetKey": "land-heavy-trimmed-subtle-iron-v19-ef8d0726",
+      "seconds": 0.15,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "stone-impact",
+          "sourceId": "source-4",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.024,
+              "end": 0.165,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.7293362312282348,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.02,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.0753596974479756,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -26.93579309159141,
+            "pitch": -19,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0015,
+            "fadeOut": 0.018,
+            "decay": 0.02,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-light--land-light-soft-stone-subtle-iron-v19-dbec4dc2",
+      "name": "land-light-soft-stone-subtle-iron-v19",
+      "slot": "land-light",
+      "assetKey": "land-light-soft-stone-subtle-iron-v19-dbec4dc2",
+      "seconds": 0.15,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "soft-stone-impact",
+          "sourceId": "source-5",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.02,
+              "end": 0.16,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -0.8620576383848357,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 2800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.004,
+            "fadeOut": 0.02,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.0753596974479756,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -26.93573140718405,
+            "pitch": -19,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0015,
+            "fadeOut": 0.018,
+            "decay": 0.02,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-medium--land-medium-subtle-iron-v19-fd35dd04",
+      "name": "land-medium-subtle-iron-v19",
+      "slot": "land-medium",
+      "assetKey": "land-medium-subtle-iron-v19-fd35dd04",
+      "seconds": 0.85,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "stone-impact",
+          "sourceId": "source-5",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.02,
+              "end": 0.8620408163265306,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.3256966399983243,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.005,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "dull-metal-overlay",
+          "sourceId": "source-2",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.052,
+              "end": 0.0753596974479756,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -26.93579394080501,
+            "pitch": -19,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0015,
+            "fadeOut": 0.018,
+            "decay": 0.02,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach--attach-dirt-scatter-cannonball-v20-35ac2479",
+      "name": "attach-dirt-scatter-cannonball-v20",
+      "slot": "attach",
+      "assetKey": "attach-dirt-scatter-cannonball-v20-35ac2479",
+      "seconds": 0.51,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "dirt-impact-scatter",
+          "sourceId": "source-1",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.022,
+              "end": 0.5224489795918368,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.102239927740947,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.005,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "cannonball-fourth-drop-overlay",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 6.078,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -27.026138624262487,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.001,
+            "fadeOut": 0.04,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-heavy--land-heavy-trimmed-cannonball-v20-784b1014",
+      "name": "land-heavy-trimmed-cannonball-v20",
+      "slot": "land-heavy",
+      "assetKey": "land-heavy-trimmed-cannonball-v20-179417-1911a881",
+      "seconds": 0.32,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "stone-impact",
+          "sourceId": "source-4",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.024,
+              "end": 0.165,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -2.8231060435470856,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.02,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "cannonball-fourth-drop-overlay",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 6.078,
+              "at": 0.012278537932806576,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -4.5,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.001,
+            "fadeOut": 0.04,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-light--land-light-soft-stone-cannonball-v20-b7c5c262",
+      "name": "land-light-soft-stone-cannonball-v20",
+      "slot": "land-light",
+      "assetKey": "land-light-soft-stone-cannonball-v20-179-823903c0",
+      "seconds": 0.32,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "soft-stone-impact",
+          "sourceId": "source-5",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.02,
+              "end": 0.16,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -36.5,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 2800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.004,
+            "fadeOut": 0.02,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "cannonball-fourth-drop-overlay",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 6.078,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -18.5,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.001,
+            "fadeOut": 0.04,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "land-medium--land-medium-cannonball-v20-bb52e6ac",
+      "name": "land-medium-cannonball-v20",
+      "slot": "land-medium",
+      "assetKey": "land-medium-cannonball-v20-1794179980091-806eb594",
+      "seconds": 0.85,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "stone-impact",
+          "sourceId": "source-5",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.02,
+              "end": 0.8620408163265306,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.1081053156425769,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0.005,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        },
+        {
+          "id": "layer-2",
+          "name": "cannonball-fourth-drop-overlay",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 6.078,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -6.5,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.001,
+            "fadeOut": 0.04,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "roll--roll-cannonball-v20-c658d06c",
+      "name": "roll-cannonball-v20",
+      "slot": "roll",
+      "assetKey": "roll-cannonball-v20-c658d06c",
+      "seconds": 4.8,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "cannonball-rolling",
+          "sourceId": "source-10",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.6,
+              "end": 13.399999999999999,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -0.34029007877489353,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.035,
+            "fadeOut": 0.035,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "loop-hit--loop-hit-cannonball-v22-43d3d6d7",
+      "name": "loop-hit-cannonball-v22",
+      "slot": "loop-hit",
+      "assetKey": "loop-hit-cannonball-v22-43d3d6d7",
+      "seconds": 0.16,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "fourth-cannonball-contact",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 5.918,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 1.3946170153447675,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 3500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.001,
+            "fadeOut": 0.045,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "ball-settle--gentle-cannonball-contact-v24-05bd5ce5",
+      "name": "gentle-cannonball-contact-v24",
+      "slot": "ball-settle",
+      "assetKey": "gentle-cannonball-contact-v24-05bd5ce5",
+      "seconds": 0.12,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "soft-contact",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 5.878,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 2.728009983604689,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 35,
+            "lowpass": 1800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.003,
+            "fadeOut": 0.035,
+            "decay": 0.035,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "loop-hit--gentle-cannonball-contact-v24-05bd5ce5",
+      "name": "gentle-cannonball-contact-v24",
+      "slot": "loop-hit",
+      "assetKey": "gentle-cannonball-contact-v24-05bd5ce5",
+      "seconds": 0.12,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "soft-contact",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 5.878,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 2.728009983604689,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 35,
+            "lowpass": 1800,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.003,
+            "fadeOut": 0.035,
+            "decay": 0.035,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "ball-settle--sphere-touch-low-v26-dddc7f5e",
+      "name": "sphere-touch-low-v26",
+      "slot": "ball-settle",
+      "assetKey": "sphere-touch-low-v26-dddc7f5e",
+      "seconds": 0.16,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "rounded-sphere-thud",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 5.918,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 2.309196480820968,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 30,
+            "lowpass": 1100,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.003,
+            "fadeOut": 0.04,
+            "decay": 0.05,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "loop-hit--loop-touch-dry-v26-f499571c",
+      "name": "loop-touch-dry-v26",
+      "slot": "loop-hit",
+      "assetKey": "loop-touch-dry-v26-f499571c",
+      "seconds": 0.1,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "light-loop-tick",
+          "sourceId": "source-9",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 5.758,
+              "end": 5.858,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 2.4989745962335115,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 220,
+            "lowpass": 3000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.002,
+            "fadeOut": 0.025,
+            "decay": 0.024,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "roll--roll-cannonball-dry-v25-3b285609",
+      "name": "roll-cannonball-dry-v25",
+      "slot": "roll",
+      "assetKey": "roll-cannonball-dry-v25-3b285609",
+      "seconds": 4.8,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "clean-contact-texture",
+          "sourceId": "source-11",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0,
+              "end": 4.8,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 0.36134703076692454,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.035,
+            "fadeOut": 0.035,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    }
+  ]
+}

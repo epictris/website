@@ -1,0 +1,5 @@
+{
+  "reference": "wind-chain-v5",
+  "feedback": "the link winding sounds sort of close to what i want, but it sounds very low quality.",
+  "revision": "Keep the source and -9 semitone pitch; widen low-pass from 2.2 to 7.5 kHz; extend recording window from 55 to 85 ms with a 12 ms tail fade."
+}

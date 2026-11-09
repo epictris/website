@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ball &amp; chain · Sound lab</title>
+  <title>Just Swing · Sound lab</title>
   <style>
     :root { color-scheme: dark; --font-family: monospace; --font-size: 14px; }
     body { margin: 0 auto; max-width: 100ch; padding: 2lh 3ch; background: #1f2430; color: #cbccc6;
@@ -21,16 +21,18 @@
     #files { width: 100%; min-width: 0; box-sizing: border-box; }
     .bar > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
     #candidates { display: grid; gap: 1lh; } article { padding: 1lh 2ch; border: 1px solid #444c60; }
+    article[hidden] { display: none; }
     article.playing { border-color: #65bddb; } .name { overflow-wrap: anywhere; }
     canvas { width: 100%; height: 5lh; display: block; background: #191e28; }
     textarea { box-sizing: border-box; width: 100%; min-height: 3lh; resize: vertical; }
     .metrics { overflow-wrap: anywhere; } #level { width: 10ch; }
     @media (max-width: 600px) { body { padding: 1lh 1ch; } article { padding: 1lh 1ch; } }
   </style>
+<link rel="stylesheet" href="/src/styles/studio.css"/>
 </head>
-<body>
-  <h1>BALL &amp; CHAIN / SOUND LAB</h1>
-  <p>Compare candidates, keep favorites, and record what to change. <a href="./editor.html">Open game editor</a></p>
+<body class="studio studio-lab">
+  <header class="studio-header"><h1><span class="studio-brand">Just Swing</span><span class="studio-page-name">Sound lab</span></h1><nav class="studio-nav" aria-label="Authoring tools"><a href="/editor.html">Level editor</a><a href="/sound-layers.html">Sound mixer</a><a href="/sound-lab.html" aria-current="page">Sound lab</a></nav></header>
+  <p>Compare candidates, keep favorites, and record what to change. <a href="./sound-layers.html">Edit event layers</a> · <a href="./editor.html">Open game editor</a></p>
   <div id="drop">
     <label>Add WAVs, recordings, or stems <input id="files" type="file" accept="audio/*,.wav,.ogg,.flac,.mp3,.aiff,.aif" multiple /></label>
     <p class="hint">Or drop files here. Files stay in this browser. Notes are saved locally; export them to share feedback.</p>
@@ -40,16 +42,25 @@
   <div class="bar">
     <label><input id="match" type="checkbox" checked /> Match active RMS</label>
     <label>Output <input id="level" type="range" min="-36" max="0" value="-12" /><output id="level-value">−12 dB</output></label>
-    <label>Strength <select id="strength"><option value="0.35">Light</option><option value="0.65">Medium</option><option value="1" selected>Heavy</option></select></label>
+    <label>Candidate gain <select id="strength"><option value="0.35">35%</option><option value="0.65">65%</option><option value="1" selected>100%</option></select></label>
     <label>Playback <select id="mode"><option value="once">Once</option><option value="repeat">6 impacts / second</option><option value="loop">Loop</option></select></label>
     <button id="stop">Stop</button>
   </div>
-  <p class="hint">Matching uses a relative −40 dB gate and a common peak ceiling. It approximates level, not perceived loudness. Strength changes gain only; test physics response in the editor.</p>
+  <p class="hint">Matching uses a relative −40 dB gate and a common peak ceiling. It approximates level, not perceived loudness. Candidate gain adjusts a single recording; the game landing test below selects the actual impact-strength layers.</p>
+  <div class="bar">
+    <label>Game impact speed (m/s) <input id="impact-speed" type="number" min="0.15" max="30" step="0.1" value="3.5" style="width: 7ch" /></label>
+    <label>Surface <select id="impact-surface"><option value="stone">Stone</option><option value="metal">Metal</option><option value="wood">Wood</option><option value="moss">Moss / earth</option><option value="mud">Mud</option></select></label>
+    <button id="impact-test">Test game landing</button>
+  </div>
+  <p class="hint">Game landing test uses the currently assigned velocity layers and the Output level above. Try 0.8, 3.5, and 8 m/s for light, medium, and heavy. Candidate level matching does not alter this mix.</p>
   <div class="bar">
     <button id="play-a" disabled>Play A</button><button id="play-b" disabled>Play B</button>
     <button id="export">Export feedback</button>
   </div>
   <p id="status" role="status" aria-live="polite">Add candidates to begin.</p>
+  <div id="versions" class="bar" role="group" aria-label="Filter candidates by version"></div>
+  <p id="version-count" class="hint" aria-live="polite"></p>
+  <p class="hint">A/B selections stay selected when you filter, so you can compare versions. Feedback export includes all loaded candidates.</p>
   <div id="candidates"></div>
   <script type="module" src="/src/tools/soundLab.ts"></script>
 </body>

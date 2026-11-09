@@ -1,0 +1,17 @@
+{
+  "request": "Replace the heavy impact with 314632-Rock_impact_-single_stone_5 and remove the trailing scraping.",
+  "source": {
+    "name": "314632-Rock_impact_-single_stone_5.mp3",
+    "file": "rock-impact-heavy-314632.mp3",
+    "originalName": "314632-Rock_impact_-single_stone_5.mp3",
+    "sha256": "0cc18263e2d10e6ad3b8a73144ed77c4f682677e9173669d65db13bdcd5d605f",
+    "source": "User-provided download: 314632-Rock_impact_-single_stone_5.mp3",
+    "author": "",
+    "license": ""
+  },
+  "windowSeconds": [
+    0.024,
+    0.165
+  ],
+  "fadeOutSeconds": 0.02
+}

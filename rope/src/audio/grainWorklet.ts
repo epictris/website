@@ -1,5 +1,6 @@
 // The audio-thread side of a loop voice (docs/sound.md#pace-and-pitch): one
-// `WsolaLoop` per node, driven by three k-rate params the game sets every step.
+// `WsolaLoop` or rolling-only `RollingTexture` per node, driven by k-rate params.
+// Rolling randomizes short source windows; it does not scan the file at pace.
 //
 //   pace   how fast the file's own time runs, file-seconds per second
 //   pitch  how far it is resampled (1 = the file's own pitch)
@@ -15,6 +16,7 @@
 // `grainWorklet.ts?worker&url` (bundled, its import included).
 
 import { WsolaLoop } from "./grainCore";
+import { RollingTexture } from "./rollingTexture";
 
 // AudioWorkletGlobalScope, which TypeScript's DOM lib does not describe.
 declare const sampleRate: number;
@@ -24,7 +26,7 @@ declare class AudioWorkletProcessor {
 }
 
 type Message =
-  | { type: "init"; channels: Float32Array[]; start: number; end: number; at: number }
+  | { type: "init"; channels: Float32Array[]; start: number; end: number; at: number; texture?: boolean; seed?: number }
   | { type: "window"; start: number; end: number }
   | { type: "stop" };
 
@@ -37,7 +39,7 @@ class GrainLoopProcessor extends AudioWorkletProcessor {
     ];
   }
 
-  private loop: WsolaLoop | null = null;
+  private loop: WsolaLoop | RollingTexture | null = null;
   private stopped = false;
 
   constructor() {
@@ -45,9 +47,9 @@ class GrainLoopProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (e: MessageEvent<Message>) => {
       const m = e.data;
       if (m.type === "init") {
-        this.loop = new WsolaLoop(m.channels, sampleRate);
+        this.loop = m.texture ? new RollingTexture(m.channels, sampleRate, m.seed) : new WsolaLoop(m.channels, sampleRate);
         this.loop.setWindow(m.start, m.end);
-        this.loop.seek(m.at);
+        if (this.loop instanceof WsolaLoop) this.loop.seek(m.at);
       } else if (m.type === "window") {
         this.loop?.setWindow(m.start, m.end);
       } else {

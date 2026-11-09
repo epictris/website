@@ -533,3 +533,9 @@ They are built when the pointer comes onto a ▶ Test button, the click being on
 What was built ahead is used only if it is of exactly the data the press would build (compared as JSON, controller and start included), so a stale level is never played; `B`, from the cursor, cannot be built ahead and builds at the press.
 Measured over hover, a click 250 ms later and Esc: no frame over the 16.7 ms vsync on the way in or out, and no program linked.
 What is left is the idle build's own frame (~70-100 ms, 1.5 s after the last thing done), and the first test of a session still compiles what the editor's view never drew - on `ball`, one pool-mirror program (~40 ms) - which the **reflections** toggle is for.
+
+## Authoring interface
+
+The authoring tools are named **Just Swing**. The editor, sound mixer and audition lab share `src/styles/studio.css`: a docked navy workspace with blue selection and amber time/clip emphasis, selected through Impeccable previews. The top navigation switches tools; level file actions and Test level have their own command bar. Drawing tools, layers and objects share one bounded left dock; properties scroll independently on the right. Preview settings are disclosed separately from drawing tools.
+
+At phone widths, Tools & objects and Properties open mutually exclusive drawers that start closed, leaving the canvas reachable. Native Tab navigation works while a toolbar button or disclosure has focus; Tab from the canvas still cycles edit layers. Inspector sections and sound event families are keyboard-accessible buttons with expanded state. Drawing tool shortcuts are printed beside their labels, and active tool, layer and view controls expose pressed state.

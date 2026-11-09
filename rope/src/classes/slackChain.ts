@@ -6,7 +6,8 @@
 // This class is that drape. It is strictly one-way: it reads body transforms
 // and the chain's wrap path, and writes nothing back — no forces, no impulses,
 // no positions. Nothing the game measures (replays, invariants, the solver)
-// can see it; deleting it changes pixels only.
+// can see it. Cosmetic rendering and the audio observer read its node motion;
+// deleting it affects those outputs only, never physics.
 //
 // Model: a fixed-count Verlet particle chain pinned at both ends — the
 // mounting loop the chain leaves the ball through (the chain's start contact)

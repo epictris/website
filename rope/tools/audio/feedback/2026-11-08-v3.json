@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "date": "2026-11-08T19:18:41.069Z",
+  "settings": {
+    "activeRmsMatch": true,
+    "outputDb": -12,
+    "strength": 1,
+    "mode": "once",
+    "versionFilter": "v3"
+  },
+  "a": "a4c1e2efeedc873cb2b3f42a871b8d482e630abb23c47049efe3dd3b79b1052a",
+  "b": "cdee1e3ef6b221633217683ebcca938f64bec31a827de9850681d6fd23bdd94e",
+  "candidates": [
+    {
+      "sha256": "a4c1e2efeedc873cb2b3f42a871b8d482e630abb23c47049efe3dd3b79b1052a",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-weighty-v1",
+      "favorite": false,
+      "note": "too high pitched - needs to be a heavy metallic thud. no sustained ringing"
+    },
+    {
+      "sha256": "cdee1e3ef6b221633217683ebcca938f64bec31a827de9850681d6fd23bdd94e",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-dry-v1",
+      "favorite": false,
+      "note": "too high pitched - needs to be a heavy metallic thud. no sustained ringing"
+    },
+    {
+      "sha256": "5f7a387cab7887ddf74a4105a6f7a67c46480c7015758a80f9a4dde5d5bfc6ac",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-resonant-v1",
+      "favorite": false,
+      "note": "too high pitched - needs to be a heavy metallic thud. no sustained ringing"
+    },
+    {
+      "sha256": "4c07607a177c2a30257e80871c2d257aa69ffa955a5b760834f3517353bfb772",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Chain link winding onto the ball",
+      "name": "wind-link-v1",
+      "favorite": false,
+      "note": "shorter tail and remove the layer that sounds like a laser gun - it should just be a short light clink."
+    },
+    {
+      "sha256": "c54ba9a2083655aad7e9134b5d2ffce42714a413f1f13b617921168af0c2fa97",
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + tools/audio/audio.py",
+      "event": "Ball landing on metal",
+      "name": "land-chain-foley-v1",
+      "favorite": false,
+      "note": "get rid of the sustained ringing"
+    },
+    {
+      "sha256": "b44528e0de091004d233740e1ad22689748413dd45da1d8be03d906e77c3142d",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-weighty-v2",
+      "favorite": false,
+      "note": "too hollow. needs to sound more solid and dense."
+    },
+    {
+      "sha256": "1feabcd8c8d7ecfc85cfc4646aca08aaab32b12a613d12bf4e3f83b6533e97d2",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-dry-v2",
+      "favorite": false,
+      "note": "too hollow. needs to sound more solid and dense."
+    },
+    {
+      "sha256": "5c7df593deda5a7710d0dc0729e03ae41201d21d4fa2e3c9c386a852f04a713c",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-resonant-v2",
+      "favorite": false,
+      "note": "too hollow. needs to sound more solid and dense."
+    },
+    {
+      "sha256": "c2b1b9835f2faede06a941562d4966f4de14d958ac8a69f1def2abdfcd6f849f",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Chain link winding onto the ball",
+      "name": "wind-link-v2",
+      "favorite": false,
+      "note": "softer, more metallic, slightly longer tail, less harsh. Like a link of chain gently resting on a metal surface."
+    },
+    {
+      "sha256": "d91f50c0309808a86f03c8214e9277bb9bdfa3fbc4af2dbb7608d1d78c8c1b06",
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + tools/audio/audio.py",
+      "event": "Ball landing on metal",
+      "name": "land-chain-foley-v2",
+      "favorite": false,
+      "note": "not sure what event this is supposed to be for"
+    },
+    {
+      "sha256": "54dd5d4f315b36632ff61fda6dacdeb6bd9e23bba523d61386450a08c0f04fc9",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-weighty-v3",
+      "favorite": false,
+      "note": "add much more bass. this sounds like a small cardboard box hitting the ground. It should sound like a heavy, dense iron sphere thudding into concrete."
+    },
+    {
+      "sha256": "c6361e67dedb7b008922fcf0965aa276255912d485cf2d282615a7b186449338",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-dry-v3",
+      "favorite": false,
+      "note": "add much more bass. this sounds like a small cardboard box hitting the ground. It should sound like a heavy, dense iron sphere thudding into concrete."
+    },
+    {
+      "sha256": "5b523edaa5fd097a7b6507f51c11f0ce7118c29499b8f279430a2501a7f7ef20",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Ball landing / impact",
+      "name": "land-resonant-v3",
+      "favorite": false,
+      "note": "add much more bass. this sounds like a small cardboard box hitting the ground. It should sound like a heavy, dense iron sphere thudding into concrete."
+    },
+    {
+      "sha256": "dc07ae2c21a25fcc87118a3c4a46dd73f499682de685d4204f72e28dc5362ca7",
+      "source": "tools/audio/audio.py + recipes.json",
+      "event": "Chain link winding onto the ball",
+      "name": "wind-link-v3",
+      "favorite": false,
+      "note": "make it more metallic and softer"
+    }
+  ]
+}

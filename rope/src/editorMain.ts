@@ -1,5 +1,6 @@
 // Entry point for the /editor page: boots the level editor on the canvas.
 import { startEditor } from "./editor/editor";
+import "./styles/studio.css";
 
 // Two canvases on one rectangle (see editor.html): the WebGL scene underneath
 // and the editor's own 2D canvas on top. The editor decides whether the scene is

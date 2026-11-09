@@ -1,0 +1,27 @@
+{
+  "source": {
+    "name": "Swing Seat Chains Hit Move Balance Metal Squeak Park Playground",
+    "file": "swing-chain-creak-rz-post.mp3",
+    "originalName": "461978-Swing-Seat-Chains-Hit-Move-Balance-Metal-Squeak-Park-Playground.mp3",
+    "sha256": "38b00322d9d8d75e586aeec03af2af6d97f99ba97d5aee24c10be10a9359692c",
+    "source": "User-provided download: 461978-Swing-Seat-Chains-Hit-Move-Balance-Metal-Squeak-Park-Playground.mp3",
+    "author": "RZ Post (embedded artist metadata)",
+    "license": ""
+  },
+  "request": "Try the downloaded swing-seat chain recording, cutting it up to isolate the creaking part.",
+  "windowsSeconds": [
+    [
+      2.51,
+      2.79
+    ],
+    [
+      1.285,
+      1.405
+    ],
+    [
+      1.82,
+      1.98
+    ]
+  ],
+  "selection": "Tonal passages selected using spectrogram and transient/tonality measurements; user listening assessment pending."
+}

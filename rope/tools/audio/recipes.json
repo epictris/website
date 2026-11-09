@@ -2,10 +2,4942 @@
   "sampleRate": 48000,
   "seed": 1729,
   "candidates": [
-    {"name": "land-weighty-v1", "event": "land", "seconds": 0.8, "bodyHz": 82, "bodyDecay": 0.1, "metalHz": 780, "metalDecay": 0.13, "detailHz": 1700, "gains": [1, 0.16, 0.12]},
-    {"name": "land-dry-v1", "event": "land", "seconds": 0.5, "bodyHz": 110, "bodyDecay": 0.065, "metalHz": 1100, "metalDecay": 0.065, "detailHz": 2400, "gains": [0.85, 0.13, 0.2]},
-    {"name": "land-resonant-v1", "event": "land", "seconds": 1.0, "bodyHz": 95, "bodyDecay": 0.09, "metalHz": 620, "metalDecay": 0.22, "detailHz": 2000, "gains": [0.9, 0.3, 0.12]},
-    {"name": "wind-link-v1", "event": "wind", "seconds": 0.18, "bodyHz": 370, "bodyDecay": 0.012, "metalHz": 2400, "metalDecay": 0.025, "detailHz": 4300, "gains": [0.2, 0.22, 0.15]},
-    {"name": "land-chain-foley-v1", "event": "land", "seconds": 0.9, "bodyHz": 82, "bodyDecay": 0.1, "metalHz": 780, "metalDecay": 0.13, "detailHz": 1700, "gains": [1, 0.06, 0.08], "recording": "sources/chain-0358.wav", "recordingPitch": -5, "recordingLowpass": 6500, "recordingGain": 0.5, "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + tools/audio/audio.py", "author": "DenisChardonnet; project procedural sound design", "license": "CC0-1.0 recording; project LICENSE for procedural layers"}
+    {
+      "name": "land-weighty-v1",
+      "event": "land",
+      "seconds": 0.8,
+      "bodyHz": 82,
+      "bodyDecay": 0.1,
+      "metalHz": 780,
+      "metalDecay": 0.13,
+      "detailHz": 1700,
+      "gains": [
+        1,
+        0.16,
+        0.12
+      ]
+    },
+    {
+      "name": "land-dry-v1",
+      "event": "land",
+      "seconds": 0.5,
+      "bodyHz": 110,
+      "bodyDecay": 0.065,
+      "metalHz": 1100,
+      "metalDecay": 0.065,
+      "detailHz": 2400,
+      "gains": [
+        0.85,
+        0.13,
+        0.2
+      ]
+    },
+    {
+      "name": "land-resonant-v1",
+      "event": "land",
+      "seconds": 1.0,
+      "bodyHz": 95,
+      "bodyDecay": 0.09,
+      "metalHz": 620,
+      "metalDecay": 0.22,
+      "detailHz": 2000,
+      "gains": [
+        0.9,
+        0.3,
+        0.12
+      ]
+    },
+    {
+      "name": "wind-link-v1",
+      "event": "wind",
+      "seconds": 0.18,
+      "bodyHz": 370,
+      "bodyDecay": 0.012,
+      "metalHz": 2400,
+      "metalDecay": 0.025,
+      "detailHz": 4300,
+      "gains": [
+        0.2,
+        0.22,
+        0.15
+      ]
+    },
+    {
+      "name": "land-chain-foley-v1",
+      "event": "land",
+      "seconds": 0.9,
+      "bodyHz": 82,
+      "bodyDecay": 0.1,
+      "metalHz": 780,
+      "metalDecay": 0.13,
+      "detailHz": 1700,
+      "gains": [
+        1,
+        0.06,
+        0.08
+      ],
+      "recording": "sources/chain-0358.wav",
+      "recordingPitch": -5,
+      "recordingLowpass": 6500,
+      "recordingGain": 0.5,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + tools/audio/audio.py",
+      "author": "DenisChardonnet; project procedural sound design",
+      "license": "CC0-1.0 recording; project LICENSE for procedural layers"
+    },
+    {
+      "name": "land-weighty-v2",
+      "event": "land",
+      "seconds": 0.24,
+      "bodyHz": 56,
+      "bodyDecay": 0.042,
+      "metalHz": 290,
+      "metalDecay": 0.01,
+      "detailHz": 650,
+      "gains": [
+        1,
+        0.23,
+        0.25
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.04
+    },
+    {
+      "name": "land-dry-v2",
+      "event": "land",
+      "seconds": 0.18,
+      "bodyHz": 68,
+      "bodyDecay": 0.032,
+      "metalHz": 370,
+      "metalDecay": 0.008,
+      "detailHz": 900,
+      "gains": [
+        1,
+        0.2,
+        0.3
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.03
+    },
+    {
+      "name": "land-resonant-v2",
+      "event": "land",
+      "seconds": 0.28,
+      "bodyHz": 62,
+      "bodyDecay": 0.05,
+      "metalHz": 240,
+      "metalDecay": 0.014,
+      "detailHz": 700,
+      "gains": [
+        1,
+        0.3,
+        0.2
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.05
+    },
+    {
+      "name": "wind-link-v2",
+      "event": "wind",
+      "seconds": 0.045,
+      "bodyHz": 370,
+      "bodyDecay": 0.012,
+      "metalHz": 2600,
+      "metalDecay": 0.006,
+      "detailHz": 4300,
+      "gains": [
+        0,
+        0.3,
+        0.08
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.022
+    },
+    {
+      "name": "land-chain-foley-v2",
+      "event": "land",
+      "seconds": 0.25,
+      "bodyHz": 56,
+      "bodyDecay": 0.042,
+      "metalHz": 290,
+      "metalDecay": 0.008,
+      "detailHz": 650,
+      "gains": [
+        1,
+        0.12,
+        0.2
+      ],
+      "recording": "sources/chain-0358.wav",
+      "recordingPitch": -9,
+      "recordingLowpass": 2200,
+      "recordingGain": 0.2,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + tools/audio/audio.py",
+      "author": "DenisChardonnet; project procedural sound design",
+      "license": "CC0-1.0 recording; project LICENSE for procedural layers",
+      "bodySweep": 0,
+      "metalDuration": 0.025,
+      "recordingDuration": 0.055
+    },
+    {
+      "name": "land-weighty-v3",
+      "event": "land",
+      "seconds": 0.17,
+      "bodyHz": 56,
+      "bodyDecay": 0.023,
+      "metalHz": 340,
+      "metalDecay": 0.007,
+      "detailHz": 650,
+      "gains": [
+        1,
+        0.13,
+        0.14
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.027,
+      "bodyNoise": 0.92,
+      "bodyNoiseHz": 580
+    },
+    {
+      "name": "land-dry-v3",
+      "event": "land",
+      "seconds": 0.13,
+      "bodyHz": 68,
+      "bodyDecay": 0.016,
+      "metalHz": 420,
+      "metalDecay": 0.006,
+      "detailHz": 900,
+      "gains": [
+        1,
+        0.16,
+        0.18
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.023,
+      "bodyNoise": 0.96,
+      "bodyNoiseHz": 850
+    },
+    {
+      "name": "land-resonant-v3",
+      "event": "land",
+      "seconds": 0.19,
+      "bodyHz": 62,
+      "bodyDecay": 0.027,
+      "metalHz": 280,
+      "metalDecay": 0.008,
+      "detailHz": 700,
+      "gains": [
+        1,
+        0.16,
+        0.12
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.03,
+      "bodyNoise": 0.88,
+      "bodyNoiseHz": 470
+    },
+    {
+      "name": "wind-link-v3",
+      "event": "wind",
+      "seconds": 0.095,
+      "bodyHz": 370,
+      "bodyDecay": 0.012,
+      "metalHz": 1550,
+      "metalDecay": 0.016,
+      "detailHz": 2400,
+      "gains": [
+        0,
+        0.3,
+        0.008
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.07,
+      "metalAttack": 0.0025
+    },
+    {
+      "name": "land-weighty-v4",
+      "event": "land",
+      "seconds": 0.3,
+      "bodyHz": 56,
+      "bodyDecay": 0.028,
+      "metalHz": 340,
+      "metalDecay": 0.007,
+      "detailHz": 650,
+      "gains": [
+        0.7,
+        0.14,
+        0.07
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.027,
+      "bodyNoise": 0.8,
+      "bodyNoiseHz": 360,
+      "bassHz": 46,
+      "bassDecay": 0.055,
+      "bassGain": 2.8,
+      "bassDuration": 0.24
+    },
+    {
+      "name": "land-dry-v4",
+      "event": "land",
+      "seconds": 0.25,
+      "bodyHz": 68,
+      "bodyDecay": 0.022,
+      "metalHz": 420,
+      "metalDecay": 0.006,
+      "detailHz": 900,
+      "gains": [
+        0.65,
+        0.16,
+        0.09
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.023,
+      "bodyNoise": 0.85,
+      "bodyNoiseHz": 440,
+      "bassHz": 53,
+      "bassDecay": 0.043,
+      "bassGain": 2.5,
+      "bassDuration": 0.19
+    },
+    {
+      "name": "land-resonant-v4",
+      "event": "land",
+      "seconds": 0.32,
+      "bodyHz": 62,
+      "bodyDecay": 0.032,
+      "metalHz": 280,
+      "metalDecay": 0.008,
+      "detailHz": 700,
+      "gains": [
+        0.7,
+        0.17,
+        0.06
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.03,
+      "bodyNoise": 0.78,
+      "bodyNoiseHz": 300,
+      "bassHz": 41,
+      "bassDecay": 0.065,
+      "bassGain": 3,
+      "bassDuration": 0.27
+    },
+    {
+      "name": "wind-link-v4",
+      "event": "wind",
+      "seconds": 0.11,
+      "bodyHz": 370,
+      "bodyDecay": 0.012,
+      "metalHz": 2050,
+      "metalDecay": 0.021,
+      "detailHz": 2400,
+      "gains": [
+        0,
+        0.3,
+        0
+      ],
+      "bodySweep": 0,
+      "metalDuration": 0.085,
+      "metalAttack": 0.0045,
+      "outputGainDb": -5
+    },
+    {
+      "name": "land-concrete-v5",
+      "event": "land",
+      "slot": "land",
+      "seconds": 0.23,
+      "recordedLayers": [
+        {
+          "name": "impact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -12,
+          "highpass": 25,
+          "lowpass": 650,
+          "gain": 0.65,
+          "decay": 0.04,
+          "duration": 0.135,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        },
+        {
+          "name": "weight",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -24,
+          "highpass": 25,
+          "lowpass": 150,
+          "gain": 1,
+          "decay": 0.06,
+          "duration": 0.2,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        }
+      ],
+      "source": "https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "land-concrete-dry-v5",
+      "event": "land",
+      "slot": "land",
+      "seconds": 0.19,
+      "recordedLayers": [
+        {
+          "name": "impact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -10,
+          "highpass": 25,
+          "lowpass": 800,
+          "gain": 0.7,
+          "decay": 0.025,
+          "duration": 0.11,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        },
+        {
+          "name": "weight",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -22,
+          "highpass": 25,
+          "lowpass": 170,
+          "gain": 0.9,
+          "decay": 0.045,
+          "duration": 0.16,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        }
+      ],
+      "source": "https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "land-concrete-deep-v5",
+      "event": "land",
+      "slot": "land",
+      "seconds": 0.26,
+      "recordedLayers": [
+        {
+          "name": "impact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -15,
+          "highpass": 25,
+          "lowpass": 500,
+          "gain": 0.6,
+          "decay": 0.04,
+          "duration": 0.15,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        },
+        {
+          "name": "weight",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -27,
+          "highpass": 25,
+          "lowpass": 125,
+          "gain": 1,
+          "decay": 0.065,
+          "duration": 0.23,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        }
+      ],
+      "source": "https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "wind-chain-v5",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.075,
+      "recordedLayers": [
+        {
+          "name": "chain-recording",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 2200,
+          "duration": 0.055,
+          "fadeOut": 0.005,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": -9,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "land-chain-foley-v5",
+      "event": "land",
+      "slot": "land.metal",
+      "seconds": 0.23,
+      "recordedLayers": [
+        {
+          "name": "impact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -12,
+          "highpass": 25,
+          "lowpass": 650,
+          "gain": 0.65,
+          "decay": 0.04,
+          "duration": 0.135,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        },
+        {
+          "name": "weight",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.28,
+          "pitch": -24,
+          "highpass": 25,
+          "lowpass": 150,
+          "gain": 1,
+          "decay": 0.06,
+          "duration": 0.2,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true
+        },
+        {
+          "name": "chain-recording",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 2200,
+          "duration": 0.055,
+          "fadeOut": 0.005,
+          "gain": 0.2
+        }
+      ],
+      "source": "https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html + https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "Joseph SARDIN; DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "land-rock-thud-v6",
+      "event": "land",
+      "slot": "land",
+      "seconds": 0.2,
+      "recordedLayers": [
+        {
+          "name": "rock-thud",
+          "file": "sources/rock-drop-dirt-05.mp3",
+          "start": 0.052,
+          "end": 0.2326041667,
+          "pitch": 0,
+          "fadeIn": 0,
+          "fadeOut": 0,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: Rock Drop On Dirt Thud 05.mp3",
+      "author": "Vadi Sound (embedded publisher metadata)",
+      "license": ""
+    },
+    {
+      "name": "land-chain-foley-v6",
+      "event": "land",
+      "slot": "land.metal",
+      "seconds": 0.2,
+      "recordedLayers": [
+        {
+          "name": "rock-thud",
+          "file": "sources/rock-drop-dirt-05.mp3",
+          "start": 0.052,
+          "end": 0.2326041667,
+          "pitch": 0,
+          "fadeIn": 0,
+          "fadeOut": 0,
+          "gain": 1,
+          "normalize": true
+        },
+        {
+          "name": "chain-recording",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 2200,
+          "duration": 0.055,
+          "fadeOut": 0.005,
+          "normalize": true,
+          "gain": 0.06
+        }
+      ],
+      "source": "User-provided download: Rock Drop On Dirt Thud 05.mp3 + https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "Vadi Sound (embedded publisher metadata); DenisChardonnet",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-v7",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.11,
+      "recordedLayers": [
+        {
+          "name": "chain-recording",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.085,
+          "fadeOut": 0.012,
+          "gain": 1,
+          "fadeIn": 0.0003
+        }
+      ],
+      "outputGainDb": -9,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-deploy-v8",
+      "event": "deploy",
+      "slot": "deploy",
+      "seconds": 0.72,
+      "recordedLayers": [
+        {
+          "name": "rattle",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.085,
+          "fadeOut": 0.012,
+          "gain": 1,
+          "fadeIn": 0.0003,
+          "pulses": [
+            {
+              "at": 0.00545,
+              "pitch": -0.217,
+              "gain": 0.79
+            },
+            {
+              "at": 0.03782,
+              "pitch": -0.51,
+              "gain": 0.959
+            },
+            {
+              "at": 0.06302,
+              "pitch": -0.55,
+              "gain": 0.727
+            },
+            {
+              "at": 0.09711,
+              "pitch": 0.328,
+              "gain": 0.666
+            },
+            {
+              "at": 0.11823,
+              "pitch": 0.31,
+              "gain": 0.972
+            },
+            {
+              "at": 0.14572,
+              "pitch": -0.29,
+              "gain": 0.974
+            },
+            {
+              "at": 0.18142,
+              "pitch": -0.303,
+              "gain": 0.988
+            },
+            {
+              "at": 0.21068,
+              "pitch": -0.384,
+              "gain": 0.941
+            },
+            {
+              "at": 0.24015,
+              "pitch": -0.484,
+              "gain": 0.907
+            },
+            {
+              "at": 0.26517,
+              "pitch": 0.449,
+              "gain": 0.714
+            },
+            {
+              "at": 0.29285,
+              "pitch": -0.311,
+              "gain": 0.913
+            },
+            {
+              "at": 0.32101,
+              "pitch": 0.401,
+              "gain": 0.956
+            },
+            {
+              "at": 0.34688,
+              "pitch": -0.156,
+              "gain": 0.957
+            },
+            {
+              "at": 0.37568,
+              "pitch": 0.15,
+              "gain": 0.596
+            },
+            {
+              "at": 0.40542,
+              "pitch": -0.2,
+              "gain": 0.964
+            },
+            {
+              "at": 0.43608,
+              "pitch": -0.069,
+              "gain": 0.968
+            },
+            {
+              "at": 0.47088,
+              "pitch": -0.108,
+              "gain": 0.785
+            },
+            {
+              "at": 0.49537,
+              "pitch": 0.422,
+              "gain": 0.614
+            },
+            {
+              "at": 0.5229,
+              "pitch": 0.182,
+              "gain": 0.617
+            },
+            {
+              "at": 0.5481,
+              "pitch": 0.065,
+              "gain": 0.633
+            },
+            {
+              "at": 0.58156,
+              "pitch": -0.345,
+              "gain": 0.655
+            },
+            {
+              "at": 0.61277,
+              "pitch": -0.303,
+              "gain": 0.63
+            },
+            {
+              "at": 0.63842,
+              "pitch": 0.003,
+              "gain": 0.753
+            },
+            {
+              "at": 0.66835,
+              "pitch": 0.302,
+              "gain": 0.696
+            },
+            {
+              "at": 0.675,
+              "pitch": 0.345,
+              "gain": 0.99
+            }
+          ]
+        }
+      ],
+      "outputGainDb": -6,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0",
+      "loop": true
+    },
+    {
+      "name": "chain-slack-v8",
+      "event": "slack",
+      "slot": "slack",
+      "seconds": 2.4,
+      "recordedLayers": [
+        {
+          "name": "rattle",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.085,
+          "fadeOut": 0.012,
+          "gain": 1,
+          "fadeIn": 0.0003,
+          "pulses": [
+            {
+              "at": 0.02635,
+              "pitch": 0.186,
+              "gain": 0.939
+            },
+            {
+              "at": 0.13641,
+              "pitch": 0.494,
+              "gain": 0.584
+            },
+            {
+              "at": 0.27984,
+              "pitch": -0.582,
+              "gain": 0.66
+            },
+            {
+              "at": 0.42264,
+              "pitch": 0.466,
+              "gain": 0.852
+            },
+            {
+              "at": 0.54729,
+              "pitch": 0.04,
+              "gain": 0.804
+            },
+            {
+              "at": 0.65337,
+              "pitch": 0.256,
+              "gain": 0.666
+            },
+            {
+              "at": 0.77595,
+              "pitch": -0.393,
+              "gain": 0.97
+            },
+            {
+              "at": 0.88692,
+              "pitch": 0.047,
+              "gain": 0.953
+            },
+            {
+              "at": 1.01367,
+              "pitch": -0.26,
+              "gain": 0.58
+            },
+            {
+              "at": 1.1612,
+              "pitch": -0.553,
+              "gain": 0.901
+            },
+            {
+              "at": 1.29365,
+              "pitch": 0.195,
+              "gain": 0.909
+            },
+            {
+              "at": 1.4149,
+              "pitch": -0.496,
+              "gain": 0.775
+            },
+            {
+              "at": 1.52258,
+              "pitch": 0.155,
+              "gain": 0.595
+            },
+            {
+              "at": 1.67753,
+              "pitch": -0.155,
+              "gain": 0.694
+            },
+            {
+              "at": 1.78558,
+              "pitch": 0.183,
+              "gain": 0.655
+            },
+            {
+              "at": 1.90861,
+              "pitch": -0.5,
+              "gain": 0.746
+            },
+            {
+              "at": 2.04169,
+              "pitch": -0.435,
+              "gain": 0.925
+            },
+            {
+              "at": 2.15144,
+              "pitch": 0.452,
+              "gain": 0.821
+            },
+            {
+              "at": 2.355,
+              "pitch": -0.191,
+              "gain": 0.988
+            }
+          ]
+        }
+      ],
+      "outputGainDb": -9,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0",
+      "loop": true
+    },
+    {
+      "name": "chain-taut-v8",
+      "event": "taut",
+      "slot": "taut",
+      "seconds": 0.08,
+      "recordedLayers": [
+        {
+          "name": "catch",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.05,
+          "fadeOut": 0.008,
+          "gain": 1,
+          "fadeIn": 0.0002,
+          "pulses": [
+            {
+              "at": 0,
+              "pitch": -0.4,
+              "gain": 1
+            },
+            {
+              "at": 0.006,
+              "pitch": 0.35,
+              "gain": 0.55
+            },
+            {
+              "at": 0.013,
+              "pitch": -0.8,
+              "gain": 0.28
+            }
+          ]
+        }
+      ],
+      "outputGainDb": -3,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "attach-dirt-scatter-v9",
+      "event": "attach",
+      "slot": "attach",
+      "seconds": 0.51,
+      "recordedLayers": [
+        {
+          "name": "dirt-impact-scatter",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "pitch": 0,
+          "fadeIn": 0,
+          "fadeOut": 0.005,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-swing-creak-v10",
+      "event": "creak",
+      "slot": "creak",
+      "seconds": 2,
+      "loop": true,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "file": "sources/swing-chain-creak-rz-post.mp3",
+          "pitch": 0,
+          "highpass": 150,
+          "lowpass": 6500,
+          "fadeIn": 0.01,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "name": "creak-a",
+          "start": 2.51,
+          "end": 2.79,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.15,
+              "gain": 0.8
+            },
+            {
+              "at": 1.1,
+              "pitch": -0.3,
+              "gain": 1
+            }
+          ]
+        },
+        {
+          "file": "sources/swing-chain-creak-rz-post.mp3",
+          "pitch": 0,
+          "highpass": 150,
+          "lowpass": 6500,
+          "fadeIn": 0.01,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "name": "creak-b",
+          "start": 1.285,
+          "end": 1.405,
+          "gain": 0.85,
+          "pulses": [
+            {
+              "at": 0.6,
+              "gain": 1
+            },
+            {
+              "at": 1.55,
+              "pitch": 0.25,
+              "gain": 0.75
+            }
+          ]
+        },
+        {
+          "file": "sources/swing-chain-creak-rz-post.mp3",
+          "pitch": 0,
+          "highpass": 150,
+          "lowpass": 6500,
+          "fadeIn": 0.01,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "name": "creak-c",
+          "start": 1.82,
+          "end": 1.98,
+          "gain": 0.6,
+          "pulses": [
+            {
+              "at": 1.95,
+              "gain": 1
+            }
+          ]
+        }
+      ],
+      "source": "User-provided download: 461978-Swing-Seat-Chains-Hit-Move-Balance-Metal-Squeak-Park-Playground.mp3",
+      "author": "RZ Post (embedded artist metadata)",
+      "license": ""
+    },
+    {
+      "name": "chain-creak-a-v11",
+      "event": "creak",
+      "slot": "creak",
+      "seconds": 0.3,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "file": "sources/swing-chain-creak-rz-post.mp3",
+          "pitch": 0,
+          "highpass": 150,
+          "lowpass": 6500,
+          "fadeIn": 0.01,
+          "fadeOut": 0.025,
+          "name": "creak-a",
+          "start": 2.51,
+          "end": 2.79,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: 461978-Swing-Seat-Chains-Hit-Move-Balance-Metal-Squeak-Park-Playground.mp3",
+      "author": "RZ Post (embedded artist metadata)",
+      "license": ""
+    },
+    {
+      "name": "chain-creak-b-v11",
+      "event": "creak",
+      "slot": "creak",
+      "seconds": 0.15,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "file": "sources/swing-chain-creak-rz-post.mp3",
+          "pitch": 0,
+          "highpass": 150,
+          "lowpass": 6500,
+          "fadeIn": 0.01,
+          "fadeOut": 0.025,
+          "name": "creak-b",
+          "start": 1.285,
+          "end": 1.405,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: 461978-Swing-Seat-Chains-Hit-Move-Balance-Metal-Squeak-Park-Playground.mp3",
+      "author": "RZ Post (embedded artist metadata)",
+      "license": ""
+    },
+    {
+      "name": "chain-creak-c-v11",
+      "event": "creak",
+      "slot": "creak",
+      "seconds": 0.19,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "file": "sources/swing-chain-creak-rz-post.mp3",
+          "pitch": 0,
+          "highpass": 150,
+          "lowpass": 6500,
+          "fadeIn": 0.01,
+          "fadeOut": 0.025,
+          "name": "creak-c",
+          "start": 1.82,
+          "end": 1.98,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: 461978-Swing-Seat-Chains-Hit-Move-Balance-Metal-Squeak-Park-Playground.mp3",
+      "author": "RZ Post (embedded artist metadata)",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-v11",
+      "event": "wrap",
+      "slot": "wrap",
+      "seconds": 0.3,
+      "outputGainDb": -5,
+      "recordedLayers": [
+        {
+          "file": "sources/swing-chain-creak-rz-post.mp3",
+          "pitch": 0,
+          "highpass": 150,
+          "lowpass": 6500,
+          "fadeIn": 0.01,
+          "fadeOut": 0.025,
+          "name": "geometry-friction",
+          "start": 2.51,
+          "end": 2.79,
+          "gain": 1,
+          "normalize": true
+        },
+        {
+          "name": "links-seat",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.045,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.008,
+          "normalize": true,
+          "gain": 0.1
+        }
+      ],
+      "source": "User-provided download: 461978-Swing-Seat-Chains-Hit-Move-Balance-Metal-Squeak-Park-Playground.mp3 + https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "RZ Post (embedded artist metadata); DenisChardonnet",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-links-v12",
+      "event": "wrap",
+      "slot": "wrap",
+      "slots": [
+        "wrap"
+      ],
+      "seconds": 0.065,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.04,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.8
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-stone-v12",
+      "event": "wrap",
+      "slot": "wrap.stone",
+      "slots": [
+        "wrap.stone",
+        "wrap.brick"
+      ],
+      "seconds": 0.065,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.04,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "stone-contact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.246,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 6500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.6
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "DenisChardonnet; Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-wood-v12",
+      "event": "wrap",
+      "slot": "wrap.wood",
+      "slots": [
+        "wrap.wood",
+        "wrap.vine"
+      ],
+      "seconds": 0.065,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.04,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.55
+        },
+        {
+          "name": "wood-contact",
+          "file": "sources/wood-tap-0005.wav",
+          "start": 1.822,
+          "end": 1.863,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 4500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.75
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+      "author": "DenisChardonnet; Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-metal-v12",
+      "event": "wrap",
+      "slot": "wrap.metal",
+      "slots": [
+        "wrap.metal"
+      ],
+      "seconds": 0.065,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.04,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "metal-surface",
+          "file": "sources/chain-0358.wav",
+          "pitch": -5,
+          "lowpass": 9500,
+          "duration": 0.028,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.35
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-earth-v12",
+      "event": "wrap",
+      "slot": "wrap.moss",
+      "slots": [
+        "wrap.moss"
+      ],
+      "seconds": 0.065,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 7500,
+          "duration": 0.04,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.4
+        },
+        {
+          "name": "earth-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 2800,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "DenisChardonnet; source author unrecorded",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-soft-v12",
+      "event": "wrap",
+      "slot": "wrap.mud",
+      "slots": [
+        "wrap.mud",
+        "wrap.rubber"
+      ],
+      "seconds": 0.065,
+      "outputGainDb": -7,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -9,
+          "lowpass": 3500,
+          "duration": 0.04,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.2
+        },
+        {
+          "name": "soft-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 900,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "DenisChardonnet; source author unrecorded",
+      "license": ""
+    },
+    {
+      "name": "land-light-dull-metal-v13",
+      "event": "land-light",
+      "slot": "land-light",
+      "seconds": 0.13,
+      "recordedLayers": [
+        {
+          "name": "metal-body",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -12,
+          "highpass": 70,
+          "lowpass": 1700,
+          "decay": 0.018,
+          "duration": 0.065,
+          "fadeIn": 0.0004,
+          "fadeOut": 0.012,
+          "normalize": true,
+          "gain": 1
+        },
+        {
+          "name": "short-contact-weight",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.235,
+          "pitch": -12,
+          "highpass": 60,
+          "lowpass": 420,
+          "decay": 0.016,
+          "duration": 0.047,
+          "fadeIn": 0.0004,
+          "fadeOut": 0.01,
+          "normalize": true,
+          "gain": 0.35
+        }
+      ],
+      "source": "User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "samsterbirdies (filename attribution); Joseph SARDIN",
+      "license": ""
+    },
+    {
+      "name": "land-medium-v13",
+      "event": "land-medium",
+      "slot": "land-medium",
+      "seconds": 0.85,
+      "recordedLayers": [
+        {
+          "name": "stone-impact",
+          "file": "sources/rock-impact-medium-314625.mp3",
+          "start": 0.02,
+          "pitch": 0,
+          "fadeIn": 0,
+          "fadeOut": 0.005,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "land-heavy-v13",
+      "event": "land-heavy",
+      "slot": "land-heavy",
+      "seconds": 1.5,
+      "recordedLayers": [
+        {
+          "name": "stone-impact",
+          "file": "sources/rock-impact-heavy-314636.mp3",
+          "start": 0.024,
+          "pitch": 0,
+          "fadeIn": 0,
+          "fadeOut": 0.005,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: 314636-Rock_impact_-single_stone_9.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "land-heavy-trimmed-v14",
+      "event": "land-heavy",
+      "slot": "land-heavy",
+      "seconds": 0.15,
+      "recordedLayers": [
+        {
+          "name": "stone-impact",
+          "file": "sources/rock-impact-heavy-314632.mp3",
+          "start": 0.024,
+          "end": 0.165,
+          "pitch": 0,
+          "fadeIn": 0,
+          "fadeOut": 0.02,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: 314632-Rock_impact_-single_stone_5.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "land-light-soft-stone-v14",
+      "event": "land-light",
+      "slot": "land-light",
+      "seconds": 0.15,
+      "recordedLayers": [
+        {
+          "name": "soft-stone-impact",
+          "file": "sources/rock-impact-medium-314625.mp3",
+          "start": 0.02,
+          "pitch": 0,
+          "fadeIn": 0.004,
+          "fadeOut": 0.02,
+          "gain": 1,
+          "end": 0.16,
+          "lowpass": 2800
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "land-light-soft-stone-iron-v15",
+      "event": "land-light",
+      "slot": "land-light",
+      "seconds": 0.15,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-light-soft-stone-v14/land-light-soft-stone-v14.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -15,
+          "highpass": 70,
+          "lowpass": 1400,
+          "decay": 0.025,
+          "duration": 0.085,
+          "fadeIn": 0.0004,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.15
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": 0.3334
+    },
+    {
+      "name": "land-medium-iron-v15",
+      "event": "land-medium",
+      "slot": "land-medium",
+      "seconds": 0.85,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-medium-v13/land-medium-v13.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -15,
+          "highpass": 70,
+          "lowpass": 1400,
+          "decay": 0.025,
+          "duration": 0.085,
+          "fadeIn": 0.0004,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.15
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": 0.2518
+    },
+    {
+      "name": "land-heavy-trimmed-iron-v15",
+      "event": "land-heavy",
+      "slot": "land-heavy",
+      "seconds": 0.15,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-heavy-trimmed-v14/land-heavy-trimmed-v14.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -15,
+          "highpass": 70,
+          "lowpass": 1400,
+          "decay": 0.025,
+          "duration": 0.085,
+          "fadeIn": 0.0004,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.15
+        }
+      ],
+      "source": "User-provided download: 314632-Rock_impact_-single_stone_5.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": -0.0431
+    },
+    {
+      "name": "attach-dirt-scatter-iron-v15",
+      "event": "attach",
+      "slot": "attach",
+      "seconds": 0.51,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/attach-dirt-scatter-v9/attach-dirt-scatter-v9.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -15,
+          "highpass": 70,
+          "lowpass": 1400,
+          "decay": 0.025,
+          "duration": 0.085,
+          "fadeIn": 0.0004,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.15
+        }
+      ],
+      "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": -0.0488
+    },
+    {
+      "name": "wind-chain-iron-v15",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "chain-recording",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 1,
+          "fadeIn": 0.0008,
+          "highpass": 70
+        }
+      ],
+      "outputGainDb": -5.1415,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-deploy-iron-v15",
+      "event": "deploy",
+      "slot": "deploy",
+      "seconds": 0.72,
+      "recordedLayers": [
+        {
+          "name": "rattle",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 1,
+          "fadeIn": 0.0008,
+          "pulses": [
+            {
+              "at": 0.00545,
+              "pitch": -0.217,
+              "gain": 0.79
+            },
+            {
+              "at": 0.03782,
+              "pitch": -0.51,
+              "gain": 0.959
+            },
+            {
+              "at": 0.06302,
+              "pitch": -0.55,
+              "gain": 0.727
+            },
+            {
+              "at": 0.09711,
+              "pitch": 0.328,
+              "gain": 0.666
+            },
+            {
+              "at": 0.11823,
+              "pitch": 0.31,
+              "gain": 0.972
+            },
+            {
+              "at": 0.14572,
+              "pitch": -0.29,
+              "gain": 0.974
+            },
+            {
+              "at": 0.18142,
+              "pitch": -0.303,
+              "gain": 0.988
+            },
+            {
+              "at": 0.21068,
+              "pitch": -0.384,
+              "gain": 0.941
+            },
+            {
+              "at": 0.24015,
+              "pitch": -0.484,
+              "gain": 0.907
+            },
+            {
+              "at": 0.26517,
+              "pitch": 0.449,
+              "gain": 0.714
+            },
+            {
+              "at": 0.29285,
+              "pitch": -0.311,
+              "gain": 0.913
+            },
+            {
+              "at": 0.32101,
+              "pitch": 0.401,
+              "gain": 0.956
+            },
+            {
+              "at": 0.34688,
+              "pitch": -0.156,
+              "gain": 0.957
+            },
+            {
+              "at": 0.37568,
+              "pitch": 0.15,
+              "gain": 0.596
+            },
+            {
+              "at": 0.40542,
+              "pitch": -0.2,
+              "gain": 0.964
+            },
+            {
+              "at": 0.43608,
+              "pitch": -0.069,
+              "gain": 0.968
+            },
+            {
+              "at": 0.47088,
+              "pitch": -0.108,
+              "gain": 0.785
+            },
+            {
+              "at": 0.49537,
+              "pitch": 0.422,
+              "gain": 0.614
+            },
+            {
+              "at": 0.5229,
+              "pitch": 0.182,
+              "gain": 0.617
+            },
+            {
+              "at": 0.5481,
+              "pitch": 0.065,
+              "gain": 0.633
+            },
+            {
+              "at": 0.58156,
+              "pitch": -0.345,
+              "gain": 0.655
+            },
+            {
+              "at": 0.61277,
+              "pitch": -0.303,
+              "gain": 0.63
+            },
+            {
+              "at": 0.63842,
+              "pitch": 0.003,
+              "gain": 0.753
+            },
+            {
+              "at": 0.66835,
+              "pitch": 0.302,
+              "gain": 0.696
+            },
+            {
+              "at": 0.675,
+              "pitch": 0.345,
+              "gain": 0.99
+            }
+          ],
+          "highpass": 70
+        }
+      ],
+      "outputGainDb": -3.4505,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0",
+      "loop": true
+    },
+    {
+      "name": "chain-slack-iron-v15",
+      "event": "slack",
+      "slot": "slack",
+      "seconds": 2.4,
+      "recordedLayers": [
+        {
+          "name": "rattle",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 1,
+          "fadeIn": 0.0008,
+          "pulses": [
+            {
+              "at": 0.02635,
+              "pitch": 0.186,
+              "gain": 0.939
+            },
+            {
+              "at": 0.13641,
+              "pitch": 0.494,
+              "gain": 0.584
+            },
+            {
+              "at": 0.27984,
+              "pitch": -0.582,
+              "gain": 0.66
+            },
+            {
+              "at": 0.42264,
+              "pitch": 0.466,
+              "gain": 0.852
+            },
+            {
+              "at": 0.54729,
+              "pitch": 0.04,
+              "gain": 0.804
+            },
+            {
+              "at": 0.65337,
+              "pitch": 0.256,
+              "gain": 0.666
+            },
+            {
+              "at": 0.77595,
+              "pitch": -0.393,
+              "gain": 0.97
+            },
+            {
+              "at": 0.88692,
+              "pitch": 0.047,
+              "gain": 0.953
+            },
+            {
+              "at": 1.01367,
+              "pitch": -0.26,
+              "gain": 0.58
+            },
+            {
+              "at": 1.1612,
+              "pitch": -0.553,
+              "gain": 0.901
+            },
+            {
+              "at": 1.29365,
+              "pitch": 0.195,
+              "gain": 0.909
+            },
+            {
+              "at": 1.4149,
+              "pitch": -0.496,
+              "gain": 0.775
+            },
+            {
+              "at": 1.52258,
+              "pitch": 0.155,
+              "gain": 0.595
+            },
+            {
+              "at": 1.67753,
+              "pitch": -0.155,
+              "gain": 0.694
+            },
+            {
+              "at": 1.78558,
+              "pitch": 0.183,
+              "gain": 0.655
+            },
+            {
+              "at": 1.90861,
+              "pitch": -0.5,
+              "gain": 0.746
+            },
+            {
+              "at": 2.04169,
+              "pitch": -0.435,
+              "gain": 0.925
+            },
+            {
+              "at": 2.15144,
+              "pitch": 0.452,
+              "gain": 0.821
+            },
+            {
+              "at": 2.355,
+              "pitch": -0.191,
+              "gain": 0.988
+            }
+          ],
+          "highpass": 70
+        }
+      ],
+      "outputGainDb": -6.0489,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0",
+      "loop": true
+    },
+    {
+      "name": "chain-taut-iron-v15",
+      "event": "taut",
+      "slot": "taut",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "catch",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.065,
+          "fadeOut": 0.010400000000000001,
+          "gain": 1,
+          "fadeIn": 0.0008,
+          "pulses": [
+            {
+              "at": 0,
+              "pitch": -0.4,
+              "gain": 1
+            },
+            {
+              "at": 0.006,
+              "pitch": 0.35,
+              "gain": 0.55
+            },
+            {
+              "at": 0.013,
+              "pitch": -0.8,
+              "gain": 0.28
+            }
+          ],
+          "highpass": 70
+        }
+      ],
+      "outputGainDb": 0.9947,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-links-iron-v15",
+      "event": "wrap",
+      "slot": "wrap",
+      "slots": [
+        "wrap"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -6.272,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.8,
+          "highpass": 70
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-stone-iron-v15",
+      "event": "wrap",
+      "slot": "wrap.stone",
+      "slots": [
+        "wrap.stone",
+        "wrap.brick"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -5.9708,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.8,
+          "highpass": 70
+        },
+        {
+          "name": "stone-contact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.246,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 6500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.6
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "DenisChardonnet; Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-wood-iron-v15",
+      "event": "wrap",
+      "slot": "wrap.wood",
+      "slots": [
+        "wrap.wood",
+        "wrap.vine"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -6.5461,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.55,
+          "highpass": 70
+        },
+        {
+          "name": "wood-contact",
+          "file": "sources/wood-tap-0005.wav",
+          "start": 1.822,
+          "end": 1.863,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 4500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.75
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+      "author": "DenisChardonnet; Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-metal-iron-v15",
+      "event": "wrap",
+      "slot": "wrap.metal",
+      "slots": [
+        "wrap.metal"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -6.0307,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.8,
+          "highpass": 70
+        },
+        {
+          "name": "metal-surface",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.0364,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.35,
+          "highpass": 70
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-earth-iron-v15",
+      "event": "wrap",
+      "slot": "wrap.moss",
+      "slots": [
+        "wrap.moss"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -6.7027,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.4,
+          "highpass": 70
+        },
+        {
+          "name": "earth-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 2800,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "DenisChardonnet; source author unrecorded",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-soft-iron-v15",
+      "event": "wrap",
+      "slot": "wrap.mud",
+      "slots": [
+        "wrap.mud",
+        "wrap.rubber"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -5.9474,
+      "recordedLayers": [
+        {
+          "name": "metal-links",
+          "file": "sources/chain-0358.wav",
+          "pitch": -17,
+          "lowpass": 3000,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.2,
+          "highpass": 70
+        },
+        {
+          "name": "soft-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 900,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "DenisChardonnet; source author unrecorded",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-iron-detail-v16",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "chain-recording-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 0.85,
+          "fadeIn": 0.0003,
+          "highpass": 70,
+          "normalize": true
+        },
+        {
+          "name": "chain-recording-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 0.2,
+          "fadeIn": 0.0008,
+          "highpass": 70,
+          "normalize": true,
+          "decay": 0.04
+        }
+      ],
+      "outputGainDb": -9.5087,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-deploy-iron-detail-v16",
+      "event": "deploy",
+      "slot": "deploy",
+      "seconds": 0.72,
+      "recordedLayers": [
+        {
+          "name": "rattle-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 0.85,
+          "fadeIn": 0.0003,
+          "pulses": [
+            {
+              "at": 0.00545,
+              "pitch": -0.217,
+              "gain": 0.79
+            },
+            {
+              "at": 0.03782,
+              "pitch": -0.51,
+              "gain": 0.959
+            },
+            {
+              "at": 0.06302,
+              "pitch": -0.55,
+              "gain": 0.727
+            },
+            {
+              "at": 0.09711,
+              "pitch": 0.328,
+              "gain": 0.666
+            },
+            {
+              "at": 0.11823,
+              "pitch": 0.31,
+              "gain": 0.972
+            },
+            {
+              "at": 0.14572,
+              "pitch": -0.29,
+              "gain": 0.974
+            },
+            {
+              "at": 0.18142,
+              "pitch": -0.303,
+              "gain": 0.988
+            },
+            {
+              "at": 0.21068,
+              "pitch": -0.384,
+              "gain": 0.941
+            },
+            {
+              "at": 0.24015,
+              "pitch": -0.484,
+              "gain": 0.907
+            },
+            {
+              "at": 0.26517,
+              "pitch": 0.449,
+              "gain": 0.714
+            },
+            {
+              "at": 0.29285,
+              "pitch": -0.311,
+              "gain": 0.913
+            },
+            {
+              "at": 0.32101,
+              "pitch": 0.401,
+              "gain": 0.956
+            },
+            {
+              "at": 0.34688,
+              "pitch": -0.156,
+              "gain": 0.957
+            },
+            {
+              "at": 0.37568,
+              "pitch": 0.15,
+              "gain": 0.596
+            },
+            {
+              "at": 0.40542,
+              "pitch": -0.2,
+              "gain": 0.964
+            },
+            {
+              "at": 0.43608,
+              "pitch": -0.069,
+              "gain": 0.968
+            },
+            {
+              "at": 0.47088,
+              "pitch": -0.108,
+              "gain": 0.785
+            },
+            {
+              "at": 0.49537,
+              "pitch": 0.422,
+              "gain": 0.614
+            },
+            {
+              "at": 0.5229,
+              "pitch": 0.182,
+              "gain": 0.617
+            },
+            {
+              "at": 0.5481,
+              "pitch": 0.065,
+              "gain": 0.633
+            },
+            {
+              "at": 0.58156,
+              "pitch": -0.345,
+              "gain": 0.655
+            },
+            {
+              "at": 0.61277,
+              "pitch": -0.303,
+              "gain": 0.63
+            },
+            {
+              "at": 0.63842,
+              "pitch": 0.003,
+              "gain": 0.753
+            },
+            {
+              "at": 0.66835,
+              "pitch": 0.302,
+              "gain": 0.696
+            },
+            {
+              "at": 0.675,
+              "pitch": 0.345,
+              "gain": 0.99
+            }
+          ],
+          "highpass": 70,
+          "normalize": true
+        },
+        {
+          "name": "rattle-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 0.2,
+          "fadeIn": 0.0008,
+          "pulses": [
+            {
+              "at": 0.00545,
+              "pitch": -0.217,
+              "gain": 0.79
+            },
+            {
+              "at": 0.03782,
+              "pitch": -0.51,
+              "gain": 0.959
+            },
+            {
+              "at": 0.06302,
+              "pitch": -0.55,
+              "gain": 0.727
+            },
+            {
+              "at": 0.09711,
+              "pitch": 0.328,
+              "gain": 0.666
+            },
+            {
+              "at": 0.11823,
+              "pitch": 0.31,
+              "gain": 0.972
+            },
+            {
+              "at": 0.14572,
+              "pitch": -0.29,
+              "gain": 0.974
+            },
+            {
+              "at": 0.18142,
+              "pitch": -0.303,
+              "gain": 0.988
+            },
+            {
+              "at": 0.21068,
+              "pitch": -0.384,
+              "gain": 0.941
+            },
+            {
+              "at": 0.24015,
+              "pitch": -0.484,
+              "gain": 0.907
+            },
+            {
+              "at": 0.26517,
+              "pitch": 0.449,
+              "gain": 0.714
+            },
+            {
+              "at": 0.29285,
+              "pitch": -0.311,
+              "gain": 0.913
+            },
+            {
+              "at": 0.32101,
+              "pitch": 0.401,
+              "gain": 0.956
+            },
+            {
+              "at": 0.34688,
+              "pitch": -0.156,
+              "gain": 0.957
+            },
+            {
+              "at": 0.37568,
+              "pitch": 0.15,
+              "gain": 0.596
+            },
+            {
+              "at": 0.40542,
+              "pitch": -0.2,
+              "gain": 0.964
+            },
+            {
+              "at": 0.43608,
+              "pitch": -0.069,
+              "gain": 0.968
+            },
+            {
+              "at": 0.47088,
+              "pitch": -0.108,
+              "gain": 0.785
+            },
+            {
+              "at": 0.49537,
+              "pitch": 0.422,
+              "gain": 0.614
+            },
+            {
+              "at": 0.5229,
+              "pitch": 0.182,
+              "gain": 0.617
+            },
+            {
+              "at": 0.5481,
+              "pitch": 0.065,
+              "gain": 0.633
+            },
+            {
+              "at": 0.58156,
+              "pitch": -0.345,
+              "gain": 0.655
+            },
+            {
+              "at": 0.61277,
+              "pitch": -0.303,
+              "gain": 0.63
+            },
+            {
+              "at": 0.63842,
+              "pitch": 0.003,
+              "gain": 0.753
+            },
+            {
+              "at": 0.66835,
+              "pitch": 0.302,
+              "gain": 0.696
+            },
+            {
+              "at": 0.675,
+              "pitch": 0.345,
+              "gain": 0.99
+            }
+          ],
+          "highpass": 70,
+          "normalize": true,
+          "decay": 0.04
+        }
+      ],
+      "outputGainDb": -5.9748,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0",
+      "loop": true
+    },
+    {
+      "name": "chain-slack-iron-detail-v16",
+      "event": "slack",
+      "slot": "slack",
+      "seconds": 2.4,
+      "recordedLayers": [
+        {
+          "name": "rattle-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 0.85,
+          "fadeIn": 0.0003,
+          "pulses": [
+            {
+              "at": 0.02635,
+              "pitch": 0.186,
+              "gain": 0.939
+            },
+            {
+              "at": 0.13641,
+              "pitch": 0.494,
+              "gain": 0.584
+            },
+            {
+              "at": 0.27984,
+              "pitch": -0.582,
+              "gain": 0.66
+            },
+            {
+              "at": 0.42264,
+              "pitch": 0.466,
+              "gain": 0.852
+            },
+            {
+              "at": 0.54729,
+              "pitch": 0.04,
+              "gain": 0.804
+            },
+            {
+              "at": 0.65337,
+              "pitch": 0.256,
+              "gain": 0.666
+            },
+            {
+              "at": 0.77595,
+              "pitch": -0.393,
+              "gain": 0.97
+            },
+            {
+              "at": 0.88692,
+              "pitch": 0.047,
+              "gain": 0.953
+            },
+            {
+              "at": 1.01367,
+              "pitch": -0.26,
+              "gain": 0.58
+            },
+            {
+              "at": 1.1612,
+              "pitch": -0.553,
+              "gain": 0.901
+            },
+            {
+              "at": 1.29365,
+              "pitch": 0.195,
+              "gain": 0.909
+            },
+            {
+              "at": 1.4149,
+              "pitch": -0.496,
+              "gain": 0.775
+            },
+            {
+              "at": 1.52258,
+              "pitch": 0.155,
+              "gain": 0.595
+            },
+            {
+              "at": 1.67753,
+              "pitch": -0.155,
+              "gain": 0.694
+            },
+            {
+              "at": 1.78558,
+              "pitch": 0.183,
+              "gain": 0.655
+            },
+            {
+              "at": 1.90861,
+              "pitch": -0.5,
+              "gain": 0.746
+            },
+            {
+              "at": 2.04169,
+              "pitch": -0.435,
+              "gain": 0.925
+            },
+            {
+              "at": 2.15144,
+              "pitch": 0.452,
+              "gain": 0.821
+            },
+            {
+              "at": 2.355,
+              "pitch": -0.191,
+              "gain": 0.988
+            }
+          ],
+          "highpass": 70,
+          "normalize": true
+        },
+        {
+          "name": "rattle-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.11050000000000001,
+          "fadeOut": 0.015600000000000001,
+          "gain": 0.2,
+          "fadeIn": 0.0008,
+          "pulses": [
+            {
+              "at": 0.02635,
+              "pitch": 0.186,
+              "gain": 0.939
+            },
+            {
+              "at": 0.13641,
+              "pitch": 0.494,
+              "gain": 0.584
+            },
+            {
+              "at": 0.27984,
+              "pitch": -0.582,
+              "gain": 0.66
+            },
+            {
+              "at": 0.42264,
+              "pitch": 0.466,
+              "gain": 0.852
+            },
+            {
+              "at": 0.54729,
+              "pitch": 0.04,
+              "gain": 0.804
+            },
+            {
+              "at": 0.65337,
+              "pitch": 0.256,
+              "gain": 0.666
+            },
+            {
+              "at": 0.77595,
+              "pitch": -0.393,
+              "gain": 0.97
+            },
+            {
+              "at": 0.88692,
+              "pitch": 0.047,
+              "gain": 0.953
+            },
+            {
+              "at": 1.01367,
+              "pitch": -0.26,
+              "gain": 0.58
+            },
+            {
+              "at": 1.1612,
+              "pitch": -0.553,
+              "gain": 0.901
+            },
+            {
+              "at": 1.29365,
+              "pitch": 0.195,
+              "gain": 0.909
+            },
+            {
+              "at": 1.4149,
+              "pitch": -0.496,
+              "gain": 0.775
+            },
+            {
+              "at": 1.52258,
+              "pitch": 0.155,
+              "gain": 0.595
+            },
+            {
+              "at": 1.67753,
+              "pitch": -0.155,
+              "gain": 0.694
+            },
+            {
+              "at": 1.78558,
+              "pitch": 0.183,
+              "gain": 0.655
+            },
+            {
+              "at": 1.90861,
+              "pitch": -0.5,
+              "gain": 0.746
+            },
+            {
+              "at": 2.04169,
+              "pitch": -0.435,
+              "gain": 0.925
+            },
+            {
+              "at": 2.15144,
+              "pitch": 0.452,
+              "gain": 0.821
+            },
+            {
+              "at": 2.355,
+              "pitch": -0.191,
+              "gain": 0.988
+            }
+          ],
+          "highpass": 70,
+          "normalize": true,
+          "decay": 0.04
+        }
+      ],
+      "outputGainDb": -10.6981,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0",
+      "loop": true
+    },
+    {
+      "name": "chain-taut-iron-detail-v16",
+      "event": "taut",
+      "slot": "taut",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "catch-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.065,
+          "fadeOut": 0.010400000000000001,
+          "gain": 0.85,
+          "fadeIn": 0.0003,
+          "pulses": [
+            {
+              "at": 0,
+              "pitch": -0.4,
+              "gain": 1
+            },
+            {
+              "at": 0.006,
+              "pitch": 0.35,
+              "gain": 0.55
+            },
+            {
+              "at": 0.013,
+              "pitch": -0.8,
+              "gain": 0.28
+            }
+          ],
+          "highpass": 70,
+          "normalize": true
+        },
+        {
+          "name": "catch-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.065,
+          "fadeOut": 0.010400000000000001,
+          "gain": 0.2,
+          "fadeIn": 0.0008,
+          "pulses": [
+            {
+              "at": 0,
+              "pitch": -0.4,
+              "gain": 1
+            },
+            {
+              "at": 0.006,
+              "pitch": 0.35,
+              "gain": 0.55
+            },
+            {
+              "at": 0.013,
+              "pitch": -0.8,
+              "gain": 0.28
+            }
+          ],
+          "highpass": 70,
+          "normalize": true,
+          "decay": 0.04
+        }
+      ],
+      "outputGainDb": -0.029,
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-links-iron-detail-v16",
+      "event": "wrap",
+      "slot": "wrap",
+      "slots": [
+        "wrap"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -5.6214,
+      "recordedLayers": [
+        {
+          "name": "metal-links-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.68,
+          "highpass": 70
+        },
+        {
+          "name": "metal-links-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.16000000000000003,
+          "highpass": 70,
+          "decay": 0.04
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-stone-iron-detail-v16",
+      "event": "wrap",
+      "slot": "wrap.stone",
+      "slots": [
+        "wrap.stone",
+        "wrap.brick"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -5.2193,
+      "recordedLayers": [
+        {
+          "name": "metal-links-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.68,
+          "highpass": 70
+        },
+        {
+          "name": "metal-links-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.16000000000000003,
+          "highpass": 70,
+          "decay": 0.04
+        },
+        {
+          "name": "stone-contact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.246,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 6500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.6
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "DenisChardonnet; Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-wood-iron-detail-v16",
+      "event": "wrap",
+      "slot": "wrap.wood",
+      "slots": [
+        "wrap.wood",
+        "wrap.vine"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -4.5055,
+      "recordedLayers": [
+        {
+          "name": "metal-links-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.4675,
+          "highpass": 70
+        },
+        {
+          "name": "metal-links-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.11000000000000001,
+          "highpass": 70,
+          "decay": 0.04
+        },
+        {
+          "name": "wood-contact",
+          "file": "sources/wood-tap-0005.wav",
+          "start": 1.822,
+          "end": 1.863,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 4500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.75
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+      "author": "DenisChardonnet; Joseph SARDIN",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-metal-iron-detail-v16",
+      "event": "wrap",
+      "slot": "wrap.metal",
+      "slots": [
+        "wrap.metal"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -5.4999,
+      "recordedLayers": [
+        {
+          "name": "metal-links-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.68,
+          "highpass": 70
+        },
+        {
+          "name": "metal-links-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.16000000000000003,
+          "highpass": 70,
+          "decay": 0.04
+        },
+        {
+          "name": "metal-surface-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.0364,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.2975,
+          "highpass": 70
+        },
+        {
+          "name": "metal-surface-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.0364,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.06999999999999999,
+          "highpass": 70,
+          "decay": 0.04
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
+      "author": "DenisChardonnet",
+      "license": "CC0-1.0"
+    },
+    {
+      "name": "chain-wrap-earth-iron-detail-v16",
+      "event": "wrap",
+      "slot": "wrap.moss",
+      "slots": [
+        "wrap.moss"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -6.5674,
+      "recordedLayers": [
+        {
+          "name": "metal-links-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.34,
+          "highpass": 70
+        },
+        {
+          "name": "metal-links-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.08000000000000002,
+          "highpass": 70,
+          "decay": 0.04
+        },
+        {
+          "name": "earth-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 2800,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "DenisChardonnet; source author unrecorded",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-soft-iron-detail-v16",
+      "event": "wrap",
+      "slot": "wrap.mud",
+      "slots": [
+        "wrap.mud",
+        "wrap.rubber"
+      ],
+      "seconds": 0.1,
+      "outputGainDb": -5.9608,
+      "recordedLayers": [
+        {
+          "name": "metal-links-detail",
+          "file": "sources/chain-0358.wav",
+          "pitch": -10,
+          "lowpass": 8500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.17,
+          "highpass": 70
+        },
+        {
+          "name": "metal-links-weight",
+          "file": "sources/chain-0358.wav",
+          "pitch": -18,
+          "lowpass": 1500,
+          "duration": 0.052000000000000005,
+          "fadeIn": 0.0008,
+          "fadeOut": 0.0078000000000000005,
+          "normalize": true,
+          "gain": 0.04000000000000001,
+          "highpass": 70,
+          "decay": 0.04
+        },
+        {
+          "name": "soft-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 900,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "DenisChardonnet; source author unrecorded",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-heavy-1-v17",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 1.23104,
+          "end": 1.35104,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": -9.247,
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-heavy-2-v17",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": -6.9013,
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-heavy-3-v17",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 5.08875,
+          "end": 5.20875,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": -8.4884,
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-deploy-recorded-heavy-v17",
+      "event": "deploy",
+      "slot": "deploy",
+      "seconds": 0.72,
+      "recordedLayers": [
+        {
+          "name": "heavy-links-1",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 1.23104,
+          "end": 1.35104,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.00545,
+              "pitch": 0,
+              "gain": 0.79
+            },
+            {
+              "at": 0.11823,
+              "pitch": 0,
+              "gain": 0.972
+            },
+            {
+              "at": 0.24015,
+              "pitch": 0,
+              "gain": 0.907
+            },
+            {
+              "at": 0.34688,
+              "pitch": 0,
+              "gain": 0.957
+            },
+            {
+              "at": 0.47088,
+              "pitch": 0,
+              "gain": 0.785
+            },
+            {
+              "at": 0.58156,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "at": 0.675,
+              "pitch": 0,
+              "gain": 0.99
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-2",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.03782,
+              "pitch": 0,
+              "gain": 0.959
+            },
+            {
+              "at": 0.14572,
+              "pitch": 0,
+              "gain": 0.974
+            },
+            {
+              "at": 0.26517,
+              "pitch": 0,
+              "gain": 0.714
+            },
+            {
+              "at": 0.37568,
+              "pitch": 0,
+              "gain": 0.596
+            },
+            {
+              "at": 0.49537,
+              "pitch": 0,
+              "gain": 0.614
+            },
+            {
+              "at": 0.61277,
+              "pitch": 0,
+              "gain": 0.63
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-3",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 5.08875,
+          "end": 5.20875,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.06302,
+              "pitch": 0,
+              "gain": 0.727
+            },
+            {
+              "at": 0.18142,
+              "pitch": 0,
+              "gain": 0.988
+            },
+            {
+              "at": 0.29285,
+              "pitch": 0,
+              "gain": 0.913
+            },
+            {
+              "at": 0.40542,
+              "pitch": 0,
+              "gain": 0.964
+            },
+            {
+              "at": 0.5229,
+              "pitch": 0,
+              "gain": 0.617
+            },
+            {
+              "at": 0.63842,
+              "pitch": 0,
+              "gain": 0.753
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-4",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 5.91576,
+          "end": 6.03576,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.09711,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "at": 0.21068,
+              "pitch": 0,
+              "gain": 0.941
+            },
+            {
+              "at": 0.32101,
+              "pitch": 0,
+              "gain": 0.956
+            },
+            {
+              "at": 0.43608,
+              "pitch": 0,
+              "gain": 0.968
+            },
+            {
+              "at": 0.5481,
+              "pitch": 0,
+              "gain": 0.633
+            },
+            {
+              "at": 0.66835,
+              "pitch": 0,
+              "gain": 0.696
+            }
+          ]
+        }
+      ],
+      "outputGainDb": -4.2853,
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": "",
+      "loop": true
+    },
+    {
+      "name": "chain-slack-recorded-heavy-v17",
+      "event": "slack",
+      "slot": "slack",
+      "seconds": 2.4,
+      "recordedLayers": [
+        {
+          "name": "heavy-links-1",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 1.23104,
+          "end": 1.35104,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.02635,
+              "pitch": 0,
+              "gain": 0.939
+            },
+            {
+              "at": 0.54729,
+              "pitch": 0,
+              "gain": 0.804
+            },
+            {
+              "at": 1.01367,
+              "pitch": 0,
+              "gain": 0.58
+            },
+            {
+              "at": 1.52258,
+              "pitch": 0,
+              "gain": 0.595
+            },
+            {
+              "at": 2.04169,
+              "pitch": 0,
+              "gain": 0.925
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-2",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.13641,
+              "pitch": 0,
+              "gain": 0.584
+            },
+            {
+              "at": 0.65337,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "at": 1.1612,
+              "pitch": 0,
+              "gain": 0.901
+            },
+            {
+              "at": 1.67753,
+              "pitch": 0,
+              "gain": 0.694
+            },
+            {
+              "at": 2.15144,
+              "pitch": 0,
+              "gain": 0.821
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-3",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 5.08875,
+          "end": 5.20875,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.27984,
+              "pitch": 0,
+              "gain": 0.66
+            },
+            {
+              "at": 0.77595,
+              "pitch": 0,
+              "gain": 0.97
+            },
+            {
+              "at": 1.29365,
+              "pitch": 0,
+              "gain": 0.909
+            },
+            {
+              "at": 1.78558,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "at": 2.355,
+              "pitch": 0,
+              "gain": 0.988
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-4",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 5.91576,
+          "end": 6.03576,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.42264,
+              "pitch": 0,
+              "gain": 0.852
+            },
+            {
+              "at": 0.88692,
+              "pitch": 0,
+              "gain": 0.953
+            },
+            {
+              "at": 1.4149,
+              "pitch": 0,
+              "gain": 0.775
+            },
+            {
+              "at": 1.90861,
+              "pitch": 0,
+              "gain": 0.746
+            }
+          ]
+        }
+      ],
+      "outputGainDb": -5.9825,
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": "",
+      "loop": true
+    },
+    {
+      "name": "chain-taut-recorded-heavy-v17",
+      "event": "taut",
+      "slot": "taut",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-chain-catch",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 5.91576,
+          "end": 6.03576,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-links-recorded-heavy-v17",
+      "event": "wrap",
+      "slot": "wrap",
+      "slots": [
+        "wrap"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -3.1183,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        }
+      ],
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-stone-recorded-heavy-v17",
+      "event": "wrap",
+      "slot": "wrap.stone",
+      "slots": [
+        "wrap.stone",
+        "wrap.brick"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -3.1666,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "stone-contact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.246,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 6500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.6
+        }
+      ],
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3 + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-wood-recorded-heavy-v17",
+      "event": "wrap",
+      "slot": "wrap.wood",
+      "slots": [
+        "wrap.wood",
+        "wrap.vine"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -4.8194,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "wood-contact",
+          "file": "sources/wood-tap-0005.wav",
+          "start": 1.822,
+          "end": 1.863,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 4500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.75
+        }
+      ],
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3 + https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-metal-recorded-heavy-v17",
+      "event": "wrap",
+      "slot": "wrap.metal",
+      "slots": [
+        "wrap.metal"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -3.442,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        }
+      ],
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-earth-recorded-heavy-v17",
+      "event": "wrap",
+      "slot": "wrap.moss",
+      "slots": [
+        "wrap.moss"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -6.0041,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "earth-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 2800,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-soft-recorded-heavy-v17",
+      "event": "wrap",
+      "slot": "wrap.mud",
+      "slots": [
+        "wrap.mud",
+        "wrap.rubber"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -6.1488,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-209329.mp3",
+          "start": 3.30011,
+          "end": 3.42011,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "soft-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 900,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "User-provided download: 209329-EFX_SD_Chain_Movement_02.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-heavy-1-v18",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 1.65583,
+          "end": 1.77583,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-heavy-2-v18",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-heavy-3-v18",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.35596,
+          "end": 8.47596,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": -7.9026,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-deploy-new-source-v18",
+      "event": "deploy",
+      "slot": "deploy",
+      "seconds": 0.72,
+      "recordedLayers": [
+        {
+          "name": "heavy-links-1",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 1.65583,
+          "end": 1.77583,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.00545,
+              "pitch": 0,
+              "gain": 0.79
+            },
+            {
+              "at": 0.11823,
+              "pitch": 0,
+              "gain": 0.972
+            },
+            {
+              "at": 0.24015,
+              "pitch": 0,
+              "gain": 0.907
+            },
+            {
+              "at": 0.34688,
+              "pitch": 0,
+              "gain": 0.957
+            },
+            {
+              "at": 0.47088,
+              "pitch": 0,
+              "gain": 0.785
+            },
+            {
+              "at": 0.58156,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "at": 0.675,
+              "pitch": 0,
+              "gain": 0.99
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-2",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.03782,
+              "pitch": 0,
+              "gain": 0.959
+            },
+            {
+              "at": 0.14572,
+              "pitch": 0,
+              "gain": 0.974
+            },
+            {
+              "at": 0.26517,
+              "pitch": 0,
+              "gain": 0.714
+            },
+            {
+              "at": 0.37568,
+              "pitch": 0,
+              "gain": 0.596
+            },
+            {
+              "at": 0.49537,
+              "pitch": 0,
+              "gain": 0.614
+            },
+            {
+              "at": 0.61277,
+              "pitch": 0,
+              "gain": 0.63
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-3",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.35596,
+          "end": 8.47596,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.06302,
+              "pitch": 0,
+              "gain": 0.727
+            },
+            {
+              "at": 0.18142,
+              "pitch": 0,
+              "gain": 0.988
+            },
+            {
+              "at": 0.29285,
+              "pitch": 0,
+              "gain": 0.913
+            },
+            {
+              "at": 0.40542,
+              "pitch": 0,
+              "gain": 0.964
+            },
+            {
+              "at": 0.5229,
+              "pitch": 0,
+              "gain": 0.617
+            },
+            {
+              "at": 0.63842,
+              "pitch": 0,
+              "gain": 0.753
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-4",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.71892,
+          "end": 8.83892,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.09711,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "at": 0.21068,
+              "pitch": 0,
+              "gain": 0.941
+            },
+            {
+              "at": 0.32101,
+              "pitch": 0,
+              "gain": 0.956
+            },
+            {
+              "at": 0.43608,
+              "pitch": 0,
+              "gain": 0.968
+            },
+            {
+              "at": 0.5481,
+              "pitch": 0,
+              "gain": 0.633
+            },
+            {
+              "at": 0.66835,
+              "pitch": 0,
+              "gain": 0.696
+            }
+          ]
+        }
+      ],
+      "outputGainDb": -0.565,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": "",
+      "loop": true
+    },
+    {
+      "name": "chain-slack-new-source-v18",
+      "event": "slack",
+      "slot": "slack",
+      "seconds": 2.4,
+      "recordedLayers": [
+        {
+          "name": "heavy-links-1",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 1.65583,
+          "end": 1.77583,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.02635,
+              "pitch": 0,
+              "gain": 0.939
+            },
+            {
+              "at": 0.54729,
+              "pitch": 0,
+              "gain": 0.804
+            },
+            {
+              "at": 1.01367,
+              "pitch": 0,
+              "gain": 0.58
+            },
+            {
+              "at": 1.52258,
+              "pitch": 0,
+              "gain": 0.595
+            },
+            {
+              "at": 2.04169,
+              "pitch": 0,
+              "gain": 0.925
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-2",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.13641,
+              "pitch": 0,
+              "gain": 0.584
+            },
+            {
+              "at": 0.65337,
+              "pitch": 0,
+              "gain": 0.666
+            },
+            {
+              "at": 1.1612,
+              "pitch": 0,
+              "gain": 0.901
+            },
+            {
+              "at": 1.67753,
+              "pitch": 0,
+              "gain": 0.694
+            },
+            {
+              "at": 2.15144,
+              "pitch": 0,
+              "gain": 0.821
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-3",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.35596,
+          "end": 8.47596,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.27984,
+              "pitch": 0,
+              "gain": 0.66
+            },
+            {
+              "at": 0.77595,
+              "pitch": 0,
+              "gain": 0.97
+            },
+            {
+              "at": 1.29365,
+              "pitch": 0,
+              "gain": 0.909
+            },
+            {
+              "at": 1.78558,
+              "pitch": 0,
+              "gain": 0.655
+            },
+            {
+              "at": 2.355,
+              "pitch": 0,
+              "gain": 0.988
+            }
+          ]
+        },
+        {
+          "name": "heavy-links-4",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.71892,
+          "end": 8.83892,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1,
+          "pulses": [
+            {
+              "at": 0.42264,
+              "pitch": 0,
+              "gain": 0.852
+            },
+            {
+              "at": 0.88692,
+              "pitch": 0,
+              "gain": 0.953
+            },
+            {
+              "at": 1.4149,
+              "pitch": 0,
+              "gain": 0.775
+            },
+            {
+              "at": 1.90861,
+              "pitch": 0,
+              "gain": 0.746
+            }
+          ]
+        }
+      ],
+      "outputGainDb": -5.2563,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": "",
+      "loop": true
+    },
+    {
+      "name": "chain-taut-new-source-v18",
+      "event": "taut",
+      "slot": "taut",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-chain-catch",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.71892,
+          "end": 8.83892,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-links-new-source-v18",
+      "event": "wrap",
+      "slot": "wrap",
+      "slots": [
+        "wrap"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": 1.0618,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        }
+      ],
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-stone-new-source-v18",
+      "event": "wrap",
+      "slot": "wrap.stone",
+      "slots": [
+        "wrap.stone",
+        "wrap.brick"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": 1.0618,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "stone-contact",
+          "file": "sources/hammer-concrete-1108.wav",
+          "start": 0.2115,
+          "end": 0.246,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 6500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.6
+        }
+      ],
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-wood-new-source-v18",
+      "event": "wrap",
+      "slot": "wrap.wood",
+      "slots": [
+        "wrap.wood",
+        "wrap.vine"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": 0.9517,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "wood-contact",
+          "file": "sources/wood-tap-0005.wav",
+          "start": 1.822,
+          "end": 1.863,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 4500,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.75
+        }
+      ],
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-metal-new-source-v18",
+      "event": "wrap",
+      "slot": "wrap.metal",
+      "slots": [
+        "wrap.metal"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": 1.0618,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        }
+      ],
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-earth-new-source-v18",
+      "event": "wrap",
+      "slot": "wrap.moss",
+      "slots": [
+        "wrap.moss"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -3.4507,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "earth-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 2800,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "chain-wrap-soft-new-source-v18",
+      "event": "wrap",
+      "slot": "wrap.mud",
+      "slots": [
+        "wrap.mud",
+        "wrap.rubber"
+      ],
+      "seconds": 0.14,
+      "outputGainDb": -3.3787,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.8
+        },
+        {
+          "name": "soft-contact",
+          "file": "sources/foley-impact-earth-dirt-scatter-01.mp3",
+          "start": 0.022,
+          "end": 0.064,
+          "pitch": 0,
+          "highpass": 100,
+          "lowpass": 900,
+          "fadeIn": 0.0002,
+          "fadeOut": 0.006,
+          "normalize": true,
+          "gain": 0.65
+        }
+      ],
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "land-light-soft-stone-subtle-iron-v19",
+      "event": "land-light",
+      "slot": "land-light",
+      "seconds": 0.15,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-light-soft-stone-v14/land-light-soft-stone-v14.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -19,
+          "highpass": 45,
+          "lowpass": 800,
+          "decay": 0.02,
+          "duration": 0.07,
+          "fadeIn": 0.0015,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": 0.1873
+    },
+    {
+      "name": "land-medium-subtle-iron-v19",
+      "event": "land-medium",
+      "slot": "land-medium",
+      "seconds": 0.85,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-medium-v13/land-medium-v13.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -19,
+          "highpass": 45,
+          "lowpass": 800,
+          "decay": 0.02,
+          "duration": 0.07,
+          "fadeIn": 0.0015,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": 0.0754
+    },
+    {
+      "name": "land-heavy-trimmed-subtle-iron-v19",
+      "event": "land-heavy",
+      "slot": "land-heavy",
+      "seconds": 0.15,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-heavy-trimmed-v14/land-heavy-trimmed-v14.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -19,
+          "highpass": 45,
+          "lowpass": 800,
+          "decay": 0.02,
+          "duration": 0.07,
+          "fadeIn": 0.0015,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 314632-Rock_impact_-single_stone_5.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": 0.1018
+    },
+    {
+      "name": "attach-dirt-scatter-subtle-iron-v19",
+      "event": "attach",
+      "slot": "attach",
+      "seconds": 0.51,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/attach-dirt-scatter-v9/attach-dirt-scatter-v9.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "dull-metal-overlay",
+          "file": "sources/metal-bounce-samsterbirdies.wav",
+          "start": 0.052,
+          "end": 0.085,
+          "pitch": -19,
+          "highpass": 45,
+          "lowpass": 800,
+          "decay": 0.02,
+          "duration": 0.07,
+          "fadeIn": 0.0015,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3 + User-provided download: 581592__samsterbirdies__saw-metal-bounce-1.wav",
+      "author": "",
+      "license": "",
+      "outputGainDb": -0.0536
+    },
+    {
+      "name": "land-light-soft-stone-cannonball-v20",
+      "event": "land-light",
+      "slot": "land-light",
+      "seconds": 0.32,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-light-soft-stone-v14/land-light-soft-stone-v14.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "cannonball-fourth-drop-overlay",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 6.078,
+          "pitch": 0,
+          "fadeIn": 0.001,
+          "fadeOut": 0.04,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758\u20136.078 s)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "land-medium-cannonball-v20",
+      "event": "land-medium",
+      "slot": "land-medium",
+      "seconds": 0.85,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-medium-v13/land-medium-v13.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "cannonball-fourth-drop-overlay",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 6.078,
+          "pitch": 0,
+          "fadeIn": 0.001,
+          "fadeOut": 0.04,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758\u20136.078 s)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "land-heavy-trimmed-cannonball-v20",
+      "event": "land-heavy",
+      "slot": "land-heavy",
+      "seconds": 0.32,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/land-heavy-trimmed-v14/land-heavy-trimmed-v14.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "cannonball-fourth-drop-overlay",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 6.078,
+          "pitch": 0,
+          "fadeIn": 0.001,
+          "fadeOut": 0.04,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 314632-Rock_impact_-single_stone_5.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758\u20136.078 s)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "attach-dirt-scatter-cannonball-v20",
+      "event": "attach",
+      "slot": "attach",
+      "seconds": 0.51,
+      "recordedLayers": [
+        {
+          "name": "existing-impact",
+          "file": "out/attach-dirt-scatter-v9/attach-dirt-scatter-v9.wav",
+          "gain": 1,
+          "fadeOut": 0
+        },
+        {
+          "name": "cannonball-fourth-drop-overlay",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 6.078,
+          "pitch": 0,
+          "fadeIn": 0.001,
+          "fadeOut": 0.04,
+          "normalize": true,
+          "gain": 0.045
+        }
+      ],
+      "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758\u20136.078 s)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "roll-cannonball-v20",
+      "event": "roll",
+      "slot": "roll",
+      "seconds": 4.8,
+      "loop": true,
+      "recordedLayers": [
+        {
+          "name": "cannonball-rolling",
+          "file": "sources/cannonball_rolls.m4a",
+          "start": 8.6,
+          "end": 13.4,
+          "pitch": 0,
+          "fadeIn": 0.035,
+          "fadeOut": 0.035,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: cannonball_rolls.m4a (8.6\u201313.4 s)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "loop-hit-cannonball-v22",
+      "event": "loop-hit",
+      "slot": "loop-hit",
+      "seconds": 0.16,
+      "recordedLayers": [
+        {
+          "name": "fourth-cannonball-contact",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 5.918,
+          "pitch": 0,
+          "lowpass": 3500,
+          "fadeIn": 0.001,
+          "fadeOut": 0.045,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: cannonball_drops.m4a (fourth impact, 5.758–5.918 s)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "roll-cannonball-rumble-v23",
+      "event": "roll",
+      "slot": "roll",
+      "seconds": 4.8,
+      "loop": true,
+      "recordedLayers": [
+        {
+          "name": "bass-rumble",
+          "file": "sources/cannonball_rolls.m4a",
+          "start": 8.6,
+          "end": 13.4,
+          "pitch": 0,
+          "highpass": 30,
+          "lowpass": 650,
+          "fadeIn": 0.035,
+          "fadeOut": 0.035,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: cannonball_rolls.m4a (8.6–13.4 s, bass rumble)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "gentle-cannonball-contact-v24",
+      "event": "loop-hit",
+      "slot": "loop-hit",
+      "slots": ["loop-hit", "ball-settle"],
+      "seconds": 0.12,
+      "recordedLayers": [
+        {
+          "name": "soft-contact",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 5.878,
+          "pitch": 0,
+          "highpass": 35,
+          "lowpass": 1800,
+          "decay": 0.035,
+          "fadeIn": 0.003,
+          "fadeOut": 0.035,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: cannonball_drops.m4a (fourth impact, soft short contact)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "roll-cannonball-dry-v25",
+      "event": "roll",
+      "slot": "roll",
+      "seconds": 4.8,
+      "loop": true,
+      "recordedLayers": [
+        {
+          "name": "clean-contact-texture",
+          "file": "sources/cannonball-roll-dry-v25.wav",
+          "pitch": 0,
+          "fadeIn": 0.035,
+          "fadeOut": 0.035,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: cannonball_rolls.m4a (8.6–13.4 s; narrow tonal resonance reduction)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "loop-touch-dry-v26",
+      "event": "loop-hit",
+      "slot": "loop-hit",
+      "seconds": 0.1,
+      "recordedLayers": [
+        {
+          "name": "light-loop-tick",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 5.858,
+          "pitch": 0,
+          "highpass": 220,
+          "lowpass": 3000,
+          "decay": 0.024,
+          "fadeIn": 0.002,
+          "fadeOut": 0.025,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: cannonball_drops.m4a (fourth impact; short light loop tick)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "sphere-touch-low-v26",
+      "event": "ball-settle",
+      "slot": "ball-settle",
+      "seconds": 0.16,
+      "recordedLayers": [
+        {
+          "name": "rounded-sphere-thud",
+          "file": "sources/cannonball_drops.m4a",
+          "start": 5.758,
+          "end": 5.918,
+          "pitch": 0,
+          "highpass": 30,
+          "lowpass": 1100,
+          "decay": 0.05,
+          "fadeIn": 0.003,
+          "fadeOut": 0.04,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: cannonball_drops.m4a (fourth impact; lower rounded sphere contact)",
+      "author": "",
+      "license": ""
+    }
   ]
 }

@@ -24,8 +24,8 @@
 //
 // LOOPS. A loop voice is a `grain-loop` AudioWorkletNode (audio/grainWorklet.ts)
 // rather than a looping buffer source, so its PACE (how fast the file's time
-// runs) and its PITCH follow the speed apart (docs/sound.md#pace-and-pitch): a
-// roll's texture quickens with the ball while its ring stays where it was.
+// runs) and its PITCH follow the speed apart (docs/sound.md#pace-and-pitch).
+// Rolling defaults to native pace/pitch, with speed driving level and tone.
 //
 // LIVE. The bank and the library are read afresh on every step, so an
 // assignment changed in the editor's Sounds menu is heard on the next one: a
@@ -38,10 +38,11 @@
 
 import type { SoundLevel } from "../render/settings";
 import { SOUND_ASSETS } from "./library";
-import { SOUND_BANK, clipPlay, resolveSlot, type ClipPlay, type SlotParams, type SoundFamily } from "./slots";
+import { SOUND_BANK, clipPlay, resolveSlot, landingMix, type LandingLayer, type ClipPlay, type SlotParams, type SoundFamily } from "./slots";
 import type { SoundStep } from "./soundObserver";
 import { SURFACE_KINDS, type SurfaceKind } from "./surfaces";
 import grainWorkletUrl from "./grainWorklet.ts?worker&url";
+import { strikeLevel, loopGainFollow } from "./playbackLevel";
 
 export type SoundVolume = SoundLevel;
 // Off, and three steps of about 5 dB.
@@ -63,12 +64,10 @@ const PAN_WIDTH = 0.6;
 const MAX_ONESHOTS = 48;
 // A one-shot is louder the faster it happened, in proportion, up to this many
 // times its volume at the reference speed; a loop up to `LOOP_MAX_GAIN`.
-const ONESHOT_MAX_GAIN = 2;
 const LOOP_MAX_GAIN = 1.5;
 // A loop's pitch is held inside two octaves either way, so a speed far off its
-// reference does not turn a roll into a squeal or a growl. Its pace is held
-// only by what the worklet takes: a quicker or slower texture is not a sound
-// the ear hears as wrong the way a squeal is.
+// reference does not turn a loop into a squeal or a growl. Extreme independent
+// pace changes can still smear transients; rolling defaults to no stretching.
 const RATE_MIN = 0.25;
 const RATE_MAX = 4;
 const PACE_MAX = 16;
@@ -82,8 +81,9 @@ const REST_AFTER = 9 * FOLLOW;
 // whoosh silent at walking pace and loud in a swing. Each fades in from rest
 // over the bottom of its range, so a ball creeping or settling plays nothing.
 function loopLevel(family: SoundFamily, ratio: number): number {
-  const fade = smoothstep(0.02, 0.1, ratio);
-  const level = family === "whoosh" ? ratio * ratio : ratio;
+  const fade = family === "roll" ? smoothstep(0, 0.03, ratio) : smoothstep(0.02, 0.1, ratio);
+  const level = family === "whoosh" ? ratio * ratio
+    : family === "roll" && ratio < 1 ? Math.pow(ratio, 1.25) : ratio;
   return Math.min(LOOP_MAX_GAIN, level) * fade;
 }
 
@@ -94,10 +94,12 @@ interface LoopVoice {
   node: AudioWorkletNode;
   gain: GainNode;
   pan: StereoPannerNode;
+  tone: BiquadFilterNode | null;
+  rings: BiquadFilterNode[];
   // The file's length, s, and the window last sent to the worklet, samples.
   seconds: number;
   window: { start: number; end: number };
-  // Faded out with its `run` param set to drop (see `REST_AFTER`); false
+  // Faded out with its `run` param set to drop after nine gain time constants; false
   // while it is heard, and on its first step, which sets its params outright.
   resting: boolean;
   fresh: boolean;
@@ -133,6 +135,7 @@ export class AudioOut {
   private analyser: AnalyserNode | null = null;
   // The loop voices' processor, registered once per context; loops wait for it.
   private workletReady = false;
+  private impactPreviewEpoch = 0;
   private capture: { node: ScriptProcessorNode; chunks: Float32Array[] } | null = null;
 
   constructor(volume: SoundVolume) {
@@ -210,6 +213,7 @@ export class AudioOut {
   // still ringing go too: a test that is over is over, where a pause lets a
   // landing finish.
   silence(oneShots = false): void {
+    if (oneShots) this.impactPreviewEpoch++;
     if (!this.ctx) return;
     this.queue.length = 0;
     this.quiet = true;
@@ -262,6 +266,20 @@ export class AudioOut {
       // Already ended.
     }
     this.auditioning = null;
+  }
+
+  // The lab's collision test uses the very same velocity/surface selection
+  // and playback path as a real landing. Its extra gain is monitor level only.
+  async auditionLanding(surface: SurfaceKind, speed: number, volumeDb = 0): Promise<LandingLayer[]> {
+    this.unlock();
+    this.silence(true);
+    const epoch = this.impactPreviewEpoch;
+    const layers = landingMix(SOUND_BANK, surface, speed);
+    const buffers = await Promise.all(layers.flatMap(layer => layer.params.sounds.map(key => this.load(key))));
+    if (epoch !== this.impactPreviewEpoch) return [];
+    if (!layers.length || buffers.some(buffer => !buffer) || !this.ctx) throw new Error("Landing sounds are unavailable. Load the current game library on the dev server.");
+    this.play("land", surface, speed, 0, this.ctx.currentTime, dbToGain(volumeDb));
+    return layers;
   }
 
   // A library file decoded, for drawing it (the menu's waveform). Starts the
@@ -355,10 +373,15 @@ export class AudioOut {
       this.driveLoop(`roll:${surface}`, "roll", surface, roll?.speed ?? 0, roll ? pan(roll.x) : null, t);
     }
     this.driveLoop("whoosh", "whoosh", null, step.air.speed, pan(step.air.x), t);
+    this.driveLoop("deploy", "deploy", null, step.deploy?.speed ?? 0, pan(step.deploy?.x ?? 0), t);
+    this.driveLoop("slack", "slack", null, step.slack?.speed ?? 0, pan(step.slack?.x ?? 0), t);
     this.driveLoop("wade", "wade", null, step.wade.speed * step.wade.interface, pan(step.wade.x), t);
     if (step.splash) this.play("splash", null, step.splash.speed, pan(step.splash.x), t);
     for (const s of step.strikes) this.play(s.family, s.surface, s.speed, pan(s.x), t + (s.at - 1) * STEP);
     for (const c of step.clinks) this.play("wind", null, c.speed, pan(c.x), t + (c.at - 1) * STEP);
+    if (step.taut) this.play("taut", null, step.taut.speed, pan(step.taut.x), t);
+    for (const c of step.creaks ?? []) this.play("creak", null, c.speed, pan(c.x), t);
+    for (const c of step.wraps ?? []) this.play("wrap", c.surface, c.speed, pan(c.x), t + ((c.at ?? 1) - 1) * STEP);
   }
 
   // A loop, at `speed` (0 = silent). `pan` null is "not touching": fade out.
@@ -386,7 +409,7 @@ export class AudioOut {
       const key = this.pick(resolved.key, params);
       const buffer = key ? this.now(key) : null;
       if (!key || !buffer) return;
-      voice = this.startLoop(resolved.key, key, buffer);
+      voice = this.startLoop(resolved.key, key, buffer, family);
       this.loops.set(channel, voice);
     }
     // Read every step, so an edit in the menu is heard on a loop already
@@ -400,9 +423,16 @@ export class AudioOut {
     }
     const ratio = speed / Math.max(params.refSpeed, 1e-3);
     const gain = active ? dbToGain(params.volume) * clip.gain * loopLevel(family, ratio) : 0;
-    voice.gain.gain.setTargetAtTime(gain, t, FOLLOW);
+    const gainFollow = loopGainFollow(family);
+    voice.gain.gain.setTargetAtTime(gain, t, gainFollow);
+    // Quiet rolling loses some high detail without stretching its transients.
+    if (voice.tone && active) {
+      const cutoff = 6000 + 8000 * smoothstep(0, 1, ratio);
+      if (voice.fresh) voice.tone.frequency.setValueAtTime(cutoff, t);
+      else voice.tone.frequency.setTargetAtTime(cutoff, t, 0.08);
+    }
     if (!active) {
-      this.rest(voice, t + REST_AFTER);
+      this.rest(voice, t + 9 * gainFollow);
       return;
     }
     if (voice.resting) {
@@ -431,7 +461,7 @@ export class AudioOut {
   // A loop voice for `sound`, silent until its first step sets its gain. It
   // starts at a random point in its window, so a roll that stops and starts
   // does not restart the same bar of it every time.
-  private startLoop(slot: string, sound: string, buffer: AudioBuffer): LoopVoice {
+  private startLoop(slot: string, sound: string, buffer: AudioBuffer, family: SoundFamily): LoopVoice {
     const ctx = this.ctx!;
     const node = new AudioWorkletNode(ctx, "grain-loop", {
       numberOfInputs: 0,
@@ -446,12 +476,33 @@ export class AudioOut {
     const at = window.start + Math.random() * (window.end - window.start);
     // Copied into the worklet (a transfer would empty the decoded buffer the
     // next voice on this file reads).
-    node.port.postMessage({ type: "init", channels, ...window, at });
+    node.port.postMessage({ type: "init", channels, ...window, at, texture: family === "roll", seed: Math.floor(Math.random() * 0x100000000) });
     const gain = ctx.createGain();
     gain.gain.value = 0;
     const pan = ctx.createStereoPanner();
-    node.connect(gain).connect(pan).connect(this.bus!);
-    return { slot, sound, node, gain, pan, seconds: buffer.duration, window, resting: false, fresh: true };
+    const tone = family === "roll" ? ctx.createBiquadFilter() : null;
+    // Narrow resonances measured in the current cannonball recording. Retain
+    // broadband contact detail instead of muffling everything above the bass.
+    const rings = family === "roll" && sound.startsWith("roll-cannonball-v20-") ? [[1570, -30], [3217, -18], [3891, -12], [4740, -18]].map(([hz, db]) => {
+      const filter = ctx.createBiquadFilter();
+      filter.type = "peaking";
+      filter.frequency.value = hz!;
+      filter.Q.value = 9;
+      filter.gain.value = db!;
+      return filter;
+    }) : [];
+    let filtered: AudioNode = node;
+    for (const filter of rings) {
+      filtered.connect(filter);
+      filtered = filter;
+    }
+    if (tone) {
+      tone.type = "lowpass";
+      tone.Q.value = Math.SQRT1_2;
+      filtered.connect(tone).connect(gain);
+    } else filtered.connect(gain);
+    gain.connect(pan).connect(this.bus!);
+    return { slot, sound, node, gain, pan, tone, rings, seconds: buffer.duration, window, resting: false, fresh: true };
   }
 
   // A voice that has faded stops working at `at` (see `REST_AFTER`). Once per
@@ -468,23 +519,27 @@ export class AudioOut {
     // The node ends itself on "stop"; until then its fade plays out.
     setTimeout(() => {
       voice.node.port.postMessage({ type: "stop" });
+      voice.tone?.disconnect();
+      for (const filter of voice.rings) filter.disconnect();
       voice.pan.disconnect();
     }, 400);
   }
 
   // A one-shot for `family` on `surface`, at `speed`.
-  private play(family: SoundFamily, surface: SurfaceKind | null, speed: number, pan: number, t: number): void {
-    const resolved = resolveSlot(SOUND_BANK, family, surface);
-    if (!resolved) return;
-    const params = resolved.params;
-    const key = this.pick(resolved.key, params);
-    const buffer = key ? this.now(key) : null;
-    if (!buffer) return;
-    const clip = clipPlay(SOUND_BANK, key!, buffer.duration);
-    const gain =
-      dbToGain(params.volume) * clip.gain * Math.min(ONESHOT_MAX_GAIN, speed / Math.max(params.refSpeed, 1e-3));
-    const rate = clip.rate * Math.pow(2, ((Math.random() * 2 - 1) * params.pitchJitter) / 12);
-    this.oneShot(buffer, gain, pan, rate, t, clip);
+  private play(family: SoundFamily, surface: SurfaceKind | null, speed: number, pan: number, t: number, monitorGain = 1): void {
+    const own = family === "land" ? null : resolveSlot(SOUND_BANK, family, surface);
+    const layers = family === "land" ? landingMix(SOUND_BANK, surface, speed) : own ? [{ ...own, weight: 1 }] : [];
+    for (const resolved of layers) {
+      const params = resolved.params;
+      const key = this.pick(resolved.key, params);
+      const buffer = key ? this.now(key) : null;
+      if (!buffer) continue;
+      const clip = clipPlay(SOUND_BANK, key!, buffer.duration);
+      const rate = clip.rate * Math.pow(2, ((Math.random() * 2 - 1) * params.pitchJitter) / 12);
+      const gain = monitorGain * resolved.weight * dbToGain(params.volume) * clip.gain *
+        strikeLevel(family, speed, params.refSpeed, (clip.end - clip.start) / rate);
+      this.oneShot(buffer, gain, pan, rate, t, clip);
+    }
   }
 
   // One of the slot's files at random, never the one it played last when it

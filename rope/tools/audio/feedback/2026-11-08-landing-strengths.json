@@ -1,0 +1,6 @@
+{
+  "heavy": "314636-Rock_impact_-single_stone_9",
+  "medium": "314625-Rock_impact_-single_stone_-light_4",
+  "light": "A deep, dull metallic clink of the whole heavy ball, very different from a small chain-link clink.",
+  "implementation": "Use a separate damped, pitched-down metal-impact recording plus a short contact body for Light, no chain sample. Preserve pitch of the requested Medium and Heavy recordings. Select/blend by normal collision speed."
+}

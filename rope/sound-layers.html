@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Just Swing · Sound mixer</title>
+  <link rel="stylesheet" href="/src/styles/studio.css" />
+</head>
+<body class="studio studio-mixer">
+  <header class="studio-header">
+    <h1 class="studio-brand">Just Swing</h1>
+    <nav class="studio-nav" aria-label="Authoring tools">
+      <a href="/editor.html">Level editor</a>
+      <a href="/sound-layers.html" aria-current="page">Sound mixer</a>
+      <a href="/sound-lab.html">Sound lab</a>
+    </nav>
+  </header>
+  <fieldset id="workspace" aria-label="Sound mixer">
+    <div class="mix-actions bar" aria-label="Draft and game actions">
+      <button id="undo">Undo</button><button id="redo">Redo</button>
+      <button id="new">New variation</button>
+      <span class="hint draft-hint">Draft edits stay separate from the game</span>
+      <button id="revert">Revert to saved</button>
+      <button id="save">Save draft</button>
+      <button id="export">Export WAV</button>
+      <button id="apply">Apply to game event</button>
+    </div>
+    <div class="workspace">
+      <aside class="source-browser" aria-label="Events and source recordings">
+        <h2>Event</h2>
+        <label class="visually-hidden" for="events">Event</label><select id="events"></select>
+        <label class="surface-toggle"><input id="all-surfaces" type="checkbox" /> All surfaces</label>
+        <section class="browser-section">
+          <h2>Variation / draft</h2>
+          <label class="visually-hidden" for="variants">Variation / draft</label><select id="variants"></select>
+        </section>
+        <section class="browser-section source-section">
+          <h2>Source recordings</h2>
+          <label class="visually-hidden" for="source-search">Find a source recording</label>
+          <input id="source-search" type="search" placeholder="Find a recording…" autocomplete="off" />
+          <label class="visually-hidden" for="sources">Source</label><select id="sources" size="9"></select>
+          <p id="source-count" class="hint" aria-live="polite"></p>
+          <button id="add">Add layer</button>
+          <label class="import-source" for="import">Import recording</label>
+          <input id="import" type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.aiff,.aif" />
+        </section>
+        <details class="saving-help">
+          <summary>Saving &amp; applying</summary>
+          <p>Edits are kept in this browser. Save draft writes the editable project to disk. Apply renders a new game asset and replaces this event’s selected variation. Other variations and event-volume settings stay intact.</p>
+        </details>
+      </aside>
+      <main class="arrangement" aria-label="Layer arrangement">
+        <div class="bar transport" aria-label="Playback">
+          <button id="play" class="studio-primary">Play mix</button><button id="stop">Stop</button>
+          <button id="play-layer">Selected layer</button>
+          <label>Playhead (s) <input id="playhead-time" type="number" min="0" step="0.01" value="0" /></label>
+          <label class="monitor-control">Monitor <input id="monitor" type="range" min="-36" max="0" value="-12" /><output id="monitor-value">−12 dB</output></label>
+        </div>
+        <div class="arrangement-content">
+          <section class="mix-project" aria-label="Mix properties">
+            <label class="project-name-label"><span class="visually-hidden">Name</span><input id="project-name" maxlength="200" aria-label="Project name" /></label>
+            <div class="bar mix-settings">
+              <label>Length (s) <input id="duration" type="number" min="0.02" max="60" step="0.01" /></label>
+              <label>Mix gain (dB) <input id="mix-gain" type="number" min="-60" max="24" step="0.5" /></label>
+              <label><input id="loop" type="checkbox" /> Loop</label>
+              <button id="headroom">Set −3 dB peak</button>
+            </div>
+          </section>
+          <div class="arrangement-head"><h2>Arrangement</h2><span id="arrangement-count" class="hint"></span></div>
+          <div class="timeline-scroll"><div class="timeline" id="timeline"><div class="ruler" id="ruler"></div><div id="tracks"></div><div class="playhead" id="playhead"></div></div></div>
+          <p id="meter" class="meter" aria-live="polite"></p>
+          <p class="hint timeline-help">Drag clips to move · Drag edges to trim · Click the ruler to seek<br />Arrow keys nudge 10 ms · Shift + arrow nudges 100 ms</p>
+          <details class="editing-help"><summary>Editing &amp; source details</summary><p>Each track refers to an original recording. Gain, pitch, filters, fades and repeated grains remain editable. Move layer shifts all clips on that track. Mute and solo affect previews and exports.</p><p>Effects tails end at the project length; extend Length to let them ring. Monitor changes listening volume only. Exported mixes are not normalized automatically. Use Set −3 dB peak to adjust headroom.</p><p>The game’s velocity, strength, variation and material rules still apply after assignment. Select each material event separately to edit its overrides.</p></details>
+        </div>
+      </main>
+      <aside class="inspector" aria-label="Layer and clip properties"><h2>Selected layer</h2><div id="inspector"></div></aside>
+    </div>
+  </fieldset>
+  <p id="status" role="status" aria-live="polite">Loading sound events…</p>
+  <script type="module" src="/src/tools/soundLayers.ts"></script>
+</body>
+</html>

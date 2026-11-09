@@ -1,0 +1,4 @@
+{
+  "request": "The chain wrap should sound like metal links colliding with the geometry material, not a creaking chain.",
+  "revision": "Remove all swing/creak sources from v12 wrap audio. Use short metal-link impacts with concrete, wood, metal, or earth/damped surface layers. Initial contact and subsequent links of actual travel emit impacts; bend changes alone do not."
+}

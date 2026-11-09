@@ -35,7 +35,23 @@ _None yet._
 
 ## Sounds
 
-_None yet._
+- **attach-dirt-scatter-cannonball-v20-35ac2479** (attach-dirt-scatter-cannonball-v20.wav) - "", User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758–6.078 s), (licence not recorded)
+- **chain-deploy-new-source-v18-799a2e13** (chain-deploy-new-source-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3, (licence not recorded)
+- **chain-slack-new-source-v18-9a686a7b** (chain-slack-new-source-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3, (licence not recorded)
+- **chain-taut-new-source-v18-67695267** (chain-taut-new-source-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3, (licence not recorded)
+- **chain-wrap-earth-new-source-v18-301e3594** (chain-wrap-earth-new-source-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3, (licence not recorded)
+- **chain-wrap-soft-new-source-v18-c5026a77** (chain-wrap-soft-new-source-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3, (licence not recorded)
+- **chain-wrap-stone-new-source-v18-286ccb89** (chain-wrap-stone-new-source-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html, (licence not recorded)
+- **chain-wrap-wood-new-source-v18-34fada0a** (chain-wrap-wood-new-source-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + https://bigsoundbank.com/clou-et-marteau-1-s0005.html, (licence not recorded)
+- **land-heavy-trimmed-cannonball-v20-179417-1911a881** (land-heavy-trimmed-cannonball-v20-1794179957969.wav) - "", User-provided download: 314632-Rock_impact_-single_stone_5.mp3 + User-provided download: cannonball_drops.m4a, (licence not recorded)
+- **land-light-soft-stone-cannonball-v20-179-823903c0** (land-light-soft-stone-cannonball-v20-1794180963473.wav) - "", User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: cannonball_drops.m4a, (licence not recorded)
+- **land-medium-cannonball-v20-1794179980091-806eb594** (land-medium-cannonball-v20-1794179980091.wav) - "", User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: cannonball_drops.m4a, (licence not recorded)
+- **loop-touch-dry-v26-f499571c** (loop-touch-dry-v26.wav) - "", User-provided download: cannonball_drops.m4a (fourth impact; short light loop tick), (licence not recorded)
+- **roll-cannonball-dry-v25-3b285609** (roll-cannonball-dry-v25.wav) - "", User-provided download: cannonball_rolls.m4a (8.6–13.4 s; narrow tonal resonance reduction), (licence not recorded)
+- **sphere-touch-low-v26-dddc7f5e** (sphere-touch-low-v26.wav) - "", User-provided download: cannonball_drops.m4a (fourth impact; lower rounded sphere contact), (licence not recorded)
+- **wind-chain-heavy-1-v18-48f3e88f** (wind-chain-heavy-1-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3, (licence not recorded)
+- **wind-chain-heavy-2-v18-f5190674** (wind-chain-heavy-2-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3, (licence not recorded)
+- **wind-chain-heavy-3-v18-99cec948** (wind-chain-heavy-3-v18.wav) - "", User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3, (licence not recorded)
 
 ## Everything else
 

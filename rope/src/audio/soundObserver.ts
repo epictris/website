@@ -14,24 +14,26 @@
 // exception, because the sim keeps them to itself (an attach removes the hook
 // inside its own step), and come through `BallLevel.soundEvents`.
 
-import { WaterArea, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
+import { PhysicsBody2D, WaterArea, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
 import { GRAVITY } from "../engine/world";
 import type { BallLevel } from "../level/ballLevel";
 import { CHAIN_LINK_LEN } from "../render/chainMetrics";
 import { surfaceOf, type SurfaceKind } from "./surfaces";
+import { BallPlayer } from "../classes/ballPlayer";
 
 // One surface the ball is rolling on this step.
 export interface RollState {
-  // How fast the contact moves across the surface, m/s: the ball's own speed
-  // along it, relative to the surface.
+  // How fast the geometric contact patch travels along the contacted surface,
+  // m/s, including the mounting loop and excluding rigid scenery motion.
   speed: number;
   x: number;
 }
 
 // The ball LANDING on a piece, or the cuff ATTACHING to or BOUNCING off one.
 export interface StrikeCue {
-  family: "land" | "attach" | "bounce";
+  family: "land" | "loop-hit" | "ball-settle" | "attach" | "bounce";
+  source?: "ball" | "loop";
   surface: SurfaceKind;
   // Into the surface, m/s (an attach: the cuff's whole speed, which it spends
   // there).
@@ -54,6 +56,12 @@ export interface SoundStep {
   roll: Map<SurfaceKind, RollState>;
   strikes: StrikeCue[];
   clinks: ClinkCue[];
+  deploy: { speed: number; x: number };
+  slack: { speed: number; x: number };
+  creak: { speed: number; x: number };
+  creaks: { speed: number; x: number; angularSpeed: number; load: number }[];
+  wraps: { speed: number; x: number; surface: SurfaceKind; load: number; at?: number }[];
+  taut: { speed: number; x: number } | null;
   // The ball going into water this step, at this speed (m/s), or null.
   splash: { speed: number; x: number } | null;
   // Moving through the water at the surface: the speed relative to the water,
@@ -79,28 +87,63 @@ export const STRIKE_MIN_SPEED = 0.15;
 // without one; shorter gaps are the same touch flickering as the ball rolls
 // over a seam.
 const BALL_ARRIVAL_GAP_STEPS = 3;
+// Emission parameters, independent of the file: angular travel in radians,
+// minimum time between phrases, and rest time before a fresh movement onset.
+const CREAK_ONSET_TRAVEL = 0.03;
+const CREAK_CONTINUE_TRAVEL = 0.18;
+const CREAK_GAP = 0.25;
+const CREAK_REARM_REST = 0.12;
+interface WrapState {
+  local: Vec2;
+  distance: number;
+  bend: number;
+  travel: number;
+  lastPlayed: number;
+  loaded: boolean;
+  lastSeen: number;
+}
 
 export class SoundObserver {
   private level: BallLevel | null = null;
+  private attempt = -1;
   private dt = 1 / 60;
   // The ball's state at the end of the previous step.
   private prevVelocity = Vec2.ZERO;
+  private prevAngularVelocity = 0;
   private prevSubmerged = 0;
   // The coil: which chain it is on, its length last step, and the high-water
   // mark the last clink was struck at.
   private coilChain: unknown = null;
   private coilLength = 0;
   private coilMark = 0;
+  private motionChain: unknown = null;
+  private previousNodes: readonly Vec2[] = [];
+  private deployTail = 0;
+  private previousSlack: number | null = null;
+  private slackArmed = false;
+  private wasDeploying = false;
+  private payoutSpeed = 0;
+  private previousPull: Vec2 | null = null;
+  private creakTravel = 0;
+  private creakCooldown = 0;
+  private creakRest = CREAK_REARM_REST;
+  private creakDirection = 0;
+  private creakOnsetPending = true;
+  private wrapContacts = new Map<CollisionShape2D, WrapState>();
+  private activeWraps = new Set<CollisionShape2D>();
   // The step each hook source last reported a touch on, and each piece the
   // ball last touched on.
   private step = 0;
   private hookLastTouch = new Map<number, number>();
-  private ballLastTouch = new Map<CollisionShape2D, number>();
+  private ballLastTouch = new Map<CollisionShape2D, { step: number; normal: Vec2 }>();
+  private loopLastTouch = new Map<CollisionShape2D, { step: number; normal: Vec2 }>();
   private readonly surfaceCache = new Map<CollisionShape2D, SurfaceKind>();
+  private rollContacts = new Map<CollisionShape2D, Map<number, { local: Vec2; normal: Vec2; feature: number }>>();
+  private loopReturn: { body: CollisionObject2D; normal: Vec2; age: number } | null = null;
 
   // Read one sim step of `level`.
   observe(level: BallLevel, dt: number): SoundStep {
-    if (level !== this.level) this.reset(level);
+    if (level !== this.level || level.attempt !== this.attempt) this.reset(level);
     this.dt = dt;
     this.step++;
     const ball = level.ball;
@@ -108,6 +151,12 @@ export class SoundObserver {
       roll: new Map(),
       strikes: [],
       clinks: [],
+      deploy: { speed: 0, x: ball.globalPosition.x },
+      slack: { speed: 0, x: ball.globalPosition.x },
+      creak: { speed: 0, x: ball.globalPosition.x },
+      creaks: [],
+      wraps: [],
+      taut: null,
       splash: null,
       wade: { speed: 0, interface: 0, x: ball.globalPosition.x },
       air: { speed: 0, x: ball.globalPosition.x },
@@ -116,11 +165,20 @@ export class SoundObserver {
       // A broken ball is held inert until it respawns: nothing rolls, nothing
       // winds, and the shards are their own sound.
       this.carry(level);
+      this.rollContacts.clear();
+      this.loopReturn = null;
+      this.previousNodes = [];
+      this.deployTail = 0;
+      this.slackArmed = false;
+      this.wasDeploying = false;
+      this.previousPull = null;
+      this.resetFriction();
       return out;
     }
     this.readHook(level, out);
     this.readBallContacts(level, out);
     this.readCoil(level, out);
+    this.readChainMotion(level, out);
     this.readWater(level, out);
     this.readAir(level, out);
     this.carry(level);
@@ -129,24 +187,41 @@ export class SoundObserver {
 
   private reset(level: BallLevel): void {
     this.level = level;
+    this.attempt = level.attempt;
     this.prevVelocity = level.ball.linearVelocity;
+    this.prevAngularVelocity = level.ball.angularVelocity;
     this.prevSubmerged = level.ball.submerged;
     this.coilChain = null;
     this.coilLength = 0;
     this.coilMark = 0;
+    // A level may open already attached. That initial chain is not a throw.
+    this.motionChain = level.ball.chain;
+    this.previousNodes = [];
+    this.deployTail = 0;
+    this.previousSlack = null;
+    this.slackArmed = false;
+    this.wasDeploying = false;
+    this.payoutSpeed = 0;
+    this.previousPull = null;
+    this.resetFriction();
     this.hookLastTouch.clear();
     this.ballLastTouch.clear();
+    this.loopLastTouch.clear();
     this.surfaceCache.clear();
+    this.rollContacts.clear();
+    this.loopReturn = null;
   }
 
   private carry(level: BallLevel): void {
     this.prevVelocity = level.ball.linearVelocity;
+    this.prevAngularVelocity = level.ball.angularVelocity;
     this.prevSubmerged = level.ball.submerged;
     // Forget sources long silent, so the maps do not grow across a session
     // that mints a hook per throw.
     if (this.step % 600 === 0) {
       for (const [k, at] of this.hookLastTouch) if (this.step - at > 600) this.hookLastTouch.delete(k);
-      for (const [k, at] of this.ballLastTouch) if (this.step - at > 600) this.ballLastTouch.delete(k);
+      for (const [k, touch] of this.ballLastTouch) if (this.step - touch.step > 600) this.ballLastTouch.delete(k);
+      for (const [k, touch] of this.loopLastTouch) if (this.step - touch.step > 600) this.loopLastTouch.delete(k);
     }
   }
 
@@ -191,37 +266,94 @@ export class SoundObserver {
   private readBallContacts(level: BallLevel, out: SoundStep): void {
     const ball = level.ball;
     const dt = this.dt;
+    const nextRollContacts: typeof this.rollContacts = new Map();
+    if (this.loopReturn) {
+      this.loopReturn.age += dt;
+      if (this.loopReturn.age > .25) this.loopReturn = null;
+    }
     // What the ball was arriving with: last step's velocity and this step's
     // gravity, before the contact solve answered it.
     const arrival = this.prevVelocity.add(GRAVITY.mul(dt));
+    // Snapshot before reading this frame: new contacts must not suppress one
+    // another, but a seam between supporting pieces is continuous rolling.
+    const recent = [...this.ballLastTouch.values()].filter(touch => this.step - touch.step <= BALL_ARRIVAL_GAP_STEPS);
+    const recentLoop = [...this.loopLastTouch.values()].filter(touch => this.step - touch.step <= BALL_ARRIVAL_GAP_STEPS);
     const seen = new Set<CollisionShape2D>();
+    const seenLoop = new Set<CollisionShape2D>();
     for (const c of level.world.frameContacts) {
       const ballIsA = c.a === ball;
       if (!ballIsA && c.b !== ball) continue;
+      // Broad-phase/speculative contacts can be separated and carry no force.
+      // Approaching their tilted normals while rolling is not a collision.
+      if (c.maxNormalImpulse <= 0) continue;
       const other = ballIsA ? c.b : c.a;
       const piece = other.getShapes()[ballIsA ? c.shapeB : c.shapeA] ?? null;
-      if (piece === null || seen.has(piece)) continue;
-      seen.add(piece);
+      const ballShapeIndex = ballIsA ? c.shapeA : c.shapeB;
+      const loop = ballShapeIndex === BallPlayer.LOOP_SHAPE_INDEX;
+      const contactSeen = loop ? seenLoop : seen;
+      if (piece === null || contactSeen.has(piece)) continue;
+      contactSeen.add(piece);
       // Out of the surface, toward the ball.
       const normal = ballIsA ? c.normal : c.normal.neg();
       const surfaceVel = other.velocityAtPoint(c.point);
-      const rel = ball.linearVelocity.sub(surfaceVel);
       const tangent = new Vec2(-normal.y, normal.x);
       const kind = this.surface(piece, other);
-      const state: RollState = { speed: Math.abs(rel.dot(tangent)), x: c.point.x };
-      // Two pieces of one surface under the ball (a seam) are one roll.
-      const held = out.roll.get(kind);
-      if (held === undefined || state.speed > held.speed) out.roll.set(kind, state);
+      // Both avatar shapes are circles. Track the geometric patch, not the
+      // material point's velocity (which is zero in ideal no-slip rolling).
+      // Reconstruct it from the circle and normal, avoiding solver point jitter.
+      const shape = ball.getShapes()[ballShapeIndex];
+      if (shape?.shape.kind === "circle") {
+        const patch = shape.globalPosition.sub(normal.mul(shape.shape.radius));
+        const local = patch.sub(other.globalPosition).rotated(-other.globalRotation);
+        const localNormal = normal.rotated(-other.globalRotation);
+        const previous = this.rollContacts.get(piece)?.get(ballShapeIndex);
+        // First touch has no measured displacement. The circle centre's
+        // tangential velocity is the instantaneous flat-face limit, including
+        // the loop's offset/rotation. Normal migration is measured thereafter.
+        const centreMotion = ball.velocityAtPoint(shape.globalPosition).sub(other.velocityAtPoint(patch));
+        let speed = Math.abs(centreMotion.dot(tangent));
+        if (previous && previous.feature === c.featureId && previous.normal.dot(localNormal) > 0.9 && dt > 0) {
+          const n = previous.normal.add(localNormal).normalized();
+          speed = Math.abs(local.sub(previous.local).dot(new Vec2(-n.y, n.x))) / dt;
+        }
+        // Position correction can shuffle a resting patch without physical
+        // motion. Below 5 mm/s of relative circle-centre motion, treat it as
+        // settled rather than amplifying solver jitter into rolling texture.
+        if (centreMotion.length() < .005) speed = 0;
+        let contacts = nextRollContacts.get(piece);
+        if (!contacts) nextRollContacts.set(piece, contacts = new Map());
+        // Distinct pieces have distinct normals/patches, even on one body.
+        // Switching support must not turn their separation into apparent travel.
+        if (!contacts.has(ballShapeIndex)) contacts.set(ballShapeIndex, { local, normal: localNormal, feature: c.featureId });
+        const state: RollState = { speed, x: patch.x };
+        const held = out.roll.get(kind);
+        if (held === undefined || state.speed > held.speed) out.roll.set(kind, state);
+      }
       // An arrival on this piece: how fast the ball came INTO it.
-      const last = this.ballLastTouch.get(piece);
-      this.ballLastTouch.set(piece, this.step);
-      if (last === undefined || this.step - last > BALL_ARRIVAL_GAP_STEPS) {
-        const into = -arrival.sub(surfaceVel).dot(normal);
-        if (into >= STRIKE_MIN_SPEED) {
-          out.strikes.push({ family: "land", surface: kind, speed: into, x: c.point.x, at: 1 });
+      const touches = loop ? this.loopLastTouch : this.ballLastTouch;
+      const last = touches.get(piece);
+      touches.set(piece, { step: this.step, normal });
+      const continuingSupport = (loop ? recentLoop : [...recent, ...recentLoop]).some(touch => touch.normal.dot(normal) > 0.9);
+      const returning = !loop && this.loopReturn?.body === other && this.loopReturn.normal.dot(normal.rotated(-other.globalRotation)) > .9;
+      if (returning || (!continuingSupport && (last === undefined || this.step - last.step > BALL_ARRIVAL_GAP_STEPS))) {
+        // The mounting ring can strike while the centre is still supported.
+        // Include its rotational point velocity, independently of rim contacts.
+        const arm = c.point.sub(ball.globalPosition);
+        const pointArrival = loop ? arrival.add(new Vec2(-arm.y, arm.x).mul(this.prevAngularVelocity)) : arrival;
+        const into = -pointArrival.sub(surfaceVel).dot(normal);
+        const settle = returning && into < 3;
+        if (returning) this.loopReturn = null;
+        if (into >= (settle ? .04 : STRIKE_MIN_SPEED)) {
+          out.strikes.push({ family: loop ? "loop-hit" : settle ? "ball-settle" : "land", source: loop ? "loop" : "ball", surface: kind, speed: into, x: c.point.x, at: 1 });
         }
       }
     }
+    for (const [piece, contacts] of nextRollContacts) {
+      const loop = contacts.get(BallPlayer.LOOP_SHAPE_INDEX);
+      const rimSupported = [...nextRollContacts].some(([other, shapes]) => other.owner === piece.owner && shapes.has(0));
+      if (loop && !rimSupported) this.loopReturn = { body: piece.owner, normal: loop.normal, age: 0 };
+    }
+    this.rollContacts = nextRollContacts;
   }
 
   private readCoil(level: BallLevel, out: SoundStep): void {
@@ -251,6 +383,202 @@ export class SoundObserver {
       const at = Math.min(1, Math.max(0, (this.coilMark - before) / wound));
       out.clinks.push({ speed, x: ball.globalPosition.x, at });
     }
+  }
+
+  private readChainMotion(level: BallLevel, out: SoundStep): void {
+    const ball = level.ball;
+    const chain = ball.chain;
+    const changed = chain !== this.motionChain;
+    this.motionChain = chain;
+    if (!chain || ball.chainStowed) {
+      this.previousNodes = [];
+      this.deployTail = 0;
+      this.previousSlack = null;
+      this.previousPull = null;
+      this.slackArmed = false;
+      this.wasDeploying = false;
+      this.resetFriction();
+      return;
+    }
+    // A point-blank throw can attach inside its first step. Give that payout
+    // a short cue too, but never retrigger merely because the hook attaches.
+    if (changed) {
+      this.previousNodes = [];
+      this.deployTail = 0.035;
+      this.previousSlack = null;
+      this.previousPull = null;
+      this.slackArmed = false;
+      this.wasDeploying = false;
+      this.resetFriction();
+    }
+    const loose = chain.maxRopeLength - chain.getCurrentLength();
+    if (ball.hookInFlight) {
+      out.deploy.speed = ball.hookInFlight.linearVelocity.length();
+      this.payoutSpeed = out.deploy.speed;
+      this.deployTail = 0.035;
+    } else if (this.deployTail > 0) {
+      out.deploy.speed = 6;
+      this.deployTail = Math.max(0, this.deployTail - this.dt);
+    }
+    if (!ball.hookInFlight) {
+      // Hysteresis: a chain must acquire real slack before it can catch again.
+      // Small solver fluctuations near full extension cannot retrigger it.
+      const instantCatch = changed ? Math.max(0, ...out.strikes.filter(s => s.family === "attach").map(s => s.speed)) : 0;
+      if (loose <= 0.015 && (this.slackArmed || this.wasDeploying || instantCatch > 0)) {
+        const speed = this.wasDeploying ? this.payoutSpeed : instantCatch || Math.max(0, ((this.previousSlack ?? loose) - loose) / this.dt);
+        if (speed >= STRIKE_MIN_SPEED) out.taut = { speed, x: ball.globalPosition.x };
+        this.slackArmed = false;
+      }
+      if (loose > 0.06) this.slackArmed = true;
+      this.previousSlack = loose;
+    }
+    this.wasDeploying = ball.hookInFlight !== null;
+
+    const pull = chain.startPull();
+    const beforePull = this.previousPull;
+    const topologyChanged = this.readWrapContacts(level, loose, !changed && beforePull === null, out);
+    this.previousPull = pull;
+    this.creakCooldown = Math.max(0, this.creakCooldown - this.dt);
+    let rubbing = false;
+    if (!ball.hookInFlight && !changed && !topologyChanged && loose <= 0.03 && pull && beforePull && level.chainTension > 0) {
+      // Direction changes at the ball-side span approximate link articulation
+      // under load. A taut chain moving bodily without turning does not squeak.
+      const cross = beforePull.x * pull.y - beforePull.y * pull.x;
+      const signedAngle = Math.atan2(cross, beforePull.dot(pull));
+      const angularSpeed = Math.abs(signedAngle) / this.dt;
+      if (angularSpeed >= 0.03) {
+        rubbing = true;
+        const weight = Math.max(1, ball.mass * GRAVITY.length());
+        const load = Math.min(2, Math.sqrt(level.chainTension / weight));
+        out.creak.speed = Math.min(3, angularSpeed) * load * (1 - ball.submerged);
+        const direction = Math.sign(signedAngle);
+        const freshMotion = this.creakRest >= CREAK_REARM_REST || this.creakDirection !== direction;
+        if (freshMotion) this.creakOnsetPending = true;
+        this.creakTravel += Math.abs(signedAngle);
+        const threshold = this.creakOnsetPending ? CREAK_ONSET_TRAVEL : CREAK_CONTINUE_TRAVEL;
+        if (out.creak.speed > 0.03 && this.creakTravel >= threshold && this.creakCooldown === 0) {
+          out.creaks.push({ ...out.creak, angularSpeed, load });
+          this.creakTravel = 0;
+          this.creakCooldown = CREAK_GAP;
+          this.creakOnsetPending = false;
+        }
+        this.creakRest = 0;
+        this.creakDirection = direction;
+      }
+    }
+    if (!rubbing) {
+      this.creakRest += this.dt;
+      if (this.creakRest >= CREAK_REARM_REST) {
+        this.creakTravel = 0;
+        this.creakDirection = 0;
+        this.creakOnsetPending = true;
+      }
+    }
+
+    const nodes = ball.chainSlack?.nodePositions() ?? [];
+    const before = this.previousNodes;
+    this.previousNodes = nodes.slice();
+    // A new drape or a changed node count has no motion history to measure.
+    if (ball.hookInFlight || changed || before.length !== nodes.length || nodes.length < 3) return;
+    const free = chain.maxRopeLength - chain.coiledLength;
+    if (loose <= 0.03 || free <= CHAIN_LINK_LEN * 2) return;
+    let mean = Vec2.ZERO;
+    let x = 0;
+    const velocities: Vec2[] = [];
+    for (let i = 1; i < nodes.length - 1; i++) {
+      const velocity = nodes[i]!.sub(before[i]!).div(this.dt);
+      velocities.push(velocity);
+      mean = mean.add(velocity);
+      x += nodes[i]!.x;
+    }
+    mean = mean.div(velocities.length);
+    // Relative motion is the main signal: links moving differently from one
+    // another. A small translation contribution keeps a dragged loose chain
+    // audible, without treating its full world speed as violent articulation.
+    let variation = 0;
+    for (const velocity of velocities) variation += velocity.sub(mean).lengthSquared();
+    const motion = Math.sqrt(variation / velocities.length) + mean.length() * 0.15;
+    if (motion < 0.06) return;
+    const slackWeight = Math.min(1, loose / 0.15);
+    out.slack = { speed: Math.min(4, motion) * slackWeight * (1 - ball.submerged), x: x / velocities.length };
+  }
+
+  private resetFriction(): void {
+    this.creakTravel = 0;
+    this.creakCooldown = 0;
+    this.creakRest = CREAK_REARM_REST;
+    this.creakDirection = 0;
+    this.creakOnsetPending = true;
+    this.wrapContacts.clear();
+    this.activeWraps.clear();
+  }
+
+  private readWrapContacts(level: BallLevel, loose: number, baselineOnly: boolean, out: SoundStep): boolean {
+    const ball = level.ball;
+    const chain = ball.chain!;
+    const nodes = chain.path();
+    const groups = new Map<CollisionShape2D, { local: Vec2; point: Vec2; distance: number; bend: number }>();
+    let distance = 0;
+    for (let i = 1; i < nodes.length; i++) {
+      const contact = nodes[i]!.contact;
+      const point = contact.globalPosition;
+      const previous = nodes[i - 1]!.contact.globalPosition;
+      distance += point.distanceTo(previous);
+      if (i === nodes.length - 1 || contact.obj === ball || contact.obj.removed) continue;
+      const incoming = point.sub(previous).normalized();
+      const outgoing = nodes[i + 1]!.contact.globalPosition.sub(point).normalized();
+      const bend = Math.atan2(Math.abs(incoming.x * outgoing.y - incoming.y * outgoing.x), incoming.dot(outgoing));
+      const shape = contact.shape;
+      const held = groups.get(shape);
+      if (held) held.bend += bend;
+      else groups.set(shape, { local: contact.position, point, distance, bend });
+    }
+    const loaded = !ball.hookInFlight && loose <= 0.03 && level.chainTension > 0 && ball.submerged < 1;
+    const load = Math.min(2, Math.sqrt(Math.max(0, level.chainTension) / Math.max(1, ball.mass * GRAVITY.length())));
+    const next = new Map<CollisionShape2D, WrapState>();
+    let changed = groups.size !== this.activeWraps.size;
+    for (const [shape, contact] of groups) {
+      const before = this.wrapContacts.get(shape);
+      if (!this.activeWraps.has(shape)) changed = true;
+      // Group by the actual shape, not regenerated RopeWrap node identities.
+      // Local movement excludes the motion of the scenery itself. Distance
+      // from the chain's material start catches links sliding over a corner.
+      const slip = before ? Math.max(contact.local.distanceTo(before.local), Math.abs(contact.distance - before.distance)) : 0;
+      // Links strike the surface when new chain travels over it. Changing
+      // bend angle alone is friction, not another link impact.
+      const travel = (before?.travel ?? 0) + slip;
+      const state: WrapState = { ...contact, travel, lastPlayed: before?.lastPlayed ?? -Infinity, loaded, lastSeen: this.step };
+      const caught = !before || !before.loaded;
+      const cooled = this.step - state.lastPlayed >= Math.ceil(0.12 / this.dt);
+      if (!baselineOnly && loaded && caught && cooled && out.wraps.length < 6) {
+        const surfaceVelocity = shape.owner instanceof PhysicsBody2D ? shape.owner.velocityAtPoint(contact.point) : Vec2.ZERO;
+        const approach = ball.linearVelocity.sub(surfaceVelocity).length() * Math.sin(Math.min(Math.PI, contact.bend) / 2);
+        const motion = Math.max(0.3, Math.min(6, Math.max(slip / this.dt, approach)));
+        out.wraps.push({ speed: motion * load, x: contact.point.x, surface: this.surface(shape, shape.owner), load, at: 1 });
+        state.travel = 0;
+        state.lastPlayed = this.step;
+      } else if (!baselineOnly && loaded && !caught && slip > 0) {
+        const links = Math.min(3, Math.floor(travel / CHAIN_LINK_LEN));
+        for (let i = 0; i < links && out.wraps.length < 6; i++) {
+          const at = Math.min(1, Math.max(0, ((i + 1) * CHAIN_LINK_LEN - (before?.travel ?? 0)) / slip));
+          out.wraps.push({ speed: Math.min(6, slip / this.dt) * load, x: contact.point.x,
+            surface: this.surface(shape, shape.owner), load, at });
+        }
+        // Excess fast-travel events are dropped rather than queued to keep
+        // rattling after motion ends. The sub-link phase carries forward.
+        state.travel = travel % CHAIN_LINK_LEN;
+        if (links > 0) state.lastPlayed = this.step;
+      }
+      if (!loaded) state.travel = 0;
+      next.set(shape, state);
+    }
+    // A one-frame topology flicker at a facet seam is not a new collision.
+    for (const [shape, state] of this.wrapContacts) {
+      if (!next.has(shape) && this.step - state.lastSeen <= 3) next.set(shape, state);
+    }
+    this.activeWraps = new Set(groups.keys());
+    this.wrapContacts = next;
+    return changed;
   }
 
   private readWater(level: BallLevel, out: SoundStep): void {

@@ -1,0 +1,290 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-08T23:12:47.794331+00:00",
+  "title": "Design System: Just Swing authoring tools",
+  "extensions": {
+    "colorMeta": {
+      "studio-bg": {
+        "role": "neutral",
+        "displayName": "Bg",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.018 255)",
+          "oklch(35% 0.028 255)",
+          "oklch(45% 0.035 255)",
+          "oklch(60% 0.035 255)",
+          "oklch(75% 0.026 255)",
+          "oklch(87% 0.014 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.018 255)",
+          "oklch(35% 0.028 255)",
+          "oklch(45% 0.035 255)",
+          "oklch(60% 0.035 255)",
+          "oklch(75% 0.026 255)",
+          "oklch(87% 0.014 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.018 255)",
+          "oklch(35% 0.028 255)",
+          "oklch(45% 0.035 255)",
+          "oklch(60% 0.035 255)",
+          "oklch(75% 0.026 255)",
+          "oklch(87% 0.014 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-input": {
+        "role": "neutral",
+        "displayName": "Input",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.018 255)",
+          "oklch(35% 0.028 255)",
+          "oklch(45% 0.035 255)",
+          "oklch(60% 0.035 255)",
+          "oklch(75% 0.026 255)",
+          "oklch(87% 0.014 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-line": {
+        "role": "neutral",
+        "displayName": "Line",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.018 255)",
+          "oklch(35% 0.028 255)",
+          "oklch(45% 0.035 255)",
+          "oklch(60% 0.035 255)",
+          "oklch(75% 0.026 255)",
+          "oklch(87% 0.014 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.018 255)",
+          "oklch(35% 0.028 255)",
+          "oklch(45% 0.035 255)",
+          "oklch(60% 0.035 255)",
+          "oklch(75% 0.026 255)",
+          "oklch(87% 0.014 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.018 255)",
+          "oklch(35% 0.028 255)",
+          "oklch(45% 0.035 255)",
+          "oklch(60% 0.035 255)",
+          "oklch(75% 0.026 255)",
+          "oklch(87% 0.014 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-accent": {
+        "role": "primary",
+        "displayName": "Accent",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.050 255)",
+          "oklch(35% 0.080 255)",
+          "oklch(45% 0.100 255)",
+          "oklch(60% 0.100 255)",
+          "oklch(75% 0.075 255)",
+          "oklch(87% 0.040 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-selected": {
+        "role": "primary",
+        "displayName": "Selected",
+        "tonalRamp": [
+          "oklch(15% 0.015 255)",
+          "oklch(25% 0.050 255)",
+          "oklch(35% 0.080 255)",
+          "oklch(45% 0.100 255)",
+          "oklch(60% 0.100 255)",
+          "oklch(75% 0.075 255)",
+          "oklch(87% 0.040 255)",
+          "oklch(95% 0.010 255)"
+        ]
+      },
+      "studio-warm": {
+        "role": "secondary",
+        "displayName": "Warm",
+        "tonalRamp": [
+          "oklch(15% 0.015 80)",
+          "oklch(25% 0.050 80)",
+          "oklch(35% 0.080 80)",
+          "oklch(45% 0.100 80)",
+          "oklch(60% 0.100 80)",
+          "oklch(75% 0.075 80)",
+          "oklch(87% 0.040 80)",
+          "oklch(95% 0.010 80)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Body",
+        "purpose": "Compact readable authoring content."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Controls and compact actions."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Headings without a size change."
+      },
+      "brand": {
+        "displayName": "Brand",
+        "purpose": "Just Swing header identity."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "wide",
+        "value": "1600px"
+      },
+      {
+        "name": "compact-desktop",
+        "value": "1150px"
+      },
+      {
+        "name": "stack-inspector",
+        "value": "850px"
+      },
+      {
+        "name": "mobile",
+        "value": "600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Save draft",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Canonical button control.",
+      "html": "<button class=\"ds-button\">Save draft</button>",
+      "css": ".ds-button{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;background:var(--studio-raised,#253348);color:var(--studio-text,#e2eafa);padding:.45lh 1.2ch;min-height:32px;border:1px solid var(--studio-line,#3c4c62);border-radius:4px;font-weight:500}.ds-button:hover{background:#31435c}.ds-button:active{background:#3a567e}.ds-button:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    },
+    {
+      "name": "Play mix",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Canonical button primary control.",
+      "html": "<button class=\"ds-button-primary\">Play mix</button>",
+      "css": ".ds-button-primary{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;background:var(--studio-accent,#96beff);color:#14243d;padding:.45lh 1.2ch;min-height:32px;border:1px solid var(--studio-line,#3c4c62);border-radius:4px;font-weight:500}.ds-button-primary:hover{background:#bdd6ff}.ds-button-primary:active{background:#3a567e}.ds-button-primary:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    },
+    {
+      "name": "Solo",
+      "kind": "button",
+      "refersTo": "button-selected",
+      "description": "Canonical button selected control.",
+      "html": "<button class=\"ds-button-selected\" aria-pressed=\"true\">Solo</button>",
+      "css": ".ds-button-selected{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;background:var(--studio-selected,#2b4265);color:var(--studio-accent,#96beff);padding:.45lh 1.2ch;min-height:32px;border:1px solid var(--studio-line,#3c4c62);border-radius:4px;font-weight:500}.ds-button-selected:hover{background:#31435c}.ds-button-selected:active{background:#3a567e}.ds-button-selected:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    },
+    {
+      "name": "Source search",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Filter recording names before adding a source.",
+      "html": "<input class=\"ds-search\" type=\"search\" aria-label=\"Search recordings\" placeholder=\"Search recordings\">",
+      "css": ".ds-search{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;background:var(--studio-input,#141d2b);color:var(--studio-text,#e2eafa);border:1px solid var(--studio-line,#3c4c62);border-radius:4px;padding:.45lh 1.2ch;min-height:32px}.ds-search:hover{border-color:#7896ba}.ds-search:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    },
+    {
+      "name": "Authoring navigation",
+      "kind": "nav",
+      "description": "Shared header navigation with a visible current page.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Authoring tools\"><a href=\"#editor\">Level editor</a><a href=\"#mixer\" aria-current=\"page\">Sound mixer</a></nav>",
+      "css": ".ds-nav{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;display:flex;gap:2.5ch;background:var(--studio-panel,#1b2534)}.ds-nav a{display:flex;align-items:center;height:56px;color:var(--studio-muted,#a5b4cd);text-decoration:none;border-bottom:2px solid transparent}.ds-nav a:hover,.ds-nav a[aria-current]{color:var(--studio-accent,#96beff)}.ds-nav a[aria-current]{border-color:var(--studio-accent,#96beff)}.ds-nav a:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    },
+    {
+      "name": "Assignment chip",
+      "kind": "chip",
+      "description": "Separate audition and removal actions for assigned recordings.",
+      "html": "<span class=\"ds-chip\"><button aria-label=\"Preview recording\">Recording</button><button aria-label=\"Unassign recording\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 18 18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m4 4 10 10M14 4 4 14\"/></svg></button></span>",
+      "css": ".ds-chip{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;display:inline-flex;background:var(--studio-selected,#2b4265);border:1px solid #6486b4;border-radius:3px;color:var(--studio-text,#e2eafa)}.ds-chip button{font:inherit;color:inherit;min-height:26px;background:transparent;border:0;padding:0 .5ch}.ds-chip button:hover{background:var(--studio-raised,#253348)}.ds-chip button:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    },
+    {
+      "name": "Property panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Flat dock with a keyboard-operable disclosure.",
+      "html": "<section class=\"ds-panel\"><h2>Properties</h2><details><summary>Playback</summary><p>Gain and pitch</p></details></section>",
+      "css": ".ds-panel{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;background:var(--studio-panel,#1b2534);color:var(--studio-text,#e2eafa);border-left:1px solid var(--studio-line,#3c4c62);padding:1lh 1.8ch}.ds-panel h2{font:inherit;font-weight:650;border-bottom:1px solid var(--studio-line,#3c4c62);padding-bottom:.6lh}.ds-panel summary{cursor:pointer;font-weight:600}.ds-panel summary:hover{color:var(--studio-accent,#96beff)}.ds-panel summary:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    },
+    {
+      "name": "Selected timeline clip",
+      "kind": "custom",
+      "description": "Amber editing selection distinct from blue keyboard focus.",
+      "html": "<button class=\"ds-clip\" aria-pressed=\"true\" aria-label=\"Selected clip, start 0 seconds\">Clip</button>",
+      "css": ".ds-clip{font-family:var(--font-family,ui-sans-serif,system-ui,sans-serif);font-size:var(--font-size,13px);line-height:1.5;background:#3c577c;border:2px solid var(--studio-warm,#edc282);border-radius:3px;color:var(--studio-text,#e2eafa);height:4.9lh;min-width:5px;width:180px;cursor:grab}.ds-clip:hover{background:#2f4e74}.ds-clip:active{cursor:grabbing}.ds-clip:focus-visible{outline:2px solid var(--studio-accent,#96beff);outline-offset:3px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Midnight Docked Studio",
+    "overview": "A docked studio for precise level and sound authoring. Midnight navy furniture frames the real game canvas and recording waveforms; blue identifies controls and selection, while amber singles out clip focus and time.\n\nCompact controls share one system sans size. Hierarchy comes from weight, spacing, alignment and bounded work areas, preserving room for the artifact being edited.",
+    "keyCharacteristics": [
+      "Midnight tonal panels with restrained borders.",
+      "One compact type size with tabular measurements.",
+      "Tools and sources left; properties right.",
+      "Real canvas and waveforms supply the visual material."
+    ],
+    "rules": [
+      {
+        "name": "The Blue Control Rule",
+        "body": "Use blue for controls, navigation and general selection; reserve amber for timeline focus, time and status emphasis.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Size Rule",
+        "body": "Keep authoring text at the shared font size; use weight, spacing and grouping to establish hierarchy.",
+        "section": "typography"
+      },
+      {
+        "name": "The Dock Rule",
+        "body": "Keep desktop furniture at the workspace edges and let the working artifact occupy the center.",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Do use the shared studio tokens and system sans stack.",
+      "Do pair exact numeric values with sliders where both precision and audition matter.",
+      "Do provide visible keyboard focus, accessible control names and native keyboard-operable disclosures.",
+      "Do preserve distinct Save draft, Export WAV and Apply to game actions.",
+      "Do keep mobile editor drawers closed initially and mutually exclusive."
+    ],
+    "donts": [
+      "Don't reintroduce the retired cyan monospace authoring identity.",
+      "Don't use amber as the general navigation or button accent.",
+      "Don't enlarge headings to create hierarchy within the compact authoring shell.",
+      "Don't substitute decorative imagery for real canvas content or waveforms."
+    ]
+  }
+}

@@ -50,3 +50,4 @@ tools/audio/.venv/
 tools/audio/.local/
 tools/audio/out/
 tools/audio/sources/
+tools/audio/layer-uploads/

@@ -1,1 +1,172 @@
-{}
+{
+  "attach-dirt-scatter-cannonball-v20-35ac2479": {
+    "file": "/sounds/attach-dirt-scatter-cannonball-v20-35ac2479.ogg",
+    "sha256": "35ac2479d827bd1495c09a6335152afea2695be288fb673e622febc098a9e798",
+    "bytes": 7212,
+    "seconds": 0.513,
+    "name": "attach-dirt-scatter-cannonball-v20.wav",
+    "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758–6.078 s)",
+    "author": "",
+    "license": ""
+  },
+  "chain-deploy-new-source-v18-799a2e13": {
+    "file": "/sounds/chain-deploy-new-source-v18-799a2e13.ogg",
+    "sha256": "799a2e13efb616a634e51bb517968dd93a422c6fe0c5073663d1c1dfe08cbea6",
+    "bytes": 11123,
+    "seconds": 0.727,
+    "name": "chain-deploy-new-source-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+    "author": "",
+    "license": ""
+  },
+  "chain-slack-new-source-v18-9a686a7b": {
+    "file": "/sounds/chain-slack-new-source-v18-9a686a7b.ogg",
+    "sha256": "9a686a7b1d2967446eff32feeffc15042932d0a70e158a729413c61cc536f678",
+    "bytes": 39336,
+    "seconds": 2.407,
+    "name": "chain-slack-new-source-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+    "author": "",
+    "license": ""
+  },
+  "chain-taut-new-source-v18-67695267": {
+    "file": "/sounds/chain-taut-new-source-v18-67695267.ogg",
+    "sha256": "6769526782b0cbad400bdbcf16dc0183de677488c7389cc370c8b47d5da24336",
+    "bytes": 3282,
+    "seconds": 0.146,
+    "name": "chain-taut-new-source-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+    "author": "",
+    "license": ""
+  },
+  "chain-wrap-earth-new-source-v18-301e3594": {
+    "file": "/sounds/chain-wrap-earth-new-source-v18-301e3594.ogg",
+    "sha256": "301e35948edf95ef96870116ea322804b0b0569c24b8764b7e011d699dc02712",
+    "bytes": 2948,
+    "seconds": 0.146,
+    "name": "chain-wrap-earth-new-source-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+    "author": "",
+    "license": ""
+  },
+  "chain-wrap-soft-new-source-v18-c5026a77": {
+    "file": "/sounds/chain-wrap-soft-new-source-v18-c5026a77.ogg",
+    "sha256": "c5026a775e27d59a442d944e9c9f2962e59fa6c7692475055855436adf6f5b6b",
+    "bytes": 2907,
+    "seconds": 0.146,
+    "name": "chain-wrap-soft-new-source-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3",
+    "author": "",
+    "license": ""
+  },
+  "chain-wrap-stone-new-source-v18-286ccb89": {
+    "file": "/sounds/chain-wrap-stone-new-source-v18-286ccb89.ogg",
+    "sha256": "286ccb89681c525f8c9d1afb0f71cd4ef9ab1bf3b828a3d4e519399f8780448d",
+    "bytes": 2921,
+    "seconds": 0.146,
+    "name": "chain-wrap-stone-new-source-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+    "author": "",
+    "license": ""
+  },
+  "chain-wrap-wood-new-source-v18-34fada0a": {
+    "file": "/sounds/chain-wrap-wood-new-source-v18-34fada0a.ogg",
+    "sha256": "34fada0a7ba5979e0849265b9d29b82547f7a379652e36621f1c2187b29cc4ff",
+    "bytes": 2901,
+    "seconds": 0.146,
+    "name": "chain-wrap-wood-new-source-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3 + https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+    "author": "",
+    "license": ""
+  },
+  "land-heavy-trimmed-cannonball-v20-179417-1911a881": {
+    "file": "/sounds/land-heavy-trimmed-cannonball-v20-179417-1911a881.ogg",
+    "sha256": "1911a88140bd8b9c58cb1f0ec0abaaf340394538b4cbc23e2a9ed6422fee1fe8",
+    "bytes": 3453,
+    "seconds": 0.327,
+    "name": "land-heavy-trimmed-cannonball-v20-1794179957969.wav",
+    "source": "User-provided download: 314632-Rock_impact_-single_stone_5.mp3 + User-provided download: cannonball_drops.m4a",
+    "author": "",
+    "license": ""
+  },
+  "land-light-soft-stone-cannonball-v20-179-823903c0": {
+    "file": "/sounds/land-light-soft-stone-cannonball-v20-179-823903c0.ogg",
+    "sha256": "823903c0468f5e957a4fea8eb3ba8e5ad88fa25d167841ef4a5634541b020d9a",
+    "bytes": 3318,
+    "seconds": 0.327,
+    "name": "land-light-soft-stone-cannonball-v20-1794180963473.wav",
+    "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: cannonball_drops.m4a",
+    "author": "",
+    "license": ""
+  },
+  "land-medium-cannonball-v20-1794179980091-806eb594": {
+    "file": "/sounds/land-medium-cannonball-v20-1794179980091-806eb594.ogg",
+    "sha256": "806eb5944ff04c63a407bb8bc3925d71d490eadac605e540c1080e158f1179f9",
+    "bytes": 6568,
+    "seconds": 0.857,
+    "name": "land-medium-cannonball-v20-1794179980091.wav",
+    "source": "User-provided download: 314625-Rock_impact_-single_stone_-light_4.mp3 + User-provided download: cannonball_drops.m4a",
+    "author": "",
+    "license": ""
+  },
+  "loop-touch-dry-v26-f499571c": {
+    "file": "/sounds/loop-touch-dry-v26-f499571c.ogg",
+    "sha256": "f499571cd761de0497feefbc78864087a7c721a40c013db7ded459cd95dc2ebd",
+    "bytes": 2417,
+    "seconds": 0.103,
+    "name": "loop-touch-dry-v26.wav",
+    "source": "User-provided download: cannonball_drops.m4a (fourth impact; short light loop tick)",
+    "author": "",
+    "license": ""
+  },
+  "roll-cannonball-dry-v25-3b285609": {
+    "file": "/sounds/roll-cannonball-dry-v25-3b285609.ogg",
+    "sha256": "3b2856091c26f4425196fcf45d953a03d8b8c0d530f69ee51e055151d129d040",
+    "bytes": 53011,
+    "seconds": 4.806,
+    "name": "roll-cannonball-dry-v25.wav",
+    "source": "User-provided download: cannonball_rolls.m4a (8.6–13.4 s; narrow tonal resonance reduction)",
+    "author": "",
+    "license": ""
+  },
+  "sphere-touch-low-v26-dddc7f5e": {
+    "file": "/sounds/sphere-touch-low-v26-dddc7f5e.ogg",
+    "sha256": "dddc7f5e068498c50a21b5ba3473c436ba45037cfeaa0809707320efb0fff5cc",
+    "bytes": 2884,
+    "seconds": 0.165,
+    "name": "sphere-touch-low-v26.wav",
+    "source": "User-provided download: cannonball_drops.m4a (fourth impact; lower rounded sphere contact)",
+    "author": "",
+    "license": ""
+  },
+  "wind-chain-heavy-1-v18-48f3e88f": {
+    "file": "/sounds/wind-chain-heavy-1-v18-48f3e88f.ogg",
+    "sha256": "48f3e88f82966ec0c214cb0577f42dbe9b1d90d90d08fe3d546dd7336093c607",
+    "bytes": 2655,
+    "seconds": 0.146,
+    "name": "wind-chain-heavy-1-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+    "author": "",
+    "license": ""
+  },
+  "wind-chain-heavy-2-v18-f5190674": {
+    "file": "/sounds/wind-chain-heavy-2-v18-f5190674.ogg",
+    "sha256": "f519067447cc7e72bedd151fabd40b7a09916df970515943ed5bd96bec3adaa0",
+    "bytes": 2905,
+    "seconds": 0.146,
+    "name": "wind-chain-heavy-2-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+    "author": "",
+    "license": ""
+  },
+  "wind-chain-heavy-3-v18-99cec948": {
+    "file": "/sounds/wind-chain-heavy-3-v18-99cec948.ogg",
+    "sha256": "99cec94884ed6ec3fe0836483b787fdfe4f0b9abaccca3ef6e49ca63e69f31b1",
+    "bytes": 2967,
+    "seconds": 0.146,
+    "name": "wind-chain-heavy-3-v18.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
+    "author": "",
+    "license": ""
+  }
+}

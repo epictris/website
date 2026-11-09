@@ -19,6 +19,7 @@ import { levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
 import { SCENE_MESH_FILE, SCENES_DIR } from "./src/render3d/scenes";
 import { sceneService } from "./src/server/scenes";
 import { soundService } from "./src/server/sounds";
+import { soundLayerService } from "./src/server/soundLayers";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -534,6 +535,8 @@ export default defineConfig({
         "**/public/sounds/**",
         "**/src/audio/soundAssets.json",
         "**/src/audio/soundBank.json",
+        "**/tools/audio/layer-projects.json",
+        "**/tools/audio/layer-uploads/**",
       ],
     },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
@@ -550,6 +553,7 @@ export default defineConfig({
         main: join(import.meta.dirname, "index.html"),
         editor: join(import.meta.dirname, "editor.html"),
         soundLab: join(import.meta.dirname, "sound-lab.html"),
+        soundLayers: join(import.meta.dirname, "sound-layers.html"),
       },
       output: {
         // Rollup names a shared chunk after one arbitrary module inside it, and
@@ -573,6 +577,7 @@ export default defineConfig({
     editorRoute(),
     sceneService(),
     soundService(),
+    soundLayerService(),
     scenesInBuild(),
   ],
 });

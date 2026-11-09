@@ -3,6 +3,7 @@
 // and saves/loads levels from disk through the dev-server API.
 
 import { Vec2 } from "../engine/vec2";
+import { uiIcon } from "./uiIcons";
 import { ROOT_BARK_VARIANTS, ROOT_BARK_LABELS, rootBarkVariant } from "../level/rootAppearance";
 import { setRootBark } from "./rootEditing";
 import { PIXELS_PER_METER, PX } from "../engine/units";
@@ -2449,6 +2450,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Toolbar.
   const bar = el("div", "ed-bar");
+  bar.setAttribute("aria-label", "Level editor tools");
+  const brand = el("header", "ed-shell-header");
+  const brandName = document.createElement("strong");
+  brandName.textContent = "Just Swing";
+  const navigation = document.createElement("nav");
+  navigation.className = "studio-nav";
+  navigation.setAttribute("aria-label", "Authoring tools");
+  for (const [label, href] of [["Level editor", "./editor.html"], ["Sound mixer", "./sound-layers.html"], ["Sound lab", "./sound-lab.html"]]) {
+    const link = document.createElement("a");
+    link.textContent = label!;
+    link.href = href!;
+    if (label === "Level editor") link.setAttribute("aria-current", "page");
+    navigation.appendChild(link);
+  }
+  brand.append(brandName, navigation);
+  root.appendChild(brand);
   root.appendChild(bar);
 
   // The workspace switcher, at the top because it changes what everything
@@ -2468,8 +2485,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     workspaceBtns.level.classList.add("active");
   }
 
-  const fileRow = el("div", "ed-row");
-  bar.appendChild(fileRow);
+  const fileRow = el("div", "ed-row ed-file-row ed-commandbar");
+  root.appendChild(fileRow);
   const btnNew = button("New", () => {
     if (dirty && !confirm("Discard unsaved changes?")) return;
     cancelAutosave();
@@ -2512,6 +2529,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     updateTitle();
   });
   fileRow.append(btnNew, loadSel, btnSave, btnSaveAs, btnDelete);
+  btnDelete.classList.add("ed-danger");
+  loadSel.setAttribute("aria-label", "Load level");
   // The game's sounds (see soundMenu.ts): not part of any level, so beside the
   // files rather than in the inspector, and heard in ▶ Test as they change.
   const soundMenu = new SoundMenu(root, testSound);
@@ -2520,25 +2539,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   btnSounds.title = "Assign sound files to the game's events: rolling, attaching, bouncing, winding, the whoosh";
   fileRow.append(btnSounds);
 
-  const toolRow = el("div", "ed-row");
+  const toolRow = el("div", "ed-row ed-tools");
+  toolRow.setAttribute("role", "group");
+  toolRow.setAttribute("aria-label", "Drawing tools");
   bar.appendChild(toolRow);
   const toolBtns: Record<Tool, HTMLButtonElement> = {
     select: button("Select", () => setTool("select")),
-    rect: button("+ Rect", () => setTool("rect")),
-    circle: button("+ Circle", () => setTool("circle")),
-    belt: button("+ Belt", () => setTool("belt")),
-    poly: button("+ Poly", () => setTool("poly")),
-    path: button("+ Path", () => setTool("path")),
-    text: button("+ Text", () => setTool("text")),
-    arrow: button("+ Arrow", () => setTool("arrow")),
-    checkpoint: button("+ Checkpoint", () => setTool("checkpoint")),
-    chain: button("+ Chain", () => setTool("chain")),
-    vine: button("+ Vine", () => setTool("vine")),
-    root: button("+ Root", () => setTool("root")),
-    light: button("+ Light", () => setTool("light")),
-    glow: button("+ Glow", () => setTool("glow")),
-    fireflies: button("+ Fireflies", () => setTool("fireflies")),
+    rect: button("Rect", () => setTool("rect")),
+    circle: button("Circle", () => setTool("circle")),
+    belt: button("Belt", () => setTool("belt")),
+    poly: button("Poly", () => setTool("poly")),
+    path: button("Path", () => setTool("path")),
+    text: button("Text", () => setTool("text")),
+    arrow: button("Arrow", () => setTool("arrow")),
+    checkpoint: button("Checkpoint", () => setTool("checkpoint")),
+    chain: button("Chain", () => setTool("chain")),
+    vine: button("Vine", () => setTool("vine")),
+    root: button("Root", () => setTool("root")),
+    light: button("Light", () => setTool("light")),
+    glow: button("Glow", () => setTool("glow")),
+    fireflies: button("Fireflies", () => setTool("fireflies")),
   };
+  for (const [key, shortcut] of Object.entries({ select: "V", rect: "R", circle: "C", poly: "P", text: "T", arrow: "A", chain: "K", checkpoint: "S" })) {
+    toolBtns[key as Tool].dataset["shortcut"] = shortcut;
+    toolBtns[key as Tool].setAttribute("aria-keyshortcuts", shortcut);
+  }
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
   // the one gesture draws three different things.
   const PATH_TOOL_TITLE: Record<EdLayer, string> = {
@@ -2684,7 +2709,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const layerList = el("div", "ed-layers");
   bar.appendChild(layerList);
   const layerHeading = el("div", "ed-layer-label");
-  layerHeading.textContent = "layer";
+  layerHeading.textContent = "Layers";
   layerList.appendChild(layerHeading);
   const layerBtns = {} as Record<EdLayer, HTMLButtonElement>;
   const layerEyes = {} as Record<EdLayer, HTMLButtonElement>;
@@ -2771,7 +2796,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
-    toolBtns.path.textContent = activeLayer === "scene" ? "+ Curve" : "+ Path";
+    toolBtns.path.textContent = activeLayer === "scene" ? "Curve" : "Path";
     toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
     if (!tools.includes(tool)) setTool("select");
   }
@@ -2781,7 +2806,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     activeLayer = l;
     // The selection survives: every visible layer is pickable, so items on the
     // outgoing layer are still selectable and still shown by the inspector.
-    for (const [k, b] of Object.entries(layerBtns)) b.classList.toggle("active", k === l);
+    for (const [k, b] of Object.entries(layerBtns)) {
+      b.classList.toggle("active", k === l);
+      b.setAttribute("aria-pressed", String(k === l));
+    }
     // `kind` is a geometry property; a camera region and a note have none.
     refreshToolOptions();
     refreshToolButtons();
@@ -2789,7 +2817,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   const testRow = el("div", "ed-row");
-  bar.appendChild(testRow);
+  const previewOptions = document.createElement("details");
+  previewOptions.className = "ed-preview-options";
+  const previewSummary = document.createElement("summary");
+  previewSummary.textContent = "Preview settings";
+  previewOptions.append(previewSummary, testRow);
+  bar.appendChild(previewOptions);
   // Where a ▶ Test starts: the SELECTED CHECKPOINT if one is picked, and
   // otherwise the level's own spawn.
   //
@@ -2802,12 +2835,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const picked = selectedBodies().filter(isCheckpointNote);
     return picked.length === 1 ? picked[0]!.pos : undefined;
   }
-  const btnTestBall = button("▶ Test", () => startTest(testSpawn()));
+  const btnTestBall = button("Test level", () => startTest(testSpawn()));
+  btnTestBall.classList.add("ed-primary");
   btnTestBall.title =
     "Test from the level's spawn, or from the selected checkpoint (B tests from the cursor)";
   // The click is on its way: build its level now (see `prebuildTest`).
   btnTestBall.addEventListener("pointerenter", () => prebuildTest(performance.now(), true));
-  testRow.append(btnTestBall);
+  fileRow.append(btnTestBall);
   const snapChk = checkbox("snap 5cm", snapOn, (v) => {
     snapOn = v;
     writeViewSetting("snap", v);
@@ -2886,7 +2920,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     bar.appendChild(viewRow);
     const setViewMode = (m: ViewMode): void => {
       viewMode = m;
-      for (const [k, b] of Object.entries(viewBtns)) b.classList.toggle("active", k === m);
+      for (const [k, b] of Object.entries(viewBtns)) {
+        b.classList.toggle("active", k === m);
+        b.setAttribute("aria-pressed", String(k === m));
+      }
       // The 3D canvas keeps its last frame otherwise, showing a stale scene
       // under a 2D view that is meant to be the editor exactly as it was.
       refreshSceneCanvas();
@@ -2943,7 +2980,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     drag = null;
     if (k === "visuals") visuals.enter();
     else visuals.leave();
-    for (const [key, b] of Object.entries(workspaceBtns)) b.classList.toggle("active", key === k);
+    for (const [key, b] of Object.entries(workspaceBtns)) {
+      b.classList.toggle("active", key === k);
+      b.setAttribute("aria-pressed", String(key === k));
+    }
     // The Level workspace's view toggle says how IT draws; the Visuals
     // workspace is always the scene with its guides, so the toggle goes while
     // it is active and comes back as it was left.
@@ -2960,7 +3000,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Inspector.
   const inspector = el("div", "ed-inspector");
+  inspector.setAttribute("aria-label", "Properties");
   root.appendChild(inspector);
+  // On a narrow screen, make room for the scene; either drawer can be
+  // reached explicitly instead of pinning both over the entire viewport.
+  const paneSwitcher = el("div", "ed-pane-switcher");
+  const paneButtons = new Map<string, HTMLButtonElement>();
+  for (const [label, pane] of [["Tools & objects", "tools"], ["Properties", "properties"]]) {
+    const toggle = button(label!, () => {
+      const opening = !root.classList.contains(`ed-${pane}-open`);
+      for (const [key, control] of paneButtons) {
+        const open = key === pane && opening;
+        root.classList.toggle(`ed-${key}-open`, open);
+        control.setAttribute("aria-expanded", String(open));
+      }
+    });
+    toggle.setAttribute("aria-expanded", "false");
+    paneButtons.set(pane!, toggle);
+    paneSwitcher.appendChild(toggle);
+  }
+  root.appendChild(paneSwitcher);
 
   // --- outliner -------------------------------------------------------------
   // The level as it actually IS: a list of bodies, each expandable into the
@@ -2978,17 +3037,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // make the panel a second copy of the layer list rather than a view of the
   // level's structure.
   const outliner = el("div", "ed-outliner");
-  root.appendChild(outliner);
+  const leftDock = el("aside", "ed-left-dock");
+  leftDock.setAttribute("aria-label", "Tools, layers and objects");
+  leftDock.append(bar, outliner);
+  root.appendChild(leftDock);
   const outlinerHead = el("div", "ed-outliner-head");
   const outlinerTitle = el("span", "ed-outliner-title");
   const outlinerBody = el("div", "ed-outliner-list");
   let outlinerOpen = true;
-  const outlinerToggle = button("▾", () => {
+  const outlinerToggle = button("", () => {
     outlinerOpen = !outlinerOpen;
-    outlinerToggle.textContent = outlinerOpen ? "▾" : "▸";
+    outlinerToggle.setAttribute("aria-expanded", String(outlinerOpen));
     outlinerBody.style.display = outlinerOpen ? "" : "none";
   });
   outlinerToggle.classList.add("ed-twist");
+  outlinerToggle.innerHTML = uiIcon("chevron");
+  outlinerToggle.setAttribute("aria-label", "Show objects");
+  outlinerToggle.setAttribute("aria-expanded", "true");
   outlinerHead.append(outlinerToggle, outlinerTitle);
   outliner.append(outlinerHead, outlinerBody);
 
@@ -3320,7 +3385,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (t !== "poly" && t !== "path") cancelPolyDraft();
     if (t !== "root") cancelRootDraft();
     tool = t;
-    for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
+    for (const [k, b] of Object.entries(toolBtns)) {
+      b.classList.toggle("active", k === t);
+      b.setAttribute("aria-pressed", String(k === t));
+    }
     refreshToolOptions();
     applyToolCursor();
   }
@@ -11355,6 +11423,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       focused instanceof HTMLTextAreaElement ||
       focused instanceof HTMLSelectElement;
     if (typing) return;
+    // Keep native keyboard access to the DOM controls. Tab still cycles the
+    // editing layer when the canvas/body owns focus.
+    if (focused instanceof Element && focused.closest("button,a,summary")) {
+      if (e.code === "Tab" || e.code === "Space" || e.code === "Enter" || e.code === "NumpadEnter") return;
+    }
     // Arrows before the Ctrl block: Ctrl+Arrow is the fine nudge, not a combo.
     const dir = NUDGE_DIRS[e.code];
     if (dir) {

@@ -16,7 +16,7 @@ import bank from "./soundBank.json";
 import type { SurfaceKind } from "./surfaces";
 import { SURFACE_KINDS } from "./surfaces";
 
-export type SoundFamily = "roll" | "land" | "attach" | "bounce" | "wind" | "whoosh" | "splash" | "wade";
+export type SoundFamily = "roll" | "land" | "land-light" | "land-medium" | "land-heavy" | "loop-hit" | "ball-settle" | "attach" | "bounce" | "wind" | "deploy" | "slack" | "taut" | "creak" | "wrap" | "whoosh" | "splash" | "wade";
 
 export interface SlotParams {
   // Library keys (`SOUND_ASSETS`). A one-shot picks one at random each time,
@@ -130,23 +130,67 @@ export const FAMILIES: readonly FamilySpec[] = [
   {
     family: "roll",
     label: "Roll",
-    help: "The ball rolling along a surface. Looped while it is in contact and moving; louder and quicker the faster it rolls, at the recording's own pitch.",
+    help: "Sphere or mounting loop rolling along a surface. Short, varied recording grains at native pitch by default; contact travel controls level and tone rather than repeating a multi-second phrase.",
     loop: true,
     surfaces: BALL_SURFACES,
     speedIs: "rolling speed",
-    // The roughness under the ball is struck at a rate in proportion to its
-    // speed; the ball and the surface ring at their own frequencies whatever
-    // the speed (docs/sound.md#pace-and-pitch).
-    defaults: { volume: 0, refSpeed: 3, pitchJitter: 0, pitchFollow: 0, paceFollow: 1 },
+    // Preserve recorded transients; speed controls level and tone instead of
+    // extreme time stretching (docs/sound.md#pace-and-pitch).
+    defaults: { volume: 0, refSpeed: 3, pitchJitter: 0, pitchFollow: 0, paceFollow: 0 },
   },
   {
     family: "land",
-    label: "Land",
-    help: "The ball arriving on a surface - a landing, or a hit against a wall.",
+    label: "Land fallback",
+    help: "Fallback sound for a landing or wall impact when a light, medium, or heavy slot has no recording.",
     loop: false,
     surfaces: BALL_SURFACES,
     speedIs: "speed into the surface",
     defaults: { volume: 0, refSpeed: 5, pitchJitter: 1, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "land-light",
+    label: "Land · Light",
+    help: "Gentle ball contacts: a dull metallic clink. Blends into Medium between 1.2 and 2.4 m/s into the surface.",
+    loop: false,
+    surfaces: BALL_SURFACES,
+    speedIs: "speed into the surface",
+    defaults: { volume: -6, refSpeed: 5, pitchJitter: 0.2, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "land-medium",
+    label: "Land · Medium",
+    help: "Medium-strength impacts. Full Medium from 2.4 to 4.5 m/s; blends with the neighboring strengths outside that range.",
+    loop: false,
+    surfaces: BALL_SURFACES,
+    speedIs: "speed into the surface",
+    defaults: { volume: -3, refSpeed: 5, pitchJitter: 0.15, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "land-heavy",
+    label: "Land · Heavy",
+    help: "Hard ball impacts. Blends in from 4.5 to 6.5 m/s into the surface, then plays on its own.",
+    loop: false,
+    surfaces: BALL_SURFACES,
+    speedIs: "speed into the surface",
+    defaults: { volume: 0, refSpeed: 5, pitchJitter: 0.15, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "loop-hit",
+    label: "Mounting loop impact",
+    help: "The mounting loop striking a surface. Its own recording and volume, independent of ball landing strengths. Unassigned means silent.",
+    loop: false,
+    surfaces: BALL_SURFACES,
+    speedIs: "speed into the surface",
+    defaults: { volume: -30, refSpeed: 3, pitchJitter: 0, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "ball-settle",
+    label: "Ball returns from loop",
+    help: "A quiet contact as the sphere returns after loop-only support. Separate from normal Light/Medium/Heavy landings; hard falls still use those.",
+    loop: false,
+    surfaces: BALL_SURFACES,
+    speedIs: "speed into the surface",
+    defaults: { volume: -30, refSpeed: 1, pitchJitter: 0, pitchFollow: 0, paceFollow: 0 },
   },
   {
     family: "attach",
@@ -174,6 +218,51 @@ export const FAMILIES: readonly FamilySpec[] = [
     surfaces: null,
     speedIs: "winding speed",
     defaults: { volume: -6, refSpeed: 3, pitchJitter: 2, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "deploy",
+    label: "Chain deploy",
+    help: "Links rattling as the chain pays out during a throw. Stops when the flight ends; louder and quicker at higher payout speeds.",
+    loop: true,
+    surfaces: null,
+    speedIs: "payout speed",
+    defaults: { volume: -8, refSpeed: 12, pitchJitter: 0, pitchFollow: 0, paceFollow: 0.6 },
+  },
+  {
+    family: "slack",
+    label: "Slack chain",
+    help: "Loose links colliding while the slack chain moves, in the air or dragging on scenery. Quieter as it settles; silent at rest, taut, or stowed.",
+    loop: true,
+    surfaces: null,
+    speedIs: "loose-link motion",
+    defaults: { volume: -12, refSpeed: 1, pitchJitter: 0, pitchFollow: 0, paceFollow: 0.4 },
+  },
+  {
+    family: "taut",
+    label: "Chain goes taut",
+    help: "A short catch when moving slack is taken up or a deploying chain reaches tension. One cue per catch, not a loop while taut.",
+    loop: false,
+    surfaces: null,
+    speedIs: "slack take-up speed",
+    defaults: { volume: -6, refSpeed: 3, pitchJitter: 0.3, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "creak",
+    label: "Taut-chain creak",
+    help: "Short friction phrases as loaded links start turning or travel farther. Movement triggers each phrase; no repeating playback while still or merely under tension.",
+    loop: false,
+    surfaces: null,
+    speedIs: "loaded angular motion",
+    defaults: { volume: -8, refSpeed: 1, pitchJitter: 0.2, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "wrap",
+    label: "Chain wraps geometry",
+    help: "Metal links striking the contacted material as a taut chain catches or feeds over scenery. One short impact per link of travel; stationary wrapping and bend changes alone do not repeat it.",
+    loop: false,
+    surfaces: SURFACE_KINDS,
+    speedIs: "loaded contact motion",
+    defaults: { volume: -8, refSpeed: 1.5, pitchJitter: 0.3, pitchFollow: 0, paceFollow: 0 },
   },
   {
     family: "whoosh",
@@ -233,6 +322,40 @@ export function resolveSlot(
   const key = slotKey(family);
   const params = slotParams(b, key, family);
   return params.sounds.length > 0 ? { key, params } : null;
+}
+
+export interface LandingLayer {
+  family: SoundFamily;
+  key: string;
+  params: SlotParams;
+  weight: number;
+}
+
+// Velocity layers change the recording, not just its gain. Squared weights
+// sum to one through each crossfade. Surface overrides resolve within each
+// strength; legacy banks retain their single landing file as fallback.
+export function landingMix(b: SoundBank, surface: SurfaceKind | null, speed: number): LandingLayer[] {
+  if (!Number.isFinite(speed) || speed <= 0) return [];
+  let weights: [SoundFamily, number][];
+  if (speed <= 1.2) weights = [["land-light", 1]];
+  else if (speed < 2.4) {
+    const t = (speed - 1.2) / 1.2;
+    weights = [["land-light", Math.sqrt(1 - t)], ["land-medium", Math.sqrt(t)]];
+  } else if (speed <= 4.5) weights = [["land-medium", 1]];
+  else if (speed < 6.5) {
+    const t = (speed - 4.5) / 2;
+    weights = [["land-medium", Math.sqrt(1 - t)], ["land-heavy", Math.sqrt(t)]];
+  } else weights = [["land-heavy", 1]];
+  const layers = new Map<string, LandingLayer>();
+  for (const [family, weight] of weights) {
+    const own = resolveSlot(b, family, surface);
+    const resolved = own ?? resolveSlot(b, "land", surface);
+    if (!resolved) continue;
+    const existing = layers.get(resolved.key);
+    if (existing) existing.weight = Math.hypot(existing.weight, weight);
+    else layers.set(resolved.key, { ...resolved, family: own ? family : "land", weight });
+  }
+  return [...layers.values()];
 }
 
 // Every library key some slot names, which is what `cli assets` holds the

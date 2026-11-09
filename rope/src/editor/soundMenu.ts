@@ -38,6 +38,7 @@ import {
 import { SURFACE_LABELS, type SurfaceKind } from "../audio/surfaces";
 import { broadcastSounds, type SoundSystem } from "../audio/soundSystem";
 import { ClipEditor } from "./clipEditor";
+import { uiIcon } from "./uiIcons";
 
 const API = "/api/sounds";
 const OPEN_KEY = "rope.editor.soundFamilies";
@@ -56,6 +57,7 @@ export class SoundMenu {
   private bank: SoundBank = { slots: {} };
   private assets: Record<string, SoundAsset> = {};
   private open = false;
+  private opener: HTMLElement | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly openFamilies: Set<string> = readOpen();
   // Where an Upload… press puts what it uploads: a slot, or just the library.
@@ -77,11 +79,15 @@ export class SoundMenu {
     injectStyles();
     this.root = document.createElement("div");
     this.root.className = "snd-menu";
+    this.root.setAttribute("role", "region");
+    this.root.setAttribute("aria-label", "Game sound assignments");
     this.root.hidden = true;
     const head = div("snd-head");
     const title = div("snd-title");
     title.textContent = "SOUNDS";
-    const close = button("×", () => this.hide());
+    const close = button("", () => this.hide());
+    close.innerHTML = uiIcon("close");
+    close.setAttribute("aria-label", "Close sound assignments");
     close.title = "Close (Esc)";
     const lab = document.createElement("a");
     lab.href = "./sound-lab.html";
@@ -89,8 +95,15 @@ export class SoundMenu {
     lab.rel = "noopener";
     lab.textContent = "Compare sounds ↗";
     lab.style.color = "#65bddb";
-    head.append(title, lab, close);
+    const layers = document.createElement("a");
+    layers.href = "./sound-layers.html";
+    layers.target = "_blank";
+    layers.rel = "noopener";
+    layers.textContent = "Edit layers ↗";
+    layers.style.color = "#65bddb";
+    head.append(title, lab, layers, close);
     this.status = div("snd-status");
+    this.status.setAttribute("role", "status");
     this.body = div("snd-body");
     this.root.append(head, this.status, this.body);
     parent.appendChild(this.root);
@@ -106,6 +119,7 @@ export class SoundMenu {
       void this.upload(files, this.uploadTarget);
     });
     this.root.appendChild(this.fileInput);
+    window.addEventListener("resize", () => { if (this.open) this.place(); });
 
     // Files dropped anywhere on the menu that no row takes go to the library.
     this.root.addEventListener("dragover", (e) => {
@@ -138,9 +152,11 @@ export class SoundMenu {
   }
 
   async show(): Promise<void> {
+    this.opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.open = true;
     this.root.hidden = false;
     this.place();
+    this.root.querySelector<HTMLButtonElement>(".snd-head > button")?.focus();
     this.onOpenChange?.(true);
     this.say("Loading…");
     try {
@@ -177,6 +193,7 @@ export class SoundMenu {
     this.system.stopPreview();
     this.audition = null;
     this.onOpenChange?.(false);
+    this.opener?.focus();
   }
 
   // ---------------------------------------------------------------------------
@@ -377,7 +394,9 @@ export class SoundMenu {
       row.draggable = true;
       row.addEventListener("dragstart", (e) => e.dataTransfer?.setData(DRAG_TYPE, key));
       const top = div("snd-lib-top");
-      const play = button("▶", () => void this.play(key));
+      const play = button("", () => void this.play(key));
+      play.innerHTML = uiIcon("play");
+      play.setAttribute("aria-label", `Preview ${a.name}`);
       play.title = "Play, as the game plays it";
       const name = div("snd-lib-name");
       name.textContent = a.name;
@@ -460,10 +479,15 @@ export class SoundMenu {
 
   private renderFamily(f: FamilySpec): HTMLElement {
     const box = div("snd-fam");
-    const head = div("snd-fam-head");
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "snd-fam-head";
+    head.dataset["family"] = f.family;
     const isOpen = this.openFamilies.has(f.family);
+    head.setAttribute("aria-expanded", String(isOpen));
     const twist = div("snd-twist");
-    twist.textContent = isOpen ? "▾" : "▸";
+    twist.innerHTML = uiIcon("chevron");
+    if (isOpen) twist.classList.add("open");
     const label = div("snd-fam-label");
     label.textContent = f.label;
     const summary = div("snd-muted");
@@ -475,6 +499,7 @@ export class SoundMenu {
       else this.openFamilies.add(f.family);
       writeOpen(this.openFamilies);
       this.render();
+      this.root.querySelector<HTMLButtonElement>(`[data-family="${CSS.escape(f.family)}"]`)?.focus({ preventScroll: true });
     });
     box.appendChild(head);
     if (!isOpen) return box;
@@ -522,15 +547,18 @@ export class SoundMenu {
     for (const sound of params.sounds) {
       const chip = div("snd-chip");
       const a = this.assets[sound];
-      const play = document.createElement("span");
+      const play = document.createElement("button");
+      play.type = "button";
       play.className = "snd-chip-name";
       play.textContent = a?.name ?? `${sound} (missing)`;
       play.title = "Play";
       play.addEventListener("click", () => void this.play(sound, params.volume));
-      const x = document.createElement("span");
+      const x = document.createElement("button");
+      x.type = "button";
       x.className = "snd-chip-x";
-      x.textContent = "×";
+      x.innerHTML = uiIcon("close");
       x.title = "Unassign";
+      x.setAttribute("aria-label", `Unassign ${a?.name ?? sound}`);
       x.addEventListener("click", () => this.unassign(key, sound));
       chip.append(play, x);
       chips.appendChild(chip);
@@ -569,7 +597,7 @@ export class SoundMenu {
       );
       if (f.loop) {
         opts.appendChild(this.num(key, "pitchFollow", "pitch follows", params.pitchFollow, "", 0, 1, 0.05, "How far the pitch follows the speed: 0 never changes, 1 is an octave up at twice the reference speed"));
-        opts.appendChild(this.num(key, "paceFollow", "pace follows", params.paceFollow, "", 0, 1, 0.05, "How far the recording's pace follows the speed, apart from its pitch: 0 never changes, 1 plays its texture twice as quick at twice the reference speed. Equal to pitch follows is a tape played faster"));
+        if (f.family !== "roll") opts.appendChild(this.num(key, "paceFollow", "pace follows", params.paceFollow, "", 0, 1, 0.05, "How far the recording's pace follows the speed, apart from its pitch: 0 never changes, 1 plays its texture twice as quick at twice the reference speed. Equal to pitch follows is a tape played faster"));
       } else {
         opts.appendChild(this.num(key, "pitchJitter", "pitch ±", params.pitchJitter, "st", 0, 12, 0.5, "Each play is detuned at random by up to this many semitones (st) either way, so a repeated sound does not sound like one recording"));
       }

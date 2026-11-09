@@ -1,0 +1,188 @@
+{
+  "kind": "technical audio measurements, not listening feedback",
+  "master": "medium",
+  "before": [
+    {
+      "family": "land",
+      "speed": 0.8,
+      "peak": -32.289169696390715,
+      "rms50": -45.032457681434146,
+      "samples": 53248
+    },
+    {
+      "family": "land",
+      "speed": 3.5,
+      "peak": -12.057651952330225,
+      "rms50": -25.721104205348382,
+      "samples": 53248
+    },
+    {
+      "family": "land",
+      "speed": 8,
+      "peak": -9.231762945958671,
+      "rms50": -22.951267399855485,
+      "samples": 53248
+    },
+    {
+      "family": "loop-hit",
+      "speed": 1.5,
+      "peak": -45.80798903906249,
+      "rms50": -60.83751396203057,
+      "samples": 53248
+    },
+    {
+      "family": "ball-settle",
+      "speed": 0.8,
+      "peak": -41.72558859656807,
+      "rms50": -56.75511392738136,
+      "samples": 53248
+    },
+    {
+      "family": "attach",
+      "speed": 12,
+      "peak": -16.929567746555925,
+      "rms50": -29.900898153264528,
+      "samples": 53248
+    },
+    {
+      "family": "taut",
+      "speed": 3,
+      "peak": -16.5571271938187,
+      "rms50": -34.83434298689561,
+      "samples": 53248
+    },
+    {
+      "family": "wind",
+      "speed": 3,
+      "peak": -21.26258974108437,
+      "rms50": -37.01463997767586,
+      "samples": 53248
+    },
+    {
+      "family": "wrap",
+      "speed": 1.5,
+      "peak": -24.175064883644296,
+      "rms50": -42.011005831834055,
+      "samples": 53248
+    },
+    {
+      "family": "roll",
+      "speed": 3,
+      "peak": -17.477269353900603,
+      "rms50": -32.35375119092839,
+      "samples": 53248
+    },
+    {
+      "family": "deploy",
+      "speed": 12,
+      "peak": -19.418989552753,
+      "rms50": -33.860835101597566,
+      "samples": 53248
+    },
+    {
+      "family": "slack",
+      "speed": 1,
+      "peak": -17.635984929939344,
+      "rms50": -29.505824005381292,
+      "samples": 53248
+    }
+  ],
+  "after": [
+    {
+      "family": "land",
+      "speed": 0.8,
+      "peak": -14.999180572417876,
+      "rms50": -27.84724172067827,
+      "samples": 53248
+    },
+    {
+      "family": "land",
+      "speed": 3.5,
+      "peak": -10.703955217947676,
+      "rms50": -23.87859548344386,
+      "samples": 53248
+    },
+    {
+      "family": "land",
+      "speed": 8,
+      "peak": -8.294940476118635,
+      "rms50": -21.973135229587157,
+      "samples": 53248
+    },
+    {
+      "family": "loop-hit",
+      "speed": 1.5,
+      "peak": -14.34432444066803,
+      "rms50": -31.84751586889255,
+      "samples": 53248
+    },
+    {
+      "family": "ball-settle",
+      "speed": 0.8,
+      "peak": -16.563775259968693,
+      "rms50": -31.85191349411837,
+      "samples": 53248
+    },
+    {
+      "family": "attach",
+      "speed": 12,
+      "peak": -15.952420536433848,
+      "rms50": -28.927824940696677,
+      "samples": 53248
+    },
+    {
+      "family": "taut",
+      "speed": 3,
+      "peak": -11.623679424047866,
+      "rms50": -30.104972291372775,
+      "samples": 53248
+    },
+    {
+      "family": "wind",
+      "speed": 3,
+      "peak": -12.945916038219403,
+      "rms50": -30.46525445120309,
+      "samples": 53248
+    },
+    {
+      "family": "wrap",
+      "speed": 1.5,
+      "peak": -16.254840053824896,
+      "rms50": -33.606878530069565,
+      "samples": 53248
+    },
+    {
+      "family": "roll",
+      "speed": 3,
+      "peak": -14.170598270896821,
+      "rms50": -28.29672452163599,
+      "samples": 53248
+    },
+    {
+      "family": "deploy",
+      "speed": 12,
+      "peak": -13.320204313468516,
+      "rms50": -28.09392005173011,
+      "samples": 53248
+    },
+    {
+      "family": "slack",
+      "speed": 1,
+      "peak": -18.515502835624066,
+      "rms50": -30.326760408753778,
+      "samples": 53248
+    }
+  ],
+  "stationarySession460f": {
+    "peak": -200,
+    "rms50": -200,
+    "samples": 151552
+  },
+  "combinedEffectsAtHigh": {
+    "peak": -2.796455751033327,
+    "rms50": -14.631037365287913,
+    "samples": 45056
+  },
+  "consoleErrors": [],
+  "missingAssets": 0
+}

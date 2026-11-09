@@ -1,8 +1,10 @@
 // A local audition workspace. No writes to the game's sound bank, no uploads.
 export {};
+import type { AudioOut } from "../audio/audioOut";
+import type { SurfaceKind } from "../audio/surfaces";
 type Candidate = {
   id: string; name: string; buffer: AudioBuffer; peak: number; rms: number;
-  source: string; article: HTMLElement;
+  source: string; article: HTMLElement; version: string; event: string;
 };
 type Feedback = { name: string; favorite: boolean; note: string };
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -15,6 +17,9 @@ let a: Candidate | null = null;
 let b: Candidate | null = null;
 let repeatTimer: ReturnType<typeof setTimeout> | null = null;
 let generation = 0;
+let landingOut: AudioOut | null = null;
+let selectedVersion = "all";
+try { selectedVersion = localStorage.getItem("rope.soundLab.version") ?? "all"; } catch { /* unavailable storage */ }
 const storageKey = "rope.soundLab.feedback.v1";
 let feedback: Record<string, Feedback> = {};
 try { feedback = JSON.parse(localStorage.getItem(storageKey) ?? "{}"); } catch { /* unavailable storage */ }
@@ -30,6 +35,7 @@ function persist(): void {
 
 function stop(): void {
   generation++;
+  landingOut?.silence(true);
   if (repeatTimer) clearTimeout(repeatTimer);
   repeatTimer = null;
   for (const voice of voices) {
@@ -87,6 +93,25 @@ function button(label: string, action: () => void): HTMLButtonElement {
   return el;
 }
 
+function renderVersions(): void {
+  const versions = [...new Set(candidates.map(c => c.version))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  $("versions").replaceChildren(...["all", ...versions].map(version => {
+    const el = button(version === "all" ? "All" : version, () => {
+      stop();
+      selectedVersion = version;
+      try { localStorage.setItem("rope.soundLab.version", version); } catch { /* optional preference */ }
+      renderVersions();
+    });
+    el.setAttribute("aria-pressed", String(version === selectedVersion));
+    return el;
+  }));
+  for (const c of candidates) c.article.hidden = selectedVersion !== "all" && c.version !== selectedVersion;
+  const visible = candidates.filter(c => !c.article.hidden);
+  $("version-count").textContent = candidates.length ? `${visible.length} of ${candidates.length} candidates shown${selectedVersion === "all" ? "" : ` · ${selectedVersion}`}` : "";
+  // A/B may deliberately compare versions. Keep the selections and name their
+  // versions in the buttons, so filtering never silently changes a comparison.
+}
+
 function setAB(which: "a" | "b", c: Candidate): void {
   if (which === "a") a = c; else b = c;
   const target = $<HTMLButtonElement>(`play-${which}`);
@@ -112,7 +137,7 @@ function waveform(canvas: HTMLCanvasElement, buffer: AudioBuffer): void {
   ctx.stroke();
 }
 
-async function add(bytes: ArrayBuffer, name: string, source: string): Promise<void> {
+async function add(bytes: ArrayBuffer, name: string, source: string, event?: string): Promise<void> {
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   const id = Array.from(new Uint8Array(hash), v => v.toString(16).padStart(2, "0")).join("");
   if (candidates.some(c => c.id === id)) return;
@@ -127,12 +152,27 @@ async function add(bytes: ArrayBuffer, name: string, source: string): Promise<vo
     }
   }
   const article = document.createElement("article");
-  const c: Candidate = { id, name, buffer, peak, rms: count ? Math.sqrt(sum / count) : 0, source, article };
+  const version = name.match(/-v(\d+)(?:\.[a-z0-9]+)?$/i)?.[1];
+  const eventLabel = name.startsWith("land-chain-foley-") ? "Ball landing on metal" :
+    event === "land-light" ? "Light ball impact · deep dull metallic contact" :
+    event === "land-medium" ? "Medium ball impact" :
+    event === "land-heavy" ? "Heavy ball impact" :
+    (event ?? name.split("-")[0]) === "land" ? "Ball landing / impact" :
+    (event ?? name.split("-")[0]) === "wind" ? "Chain link winding onto the ball" :
+    (event ?? name.split("-")[0]) === "attach" ? "Hook catches / attaches to a surface" :
+    event === "deploy" ? "Chain paying out during a throw · loop" :
+    event === "slack" ? "Moving slack links · loop" :
+    event === "taut" ? "Slack taken up / chain catches under tension" :
+    event === "creak" ? "Loaded link friction · short movement phrase" :
+    event === "wrap" ? "Metal links striking the contacted surface" : event ?? "Unspecified";
+  const c: Candidate = { id, name, buffer, peak, rms: count ? Math.sqrt(sum / count) : 0, source, article,
+    version: version ? `v${version}` : "Unversioned", event: eventLabel };
   candidates.push(c);
   const saved = feedback[id];
   const note: Feedback = saved && typeof saved.note === "string" ? saved : { name, favorite: false, note: "" };
   feedback[id] = note;
   const title = document.createElement("h2"); title.className = "name"; title.textContent = name;
+  const eventLine = document.createElement("p"); eventLine.className = "hint"; eventLine.textContent = `Event: ${c.event}`;
   const canvas = document.createElement("canvas"); canvas.setAttribute("aria-label", `Waveform of ${name}`);
   waveform(canvas, buffer);
   const metrics = document.createElement("p"); metrics.className = "metrics";
@@ -152,9 +192,10 @@ async function add(bytes: ArrayBuffer, name: string, source: string): Promise<vo
   textarea.setAttribute("aria-label", `Feedback for ${name}`);
   textarea.value = note.note;
   textarea.addEventListener("input", () => { note.note = textarea.value; persist(); });
-  article.append(title, canvas, metrics, controls, textarea);
+  article.append(title, eventLine, canvas, metrics, controls, textarea);
   $("candidates").append(article);
   if (!a) setAB("a", c); else if (!b) setAB("b", c);
+  renderVersions();
 }
 
 function download(blob: Blob, filename: string): void {
@@ -199,6 +240,7 @@ $("play-a").addEventListener("click", () => { if (a) void play(a).catch(e => sta
 $("play-b").addEventListener("click", () => { if (b) void play(b).catch(e => status(String(e))); });
 for (const id of ["match", "strength", "mode"]) $(id).addEventListener("change", stop);
 $("level").addEventListener("input", () => {
+  landingOut?.silence(true);
   master.gain.setTargetAtTime(10 ** (level() / 20), context.currentTime, 0.01);
   $("level-value").textContent = `${level()} dB`;
 });
@@ -208,9 +250,9 @@ window.addEventListener("pagehide", stop);
 
 $("export").addEventListener("click", () => {
   const report = { version: 1, date: new Date().toISOString(),
-    settings: { activeRmsMatch: matching(), outputDb: level(), strength: strength(), mode: $<HTMLSelectElement>("mode").value },
+    settings: { activeRmsMatch: matching(), outputDb: level(), strength: strength(), mode: $<HTMLSelectElement>("mode").value, versionFilter: selectedVersion },
     a: a?.id, b: b?.id,
-    candidates: candidates.map(c => ({ sha256: c.id, source: c.source, ...feedback[c.id] })) };
+    candidates: candidates.map(c => ({ sha256: c.id, source: c.source, event: c.event, ...feedback[c.id] })) };
   download(new Blob([JSON.stringify(report, null, 2) + "\n"], { type: "application/json" }), "sound-feedback.json");
 });
 
@@ -223,16 +265,36 @@ async function loadRemote(kind: "starter" | "library"): Promise<void> {
       throw new Error(kind === "starter" ? "Run bun run audio:render, then use this page on the dev server. You can also add WAVs directly." : "Game library requires the dev server.");
     }
     const data = await response.json();
-    const files: { name: string; file: string; source: string }[] = kind === "starter"
-      ? data.candidates.map((c: { name: string; file: string; source: string }) => ({ ...c, file: `/tools/audio/out/${c.file}` }))
+    const files: { name: string; file: string; source: string; event?: string }[] = kind === "starter"
+      ? data.candidates.map((c: { name: string; file: string; source: string; event?: string }) => ({ ...c, file: `/tools/audio/out/${c.file}` }))
       : Object.values(data.assets) as { name: string; file: string; source: string }[];
     for (const file of files) {
       const audio = await fetch(file.file);
       if (!audio.ok) throw new Error(`${file.name}: HTTP ${audio.status}`);
-      await add(await audio.arrayBuffer(), file.name, file.source);
+      await add(await audio.arrayBuffer(), file.name, file.source, file.event);
     }
     status(`${candidates.length} candidate(s) loaded.`);
   } catch (e) { status(String(e)); }
 }
 $("starter").addEventListener("click", () => void loadRemote("starter"));
 $("library").addEventListener("click", () => void loadRemote("library"));
+$("impact-test").addEventListener("click", () => void (async () => {
+  stop();
+  const token = generation;
+  const speed = Number($<HTMLInputElement>("impact-speed").value);
+  if (!Number.isFinite(speed) || speed < 0.15 || speed > 30) {
+    status("Choose an impact speed between 0.15 and 30 m/s.");
+    return;
+  }
+  try {
+    const { AudioOut } = await import("../audio/audioOut");
+    if (token !== generation) return;
+    landingOut ??= new AudioOut("high");
+    const layers = await landingOut.auditionLanding($<HTMLSelectElement>("impact-surface").value as SurfaceKind, speed, level());
+    if (token !== generation) return;
+    const mix = layers.map(layer => `${layer.family.replace("land-", "")} ${Math.round(layer.weight ** 2 * 100)}%`).join(" + ");
+    status(`Game landing at ${speed} m/s · ${mix}`);
+  } catch (e) { status(String(e)); }
+})());
+for (const id of ["impact-speed", "impact-surface"]) $(id).addEventListener("change", stop);
+renderVersions();

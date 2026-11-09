@@ -7,5 +7,23 @@
     "source": "https://bigsoundbank.com/small-metal-chain-4-s0358.html",
     "author": "DenisChardonnet",
     "license": "CC0-1.0"
+  },
+  {
+    "name": "Hammer fall on concrete",
+    "file": "hammer-concrete-1108.wav",
+    "download": "https://bigsoundbank.com/UPLOAD/bwf-en/1108.wav",
+    "sha256": "f96371117b02a6a70f643aee72d554e91cb733c7e339ac76285777deb353fb17",
+    "source": "https://bigsoundbank.com/hammer-fall-on-concrete-s1108.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0"
+  },
+  {
+    "name": "Nail and Hammer #1 (wooden board)",
+    "file": "wood-tap-0005.wav",
+    "download": "https://bigsoundbank.com/UPLOAD/bwf-en/0005.wav",
+    "sha256": "50b65b95663a4a0bd29e8baf27df24fd88fc29f856d4e4f750eca98204b21038",
+    "source": "https://bigsoundbank.com/clou-et-marteau-1-s0005.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0"
   }
 ]
