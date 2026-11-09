@@ -24,7 +24,7 @@ bun run generators:setup   # once per machine: the venv the formations add-on's 
 ```
 
 `/` loads the introduction and then offers the **difficulty select** - Normal (iron ball) or Hard (`?ball=glass`, a glass ball that breaks on anything solid, [docs/glass-ball.md](docs/glass-ball.md)) - and `?level=NAME` plays one level (`src/level/registry.ts`); `BALL` is the introduction, and every level is played with the ball & chain controller in 3D (the grapple controller was retired on 2026-10-19).
-`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged), F4 captures the camera for `cli shot --view`.
+`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, F4 captures the camera for `cli shot --view`.
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor; **W** switches it between the Level workspace and the Visuals workspace (a free 3D view of the collision, lights, cameras and fireflies against the level's exported Blender scene; [docs/editor-visuals.md](docs/editor-visuals.md)).
 **P** downloads a replayable session bundle stamped with the served tree.
@@ -105,7 +105,7 @@ The ball and chain
 - [manacle](docs/manacle.md) - the edge-on ring, its hinge pin, driven rotation, the bite and the mounted cuff.
 - [glass-ball](docs/glass-ball.md) - Hard: the glass ball that breaks on anything solid but water, the respawn in place, its detectors, the hollow quartz ball (`?glasswall=`) traced through its four surfaces seeing the frame behind it, the solid quartz chain traced through the reflection probe, the aurora film and the glow, the baked wear, the shards (fractured pieces in a Rapier worker).
 - [slack-chain-drape](docs/slack-chain-drape.md) - the visual-only drape of a chain with length to spare.
-- [chain-retract](docs/chain-retract.md) - the released chain reeling back in: the drape carrying on, render-side, deleted by the next throw.
+- [chain-retract](docs/chain-retract.md) - the released chain reeling back in: the drape carrying on through the ball, render-side, deleted by the next throw; what the whip is made of, and the 3D reel it replaced.
 - [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its three exclusions, and how a corner two bodies share lets go.
 - [sparks](docs/sparks.md) - hook and ball sparks on hook-proof steel, render-side by construction.
 - [sound](docs/sound.md) - recorded files assigned to the game's sound events in the editor's Sounds menu: what is heard (rolling, landing, attaching, bouncing, winding, the whoosh, water), surfaces, slots and their fallback, the library in the asset store.

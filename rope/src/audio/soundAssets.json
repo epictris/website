@@ -328,5 +328,35 @@
     "source": "User-provided download: wind_gust.m4a (24\u201340 s; mono; 70 Hz high-pass; 200 ms circular crossfade; native pitch; -20 dBFS RMS)",
     "author": "",
     "license": ""
+  },
+  "retract-zip-v32-1-c759f148": {
+    "file": "/sounds/retract-zip-v32-1-c759f148.ogg",
+    "sha256": "c759f148504185d7fa482beed0da43c2d2787e420400d4ac172871883f733e45",
+    "bytes": 3293,
+    "seconds": 0.11,
+    "name": "retract-zip-v32-1.ogg",
+    "source": "User-provided download: large_iron_chain_drop_1.m4a (0.080-0.190s; unfiltered; raised-cosine fade in and out; native pitch and gain)",
+    "author": "",
+    "license": ""
+  },
+  "retract-zip-v32-2-065ad988": {
+    "file": "/sounds/retract-zip-v32-2-065ad988.ogg",
+    "sha256": "065ad9880eba27b918848fd251f651a426d9a3bff800159ad6563b9ebf1c94f7",
+    "bytes": 3232,
+    "seconds": 0.11,
+    "name": "retract-zip-v32-2.ogg",
+    "source": "User-provided download: large_iron_chain_drop_1.m4a (0.140-0.250s; unfiltered; raised-cosine fade in and out; native pitch and gain)",
+    "author": "",
+    "license": ""
+  },
+  "retract-zip-v32-3-371f3ba6": {
+    "file": "/sounds/retract-zip-v32-3-371f3ba6.ogg",
+    "sha256": "371f3ba6f347b5b6e685747eb72d1893952046a2865237f3236c9eab32cb0e6f",
+    "bytes": 3473,
+    "seconds": 0.11,
+    "name": "retract-zip-v32-3.ogg",
+    "source": "User-provided download: large_iron_chain_drop_1.m4a (0.200-0.310s; unfiltered; raised-cosine fade in and out; native pitch and gain)",
+    "author": "",
+    "license": ""
   }
 }

@@ -19,6 +19,8 @@ import { Vec2 } from "../engine/vec2";
 import { GRAVITY } from "../engine/world";
 import type { BallLevel } from "../level/ballLevel";
 import { CHAIN_LINK_LEN } from "../render/chainMetrics";
+import type { ChainRetract } from "../render/chainRetract";
+import { REEL_SPEED } from "../render/chainReel";
 import { surfaceOf, type SurfaceKind } from "./surfaces";
 import { ChainSurfaceAudio, type ChainSurfaceCue, type ChainImpactCue } from "./chainSurfaceAudio";
 import { ChainArticulationAudio, type ChainJingleCue } from "./chainArticulationAudio";
@@ -63,6 +65,12 @@ export interface SoundStep {
   strikes: StrikeCue[];
   clinks: ClinkCue[];
   deploy: { speed: number; x: number; y: number };
+  // A let-go chain reeling back in through the loop (render/chainReel.ts):
+  // the zip on the step it is let go, and the moment its end reaches the
+  // loop - which ends the zip - as the fraction of that step (`at`, as a
+  // wind clink's).
+  retractZip?: { speed: number; x: number; y: number } | null;
+  retractEnd?: { at: number } | null;
   slack: { speed: number; x: number; y: number };
   creak: { speed: number; x: number; y: number };
   creaks: { speed: number; x: number; y: number; angularSpeed: number; load: number }[];
@@ -116,6 +124,12 @@ interface WrapState {
 export class SoundObserver {
   private readonly chainSurface = new ChainSurfaceAudio();
   private readonly articulation = new ChainArticulationAudio();
+  // The same two readers for a let-go chain reeling in (`readReel`), each
+  // its own so a release starts them from a fresh baseline: a chain lying on
+  // the floor when it is let go has not just landed there.
+  private readonly reelSurface = new ChainSurfaceAudio();
+  private readonly reelArticulation = new ChainArticulationAudio();
+  private reelSeen: unknown = null;
   private readonly windMotion = new WindMotion();
   private level: BallLevel | null = null;
   private attempt = -1;
@@ -154,8 +168,9 @@ export class SoundObserver {
   private rollContacts = new Map<CollisionShape2D, Map<number, { local: Vec2; normal: Vec2; feature: number }>>();
   private loopReturn: { body: CollisionObject2D; normal: Vec2; age: number } | null = null;
 
-  // Read one sim step of `level`.
-  observe(level: BallLevel, dt: number): SoundStep {
+  // Read one sim step of `level`, and of the let-go chain reeling into its
+  // ball (`retract`, already stepped this step), if anything keeps one.
+  observe(level: BallLevel, dt: number, retract: ChainRetract | null = null): SoundStep {
     if (level !== this.level || level.attempt !== this.attempt) this.reset(level);
     this.dt = dt;
     this.step++;
@@ -192,10 +207,42 @@ export class SoundObserver {
     this.readBallContacts(level, out);
     this.readCoil(level, out);
     this.readChainMotion(level, out);
+    this.readReel(level, retract, out);
     this.readWater(level, out);
     this.readAir(level, out);
     this.carry(level);
     return out;
+  }
+
+  // A let-go chain reeling in (render/chainReel.ts) is heard as one quiet
+  // gesture, not a texture for the whole reel - it follows every release, so
+  // it must not wear: a short zip of links on the release step (`retract`,
+  // cut from the deploy's own recording, so it is the same chain going the
+  // other way), at the loop, ended when the chain's end reaches the loop and
+  // by a new throw (audio/audioOut.ts). No sound marks the end arriving:
+  // three tried were rejected by ear (docs/sound.md). Its links striking
+  // scenery, scraping and clinking against each other are read off its own
+  // solver contacts and node motion by the same readers the deployed chain's
+  // drape goes through. A new throw deletes the reel, so the two never sound
+  // at once.
+  private readReel(level: BallLevel, retract: ChainRetract | null, out: SoundStep): void {
+    const ball = level.ball;
+    const loop = ball.loopCenter;
+    if (retract?.released) out.retractZip = { speed: REEL_SPEED, x: loop.x, y: loop.y };
+    // Read before the reel itself: it can finish on the step its end arrives.
+    const seated = retract?.seatedAt ?? null;
+    if (seated !== null) out.retractEnd = { at: seated };
+    const reel = retract?.reel ?? null;
+    if (reel !== this.reelSeen) {
+      this.reelSurface.reset();
+      this.reelArticulation.reset();
+      this.reelSeen = reel;
+    }
+    if (reel === null) return;
+    const contact = this.reelSurface.observe(reel.contactSnapshot(), this.dt, ball, ball.submerged);
+    out.drag = contact.drag;
+    out.chainImpacts = contact.impacts;
+    out.jingles = this.reelArticulation.observe(reel.nodePositions(), this.dt, ball.submerged);
   }
 
   private reset(level: BallLevel): void {
@@ -217,6 +264,9 @@ export class SoundObserver {
     this.payoutSpeed = 0;
     this.previousPull = null;
     this.resetFriction();
+    this.reelSurface.reset();
+    this.reelArticulation.reset();
+    this.reelSeen = null;
     this.hookLastTouch.clear();
     this.ballLastTouch.clear();
     this.loopLastTouch.clear();

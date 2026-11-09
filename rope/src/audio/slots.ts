@@ -16,7 +16,7 @@ import bank from "./soundBank.json";
 import type { SurfaceKind } from "./surfaces";
 import { SURFACE_KINDS } from "./surfaces";
 
-export type SoundFamily = "roll" | "land" | "land-light" | "land-medium" | "land-heavy" | "loop-hit" | "ball-settle" | "attach" | "bounce" | "wind" | "deploy" | "slack" | "chain-drag" | "hook-drag" | "chain-hit" | "taut" | "creak" | "wrap" | "whoosh" | "splash" | "wade";
+export type SoundFamily = "roll" | "land" | "land-light" | "land-medium" | "land-heavy" | "loop-hit" | "ball-settle" | "attach" | "bounce" | "wind" | "deploy" | "retract" |"slack" | "chain-drag" | "hook-drag" | "chain-hit" | "taut" | "creak" | "wrap" | "whoosh" | "splash" | "wade";
 
 export interface SlotParams {
   // Library keys (`SOUND_ASSETS`). A one-shot picks one at random each time,
@@ -227,6 +227,15 @@ export const FAMILIES: readonly FamilySpec[] = [
     surfaces: null,
     speedIs: "payout speed",
     defaults: { volume: -8, refSpeed: 12, pitchJitter: 0, pitchFollow: 0, paceFollow: 0.6 },
+  },
+  {
+    family: "retract",
+    label: "Chain retract",
+    help: "One short zip of links as the chain is let go and reels back into the ball. A single gesture, not a rattle for the whole reel: heard every release, so it stays under the deploy it follows. Cut off when the chain's end reaches the loop, and by a new throw.",
+    loop: false,
+    surfaces: null,
+    speedIs: "reel speed",
+    defaults: { volume: -8, refSpeed: 12, pitchJitter: 0.25, pitchFollow: 0, paceFollow: 0 },
   },
   {
     family: "slack",

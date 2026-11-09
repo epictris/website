@@ -161,6 +161,7 @@ async function add(bytes: ArrayBuffer, name: string, source: string, event?: str
     (event ?? name.split("-")[0]) === "wind" ? "Chain link winding onto the ball" :
     (event ?? name.split("-")[0]) === "attach" ? "Hook catches / attaches to a surface" :
     event === "deploy" ? "Chain paying out during a throw · loop" :
+    event === "retract" ? "Chain reeling back in after a release · loop" :
     event === "slack" ? "Loose-link movement" :
     event === "taut" ? "Slack taken up / chain catches under tension" :
     event === "creak" ? "Loaded link friction · short movement phrase" :

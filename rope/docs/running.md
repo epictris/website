@@ -39,7 +39,6 @@ deliberately historical, and `cli bundles` therefore does not repeat it per row.
 `?render=2d` / `?render=3d` picks the renderer (see [**3D rendering**](render3d.md)): every
 level plays in 3D by default, and `?render=2d` is
 the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
-`?retract=1` turns on the released chain reeling back in ([chain-retract](chain-retract.md)); off, a let-go chain vanishes as it always did. `cli shot --retract` is the same switch for a filmstrip.
 **F4** captures the camera as JSON for `cli shot --view`, so a report about a spot in the level is a replayable grab.
 The frame is drawn at 1920x1080 device pixels at most by default, whatever the display: past that a player is paying for fragments rather than seeing more, and the browser scales the result up to the window.
 **S** opens the settings panel (S or Esc closes it), which pauses the run and moves that cap: 16:9 resolutions from 960x540 up to the display's own size, applied as they are picked and kept in `localStorage` as `rope.settings` (`render/settings.ts`, `render/settingsMenu.ts`). The setting changes sharpness and fill cost only; the frame is still 1920x1080 view pixels, so the world on screen is the same.

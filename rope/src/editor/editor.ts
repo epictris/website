@@ -21,6 +21,7 @@ import {
 import { renderBall } from "../render/renderer";
 import { SparkSystem } from "../render/sparks";
 import { ChainSnap } from "../render/chainSnap";
+import { ChainRetract } from "../render/chainRetract";
 import { ROPE_COLOR } from "../render/ropeLay";
 import { DebrisSystem } from "../render/debris";
 import { BallLevel } from "../level/ballLevel";
@@ -2104,6 +2105,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const testDebris = new DebrisSystem();
   // ...and a chain that snaps in it (see render/chainSnap.ts).
   const testSnap = new ChainSnap();
+  // ...and a chain let go in it, reeling back into the ball (see
+  // render/chainRetract.ts), as the game draws and plays it.
+  const testRetract = new ChainRetract();
   // ...and what it sounds like (see audio/soundSystem.ts), played with the
   // Sounds menu's own copy of the assignments, so a file assigned there is
   // heard on the next step of a test. At the game's default volume, so what
@@ -2232,6 +2236,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testSparks.reset();
     testDebris.reset();
     testSnap.reset();
+    testRetract.reset();
     mode = "test";
     // AFTER the mode flips, because that is the thing `gizmoSpec` asks about.
     // The gizmo lives in the SCENE rather than on the overlay, so it is still
@@ -11652,8 +11657,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // runs several steps must not drop the caught-up steps' events.
         testSparks.ingest(testLevel.sparkEvents);
         testDebris.ingest(testLevel.breakEvents);
+        testRetract.observe(testLevel, STEP);
         testSnap.observe(testLevel, STEP, testSparks);
-        testSound.observe(testLevel, STEP);
+        testSound.observe(testLevel, STEP, testRetract);
         recording.push(
           serializeInput(fi),
           digestBall(testLevel),
@@ -11727,7 +11733,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           w,
           h,
         });
-        scene3d!.render(testLevel3d!, camera, alpha, NO_ORBIT, null, null, testSnap);
+        scene3d!.render(testLevel3d!, camera, alpha, NO_ORBIT, testRetract, null, testSnap);
       }
       testSound.flush(camera, testIn3d ? scene3d!.camera : null);
       renderBall(
@@ -11740,7 +11746,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         alpha,
         testIn3d,
         testSparks,
-        null,
+        testRetract,
         testDebris,
         null,
         testShowDebug,

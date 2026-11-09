@@ -13,11 +13,19 @@ import audio
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+# STALE BEYOND THE IMPACTS - do not --apply without revisiting. The chain
+# events since v27 are not normalised to -20 dBFS loudest 50 ms: wrap, slack
+# and the chain-hit micro-foley are cut to -18 dBFS PEAK (-35 to -45 loudest
+# 50 ms) and levelled by slot volume around that, so this would raise them
+# 15-25 dB; the drags and the retract are not listed at all. The 2026-11-09
+# audit (scripts/audit-sound-levels.ts, docs/sound.md#mix-balance) set the
+# deploy to -9 (it played 4-5 dB over a medium landing, sustained) and the
+# drags to -14 in the bank directly.
 LEVELS = {
     "land-light": (-2, 1), "land-medium": (0, 3.5), "land-heavy": (2, 8),
     "loop-hit": (-5, 1.5), "ball-settle": (-5, .8), "attach": (-2, 12),
     "taut": (-3, 3), "wind": (0, 3), "wrap": (-4, 1.5),
-    "deploy": (-1, 12), "slack": (-3, 1), "roll": (3, 3),
+    "deploy": (-9, 12), "slack": (-3, 1), "roll": (3, 3),
 }
 
 

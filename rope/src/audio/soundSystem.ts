@@ -14,6 +14,7 @@
 import type { AudioCamera } from "./spatialAudio";
 import type { Camera } from "../render/camera";
 import type { BallLevel } from "../level/ballLevel";
+import type { ChainRetract } from "../render/chainRetract";
 import { AudioOut, type Audition, type SoundVolume } from "./audioOut";
 import { replaceSoundAssets, type SoundAsset } from "./library";
 import { replaceSoundBank, type SoundBank } from "./slots";
@@ -53,8 +54,11 @@ export class SoundSystem {
     this.out.bankChanged();
   }
 
-  observe(level: BallLevel, dt: number): void {
-    this.out.push(this.observer.observe(level, dt));
+  // `retract` is the released chain reeling in, stepped already this step
+  // (render/chainRetract.ts), whose links are heard as the deployed chain's
+  // are; null where nothing keeps one.
+  observe(level: BallLevel, dt: number, retract: ChainRetract | null = null): void {
+    this.out.push(this.observer.observe(level, dt, retract));
   }
 
   // Sources stay in level space; the listener follows the visible camera.

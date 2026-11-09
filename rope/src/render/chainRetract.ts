@@ -8,15 +8,17 @@
 // a chain that vanishes from the screen between two frames. This class keeps
 // the picture: it watches the ball once per sim step, keeps hold of the slack
 // drape of the chain that is out (`SlackChain`, the visual-only particle chain
-// both renderers already draw), and the step the chain is gone it puts that
-// same drape into its reel (`SlackChain.beginReel`) and steps it from here.
+// both renderers already draw), and the step the chain is gone it starts a
+// `ChainReel` from that drape's nodes and steps it from here.
 //
-// The drape carrying on is the whole point. Its nodes are exactly where the
-// deployed chain was drawn on the last frame, so there is no frame on which
-// the chain changes shape for any reason but the reel itself: the released
-// chain hangs, swings, drags over the scenery and heaps under the same
-// gravity, friction and collisions it had a moment before, with its far end
-// let go and hauled in through the loop.
+// The drape carrying on is the whole point. The reel's nodes are exactly where
+// the deployed chain was drawn on the last frame, so there is no frame on
+// which the chain changes shape for any reason but the reel itself: the
+// released chain hangs, swings, drags over the scenery and heaps under the
+// same gravity, friction and collisions it had a moment before, with its far
+// end let go and hauled in through the loop - and through the ball, so a coil
+// on it is drawn straight in rather than whipping the cuff round it (see
+// chainReel.ts).
 //
 // Render-side by construction, like the sparks: it reads the level and writes
 // nothing back, so no replay, digest or invariant can see it, and the sim
@@ -28,12 +30,13 @@
 // got to. A release-and-redeploy inside one step therefore plays no reel at
 // all, which is the same statement.
 
-import { Vec2 } from "../engine/vec2";
+import type { Vec2 } from "../engine/vec2";
 import type { BallPlayer } from "../classes/ballPlayer";
 import type { Rope } from "../classes/rope";
 import type { SlackChain } from "../classes/slackChain";
 import type { BallLevel } from "../level/ballLevel";
 import { MANACLE_HINGE } from "../lib/manacle";
+import { ChainReel } from "./chainReel";
 
 // One frame of the reeling chain, for the renderers: the polyline to lay
 // links along - FAR END FIRST, then on through the loop to the ball's centre,
@@ -53,8 +56,13 @@ export class ChainRetract {
   private chain: Rope | null = null;
   // The drape of the chain that is out, as of the last step it was out.
   private slack: SlackChain | null = null;
-  // The drape now reeling in, or null while nothing is.
-  private reeling: SlackChain | null = null;
+  // The chain now reeling in, or null while nothing is.
+  private reeling: ChainReel | null = null;
+  // This step's events, for the sound (audio/soundObserver.ts): whether a
+  // chain was let go and began reeling in, and the fraction of the step at
+  // which a reeling chain's end reached the loop, or null.
+  released = false;
+  seatedAt: number | null = null;
   // Scratch for the resolved polyline: a frame must not allocate per node.
   private readonly path: Vec2[] = [];
 
@@ -62,6 +70,9 @@ export class ChainRetract {
   // drape of the one that is out, and step the reel. `level` is the level
   // just stepped, or null for one without a ball.
   observe(level: BallLevel | null, delta: number): void {
+    const reelingBefore = this.reeling;
+    this.released = false;
+    this.seatedAt = null;
     const ball = level?.ball ?? null;
     if (ball !== this.ball) {
       // A different ball is a different level (a reset, or a replay loaded
@@ -78,13 +89,21 @@ export class ChainRetract {
       // Not a glass chain that broke with its ball: there is nothing left to
       // reel it into, and it is shards (see render/glassShards.ts). Nor one
       // that snapped: its halves are render/chainSnap.ts's.
+      const state = this.slack?.nodeState() ?? null;
       this.reeling =
-        chain === null && !ball.shattered && !level.chainSnapped && this.slack?.beginReel() ? this.slack : null;
+        chain === null && !ball.shattered && !level.chainSnapped && state !== null
+          ? new ChainReel(ball, state, this.slack!.chainLength(1))
+          : null;
       this.chain = chain;
     }
     this.slack = ball.chainSlack;
-    if (this.reeling !== null && !this.reeling.stepReel(level.bodies, delta)) {
-      this.reeling = null;
+    this.released = this.reeling !== null && this.reeling !== reelingBefore;
+    if (this.reeling !== null) {
+      const alive = this.reeling.step(level.bodies, delta);
+      // Read before the reel can be dropped: the end can reach the loop and
+      // the reel finish on the same step.
+      this.seatedAt = this.reeling.seatedAt;
+      if (!alive) this.reeling = null;
     }
   }
 
@@ -92,12 +111,18 @@ export class ChainRetract {
     return this.reeling !== null;
   }
 
+  // The chain reeling in, for the sound to read after the step
+  // (audio/soundObserver.ts), or null when nothing is.
+  get reel(): ChainReel | null {
+    return this.reeling;
+  }
+
   // The reeling chain as it stands this frame, or null when there is none.
   // `alpha` is the render interpolation factor the ball is drawn at, so both
   // ends are welded to the drawn ball rather than its sim pose.
   resolve(alpha: number): RetractFrame | null {
     const ball = this.ball;
-    const reel = this.reeling?.reelPath(alpha);
+    const reel = this.reeling?.frame(alpha);
     if (ball === null || !reel) return null;
     // Far end first, then the loop, then on into the ball (the tail under the
     // body, as the deployed chain is drawn).
@@ -117,5 +142,7 @@ export class ChainRetract {
     this.chain = null;
     this.slack = null;
     this.reeling = null;
+    this.released = false;
+    this.seatedAt = null;
   }
 }

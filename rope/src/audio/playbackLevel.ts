@@ -1,6 +1,23 @@
 import type { SoundFamily } from "./slots";
 import { CHAIN_LINK_LEN } from "../render/chainMetrics";
 
+// A one-shot is louder the faster it happened, in proportion, up to twice its
+// volume at the reference speed (`strikeLevel`); a loop up to this.
+export const LOOP_MAX_GAIN = 1.5;
+
+// Movement loops scale with reference speed. Wind uses its separate speed
+// threshold and acceleration swell in windLevel; rolling keeps its soft floor.
+export function loopLevel(family: SoundFamily, ratio: number): number {
+  const fade = family === "roll" ? smoothstep(0, 0.03, ratio) : smoothstep(0.02, 0.1, ratio);
+  const level = family === "roll" && ratio < 1 ? Math.pow(ratio, 1.25) : ratio;
+  return Math.min(LOOP_MAX_GAIN, level) * fade;
+}
+
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
 // Rolling starts fading immediately on contact loss, but brief hops should
 // not slam its envelope shut. No contact latch or airborne gain target.
 export function loopGainFollow(family: SoundFamily): number {

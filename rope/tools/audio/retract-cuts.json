@@ -1,0 +1,20 @@
+[
+  {
+    "key": "retract-zip-v32-1-c759f148",
+    "source": "large_iron_chain_drop_1.m4a",
+    "window": "0.080-0.190s",
+    "note": "raised-cosine fade in and out"
+  },
+  {
+    "key": "retract-zip-v32-2-065ad988",
+    "source": "large_iron_chain_drop_1.m4a",
+    "window": "0.140-0.250s",
+    "note": "raised-cosine fade in and out"
+  },
+  {
+    "key": "retract-zip-v32-3-371f3ba6",
+    "source": "large_iron_chain_drop_1.m4a",
+    "window": "0.200-0.310s",
+    "note": "raised-cosine fade in and out"
+  }
+]

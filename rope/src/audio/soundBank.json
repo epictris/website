@@ -28,7 +28,7 @@
       "sounds": [
         "deploy-timed-v28-d54dab74"
       ],
-      "volume": -1,
+      "volume": -9,
       "refSpeed": 12,
       "pitchJitter": 0,
       "pitchFollow": 0,
@@ -197,7 +197,7 @@
       "pitchJitter": 0,
       "pitchFollow": 0,
       "paceFollow": 0,
-      "volume": -8,
+      "volume": -14,
       "refSpeed": 1
     },
     "hook-drag": {
@@ -207,7 +207,7 @@
       "pitchJitter": 0,
       "pitchFollow": 0,
       "paceFollow": 0,
-      "volume": -8,
+      "volume": -14,
       "refSpeed": 1
     },
     "chain-hit": {
@@ -226,6 +226,16 @@
       "pitchJitter": 0.25,
       "pitchFollow": 0,
       "paceFollow": 0
+    },
+    "retract": {
+      "sounds": [
+        "retract-zip-v32-1-c759f148",
+        "retract-zip-v32-2-065ad988",
+        "retract-zip-v32-3-371f3ba6"
+      ],
+      "volume": -16.0,
+      "refSpeed": 12,
+      "pitchJitter": 0.25
     }
   },
   "clips": {

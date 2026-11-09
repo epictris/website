@@ -335,8 +335,7 @@ const debris = new DebrisSystem();
 // before the prewarm (see `shards`).
 // The released chain reeling back in (see render/chainRetract.ts), driven at
 // the fixed step for the same reason.
-// Behind `?retract=1` as it is in the game (`cli shot ... --retract`).
-const chainRetract = q.get("retract") !== null ? new ChainRetract() : null;
+const chainRetract = new ChainRetract();
 // A chain that snapped (see render/chainSnap.ts), on the same clock.
 const chainSnap = new ChainSnap();
 let simFrame = 0;
@@ -349,7 +348,7 @@ const advanceTo = (target: number): void => {
     debris.advance(1 / 60);
     shards.ingest(level.shatterEvents);
     shards.advance(1 / 60, level);
-    chainRetract?.observe(level, 1 / 60);
+    chainRetract.observe(level, 1 / 60);
     chainSnap.observe(level, 1 / 60, sparks);
   }
 };

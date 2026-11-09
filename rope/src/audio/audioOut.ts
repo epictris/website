@@ -44,7 +44,7 @@ import { SOUND_BANK, clipPlay, resolveSlot, landingMix, type LandingLayer, type 
 import type { SoundStep } from "./soundObserver";
 import { SURFACE_KINDS, type SurfaceKind } from "./surfaces";
 import grainWorkletUrl from "./grainWorklet.ts?worker&url";
-import { strikeLevel, loopGainFollow, scheduleShotEnvelope, windLevel } from "./playbackLevel";
+import { strikeLevel, loopGainFollow, loopLevel, scheduleShotEnvelope, windLevel } from "./playbackLevel";
 
 export type SoundVolume = SoundLevel;
 // Off, and three steps of about 5 dB.
@@ -61,9 +61,9 @@ const FOLLOW = STEP;
 // Concurrent one-shots, beyond which a new one is dropped: a fast wind can ask
 // for a few hundred links a second.
 const MAX_ONESHOTS = 48;
-// A one-shot is louder the faster it happened, in proportion, up to this many
-// times its volume at the reference speed; a loop up to `LOOP_MAX_GAIN`.
-const LOOP_MAX_GAIN = 1.5;
+// The time constant a reel's zip fades with when a new throw cuts it off,
+// seconds: quick enough not to sit under the deploy, slow enough not to click.
+const RETRACT_CUT = 0.008;
 // A loop's pitch is held inside two octaves either way, so a speed far off its
 // reference does not turn a loop into a squeal or a growl. Extreme independent
 // pace changes can still smear transients; rolling defaults to no stretching.
@@ -73,14 +73,6 @@ const PACE_MAX = 16;
 // How long after a loop's fade starts its voice stops working (`run` 0), s:
 // nine time constants of a step's fade (-78 dB), so it never cuts off audibly.
 const REST_AFTER = 9 * FOLLOW;
-
-// Movement loops scale with reference speed. Wind uses its separate speed
-// threshold and acceleration swell in windLevel; rolling keeps its soft floor.
-function loopLevel(family: SoundFamily, ratio: number): number {
-  const fade = family === "roll" ? smoothstep(0, 0.03, ratio) : smoothstep(0.02, 0.1, ratio);
-  const level = family === "roll" && ratio < 1 ? Math.pow(ratio, 1.25) : ratio;
-  return Math.min(LOOP_MAX_GAIN, level) * fade;
-}
 
 interface LoopVoice {
   // What it is playing: the slot it was resolved to, and which of its files.
@@ -108,6 +100,8 @@ export class AudioOut {
   private readonly queue: SoundStep[] = [];
   // Keyed by CHANNEL: "roll:moss", "whoosh", "wade".
   private readonly loops = new Map<string, LoopVoice>();
+  // The voices of the last reel's zip, until a new throw cuts them off.
+  private retractZip: GainNode[] = [];
   // Decoded files, by library key (a key carries its bytes' hash, so a key is
   // one recording for ever).
   private readonly buffers = new Map<string, Promise<AudioBuffer | null>>();
@@ -238,7 +232,7 @@ export class AudioOut {
     if (!buffer || !ctx) return null;
     this.stopPreview();
     const clip = clipPlay(SOUND_BANK, key, buffer.duration);
-    const src = this.oneShot(buffer, dbToGain(volume) * clip.gain, null, clip.rate, ctx.currentTime, clip, true);
+    const src = this.oneShot(buffer, dbToGain(volume) * clip.gain, null, clip.rate, ctx.currentTime, clip, true)?.src;
     if (!src) return null;
     this.auditioning = src;
     src.addEventListener("ended", () => {
@@ -365,6 +359,19 @@ export class AudioOut {
     }
     this.driveLoop("whoosh", "whoosh", null, step.air.speed, step.air, t, step.air.acceleration ?? 0);
     this.driveLoop("deploy", "deploy", null, step.deploy?.speed ?? 0, step.deploy ?? null, t);
+    // The reel's zip is the links running in, so it ends where they do: cut
+    // off when the chain's end reaches the loop, and by a new throw (which
+    // deletes the reel it was the sound of).
+    const cutZip = (at: number): void => {
+      for (const g of this.retractZip) {
+        g.gain.cancelScheduledValues(at);
+        g.gain.setTargetAtTime(0, at, RETRACT_CUT);
+      }
+      this.retractZip = [];
+    };
+    if (this.retractZip.length > 0 && (step.deploy?.speed ?? 0) > 0) cutZip(t);
+    if (step.retractZip) this.retractZip = this.play("retract", null, step.retractZip.speed, step.retractZip, t);
+    if (step.retractEnd) cutZip(t + (step.retractEnd.at - 1) * STEP);
     for (const c of step.jingles ?? []) this.play("slack", null, c.speed, c, t);
     this.driveLoop("hook-drag", "hook-drag", step.hookDrag?.surface ?? null, step.hookDrag?.speed ?? 0, step.hookDrag ?? null, t);
     this.driveLoop("chain-drag", "chain-drag", step.drag?.surface ?? null, step.drag?.speed ?? 0, step.drag ?? null, t);
@@ -521,8 +528,10 @@ export class AudioOut {
     }, 400);
   }
 
-  // A one-shot for `family` on `surface`, at `speed`.
-  private play(family: SoundFamily, surface: SurfaceKind | null, speed: number, pan: SoundPosition | null, t: number, monitorGain = 1): void {
+  // A one-shot for `family` on `surface`, at `speed`. Answers the gains of
+  // the voices it started, for a caller that may cut them short.
+  private play(family: SoundFamily, surface: SurfaceKind | null, speed: number, pan: SoundPosition | null, t: number, monitorGain = 1): GainNode[] {
+    const started: GainNode[] = [];
     const own = family === "land" ? null : resolveSlot(SOUND_BANK, family, surface);
     const layers = family === "land" ? landingMix(SOUND_BANK, surface, speed) : own ? [{ ...own, weight: 1 }] : [];
     for (const resolved of layers) {
@@ -534,8 +543,10 @@ export class AudioOut {
       const rate = clip.rate * Math.pow(2, ((Math.random() * 2 - 1) * params.pitchJitter) / 12);
       const gain = monitorGain * resolved.weight * dbToGain(params.volume) * clip.gain *
         strikeLevel(family, speed, params.refSpeed, (clip.end - clip.start) / rate);
-      this.oneShot(buffer, gain, pan, rate, t, clip);
+      const voice = this.oneShot(buffer, gain, pan, rate, t, clip);
+      if (voice) started.push(voice.gain);
     }
+    return started;
   }
 
   // One of the slot's files at random, never the one it played last when it
@@ -560,7 +571,7 @@ export class AudioOut {
     at: number,
     clip: Pick<ClipPlay, "start" | "end">,
     audition = false,
-  ): AudioBufferSourceNode | null {
+  ): { src: AudioBufferSourceNode; gain: GainNode } | null {
     const ctx = this.ctx!;
     if (!audition && gain <= 1e-4) return null;
     if (!audition && this.live >= MAX_ONESHOTS) {
@@ -586,7 +597,7 @@ export class AudioOut {
     };
     // Offset and duration are in the buffer's own seconds, whatever the rate.
     src.start(startAt, clip.start, clip.end - clip.start);
-    return src;
+    return { src, gain: g };
   }
 
   // ---------------------------------------------------------------------------

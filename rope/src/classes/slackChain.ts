@@ -66,7 +66,7 @@ import { shapeExtents } from "../engine/shapes";
 import { circleOverlapFrom } from "../engine/collision";
 import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import { ringEnd } from "../lib/vineClamp";
-import { chainEndFacing, MANACLE_REACH } from "../lib/manacle";
+import { MANACLE_REACH } from "../lib/manacle";
 import { Rope } from "./rope";
 
 // Fixed particle count. Fixed rather than derived from the chain's length so
@@ -98,7 +98,7 @@ export const FRICTION = 0.7;
 // the whole of it removed (and the tangential velocity with it): resting chain
 // sticks, and a genuinely hauled or flung one — many millimetres a step —
 // slides with only the velocity friction dragging on it.
-const STICK_STEP = 0.25 * PX; // 2.5 mm per step ≈ 0.15 m/s
+export const STICK_STEP = 0.25 * PX; // 2.5 mm per step ≈ 0.15 m/s
 // Gauss-Seidel passes per step. The pinned ends propagate one node per pass,
 // so this must comfortably exceed nothing — it is paired with the long-range
 // attachments below, which enforce the global statement the local passes
@@ -106,7 +106,7 @@ const STICK_STEP = 0.25 * PX; // 2.5 mm per step ≈ 0.15 m/s
 const ITERATIONS = 16;
 // Constraint iterations between collision resolutions (the final iteration
 // always collides last, so the frame ends clear of the scenery).
-const COLLIDE_EVERY = 4;
+export const COLLIDE_EVERY = 4;
 // How far a node may stray from its arc-length position on the wrap path, as
 // a multiple of sqrt(path length x slack). A shallow chain with slack s over a
 // span L hangs with a sag of sqrt(3·L·s/8), 0.61 of that root, so at 1 the
@@ -119,39 +119,11 @@ const SAG_BOUND_FACTOR = 1;
 // Passes a node is given over the shapes near it to end a collision step
 // clear of all of them (see solveCollisions). Two settles a seam; the third
 // is headroom.
-const SEAM_ROUNDS = 3;
+export const SEAM_ROUNDS = 3;
 // A node may not move faster than this, metres per step. Purely a safety
 // fence around the Verlet integration — the hook itself flies at 12 m/s, i.e.
 // 0.2 m per step, an order of magnitude inside it.
 export const MAX_STEP = 0.5;
-// How fast a let-go chain is reeled back in through the loop (see
-// `beginReel`): fast at first and slowing as the chain shortens, the speed
-// being REEL_RATE times the chain still out, in metres per second per metre,
-// and never under REEL_SPEED_MIN so the last of it (and the swallow past the
-// loop) still comes in rather than creeping. The feel knobs: at 5 /s a full
-// 1.8 m starts at 9 m/s, is half in after 0.14 s, and reaches the floor with
-// 0.4 m to go.
-export const REEL_RATE = 8;
-export const REEL_SPEED_MIN = 4;
-// Constraint passes per reel step. More than the drape's, because the reel
-// has no long-range attachment (see `stepReel`): the haul at the loop reaches
-// the far end only by propagating node to node, and alternating sweeps carry
-// it the whole way in a pair of passes, so this many pairs leave nothing
-// visible of the stretch. The reel runs for a quarter of a second, so the
-// extra passes cost nothing that matters.
-const REEL_ITERATIONS = 32;
-// The cuff's share of a constraint correction against a link's, as an
-// inverse mass: the cuff on the end is heavier than a link of chain, so when
-// the chain comes tight between them it is the chain that is pulled straight
-// and the cuff that lags and swings. A visual weight rather than the sim's
-// (the chain has no mass in the sim at all); small enough to read, large
-// enough that the passes above still close the last segment.
-const CUFF_WEIGHT = 0.2;
-// How much of the follow pass's correction is paid back as momentum to the
-// node ahead (Müller's s_damping, see `reelFollow`): 1 conserves it whole, 0
-// is plain follow-the-leader. The paper's own working value.
-const FOLLOW_DAMPING = 0.9;
-
 // A shape the drape may touch this step, with everything the per-node test
 // reads about it taken ONCE. The narrowphase runs nodes × seam rounds ×
 // collision passes times over this list (63 × 3 × 4 = 756 visits a shape a
@@ -161,7 +133,7 @@ const FOLLOW_DAMPING = 0.9;
 // test then rejected. Nothing here can change during a step - the drape moves
 // only its own nodes - so it is read at the top and the visits are four
 // comparisons on numbers.
-interface Candidate {
+export interface Candidate {
   readonly shape: CollisionShape2D;
   readonly owner: CollisionObject2D;
   // World centre and axis-aligned half-extents, already grown by the node
@@ -177,6 +149,86 @@ interface Candidate {
   readonly moving: boolean;
   // Owned by the body the manacle is cuffed to (see the cuff note in `step`).
   readonly cuffed: boolean;
+}
+
+// Every wrappable shape of every SOLID body near `points` this step. Both
+// halves are the rope's own notion of what a chain may touch: `wrappable`
+// excludes the mounting loop the chain threads through, and a non-solid body
+// (`isPassThrough` in Rope) excludes vine links and hook-only grates - the
+// real chain never wraps either, so a drape resting on one would be a drawing
+// of a collision the level does not contain. `exclude` are bodies the caller
+// collides with on its own terms or not at all. The AABB gate keeps the
+// per-node narrowphase to the shapes that could possibly matter, and each
+// survivor is read once into a `Candidate` (see there). Shared with the
+// released chain's reel (render/chainReel.ts).
+export function drapeCandidates(
+  points: readonly Vec2[],
+  bodies: readonly PhysicsBody2D[],
+  exclude: readonly CollisionObject2D[],
+  cuffBody: CollisionObject2D | null,
+): Candidate[] {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const margin = NODE_RADIUS + MAX_STEP;
+  const out: Candidate[] = [];
+  for (const body of bodies) {
+    if (body.removed || !body.isSolid || exclude.includes(body)) continue;
+    let moving: boolean | null = null;
+    for (const s of body.getShapes()) {
+      if (!s.wrappable) continue;
+      const c = s.globalPosition;
+      const e = shapeExtents(s);
+      if (
+        c.x + e.x < minX - margin ||
+        c.x - e.x > maxX + margin ||
+        c.y + e.y < minY - margin ||
+        c.y - e.y > maxY + margin
+      ) {
+        continue;
+      }
+      if (moving === null) {
+        const from = body.renderPosition(0);
+        const now = body.globalPosition;
+        moving = from.x !== now.x || from.y !== now.y || body.renderRotation(0) !== body.globalRotation;
+      }
+      out.push({
+        shape: s,
+        owner: body,
+        cx: c.x,
+        cy: c.y,
+        ex: e.x + NODE_RADIUS,
+        ey: e.y + NODE_RADIUS,
+        moving,
+        cuffed: body === cuffBody,
+      });
+    }
+  }
+  return out;
+}
+
+// Where a world point riding `body` was at the start of the frame, and where
+// a point that rode it from the start of the frame is now - the body's
+// frame-start pose is its captured render transform, taken at the top of the
+// frame before anything moved, so both are exact for the frame rather than a
+// velocity times dt.
+export function bodyWas(body: CollisionObject2D, p: Vec2): Vec2 {
+  const prevPos = body.renderPosition(0);
+  const prevRot = body.renderRotation(0);
+  return prevPos.add(p.sub(body.globalPosition).rotated(prevRot - body.globalRotation));
+}
+
+export function bodyCarried(body: CollisionObject2D, q: Vec2): Vec2 {
+  const prevPos = body.renderPosition(0);
+  const prevRot = body.renderRotation(0);
+  return body.globalPosition.add(q.sub(prevPos).rotated(body.globalRotation - prevRot));
 }
 
 // Read-only per-step collision telemetry. Repeated constraint/collision passes
@@ -218,7 +270,7 @@ export class SlackChain {
   contactSnapshot(): readonly DrapeContact[] {
     return [...this.audioHits.values()].flatMap(hits => [...hits.values()].map(hit => {
       const point = this.pos[hit.node]!;
-      const from = SlackChain.carried(hit.shape.owner as PhysicsBody2D, this.renderFrom[hit.node]!);
+      const from = bodyCarried(hit.shape.owner as PhysicsBody2D, this.renderFrom[hit.node]!);
       const velocity = point.sub(from).div(this.audioDelta);
       const tangent = velocity.sub(hit.normal.mul(velocity.dot(hit.normal)));
       return { ...hit, point, slideSpeed: tangent.length() };
@@ -234,23 +286,11 @@ export class SlackChain {
   private prev: Vec2[] = [];
   private renderFrom: Vec2[] = [];
   // The chain's length as of the last step - the wrap path plus the slack -
-  // which is what a reel starts from, and what the renderers count the links
-  // by (`chainLength`). `lengthFrom` is its value a step earlier, interpolated
-  // from the way `renderFrom` is for the nodes.
+  // which is what a reel starts from (render/chainReel.ts), and what the
+  // renderers count the links by (`chainLength`). `lengthFrom` is its value a
+  // step earlier, interpolated from the way `renderFrom` is for the nodes.
   private length = 0;
   private lengthFrom = 0;
-  // Reeling in after a release (see `beginReel`): the chain still out, in
-  // metres, going negative once the end has passed the loop and is being
-  // swallowed toward the ball's centre. Null while the chain is deployed.
-  private reel: number | null = null;
-  // A full segment's rest length while reeling, fixed at the release: the
-  // chain is consumed at the loop, segment by segment (`reelRestOf`), rather
-  // than shrunk all over.
-  private reelRest = 0;
-  // Whether the last node is held at the chain's far end. True for a deployed
-  // chain - the end is the hook, the tip or the anchor - and false once it
-  // is let go: from then on the end is free and is hauled in by the chain.
-  private endPinned = true;
 
   // The far-end body the chain was deployed with — the hook, later the
   // dangling tip. The visual chain threads INTO it (the manacle is drawn over
@@ -401,65 +441,13 @@ export class SlackChain {
     }
   }
 
-  // Every wrappable shape of every SOLID body near the chain this step. Both
-  // halves are the rope's own notion of what a chain may touch: `wrappable`
-  // excludes the mounting loop the chain threads through, and a non-solid body
-  // (`isPassThrough` in Rope) excludes vine links and hook-only grates — the
-  // real chain never wraps either, so the drape resting on one would be a
-  // drawing of a collision the level does not contain. The far end's own body
-  // (hook / dangling tip) is skipped: the chain threads into it. The AABB gate
-  // keeps the per-node narrowphase to the shapes that could possibly matter,
-  // and each survivor is read once into a `Candidate` (see there).
+  // The scenery this drape may touch this step (`drapeCandidates`), less the
+  // far end's own body (hook / dangling tip): the chain threads into it.
   private collectCandidates(
     bodies: readonly PhysicsBody2D[],
     cuffBody: CollisionObject2D | null,
   ): Candidate[] {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const p of this.pos) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
-    const margin = NODE_RADIUS + MAX_STEP;
-    const out: Candidate[] = [];
-    for (const body of bodies) {
-      if (body.removed || !body.isSolid || body === this.tipBody) continue;
-      let moving: boolean | null = null;
-      for (const s of body.getShapes()) {
-        if (!s.wrappable) continue;
-        const c = s.globalPosition;
-        const e = shapeExtents(s);
-        if (
-          c.x + e.x < minX - margin ||
-          c.x - e.x > maxX + margin ||
-          c.y + e.y < minY - margin ||
-          c.y - e.y > maxY + margin
-        ) {
-          continue;
-        }
-        if (moving === null) {
-          const from = body.renderPosition(0);
-          const now = body.globalPosition;
-          moving =
-            from.x !== now.x || from.y !== now.y || body.renderRotation(0) !== body.globalRotation;
-        }
-        out.push({
-          shape: s,
-          owner: body,
-          cx: c.x,
-          cy: c.y,
-          ex: e.x + NODE_RADIUS,
-          ey: e.y + NODE_RADIUS,
-          moving,
-          cuffed: body === cuffBody,
-        });
-      }
-    }
-    return out;
+    return drapeCandidates(this.pos, bodies, [this.tipBody], cuffBody);
   }
 
   // One equality-constraint pass over the segments. Alternating the sweep
@@ -474,15 +462,10 @@ export class SlackChain {
   // is also nudged perpendicular, alternating sides by node index, which gives
   // the fold a direction to grow in; the verlet step, gravity and the floor
   // then settle it into an honest pile.
-  //
-  // Reeling, each segment has its own rest (`reelRestOf`) and the cuff on
-  // the end takes the smaller share of its segment's correction
-  // (`CUFF_WEIGHT`). A deployed chain goes through neither branch.
   private solveDistances(restLen: number, reversed: boolean): void {
-    const reeling = this.reel !== null;
     for (let k = 0; k < SEGMENTS; k++) {
       const j = reversed ? SEGMENTS - 1 - k : k;
-      const rest = reeling ? this.reelRestOf(j) : restLen;
+      const rest = restLen;
       const a = this.pos[j]!;
       const b = this.pos[j + 1]!;
       const d = b.sub(a);
@@ -490,16 +473,10 @@ export class SlackChain {
       if (len < 1e-9) continue;
       const err = (len - rest) / len;
       const aPinned = j === 0;
-      const bPinned = this.endPinned && j + 1 === SEGMENTS;
+      const bPinned = j + 1 === SEGMENTS;
       if (aPinned && bPinned) continue;
       let corr = d.mul(err);
-      // No buckling kick while reeling: nothing pushes a hauled chain, and a
-      // segment shorter than its rest there is the run behind a node the
-      // haul has just lifted, still sliding on its own momentum - which the
-      // kick folded into a tangle under the loop rather than letting the
-      // along-segment correction straighten it (`reelFollow` takes the
-      // momentum itself).
-      if (!reeling && len < rest * 0.95) {
+      if (len < rest * 0.95) {
         const kick = (rest - len) * 0.5 * (j % 2 === 0 ? 1 : -1);
         corr = corr.add(d.div(len).orthogonal().mul(kick));
       }
@@ -507,9 +484,6 @@ export class SlackChain {
         this.pos[j + 1] = b.sub(corr);
       } else if (bPinned) {
         this.pos[j] = a.add(corr);
-      } else if (reeling && j + 1 === SEGMENTS) {
-        this.pos[j] = a.add(corr.mul(1 / (1 + CUFF_WEIGHT)));
-        this.pos[j + 1] = b.sub(corr.mul(CUFF_WEIGHT / (1 + CUFF_WEIGHT)));
       } else {
         const half = corr.mul(0.5);
         this.pos[j] = a.add(half);
@@ -523,17 +497,12 @@ export class SlackChain {
   // slightly for many passes of the local solver (each pass moves the error
   // one node); clamping against the pins directly removes the visible
   // sag-stretch in one statement.
-  //
-  // A reeling chain (`endPinned` false) has no pin B: its end is one more
-  // free node, held only by the chain running back to the loop.
   private solveLongRange(restLen: number, pinA: Vec2, pinB: Vec2): void {
-    const last = this.endPinned ? SEGMENTS - 1 : SEGMENTS;
-    for (let i = 1; i <= last; i++) {
+    for (let i = 1; i < SEGMENTS; i++) {
       const maxA = i * restLen;
       const fromA = this.pos[i]!.sub(pinA);
       const dA = fromA.length();
       if (dA > maxA) this.pos[i] = pinA.add(fromA.mul(maxA / dA));
-      if (!this.endPinned) continue;
       const maxB = (SEGMENTS - i) * restLen;
       const fromB = this.pos[i]!.sub(pinB);
       const dB = fromB.length();
@@ -554,9 +523,7 @@ export class SlackChain {
     candidates: readonly Candidate[],
     cuff: { body: CollisionObject2D; at: Vec2 } | null,
   ): void {
-    // A reeling chain's free end collides like any other node.
-    const last = this.endPinned ? SEGMENTS - 1 : SEGMENTS;
-    for (let i = 1; i <= last; i++) {
+    for (let i = 1; i < SEGMENTS; i++) {
       let p = this.pos[i]!;
       // Repeated until the node ends clear of every shape. A compound body's
       // pieces overlap at their seams (the lantern's handle-top piece stands
@@ -577,7 +544,7 @@ export class SlackChain {
           // its two neighbours held 11 cm apart on opposite faces by the
           // push-out (`session-1038f` f858-862).
           const from = c.moving
-            ? SlackChain.carried(c.owner, this.renderFrom[i]!)
+            ? bodyCarried(c.owner, this.renderFrom[i]!)
             : this.renderFrom[i]!;
           const ov = circleOverlapFrom(p, NODE_RADIUS, c.shape, from);
           if (!ov) continue;
@@ -588,7 +555,7 @@ export class SlackChain {
           // top of the frame, before anything moved), so the point's motion
           // is exact for the frame rather than a velocity times dt. Zero for
           // a body that did not move, without asking it.
-          const surfaceStep = c.moving ? p.sub(SlackChain.was(c.owner, p)) : Vec2.ZERO;
+          const surfaceStep = c.moving ? p.sub(bodyWas(c.owner, p)) : Vec2.ZERO;
           // Static friction first: a contacting node that has only crept this
           // step, against the surface, is put back where the surface carried
           // it (see STICK_STEP).
@@ -617,23 +584,6 @@ export class SlackChain {
       }
       this.pos[i] = p;
     }
-  }
-
-  // Where a world point riding `body` was at the start of the frame, and
-  // where a point that rode it from the start of the frame is now - the
-  // body's frame-start pose is its captured render transform, taken at the
-  // top of the frame before anything moved, so both are exact for the frame
-  // rather than a velocity times dt.
-  private static was(body: CollisionObject2D, p: Vec2): Vec2 {
-    const prevPos = body.renderPosition(0);
-    const prevRot = body.renderRotation(0);
-    return prevPos.add(p.sub(body.globalPosition).rotated(prevRot - body.globalRotation));
-  }
-
-  private static carried(body: CollisionObject2D, q: Vec2): Vec2 {
-    const prevPos = body.renderPosition(0);
-    const prevRot = body.renderRotation(0);
-    return body.globalPosition.add(q.sub(prevPos).rotated(body.globalRotation - prevRot));
   }
 
   // The full drawn polyline, loop → anchor: the simulated drape, its two ends
@@ -669,227 +619,6 @@ export class SlackChain {
     const ring = ringEnd(end);
     out.push(ring !== null ? ring.renderRimPoint(alpha) : end.contact.renderGlobalPosition(alpha));
     return out;
-  }
-
-  // ---- Reeling in after a release -----------------------------------------
-  //
-  // Letting go of the chain is instantaneous in the sim (`releaseChain`), and
-  // the picture of it is this drape carrying on: the same nodes, exactly
-  // where the deployed chain left them, with the far end unpinned and the
-  // rest length shrinking at `REEL_RATE` - so the chain is hauled back in
-  // through the loop under its own gravity, friction and collisions, and
-  // there is no frame on which it changes shape for any reason but the reel.
-  // Owned from here by the render side (`render/chainRetract.ts`), which
-  // steps it each fixed step as `BallLevel` stepped the deployed drape.
-
-  // Begin reeling. False if the drape was never stepped (nothing is laid to
-  // reel), in which case the chain simply vanishes as it always did.
-  beginReel(): boolean {
-    if (this.pos.length !== SEGMENTS + 1) return false;
-    this.reel = this.length;
-    this.reelRest = this.length / SEGMENTS;
-    this.endPinned = false;
-    return true;
-  }
-
-  // One fixed step of the reel, called where `step` was: after the physics
-  // frame, against its final transforms. False once the whole chain is in.
-  //
-  // The chain is consumed AT THE LOOP, as a winch consumes it: the segment
-  // nearest the loop is the one whose rest length shrinks, and the next only
-  // once it is gone (`reelRestOf`), while every segment beyond keeps the
-  // length it had. So the haul is felt first by the run nearest the ball and
-  // reaches the far end only through the chain - slack is taken up before the
-  // cuff moves at all, a chain wrapped round a corner is drawn back round
-  // it, and the cuff whips round after it. Shrinking every segment at once
-  // was tried first, with the drape's long-range attachment holding each
-  // node within its chain-length of the loop, and that is a chain whose end
-  // is pulled straight at the ball through whatever it was wrapped on, at
-  // the reel speed from the first frame, slack or not. Neither the sag bound
-  // nor the long-range attachment applies here for the same reason: both
-  // hold nodes to where a chain would be, and the reel is the chain going
-  // where it is pulled.
-  //
-  // Consumed segments collapse onto the loop rather than being dropped, so
-  // the node arrays never resample (a resample is a pop, see SEGMENTS);
-  // `walkChain` skips the coincident points. Past zero the reel goes on for
-  // the depth of the ball, and `reelPath` draws the end sliding under the
-  // ball to its centre with the cuff trailing it in, so the cuff leaves the
-  // picture under the ball rather than popping out of it at the rim.
-  stepReel(bodies: readonly PhysicsBody2D[], delta: number): boolean {
-    this.beginAudioStep(delta);
-    if (this.reel === null) return false;
-    const start = this.chain.start.contact;
-    const loop = start.globalPosition;
-    const centre = start.obj.globalPosition;
-    this.reel -= Math.max(REEL_SPEED_MIN, REEL_RATE * this.reel) * delta;
-    if (this.reel <= -loop.distanceTo(centre)) {
-      this.reel = null;
-      return false;
-    }
-
-    // Verlet integrate everything but the loop node, the end included; re-pin
-    // the loop to where the ball has it this frame.
-    const gravityStep = GRAVITY.mul(delta * delta);
-    for (let i = 0; i <= SEGMENTS; i++) {
-      this.renderFrom[i] = this.pos[i]!;
-      if (i === 0) continue;
-      let vel = this.pos[i]!.sub(this.prev[i]!).mul(DAMPING);
-      const speed = vel.length();
-      if (speed > MAX_STEP) vel = vel.mul(MAX_STEP / speed);
-      const next = this.pos[i]!.add(vel).add(gravityStep);
-      this.audioVelocities[i] = next.sub(this.pos[i]!).div(delta);
-      this.prev[i] = this.pos[i]!;
-      this.pos[i] = next;
-    }
-    this.prev[0] = this.pos[0]!;
-    this.pos[0] = loop;
-
-    // The blocks `step` runs, under the same budget, with more passes and no
-    // long-range attachment (see above); no cuff, since the end is free.
-    const candidates = this.collectCandidates(bodies, null);
-    const budget = SlackChain.timeBudgetMs;
-    const timed = Number.isFinite(budget);
-    const started = timed ? performance.now() : 0;
-    const blocks = REEL_ITERATIONS / COLLIDE_EVERY;
-    for (let block = 0; block < blocks; block++) {
-      for (let k = 0; k < COLLIDE_EVERY; k++) {
-        const iter = block * COLLIDE_EVERY + k;
-        this.solveDistances(this.reelRest, iter % 2 === 1);
-      }
-      this.reelFollow();
-      this.solveCollisions(candidates, null);
-      if (timed && performance.now() - started > budget) break;
-    }
-    // Chain that is in rides the loop. A node the reel has consumed (every
-    // segment before it at zero rest) arrives carrying the haul's own speed,
-    // and left with it, it overshoots through the loop next step, is pushed
-    // back out of the ball and buckles against the node behind it - a heap of
-    // links growing on the loop as the chain came in. Its momentum went into
-    // the ball; here that is a node with no motion of its own.
-    for (let j = 1; j <= SEGMENTS; j++) {
-      if (this.reelRestOf(j - 1) > 0) break;
-      this.prev[j] = this.pos[j]!;
-    }
-    return true;
-  }
-
-  // Follow the leader (Müller et al. 2012, the textbook for a chain that is
-  // inextensible from a pinned end): from the loop out, every node is put
-  // within its segment's rest of the node before it, moving only itself. One
-  // sweep carries the haul at the loop to the far end WHOLE, which the
-  // symmetric passes cannot do: each of those moves the error one node, so
-  // on their own a 13 cm haul a step stretched the run nearest the ball while
-  // the far end sat still, and the chain then vanished all at once when the
-  // count ran out (reported as "retracts slowly for a few frames then
-  // disappears"). The symmetric passes still run first for the chain's
-  // shape; this pass is the statement that it cannot be longer than it is.
-  //
-  // With the paper's momentum correction (its DFTL): pulling a node in is a
-  // pull on the node ahead of it too, so the node ahead is given the reaction
-  // to the correction its follower took, scaled by `FOLLOW_DAMPING`. Without
-  // it the follow pass conjures momentum from nothing - every node it moves
-  // keeps the move as velocity and none of that is paid for - and the run of
-  // chain still on the floor overran the node the haul had lifted off it and
-  // folded under the loop.
-  //
-  // AND WITH THE SLACK TAKEN UP FIRST. Plain follow-the-leader moves a node
-  // along its own segment by whatever its leader moved, so a slack chain
-  // slides along its own path like a train on rails - every bend kept, the
-  // cuff moving from the first frame - when a hauled chain straightens its
-  // bends first and moves its end only once it has to. So a node that is
-  // out of reach of its leader is first looked for INSIDE THE REACH OF BOTH
-  // ITS NEIGHBOURS: while the chain is bent there the two discs overlap and
-  // the node is put at the nearest point of the overlap, absorbing the pull
-  // by straightening and passing nothing on. Only when they no longer
-  // overlap - the chain through it already straight - is it carried along
-  // its segment as the paper has it, and the pull goes on to the next node.
-  // The cuff is last and has no follower, so it is carried only when every
-  // bend before it has been pulled out.
-  private reelFollow(): void {
-    for (let j = 0; j < SEGMENTS; j++) {
-      const rest = this.reelRestOf(j);
-      const a = this.pos[j]!;
-      const b = this.pos[j + 1]!;
-      const d = b.sub(a);
-      const len = d.length();
-      if (len <= rest) continue;
-      let to: Vec2 | null = null;
-      if (j + 1 < SEGMENTS) {
-        to = SlackChain.nearestWithin(b, a, rest, this.pos[j + 2]!, this.reelRestOf(j + 1));
-      }
-      if (to === null) to = rest > 0 && len > 1e-9 ? a.add(d.mul(rest / len)) : a;
-      this.pos[j + 1] = to;
-      if (j === 0) continue;
-      // v_j -= s * correction_{j+1}, written into the Verlet history.
-      this.prev[j] = this.prev[j]!.add(to.sub(b).mul(FOLLOW_DAMPING));
-    }
-  }
-
-  // The point nearest `p` that is within `ra` of `a` and within `rc` of `c`,
-  // or null when no such point exists (the two discs do not meet). The
-  // candidates are `p` itself, its projection onto either circle, and the
-  // two points where the circles cross; the nearest admissible one wins.
-  private static nearestWithin(p: Vec2, a: Vec2, ra: number, c: Vec2, rc: number): Vec2 | null {
-    const inA = (q: Vec2): boolean => q.distanceTo(a) <= ra + 1e-9;
-    const inC = (q: Vec2): boolean => q.distanceTo(c) <= rc + 1e-9;
-    if (inA(p) && inC(p)) return p;
-    let best: Vec2 | null = null;
-    let bestD = Infinity;
-    const offer = (q: Vec2): void => {
-      if (!inA(q) || !inC(q)) return;
-      const dist = q.distanceTo(p);
-      if (dist < bestD) {
-        bestD = dist;
-        best = q;
-      }
-    };
-    const onA = p.distanceTo(a) > 1e-9 ? a.add(a.directionTo(p).mul(ra)) : a;
-    const onC = p.distanceTo(c) > 1e-9 ? c.add(c.directionTo(p).mul(rc)) : c;
-    offer(onA);
-    offer(onC);
-    const dist = a.distanceTo(c);
-    if (dist > 1e-9 && dist <= ra + rc) {
-      const x = (dist * dist - rc * rc + ra * ra) / (2 * dist);
-      const h2 = ra * ra - x * x;
-      if (h2 >= 0) {
-        const h = Math.sqrt(h2);
-        const ex = a.directionTo(c);
-        const ey = ex.orthogonal();
-        const mid = a.add(ex.mul(x));
-        offer(mid.add(ey.mul(h)));
-        offer(mid.sub(ey.mul(h)));
-      }
-    }
-    return best;
-  }
-
-  // The rest length of segment `j` (0 nearest the loop) while reeling: a
-  // full segment for every one the chain still out covers counting from the
-  // far end, the remainder for the one being consumed, and nothing for the
-  // ones already in. They sum to the chain still out.
-  private reelRestOf(j: number): number {
-    const out = this.reel! - (SEGMENTS - 1 - j) * this.reelRest;
-    return Math.min(this.reelRest, Math.max(0, out));
-  }
-
-  // The reeling chain as drawn: its polyline loop → end (the end being the
-  // cuff's hinge), and the way the cuff faces there - back along the chain,
-  // as a free cuff hangs (`chainEndFacing`), and straight into the ball once
-  // it is being swallowed. Null while the chain is deployed or gone.
-  reelPath(alpha: number): { path: Vec2[]; dir: Vec2 } | null {
-    if (this.reel === null) return null;
-    const start = this.chain.start.contact;
-    const loop = start.renderGlobalPosition(alpha);
-    const centre = start.obj.renderPosition(alpha);
-    const inward = loop.distanceTo(centre) > 1e-9 ? loop.directionTo(centre) : Vec2.DOWN;
-    if (this.reel <= 0) {
-      const depth = Math.min(-this.reel, loop.distanceTo(centre));
-      return { path: [loop, loop.add(inward.mul(depth))], dir: inward };
-    }
-    const path: Vec2[] = [loop];
-    for (let i = 1; i <= SEGMENTS; i++) path.push(this.renderFrom[i]!.lerp(this.pos[i]!, alpha));
-    return { path, dir: chainEndFacing(path, inward) };
   }
 
   // Step-time node positions, for the CLI's SVG frames and debug tooling.

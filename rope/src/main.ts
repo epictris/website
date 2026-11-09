@@ -336,9 +336,7 @@ shards.useCollision(scene3d);
 // The released chain reeling back in (see render/chainRetract.ts): the same
 // shape as the sparks - it watches the sim each step, runs on the render
 // clock, and is cleared with the level.
-// Behind `?retract=1` while it is being judged: off, a released chain
-// vanishes as it always did.
-const chainRetract = params.get("retract") !== null ? new ChainRetract() : null;
+const chainRetract = new ChainRetract();
 // A chain that snapped (see render/chainSnap.ts): the same shape again, and on
 // always.
 const chainSnap = new ChainSnap();
@@ -362,7 +360,7 @@ function buildRun(): void {
   sparks.reset();
   debris.reset();
   shards.reset();
-  chainRetract?.reset();
+  chainRetract.reset();
   chainSnap.reset();
   level.onReset = reset;
   recording.clear();
@@ -686,7 +684,7 @@ const replayHost: ReplayHost = {
     sparks.reset();
     debris.reset();
     shards.reset();
-    chainRetract?.reset();
+    chainRetract.reset();
     chainSnap.reset();
     if (sceneStale) {
       buildScene();
@@ -891,12 +889,12 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     shards.ingest(level.shatterEvents);
     // Likewise per step, so a chain let go and re-thrown across two steps of
     // one render frame is seen as both rather than as nothing having changed.
-    chainRetract?.observe(level, STEP);
+    chainRetract.observe(level, STEP);
     // ...and a chain that snapped, which happens on one step only.
     chainSnap.observe(level, STEP, sparks);
     // Per step for the reason the sparks are: each step's sounds are placed
     // on that step's own moment (see `AudioOut.flush`).
-    sound.observe(level, STEP);
+    sound.observe(level, STEP, chainRetract);
   }
   // The bundle buffers are fed whether or not anyone is watching, so that they
   // hold exactly what has been simulated since the current build: a P download
