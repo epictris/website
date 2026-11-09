@@ -613,11 +613,18 @@ function caseDrop(): ViscousResult {
   c.check(`it does not re-bite the mud (${rebit < 0 ? "never" : `re-embedded ${rebit} frames later`})`, rebit < 0);
   c.check("...and is the dangling tip still", rig.tip === tip && rig.ball.chain !== null);
   // Then the ball and the tip fall to the floor, and the tip bites it: a
-  // dropped cuff is still armed, as a missed throw's is.
+  // dropped cuff is still armed, as a missed throw's is. The ball hangs
+  // straight under the cuff and lands first, so the cuff lands on the ball -
+  // which a bar resting on a circle is a stable rest on, and since the cuff
+  // and the ball collide (`BallPlayer.dangle`, 2026-11-09) it stays there - so
+  // the player aims to the side and the ball rolls out from under it, as a
+  // player shakes a cuff off. Until then it fell through the ball, which it
+  // passed through by construction.
+  const side = new Vec2(1.2, 0);
   let landed = -1;
   let anchor: unknown = null;
   for (let f = 0; f < 240 && landed < 0; f++) {
-    rig.step(rig.aim(up));
+    rig.step(rig.aim(side));
     const end = rig.ball.chain?.end;
     if (end && end.contact.obj instanceof StaticBody2D) {
       landed = f;

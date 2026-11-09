@@ -25,6 +25,9 @@ import {
   GripAnchorMonitor,
   recordingDeserializer,
   RollMonitor,
+  TipHingeMonitor,
+  TipRockMonitor,
+  TipTeleportMonitor,
   TunnelMonitor,
   WallClimbMonitor,
   worldDigestBall,
@@ -94,6 +97,9 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
   const tunnel = new TunnelMonitor();
   const runaway = new ContactRunawayMonitor();
   const wallClimb = new WallClimbMonitor();
+  const tipRock = new TipRockMonitor();
+  const tipTeleport = new TipTeleportMonitor();
+  const tipHinge = new TipHingeMonitor();
   // The recorded world digests by the frame they describe: a bundle need not
   // carry one per frame (see `Recording.digests`). Built here rather than
   // imported, as `num` is written, because older trees have no helper for it.
@@ -119,6 +125,9 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
     if (tunnel.push(level)) violations++;
     if (runaway.push(level)) violations++;
     if (wallClimb.push(level)) violations++;
+    if (tipRock.push(level)) violations++;
+    if (tipTeleport.push(level)) violations++;
+    if (tipHinge.push(level)) violations++;
     const ball = level.ball;
     peakV = keepMax(peakV, num(ball.linearVelocity.length()));
     pushRun = keepMax(pushRun, num((level as { chainPushCreditFrames?: unknown }).chainPushCreditFrames));

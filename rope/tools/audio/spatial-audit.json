@@ -1,0 +1,1293 @@
+{
+  "method": "Chromium OfflineAudioContext, actual edited recordings, production panner/envelope helpers; camera at (40,-8,15.75), six source placements per recording",
+  "samples": [
+    {
+      "key": "attach-dirt-scatter-cannonball-v20-35ac2479",
+      "slots": [
+        "attach"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 5.899272665306171,
+          "right": 5.899272665306171,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 6.266002567966154,
+          "right": 5.209633038079712,
+          "balanceDb": 0.8018343547094182
+        },
+        "right": {
+          "left": 5.112243651280287,
+          "right": 6.279536770422525,
+          "balanceDb": -0.8931606356731719
+        },
+        "above": {
+          "left": 5.899272665306171,
+          "right": 5.899272665306171,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 5.271229102315377,
+          "right": 5.271229102315377,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 3.890818110127721,
+          "right": 3.890818110127721,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "sphere-touch-low-v26-dddc7f5e",
+      "slots": [
+        "ball-settle"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 3.3461640050508774,
+          "right": 3.3461640050508774,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 3.7149480087177618,
+          "right": 2.94335805199191,
+          "balanceDb": 1.0110964399137687
+        },
+        "right": {
+          "left": 2.8892355801577962,
+          "right": 3.780375059640621,
+          "balanceDb": -1.1675193488111981
+        },
+        "above": {
+          "left": 3.3461637860263167,
+          "right": 3.3461637860263167,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 3.2032587794583667,
+          "right": 3.2032587794583667,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 2.234402821485188,
+          "right": 2.234402821485188,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "deploy-timed-v28-d54dab74",
+      "slots": [
+        "deploy"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 2.2092042344101497,
+          "right": 2.2092042344101497,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 3.2461446596727503,
+          "right": 1.4892897798808877,
+          "balanceDb": 3.3838866040897413
+        },
+        "right": {
+          "left": 1.3633246056902393,
+          "right": 3.40060512625002,
+          "balanceDb": -3.969569321037638
+        },
+        "above": {
+          "left": 2.209204225729422,
+          "right": 2.209204225729422,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 2.3477375924378703,
+          "right": 2.3477375924378703,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 4.391401333127337,
+          "right": 4.391401333127337,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "land-heavy-trimmed-cannonball-v20-179417-1911a881",
+      "slots": [
+        "land-heavy"
+      ],
+      "channels": 2,
+      "measurements": {
+        "centre": {
+          "left": 4.93900227100926,
+          "right": 4.939002271008983,
+          "balanceDb": 2.439748490379748e-13
+        },
+        "left": {
+          "left": 5.521028456716694,
+          "right": 4.220738116390553,
+          "balanceDb": 1.1663157922975358
+        },
+        "right": {
+          "left": 4.1251231825956305,
+          "right": 5.605901185876839,
+          "balanceDb": -1.3320851647945517
+        },
+        "above": {
+          "left": 4.939002244163089,
+          "right": 4.939002244163569,
+          "balanceDb": -4.2189326661708364e-13
+        },
+        "below": {
+          "left": 4.465201569226254,
+          "right": 4.4652015692315405,
+          "balanceDb": -5.14179405166517e-12
+        },
+        "audition": {
+          "left": 3.9713637489581455,
+          "right": 3.971363748958142,
+          "balanceDb": 3.857309866213147e-15
+        }
+      }
+    },
+    {
+      "key": "land-light-soft-stone-cannonball-v20-179-823903c0",
+      "slots": [
+        "land-light"
+      ],
+      "channels": 2,
+      "measurements": {
+        "centre": {
+          "left": 0.07105322059898177,
+          "right": 0.07105322051222812,
+          "balanceDb": 5.302592760490342e-9
+        },
+        "left": {
+          "left": 0.08050547594873166,
+          "right": 0.06172627403438875,
+          "balanceDb": 1.153553593378334
+        },
+        "right": {
+          "left": 0.06050068900320005,
+          "right": 0.08226912383717727,
+          "balanceDb": -1.3347655153277942
+        },
+        "above": {
+          "left": 0.0710532198491281,
+          "right": 0.0710532199125587,
+          "balanceDb": -3.8770313289621805e-9
+        },
+        "below": {
+          "left": 0.06676553521438451,
+          "right": 0.06676553552770655,
+          "balanceDb": -2.0380879277698693e-8
+        },
+        "audition": {
+          "left": 0.058299158547572415,
+          "right": 0.058299158547477505,
+          "balanceDb": 7.070448984762946e-12
+        }
+      }
+    },
+    {
+      "key": "land-medium-cannonball-v20-1794179980091-806eb594",
+      "slots": [
+        "land-medium"
+      ],
+      "channels": 2,
+      "measurements": {
+        "centre": {
+          "left": 1.900943915847176,
+          "right": 1.9009439158423087,
+          "balanceDb": 1.111966001681172e-11
+        },
+        "left": {
+          "left": 2.241050525801332,
+          "right": 1.5278320795480431,
+          "balanceDb": 1.6637602349842164
+        },
+        "right": {
+          "left": 1.4828593163500559,
+          "right": 2.3096731920658153,
+          "balanceDb": -1.9245058354161317
+        },
+        "above": {
+          "left": 1.9009439101422716,
+          "right": 1.9009439094658842,
+          "balanceDb": 1.5452913701407277e-9
+        },
+        "below": {
+          "left": 1.6955958606182835,
+          "right": 1.6955958606185872,
+          "balanceDb": -7.782122655085724e-13
+        },
+        "audition": {
+          "left": 2.0168170329732726,
+          "right": 2.0168170329745214,
+          "balanceDb": -2.6890271404846735e-12
+        }
+      }
+    },
+    {
+      "key": "loop-touch-dry-v26-f499571c",
+      "slots": [
+        "loop-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 1.336054821835414,
+          "right": 1.336054821835414,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 1.5669946792264666,
+          "right": 1.1445852893967208,
+          "balanceDb": 1.3641936190584838
+        },
+        "right": {
+          "left": 1.1205111938914099,
+          "right": 1.6221195224181972,
+          "balanceDb": -1.6066665162833502
+        },
+        "above": {
+          "left": 1.336054875904933,
+          "right": 1.336054875904933,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 1.402780409946136,
+          "right": 1.402780409946136,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 1.3355277055881567,
+          "right": 1.3355277055881567,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "roll-cannonball-dry-v25-3b285609",
+      "slots": [
+        "roll"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 42.424071127718484,
+          "right": 42.424071127718484,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 46.85990680836756,
+          "right": 37.50186133768263,
+          "balanceDb": 0.9674859687698192
+        },
+        "right": {
+          "left": 36.83484291566291,
+          "right": 47.629966420060605,
+          "balanceDb": -1.1162145320598402
+        },
+        "above": {
+          "left": 42.42407071330448,
+          "right": 42.42407071330448,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 40.930829831039325,
+          "right": 40.930829831039325,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 27.077684340339434,
+          "right": 27.077684340339434,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-1-804bd39a",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.0303956430388702,
+          "right": 0.0303956430388702,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.04416805061899221,
+          "right": 0.01931125496157588,
+          "balanceDb": 3.5929773409169767
+        },
+        "right": {
+          "left": 0.017941642499626025,
+          "right": 0.04633937531063219,
+          "balanceDb": -4.120879760895317
+        },
+        "above": {
+          "left": 0.03039549950143793,
+          "right": 0.03039549950143793,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.025864675198666098,
+          "right": 0.025864675198666098,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.05269897857868128,
+          "right": 0.05269897857868128,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-2-2de164a9",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.013907807952771188,
+          "right": 0.013907807952771188,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.021623158473443062,
+          "right": 0.00900821476257149,
+          "balanceDb": 3.8028039968201535
+        },
+        "right": {
+          "left": 0.008169295856798521,
+          "right": 0.02280165431303607,
+          "balanceDb": -4.457817325932365
+        },
+        "above": {
+          "left": 0.013907808235044436,
+          "right": 0.013907808235044436,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.01445472422100009,
+          "right": 0.01445472422100009,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.028386786523428697,
+          "right": 0.028386786523428697,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-3-d8c733e5",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.0031827421238815753,
+          "right": 0.0031827421238815753,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.005764830887884166,
+          "right": 0.002149673085167541,
+          "balanceDb": 4.284141527910657
+        },
+        "right": {
+          "left": 0.0019507224479415337,
+          "right": 0.006236044807367088,
+          "balanceDb": -5.0471374538686264
+        },
+        "above": {
+          "left": 0.0031827419906953805,
+          "right": 0.0031827419906953805,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.004040029502730771,
+          "right": 0.004040029502730771,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.02027092810949544,
+          "right": 0.02027092810949544,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-4-fc2701a0",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.0014721651378972792,
+          "right": 0.0014721651378972792,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.0028908819220040977,
+          "right": 0.001116613757585778,
+          "balanceDb": 4.131273788791489
+        },
+        "right": {
+          "left": 0.0009931284288961294,
+          "right": 0.003099276785901793,
+          "balanceDb": -4.9425494933068626
+        },
+        "above": {
+          "left": 0.0014721652246434257,
+          "right": 0.0014721652246434257,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.002001652425279523,
+          "right": 0.002001652425279523,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.004277024784979657,
+          "right": 0.004277024784979657,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-5-b69238a8",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.002958603943817185,
+          "right": 0.002958603943817185,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.0048482353951874516,
+          "right": 0.0019143554639755266,
+          "balanceDb": 4.035611156719538
+        },
+        "right": {
+          "left": 0.0017310130365656147,
+          "right": 0.005142704528821364,
+          "balanceDb": -4.728912342578265
+        },
+        "above": {
+          "left": 0.002958604102671573,
+          "right": 0.002958604102671573,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.0032074602418746367,
+          "right": 0.0032074602418746367,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.006713890035623103,
+          "right": 0.006713890035623103,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-6-76470f2a",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.012893368493754819,
+          "right": 0.012893368493754819,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.01668201407045334,
+          "right": 0.00796757985644703,
+          "balanceDb": 3.2092205820585407
+        },
+        "right": {
+          "left": 0.007409054007600421,
+          "right": 0.01732592381191831,
+          "balanceDb": -3.6893363978146936
+        },
+        "above": {
+          "left": 0.012893369572356893,
+          "right": 0.012893369572356893,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.009859505514787027,
+          "right": 0.009859505514787027,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.0193093291413913,
+          "right": 0.0193093291413913,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-7-16afd552",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.008126734913918209,
+          "right": 0.008126734913918209,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.011470754875317691,
+          "right": 0.00562724386339158,
+          "balanceDb": 3.0929626295501778
+        },
+        "right": {
+          "left": 0.005318124323536705,
+          "right": 0.012165261865305955,
+          "balanceDb": -3.593629760845789
+        },
+        "above": {
+          "left": 0.008126735237697177,
+          "right": 0.008126735237697177,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.008025994543787567,
+          "right": 0.008025994543787567,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.01536675972622123,
+          "right": 0.01536675972622123,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "slack-micro-v29-8-b7a2c990",
+      "slots": [
+        "slack"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.0011129934291838745,
+          "right": 0.0011129934291838745,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.001972344102534428,
+          "right": 0.0007878254868591957,
+          "balanceDb": 3.9855265934089
+        },
+        "right": {
+          "left": 0.0007151045022138591,
+          "right": 0.002116653206121679,
+          "balanceDb": -4.712801964326962
+        },
+        "above": {
+          "left": 0.0011129934275692995,
+          "right": 0.0011129934275692995,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.0011975880826421488,
+          "right": 0.0011975880826421488,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.007727688005422733,
+          "right": 0.007727688005422733,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "large-iron-chain-move-1-6d4e49f8",
+      "slots": [
+        "taut"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.10693241626365112,
+          "right": 0.10693241626365112,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.15201128210489753,
+          "right": 0.06810990860202938,
+          "balanceDb": 3.4866552448965846
+        },
+        "right": {
+          "left": 0.06352462543083234,
+          "right": 0.15965510996715288,
+          "balanceDb": -4.002407103129956
+        },
+        "above": {
+          "left": 0.10693241626365112,
+          "right": 0.10693241626365112,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.09258246081593545,
+          "right": 0.09258246081593545,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.15853827131841267,
+          "right": 0.15853827131841267,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "speed-wind-v30-5d9c1f9b",
+      "slots": [
+        "whoosh"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 764.7970361907635,
+          "right": 764.7970361907635,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 822.2494071128392,
+          "right": 677.351174325308,
+          "balanceDb": 0.8418968092581665
+        },
+        "right": {
+          "left": 665.2393839709631,
+          "right": 828.1825822089215,
+          "balanceDb": -0.9514813974997969
+        },
+        "above": {
+          "left": 764.7970361907635,
+          "right": 764.7970361907635,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 704.9816430349438,
+          "right": 704.9816430349438,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 473.79996881866606,
+          "right": 473.79996881866606,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "wind-chain-heavy-1-v18-48f3e88f",
+      "slots": [
+        "wind"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.11593243399694443,
+          "right": 0.11593243399694443,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.17844839810755475,
+          "right": 0.06963995460110349,
+          "balanceDb": 4.086541744170934
+        },
+        "right": {
+          "left": 0.06396194510307034,
+          "right": 0.1898992942059574,
+          "balanceDb": -4.726016883002034
+        },
+        "above": {
+          "left": 0.11593242744258263,
+          "right": 0.11593242744258263,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.08008598215431342,
+          "right": 0.08008598215431342,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.5051890031126172,
+          "right": 0.5051890031126172,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "wind-chain-heavy-2-v18-f5190674",
+      "slots": [
+        "wind"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.09108380467244018,
+          "right": 0.09108380467244018,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.15436884108766574,
+          "right": 0.061242142174898144,
+          "balanceDb": 4.015092703579863
+        },
+        "right": {
+          "left": 0.056480380496626896,
+          "right": 0.1659089066606645,
+          "balanceDb": -4.679720875276861
+        },
+        "above": {
+          "left": 0.09108380310740567,
+          "right": 0.09108380310740567,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.07373039193366805,
+          "right": 0.07373039193366805,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.5892673799218218,
+          "right": 0.5892673799218218,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "wind-chain-heavy-3-v18-99cec948",
+      "slots": [
+        "wind"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.3557382088011387,
+          "right": 0.3557382088011387,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.6180191875049846,
+          "right": 0.207206824483507,
+          "balanceDb": 4.7459790367966646
+        },
+        "right": {
+          "left": 0.1902032110868932,
+          "right": 0.6691831838858003,
+          "balanceDb": -5.4632717430826405
+        },
+        "above": {
+          "left": 0.3557382131012668,
+          "right": 0.3557382131012668,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.2710902740255448,
+          "right": 0.2710902740255448,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.9192314256509662,
+          "right": 0.9192314256509662,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-wrap-clink-v27-1-b0297ee8",
+      "slots": [
+        "wrap"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.012677892735743193,
+          "right": 0.012677892735743193,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.01638971963924007,
+          "right": 0.00775397274391459,
+          "balanceDb": 3.2504725455993464
+        },
+        "right": {
+          "left": 0.007200456362769059,
+          "right": 0.01701099417718038,
+          "balanceDb": -3.7336967316196557
+        },
+        "above": {
+          "left": 0.012677892735743193,
+          "right": 0.012677892735743193,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.00947472011067018,
+          "right": 0.00947472011067018,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.0190634524517037,
+          "right": 0.0190634524517037,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-wrap-clink-v27-2-bb67048c",
+      "slots": [
+        "wrap"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.00878378953220948,
+          "right": 0.00878378953220948,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.012556551365459953,
+          "right": 0.006037838730172358,
+          "balanceDb": 3.1798886867238063
+        },
+        "right": {
+          "left": 0.005689551459224518,
+          "right": 0.013322862135837237,
+          "balanceDb": -3.695195041053419
+        },
+        "above": {
+          "left": 0.00878378953220948,
+          "right": 0.00878378953220948,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.008718691500622797,
+          "right": 0.008718691500622797,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.01703293330649096,
+          "right": 0.01703293330649096,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-wrap-clink-v27-3-57eb2ed7",
+      "slots": [
+        "wrap"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.004383586763886749,
+          "right": 0.004383586763886749,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.00738760856839676,
+          "right": 0.0030254148790783194,
+          "balanceDb": 3.8771893789424987
+        },
+        "right": {
+          "left": 0.002735605502862371,
+          "right": 0.007848034917444546,
+          "balanceDb": -4.577074579617191
+        },
+        "above": {
+          "left": 0.004383586763886749,
+          "right": 0.004383586763886749,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.005283314056780037,
+          "right": 0.005283314056780037,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.016759779192511315,
+          "right": 0.016759779192511315,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-drag-timed-v28-d1ba876a",
+      "slots": [
+        "chain-drag",
+        "hook-drag"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 22.633217531594216,
+          "right": 22.633217531594216,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 25.275829757662766,
+          "right": 19.941183677372692,
+          "balanceDb": 1.0295448778335918
+        },
+        "right": {
+          "left": 19.582480988985253,
+          "right": 25.747644228008838,
+          "balanceDb": -1.1886978597413993
+        },
+        "above": {
+          "left": 22.633217523489986,
+          "right": 22.633217523489986,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 21.68455488565911,
+          "right": 21.68455488565911,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 15.36074248004095,
+          "right": 15.36074248004095,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-1-3c9193af",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.0145703059628676,
+          "right": 0.0145703059628676,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.023219291672225015,
+          "right": 0.010725758416650182,
+          "balanceDb": 3.3542095618059142
+        },
+        "right": {
+          "left": 0.009829608666834567,
+          "right": 0.024618184857374062,
+          "balanceDb": -3.9871980028348055
+        },
+        "above": {
+          "left": 0.014570306092866527,
+          "right": 0.014570306092866527,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.01859507038630522,
+          "right": 0.01859507038630522,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.027311577026241485,
+          "right": 0.027311577026241485,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-2-e14ac42b",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.00879036525426868,
+          "right": 0.00879036525426868,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.014846525678419837,
+          "right": 0.0063748181650575275,
+          "balanceDb": 3.6715703228045826
+        },
+        "right": {
+          "left": 0.005816530770926058,
+          "right": 0.015799115259487292,
+          "balanceDb": -4.3396873745410245
+        },
+        "above": {
+          "left": 0.008790365098271689,
+          "right": 0.008790365098271689,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.01014625139064896,
+          "right": 0.01014625139064896,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.01991736238151214,
+          "right": 0.01991736238151214,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-3-28e26b83",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.010907944114266582,
+          "right": 0.010907944114266582,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.016454899118123104,
+          "right": 0.007871180348469255,
+          "balanceDb": 3.2025536077588095
+        },
+        "right": {
+          "left": 0.007286747880803269,
+          "right": 0.017399690878541575,
+          "balanceDb": -3.7800778938000157
+        },
+        "above": {
+          "left": 0.010907944011527145,
+          "right": 0.010907944011527145,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.01310090346744958,
+          "right": 0.01310090346744958,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.01940092338112017,
+          "right": 0.01940092338112017,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-4-e1f085f2",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.00813646222741228,
+          "right": 0.00813646222741228,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.012340176196436698,
+          "right": 0.0050515126075835705,
+          "balanceDb": 3.878999194774515
+        },
+        "right": {
+          "left": 0.004623670807963385,
+          "right": 0.013006797982839761,
+          "balanceDb": -4.4918348898509874
+        },
+        "above": {
+          "left": 0.008136461871453867,
+          "right": 0.008136461871453867,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.008374453129387028,
+          "right": 0.008374453129387028,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.04201357168483985,
+          "right": 0.04201357168483985,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-5-89f3ec73",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.014313000940226514,
+          "right": 0.014313000940226514,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.01821968013656575,
+          "right": 0.009183960296599401,
+          "balanceDb": 2.9751075071126785
+        },
+        "right": {
+          "left": 0.008617496738717896,
+          "right": 0.018950221085302935,
+          "balanceDb": -3.4223315336687907
+        },
+        "above": {
+          "left": 0.014313001119076477,
+          "right": 0.014313001119076477,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.009679559568138853,
+          "right": 0.009679559568138853,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.019991592626121636,
+          "right": 0.019991592626121636,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-6-1e93f54e",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.012893342804712727,
+          "right": 0.012893342804712727,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.016682038512757038,
+          "right": 0.007967567703070961,
+          "balanceDb": 3.2092335698201717
+        },
+        "right": {
+          "left": 0.0074090434868507886,
+          "right": 0.0173259611170827,
+          "balanceDb": -3.6893519157023165
+        },
+        "above": {
+          "left": 0.012893343016397477,
+          "right": 0.012893343016397477,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.009859514166075271,
+          "right": 0.009859514166075271,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.019309324769403988,
+          "right": 0.019309324769403988,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-7-5e953228",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.008126749279755908,
+          "right": 0.008126749279755908,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.011470809895359497,
+          "right": 0.0056273337048667275,
+          "balanceDb": 3.0929141241386464
+        },
+        "right": {
+          "left": 0.00531822033035718,
+          "right": 0.012165332972665475,
+          "balanceDb": -3.5935767443537237
+        },
+        "above": {
+          "left": 0.008126748851134128,
+          "right": 0.008126748851134128,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.008025891858366559,
+          "right": 0.008025891858366559,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.015366704997771714,
+          "right": 0.015366704997771714,
+          "balanceDb": 0
+        }
+      }
+    },
+    {
+      "key": "chain-hit-micro-v29-8-aa3466e6",
+      "slots": [
+        "chain-hit"
+      ],
+      "channels": 1,
+      "measurements": {
+        "centre": {
+          "left": 0.0011130532670103244,
+          "right": 0.0011130532670103244,
+          "balanceDb": 0
+        },
+        "left": {
+          "left": 0.0019722187772424084,
+          "right": 0.0007877652094753923,
+          "balanceDb": 3.9855829244556014
+        },
+        "right": {
+          "left": 0.0007150390573593502,
+          "right": 0.0021164966129674414,
+          "balanceDb": -4.712878130250892
+        },
+        "above": {
+          "left": 0.0011130532510697053,
+          "right": 0.0011130532510697053,
+          "balanceDb": 0
+        },
+        "below": {
+          "left": 0.001197481708305488,
+          "right": 0.001197481708305488,
+          "balanceDb": 0
+        },
+        "audition": {
+          "left": 0.007727391419136671,
+          "right": 0.007727391419136671,
+          "balanceDb": 0
+        }
+      }
+    }
+  ]
+}

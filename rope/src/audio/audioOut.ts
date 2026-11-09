@@ -36,13 +36,15 @@
 // within it, and its gain and rate multiply the slot's. A running loop takes a
 // changed window, gain and rate on its next step.
 
+import type { Camera } from "../render/camera";
+import { cameraListener, setListenerPose, soundPosition, setSpatialPosition, makeSpatialPanner, type SoundPosition, type AudioCamera } from "./spatialAudio";
 import type { SoundLevel } from "../render/settings";
 import { SOUND_ASSETS } from "./library";
 import { SOUND_BANK, clipPlay, resolveSlot, landingMix, type LandingLayer, type ClipPlay, type SlotParams, type SoundFamily } from "./slots";
 import type { SoundStep } from "./soundObserver";
 import { SURFACE_KINDS, type SurfaceKind } from "./surfaces";
 import grainWorkletUrl from "./grainWorklet.ts?worker&url";
-import { strikeLevel, loopGainFollow } from "./playbackLevel";
+import { strikeLevel, loopGainFollow, scheduleShotEnvelope, windLevel } from "./playbackLevel";
 
 export type SoundVolume = SoundLevel;
 // Off, and three steps of about 5 dB.
@@ -56,9 +58,6 @@ const STEP = 1 / 60;
 // How quickly a loop follows its targets, s - one step, so it tracks the sim
 // without zippering between steps.
 const FOLLOW = STEP;
-// How wide the stereo picture is: a sound at the edge of the view pans this
-// far, and one further out no further.
-const PAN_WIDTH = 0.6;
 // Concurrent one-shots, beyond which a new one is dropped: a fast wind can ask
 // for a few hundred links a second.
 const MAX_ONESHOTS = 48;
@@ -75,15 +74,11 @@ const PACE_MAX = 16;
 // nine time constants of a step's fade (-78 dB), so it never cuts off audibly.
 const REST_AFTER = 9 * FOLLOW;
 
-// A loop's level against its reference speed, by family: a roll and a wade
-// grow in proportion to the speed; the air goes as its SQUARE (the pressure of
-// moving air goes as the dynamic pressure, rho v^2 / 2), which is what keeps a
-// whoosh silent at walking pace and loud in a swing. Each fades in from rest
-// over the bottom of its range, so a ball creeping or settling plays nothing.
+// Movement loops scale with reference speed. Wind uses its separate speed
+// threshold and acceleration swell in windLevel; rolling keeps its soft floor.
 function loopLevel(family: SoundFamily, ratio: number): number {
   const fade = family === "roll" ? smoothstep(0, 0.03, ratio) : smoothstep(0.02, 0.1, ratio);
-  const level = family === "whoosh" ? ratio * ratio
-    : family === "roll" && ratio < 1 ? Math.pow(ratio, 1.25) : ratio;
+  const level = family === "roll" && ratio < 1 ? Math.pow(ratio, 1.25) : ratio;
   return Math.min(LOOP_MAX_GAIN, level) * fade;
 }
 
@@ -93,7 +88,7 @@ interface LoopVoice {
   sound: string;
   node: AudioWorkletNode;
   gain: GainNode;
-  pan: StereoPannerNode;
+  pan: PannerNode;
   tone: BiquadFilterNode | null;
   rings: BiquadFilterNode[];
   // The file's length, s, and the window last sent to the worklet, samples.
@@ -179,19 +174,15 @@ export class AudioOut {
     this.queue.push(step);
   }
 
-  // Schedule the steps this frame ran. `listenerX` is the camera's centre and
-  // `halfWidth` how far either side of it the view reaches, metres.
-  flush(listenerX: number, halfWidth: number): void {
+  // Schedule sources in level space and move the listener with the camera.
+  flush(camera: Camera, renderedCamera?: AudioCamera | null): void {
     const ctx = this.ctx;
     if (ctx === null || ctx.state !== "running") {
       this.queue.length = 0;
       return;
     }
     const now = ctx.currentTime;
-    const pan = (x: number): number => {
-      const p = (x - listenerX) / Math.max(halfWidth, 1e-3);
-      return Math.max(-1, Math.min(1, p)) * PAN_WIDTH;
-    };
+    setListenerPose(ctx.listener, cameraListener(camera, renderedCamera), now);
     const n = this.queue.length;
     if (n === 0) {
       // The next step is due a step after the last; a frame between the two
@@ -201,7 +192,7 @@ export class AudioOut {
     }
     for (let i = 0; i < n; i++) {
       const t = Math.max(now, now + LEAD - (n - 1 - i) * STEP);
-      this.playStep(this.queue[i]!, t, pan);
+      this.playStep(this.queue[i]!, t);
       this.lastStepAt = t;
     }
     this.quiet = false;
@@ -247,7 +238,7 @@ export class AudioOut {
     if (!buffer || !ctx) return null;
     this.stopPreview();
     const clip = clipPlay(SOUND_BANK, key, buffer.duration);
-    const src = this.oneShot(buffer, dbToGain(volume) * clip.gain, 0, clip.rate, ctx.currentTime, clip, true);
+    const src = this.oneShot(buffer, dbToGain(volume) * clip.gain, null, clip.rate, ctx.currentTime, clip, true);
     if (!src) return null;
     this.auditioning = src;
     src.addEventListener("ended", () => {
@@ -278,7 +269,7 @@ export class AudioOut {
     const buffers = await Promise.all(layers.flatMap(layer => layer.params.sounds.map(key => this.load(key))));
     if (epoch !== this.impactPreviewEpoch) return [];
     if (!layers.length || buffers.some(buffer => !buffer) || !this.ctx) throw new Error("Landing sounds are unavailable. Load the current game library on the dev server.");
-    this.play("land", surface, speed, 0, this.ctx.currentTime, dbToGain(volumeDb));
+    this.play("land", surface, speed, null, this.ctx.currentTime, dbToGain(volumeDb));
     return layers;
   }
 
@@ -366,22 +357,25 @@ export class AudioOut {
     return b ?? null;
   }
 
-  private playStep(step: SoundStep, t: number, pan: (x: number) => number): void {
+  private playStep(step: SoundStep, t: number): void {
     for (const surface of SURFACE_KINDS) {
       if (surface === "vine") continue;
       const roll = step.roll.get(surface);
-      this.driveLoop(`roll:${surface}`, "roll", surface, roll?.speed ?? 0, roll ? pan(roll.x) : null, t);
+      this.driveLoop(`roll:${surface}`, "roll", surface, roll?.speed ?? 0, roll ?? null, t);
     }
-    this.driveLoop("whoosh", "whoosh", null, step.air.speed, pan(step.air.x), t);
-    this.driveLoop("deploy", "deploy", null, step.deploy?.speed ?? 0, pan(step.deploy?.x ?? 0), t);
-    this.driveLoop("slack", "slack", null, step.slack?.speed ?? 0, pan(step.slack?.x ?? 0), t);
-    this.driveLoop("wade", "wade", null, step.wade.speed * step.wade.interface, pan(step.wade.x), t);
-    if (step.splash) this.play("splash", null, step.splash.speed, pan(step.splash.x), t);
-    for (const s of step.strikes) this.play(s.family, s.surface, s.speed, pan(s.x), t + (s.at - 1) * STEP);
-    for (const c of step.clinks) this.play("wind", null, c.speed, pan(c.x), t + (c.at - 1) * STEP);
-    if (step.taut) this.play("taut", null, step.taut.speed, pan(step.taut.x), t);
-    for (const c of step.creaks ?? []) this.play("creak", null, c.speed, pan(c.x), t);
-    for (const c of step.wraps ?? []) this.play("wrap", c.surface, c.speed, pan(c.x), t + ((c.at ?? 1) - 1) * STEP);
+    this.driveLoop("whoosh", "whoosh", null, step.air.speed, step.air, t, step.air.acceleration ?? 0);
+    this.driveLoop("deploy", "deploy", null, step.deploy?.speed ?? 0, step.deploy ?? null, t);
+    for (const c of step.jingles ?? []) this.play("slack", null, c.speed, c, t);
+    this.driveLoop("hook-drag", "hook-drag", step.hookDrag?.surface ?? null, step.hookDrag?.speed ?? 0, step.hookDrag ?? null, t);
+    this.driveLoop("chain-drag", "chain-drag", step.drag?.surface ?? null, step.drag?.speed ?? 0, step.drag ?? null, t);
+    for (const c of step.chainImpacts ?? []) this.play("chain-hit", c.surface, c.speed, c, t + ((c.at ?? 1) - 1) * STEP);
+    this.driveLoop("wade", "wade", null, step.wade.speed * step.wade.interface, step.wade, t);
+    if (step.splash) this.play("splash", null, step.splash.speed, step.splash, t);
+    for (const s of step.strikes) this.play(s.family, s.surface, s.speed, s, t + (s.at - 1) * STEP);
+    for (const c of step.clinks) this.play("wind", null, c.speed, c, t + (c.at - 1) * STEP);
+    if (step.taut) this.play("taut", null, step.taut.speed, step.taut, t);
+    for (const c of step.creaks ?? []) this.play("creak", null, c.speed, c, t);
+    for (const c of step.wraps ?? []) this.play("wrap", c.surface, c.speed, c, t + ((c.at ?? 1) - 1) * STEP);
   }
 
   // A loop, at `speed` (0 = silent). `pan` null is "not touching": fade out.
@@ -390,8 +384,9 @@ export class AudioOut {
     family: SoundFamily,
     surface: SurfaceKind | null,
     speed: number,
-    pan: number | null,
+    pan: SoundPosition | null,
     t: number,
+    acceleration = 0,
   ): void {
     const resolved = resolveSlot(SOUND_BANK, family, surface);
     let voice = this.loops.get(channel);
@@ -403,13 +398,13 @@ export class AudioOut {
     }
     if (!resolved) return;
     const params = resolved.params;
-    const active = pan !== null && speed > 0;
+    const active = pan !== null && speed > 0 && (family !== "whoosh" || speed > params.refSpeed * 0.25);
     if (!voice) {
       if (!active || !this.workletReady) return;
       const key = this.pick(resolved.key, params);
       const buffer = key ? this.now(key) : null;
       if (!key || !buffer) return;
-      voice = this.startLoop(resolved.key, key, buffer, family);
+      voice = this.startLoop(resolved.key, key, buffer, family, pan!);
       this.loops.set(channel, voice);
     }
     // Read every step, so an edit in the menu is heard on a loop already
@@ -422,7 +417,8 @@ export class AudioOut {
       voice.node.port.postMessage({ type: "window", ...window });
     }
     const ratio = speed / Math.max(params.refSpeed, 1e-3);
-    const gain = active ? dbToGain(params.volume) * clip.gain * loopLevel(family, ratio) : 0;
+    const level = family === "whoosh" ? windLevel(speed, acceleration, params.refSpeed) : loopLevel(family, ratio);
+    const gain = active ? dbToGain(params.volume) * clip.gain * level : 0;
     const gainFollow = loopGainFollow(family);
     voice.gain.gain.setTargetAtTime(gain, t, gainFollow);
     // Quiet rolling loses some high detail without stretching its transients.
@@ -454,14 +450,14 @@ export class AudioOut {
     };
     set(voice.node.parameters.get("pitch")!, pitch);
     set(voice.node.parameters.get("pace")!, pace);
-    set(voice.pan.pan, pan);
+    setSpatialPosition(voice.pan, soundPosition(pan), t, !fresh);
     voice.fresh = false;
   }
 
   // A loop voice for `sound`, silent until its first step sets its gain. It
   // starts at a random point in its window, so a roll that stops and starts
   // does not restart the same bar of it every time.
-  private startLoop(slot: string, sound: string, buffer: AudioBuffer, family: SoundFamily): LoopVoice {
+  private startLoop(slot: string, sound: string, buffer: AudioBuffer, family: SoundFamily, initialPosition: SoundPosition): LoopVoice {
     const ctx = this.ctx!;
     const node = new AudioWorkletNode(ctx, "grain-loop", {
       numberOfInputs: 0,
@@ -479,7 +475,7 @@ export class AudioOut {
     node.port.postMessage({ type: "init", channels, ...window, at, texture: family === "roll", seed: Math.floor(Math.random() * 0x100000000) });
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    const pan = ctx.createStereoPanner();
+    const pan = makeSpatialPanner(ctx, initialPosition);
     const tone = family === "roll" ? ctx.createBiquadFilter() : null;
     // Narrow resonances measured in the current cannonball recording. Retain
     // broadband contact detail instead of muffling everything above the bass.
@@ -526,7 +522,7 @@ export class AudioOut {
   }
 
   // A one-shot for `family` on `surface`, at `speed`.
-  private play(family: SoundFamily, surface: SurfaceKind | null, speed: number, pan: number, t: number, monitorGain = 1): void {
+  private play(family: SoundFamily, surface: SurfaceKind | null, speed: number, pan: SoundPosition | null, t: number, monitorGain = 1): void {
     const own = family === "land" ? null : resolveSlot(SOUND_BANK, family, surface);
     const layers = family === "land" ? landingMix(SOUND_BANK, surface, speed) : own ? [{ ...own, weight: 1 }] : [];
     for (const resolved of layers) {
@@ -559,7 +555,7 @@ export class AudioOut {
   private oneShot(
     buffer: AudioBuffer,
     gain: number,
-    pan: number,
+    pan: SoundPosition | null,
     rate: number,
     at: number,
     clip: Pick<ClipPlay, "start" | "end">,
@@ -576,9 +572,10 @@ export class AudioOut {
     src.buffer = buffer;
     src.playbackRate.value = rate;
     const g = ctx.createGain();
-    g.gain.value = gain;
-    const p = ctx.createStereoPanner();
-    p.pan.value = pan;
+    const startAt = Math.max(ctx.currentTime, at);
+    scheduleShotEnvelope(g.gain, gain, startAt, (clip.end - clip.start) / rate);
+    // Auditions are centred and head-locked; gameplay sources are world-fixed.
+    const p = pan ? makeSpatialPanner(ctx, pan) : ctx.createGain();
     src.connect(g).connect(p).connect(this.bus!);
     this.live++;
     if (!audition) this.shots.add(g);
@@ -588,7 +585,7 @@ export class AudioOut {
       p.disconnect();
     };
     // Offset and duration are in the buffer's own seconds, whatever the rate.
-    src.start(Math.max(ctx.currentTime, at), clip.start, clip.end - clip.start);
+    src.start(startAt, clip.start, clip.end - clip.start);
     return src;
   }
 

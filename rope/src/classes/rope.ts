@@ -1430,10 +1430,48 @@ export class Rope {
   }
 
   private isPointOutsideBoundingStrip(point: Vec2, span: Segment): boolean {
+    return Rope.outsideStrip(point, span);
+  }
+
+  private static outsideStrip(point: Vec2, span: Segment): boolean {
     return (
       span.direction().dot(span.start.directionTo(point)) < 0 ||
       span.direction().dot(span.end.directionTo(point)) > 0
     );
+  }
+
+  // The corner a polygon that crossed `span` from clear is wrapped at: its
+  // tangent from the span's start, the sample's construction for a span clean
+  // through a shape - unless that tangent lies outside the span's own extent,
+  // where the vertex that crossed (`crossed`, the sweep's point) is the bend.
+  //
+  // A tangent behind the start or past the end is not a corner the span can
+  // bend round; it is what the construction answers when the start stands
+  // almost in the plane of one of the shape's faces, which sees that face
+  // edge-on and names its far end. `session-435f` f254: the ball sat on the
+  // floor just past a floor piece's top corner, 2 mm off the line of the
+  // piece's 45 degree underside, and the chain ran from its underside along
+  // the floor to a cuff 60 cm away. A kink in the floor's top face 1 cm high
+  // crossed the span as the ball rolled - the chain lying on it - and the
+  // tangent from the start was the underside's far end, 1.1 m down and 1.1 m
+  // BEHIND the start: the path read 4.28 m on a 1.8 m chain, the lease held
+  // it as slack, and the chain ran through the floor to that corner for the
+  // rest of the run (`chain-clip` from f254). The vertex that crossed is the
+  // kink, and a chain lying on a floor bends over the kink.
+  static crossedWrapVertex(shape: CollisionShape2D, side: WrapDirection, span: Segment, crossed: Vec2): number | null {
+    const corners = ShapeGeometry.getGlobalCorners(shape);
+    const tangent = RopeGeneration.calculateTangentVertexIndex(shape, side, span.start);
+    if (tangent !== null && !Rope.outsideStrip(corners[tangent]!, span)) return tangent;
+    let best: number | null = null;
+    let bestDistance = Infinity;
+    for (let i = 0; i < corners.length; i++) {
+      const d = corners[i]!.distanceTo(crossed);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = i;
+      }
+    }
+    return best;
   }
 
   private regeneratePath(bodies: PhysicsBody2D[]): void {
@@ -1597,11 +1635,7 @@ export class Rope {
           let vertexIndex: number | null = null;
           const { entry, exit } = Intersections.getIntersectionsShapeSegment(bodyShape, span.span);
           if (crossedFromClear) {
-            vertexIndex = RopeGeneration.calculateTangentVertexIndex(
-              bodyShape,
-              wrapDir,
-              span.span.start,
-            );
+            vertexIndex = Rope.crossedWrapVertex(bodyShape, wrapDir, span.span, crossing!.point);
           } else if ((entry && !exit) || (!entry && exit) || (!entry && !exit)) {
             let maxVertexAngle = 0;
             for (let i = 0; i < corners.length; i++) {

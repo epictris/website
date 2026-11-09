@@ -41,7 +41,7 @@ import { PX } from "../engine/units";
 import { RopeVineClamp } from "../lib/vineClamp";
 import { RAIL_KINETIC_FRICTION, RAIL_STATIC_FRICTION, RopeClamp } from "../lib/rail";
 import { creepSpeed } from "../lib/viscous";
-import { MANACLE_REACH } from "../lib/manacle";
+import { MANACLE_HINGE, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { CHAIN_LINK_BAR } from "../render/chainMetrics";
 import {
   AnimatableBody2D,
@@ -59,6 +59,7 @@ import {
   type World,
 } from "../engine/world";
 import { Rope } from "../classes/rope";
+import { BallHook } from "../classes/ballHook";
 import { RopeContact, RopeWrap } from "../lib/ropeContact";
 import { Segment } from "../lib/segment";
 import { ShapeGeometry } from "../lib/shapeGeometry";
@@ -692,6 +693,7 @@ export class BallChainRow implements IslandRow, IslandUnit {
     return Math.max(0, this.rope.leavingSpanLength(this.ball) ?? 0);
   }
 
+
   get rows(): readonly IslandRow[] {
     return [this];
   }
@@ -706,6 +708,26 @@ export class BallChainRow implements IslandRow, IslandUnit {
     this.substep = 0;
     this.driven = 0;
     this.frameImpulse = 0;
+    // Whether the dangling cuff is near enough the ball to touch it this frame
+    // (see `tipOnBall`): touching it already (a gathered contact between the
+    // two), or with its hinge within the bar's own reach of the ball's surface
+    // plus what the two can close in a frame - their relative speed, and the
+    // cuff's spin at that reach - plus the contact band.
+    const tip = this.dangling ? this.tip() : null;
+    this.tipOnBall = false;
+    if (tip instanceof BallHook) {
+      const touching = contacts.some(
+        (c) => (c.a === this.ball && c.b === tip) || (c.a === tip && c.b === this.ball),
+      );
+      const ballShape = this.ball.primaryShape().shape;
+      const radius = ballShape.kind === "circle" ? ballShape.radius : 0;
+      const hinge = tip.hinge;
+      const gap = hinge.distanceTo(this.ball.globalPosition) - radius;
+      const closing =
+        (tip.linearVelocity.sub(this.ball.linearVelocity).length() + Math.abs(tip.angularVelocity) * BallChainRow.CUFF_SPAN) *
+        dt;
+      this.tipOnBall = touching || gap <= BallChainRow.CUFF_SPAN + closing + CONTACT_SLOP;
+    }
     const path = this.rope.path();
     const onPath = new Set<CollisionObject2D>();
     for (const node of path) onPath.add(node.contact.obj);
@@ -798,8 +820,19 @@ export class BallChainRow implements IslandRow, IslandUnit {
   // (`TieSolver.chains`). A new far end carries no tension history, so the
   // warm start is dropped with it, as `Rope.end`'s setter drops the frame
   // correction.
+  //
+  // A DANGLING chain does not hold the ball at all: the row reads the ball as
+  // an infinite mass and sends it nothing (see `dangling`), so the island has
+  // no business integrating it or solving its contacts, and the ball stays a
+  // free ball, its contacts the world's. Held by the island, its floor contact
+  // was an island row, which reads a motor-driven spin as no drive at all
+  // (`spinSlipOf`): a ball landing with a missed throw's chain out could not
+  // catch any spin on the floor and skidded at its sliding friction, four times
+  // as far as the same ball without the chain - 0.73 m against 0.19 - read as
+  // the ball losing its grip whenever the hook was out (`session-372f`,
+  // `dangling-landing-grip`; since `b6cc767`, 2026-10-19).
   sync(chains: readonly TieChain[]): void {
-    const bodies: RigidBody2D[] = [this.ball];
+    const bodies: RigidBody2D[] = this.dangling ? [] : [this.ball];
     this.slats = new Set();
     for (const node of this.rope.path()) {
       const obj = node.contact.obj;
@@ -1007,11 +1040,38 @@ export class BallChainRow implements IslandRow, IslandUnit {
     return null;
   }
 
+  // While the dangling cuff is near enough the ball to touch it this frame,
+  // the row is two-way. The cuff and the ball collide (`BallPlayer.dangle`),
+  // and a contact is an impulse pair: with the chain one-way beside it, the
+  // chain hauled the cuff with nothing pulling the ball back while the cuff
+  // pushed and dragged the ball, and the ball drove itself along on its own
+  // cuff - standing on it as the winch reeled it in, carried left at 3 m/s
+  // (`session-206f` f155-185), 33 m along the floor in
+  // `ball-roll-wall-dangling`. A real chain pulling a cuff that is pressed
+  // against the ball pulls the ball back as hard, and the two internal forces
+  // cancel. Asked of touching alone, the winch whirled a short-chained cuff
+  // round the ball at 9 m/s on the frames between touches, paid for by
+  // nothing, and the cuff kicked the ball 22 cm up a wall with it
+  // (`ball-roll-wall-dangling` f206-226) - so it is asked of reach. Out of
+  // reach, the cuff keeps the one-way rule: what it is pinned on does not
+  // anchor the ball through the chain (`session-373f`). What is left at the
+  // boundary is a cuff flung from beyond reach that swings back carrying
+  // speed its one-way frames gave it (chosen 2026-11-09 over a two-way chain
+  // throughout, which would let a missed throw anchor).
+  private tipOnBall = false;
+
+  // The furthest any point of the cuff's bar stands from its hinge: a hinge
+  // further than this from the ball's surface cannot touch the ball.
+  static readonly CUFF_SPAN = Math.sqrt(
+    (MANACLE_HINGE + MANACLE_REACH) * (MANACLE_HINGE + MANACLE_REACH) + (MANACLE_THICKNESS / 2) * (MANACLE_THICKNESS / 2),
+  );
+
   // An impulse `j` along the chain, to every body on it - but the ball, while
-  // the chain's end is its dangling tip (see `dangling`).
+  // the chain's end is its dangling tip (see `dangling`) and is not touching
+  // it (see `tipOnBall`).
   private applyAll(terms: readonly RopeRowTerm[], j: number): void {
     if (j === 0) return;
-    const skip = this.dangling ? this.ball : null;
+    const skip = this.dangling && !this.tipOnBall ? this.ball : null;
     for (const t of terms) if (t.body !== skip) applyTerm(t, j);
   }
 
@@ -1293,7 +1353,12 @@ export class BallChainRow implements IslandRow, IslandUnit {
       slackRate += this.termRate(t);
       if (t.body === tip) this.tipTerms.push(t);
       if (t.body === this.ball) {
-        if (dangling) continue;
+        if (dangling) {
+          // The ball's share of the row's mass only while the cuff touches it
+          // (see `tipOnBall`), and none of the dangling chain's other terms.
+          if (this.tipOnBall) w += t.ma * t.ma * (invMassOf(this.ball) + t.arm * t.arm * invInertiaOf(this.ball));
+          continue;
+        }
         this.ballTerms.push(t);
       }
       if (t.body instanceof RigidBody2D) w += t.ma * t.ma * (invMassOf(t.body) + t.arm * t.arm * invInertiaOf(t.body));

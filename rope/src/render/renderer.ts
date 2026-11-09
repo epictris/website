@@ -29,7 +29,7 @@ import type { TieChain } from "../engine/ties";
 import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
-import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
+import { CHAIN_LINK_LEN, CHAIN_LINK_W, chainLinkPitch, walkChain } from "./chainMetrics";
 import type { ChainRetract } from "./chainRetract";
 import type { ChainSnap } from "./chainSnap";
 import { MANACLE_HINGE, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
@@ -710,6 +710,9 @@ function drawChainPolyline(
   // on; an authored scene chain passes its own, darkened for the narrow links so
   // the alternation still reads as interlocking loops.
   colors: { broad: string; narrow: string } = { broad: CHAIN, narrow: CHAIN_DARK },
+  // How far apart the links fall: `CHAIN_LINK_LEN`, except for the ball's
+  // chain over its drape (`chainLinkPitch`).
+  pitch: number = CHAIN_LINK_LEN,
 ): void {
   const half = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
   ctx.lineWidth = PX;
@@ -725,7 +728,7 @@ function drawChainPolyline(
     ctx.ellipse(0, 0, half, w, 0, 0, Math.PI * 2);
     ctx.restore();
     ctx.stroke();
-  });
+  }, pitch);
 }
 
 // How far a chain's links are pushed toward the backdrop: the fill they are
@@ -1054,8 +1057,11 @@ export function renderBall(
     // end node is the pin, free or bitten, and around a rail the drape is
     // pinned to the ring's rim (`SlackChain`) - so the links run to exactly the
     // point the drawn cuff is shackled at, with nothing trimmed or lifted.
+    // As many links out of the ball as the chain's length holds, however long
+    // the drape's polyline is drawn (`chainLinkPitch`).
+    const pitch = ball.chainSlack ? chainLinkPitch(loopToAnchor, ball.chainSlack.chainLength(alpha)) : CHAIN_LINK_LEN;
     const path = [...loopToAnchor.reverse(), ball.renderPosition(alpha)];
-    drawChainPolyline(ctx, path, ball.glass ? GLASS_LINKS : undefined);
+    drawChainPolyline(ctx, path, ball.glass ? GLASS_LINKS : undefined, pitch);
     // The manacle at the chain's far end (flying hook, dangling tip, or anchor),
     // wherever the sim says it is (`BallPlayer.manaclePose`): a free cuff is
     // the hook body itself, at its own pose; a bitten one stands on the face's

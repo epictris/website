@@ -716,6 +716,11 @@ export abstract class CollisionObject2D {
     other.exceptions.add(this.id);
   }
 
+  removeCollisionExceptionWith(other: CollisionObject2D): void {
+    this.exceptions.delete(other.id);
+    other.exceptions.delete(this.id);
+  }
+
   // Removed from the world tree (Godot GetParent().RemoveChild(this)).
   removed = false;
 

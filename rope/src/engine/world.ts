@@ -2812,18 +2812,33 @@ export class World {
     for (let i = 0; i < constraints.length; ) {
       const head = constraints[i]!;
       let deepest = head;
-      let slipped = false;
+      // The pair slides only when EVERY point carrying load is at its cone.
+      // Sequential impulses split a manifold's friction between its points in
+      // whatever order they are solved, so one point at its cone says only
+      // that it was asked first: while another still has friction to spare,
+      // the solve has stopped the slide and the pair is held. Read as "any
+      // point", a bar lying on a 25 degree slope - well inside its 0.6 - was
+      // never pinned, because the less loaded of its two points always
+      // saturated (0.099 of normal impulse against 0.146), and it crept down
+      // by gravity's integration step, 1.15 mm a frame at a reported velocity
+      // of zero (`hook-rest`, the dangling cuff once it turned as a body).
+      let carrying = 0;
+      let saturated = 0;
       let normalImpulse = 0;
       let j = i;
       while (j < constraints.length) {
         const c = constraints[j]!;
         if (c.a !== head.a || c.b !== head.b) break;
         if (c.depth > deepest.depth) deepest = c;
-        if (c.slipping) slipped = true;
+        if (c.normalImpulse > 0) {
+          carrying++;
+          if (c.slipping) saturated++;
+        }
         normalImpulse += c.normalImpulse;
         j++;
       }
       i = j;
+      const slipped = carrying > 0 && saturated === carrying;
       // No depth gate. Resting is what the contact CARRIED, not how deep it is
       // — the same lesson the steered grip learnt on `steered-ramp-hold`: the
       // solve pushes a resting interface to exactly zero overlap, so a depth

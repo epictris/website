@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { strikeLevel, loopGainFollow } from "../src/audio/playbackLevel";
+import { strikeLevel, loopGainFollow, scheduleShotEnvelope } from "../src/audio/playbackLevel";
 import { resolveSlot, type SoundBank } from "../src/audio/slots";
 import { CHAIN_LINK_LEN } from "../src/render/chainMetrics";
 
@@ -32,3 +32,20 @@ const loopBank: SoundBank = { slots: {
 assert.equal(resolveSlot(loopBank, "loop-hit", "stone")!.params.volume, -40, "loop volume is independent of ball landing volume");
 assert.equal(resolveSlot({ slots: { "land-light": { sounds: ["ball"] } } }, "loop-hit", "stone"), null, "unassigned loop has no ball landing fallback");
 console.log("PASS: short-hop roll envelope, airborne fade, independent loop impact volume and silence");
+
+assert.ok(Math.exp(-0.007 / loopGainFollow("deploy")) < 0.001, "deployment reaches silence within 7 ms of attachment");
+
+// Actual automation commands reach zero exactly when the pitched window ends.
+for (const seconds of [0.001, 0.01, 0.04, 0.136, 0.85]) {
+  const commands: { value: number; time: number }[] = [];
+  const capture = (value: number, time: number) => { commands.push({ value, time }); return {} as AudioParam; };
+  scheduleShotEnvelope({ setValueAtTime: capture, linearRampToValueAtTime: capture }, 0.3, 2, seconds);
+  assert.deepEqual(commands[0], { value: 0, time: 2 });
+  assert.deepEqual(commands.at(-1), { value: 0, time: 2 + seconds });
+  assert.ok(commands.every((c, i) => i === 0 || c.time >= commands[i - 1]!.time), "short windows never reverse envelope time");
+  assert.ok(commands.every(c => c.value >= 0 && c.value <= 0.3));
+}
+console.log("PASS: cropped one-shots have bounded onset/release fades and end at silence");
+for (const family of ["chain-drag", "hook-drag"] as const) {
+  assert.ok(Math.exp(-0.035 / loopGainFollow(family)) < 0.001, "scrapes reach near-silence within 35 ms of stopping");
+}

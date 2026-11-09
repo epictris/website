@@ -23,7 +23,7 @@ import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import type { CollisionObject2D } from "../engine/body";
 import { PX } from "../engine/units";
-import { CHAIN_LINK_BAR, CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
+import { CHAIN_LINK_BAR, CHAIN_LINK_LEN, CHAIN_LINK_W, chainLinkPitch, walkChain } from "../render/chainMetrics";
 import type { ChainRetract } from "../render/chainRetract";
 import type { ChainSnap } from "../render/chainSnap";
 import { MANACLE_BAND, MANACLE_HINGE, MANACLE_RADIUS, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
@@ -297,7 +297,12 @@ export class ChainLayer {
           const wrap = nodes.length >= 3 ? nodes[nodes.length - 2]!.contact.renderGlobalPosition(alpha) : null;
           this.anchorReach = Math.max(CHAIN_LINK_LEN, hinge.distanceTo(wrap ?? ball.renderPosition(alpha)));
         }
-        this.lay(this.path, this.anchorDepth !== 0);
+        // As many links out of the ball as the chain's length holds, however
+        // long the drape's polyline is drawn (`chainLinkPitch`).
+        const pitch = ball.chainSlack
+          ? chainLinkPitch(loopToAnchor, ball.chainSlack.chainLength(alpha))
+          : CHAIN_LINK_LEN;
+        this.lay(this.path, this.anchorDepth !== 0, pitch);
 
         // The manacle at the far end - the flying hook, the dangling tip, or the
         // anchor - wherever the sim says it is (`BallPlayer.manaclePose`).
@@ -355,18 +360,18 @@ export class ChainLayer {
 
   // `toAnchor`: the ball's chain bitten into set-back scenery, laid from its
   // anchored end at `anchorDepth` straight forward to the plane over
-  // `anchorReach` (see `sync`).
-  private lay(points: readonly Vec2[], toAnchor = false): void {
+  // `anchorReach` (see `sync`). `pitch`: how far apart the links fall, which
+  // only the ball's chain over its drape sets (`chainLinkPitch`).
+  private lay(points: readonly Vec2[], toAnchor = false, pitch: number = CHAIN_LINK_LEN): void {
     // The depth along the chain is a straight line from the anchor, so every
     // link on that run leans into it by the same angle.
     const slope = toAnchor ? -this.anchorDepth / this.anchorReach : 0;
     const lean = Math.atan(slope);
-    walkChain(points, ({ mid, dir, broad, index }) => {
+    walkChain(points, ({ mid, dir, broad, at: s }) => {
       const i = this.target.count++;
       // Turn the link's +x onto the tangent (in three's frame), then twist every
       // other link about that tangent.
       const angle = Math.atan2(threeY(dir.y), dir.x);
-      const s = (index + 0.5) * CHAIN_LINK_LEN;
       const z = toAnchor && s < this.anchorReach ? this.anchorDepth + slope * s : 0;
       const leaning = toAnchor && s < this.anchorReach;
       this.axis.set(Math.cos(angle), Math.sin(angle), 0);
@@ -387,7 +392,7 @@ export class ChainLayer {
       this.pos.set(mid.x, threeY(mid.y), z);
       this.m.compose(this.pos, this.q, this.scl);
       this.target.set(i, this.m, this.tint);
-    });
+    }, pitch);
   }
 
   // The manacle at `centre`, its hinge pointing along `dir`. Turned about z to

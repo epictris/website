@@ -581,9 +581,18 @@ export class BallPlayer extends RigidBody2D {
     // The load-bearing contact the ball ended last frame on, either shape: `a` is
     // always the dynamic body of a pair, which against scenery is the ball.
     // Speculative contacts carry no impulse and are not something met.
+    //
+    // Never the ball's own dangling cuff. A ride follows its surface - its
+    // speed included - and the cuff's motion is the ball's own doing: its
+    // winch whirls it, its loop strikes it. Since the two collide
+    // (`dangle`), a ball resting its loop on the cuff took it for the ground
+    // and chased it, 3.7 m/s a frame and 7.2 m/s in two as the winch flung the
+    // cuff away under it (`session-291f` f186-187, `ride-on-cuff`). The ball
+    // still meets the cuff, and rides up over it, through the contacts.
     let support: ContactConstraint | null = null;
     for (const c of contacts) {
       if (c.a !== this || c.normalImpulse <= 0) continue;
+      if (c.b === this.chainTip) continue;
       if (support === null || c.normalImpulse > support.normalImpulse) support = c;
     }
     const carriedBefore = this.lastSupport;
@@ -1243,9 +1252,28 @@ export class BallPlayer extends RigidBody2D {
     const vr = hook.linearVelocity.dot(outward);
     if (vr > 0) hook.linearVelocity = hook.linearVelocity.sub(outward.mul(vr));
 
-    this.chainTip = hook;
+    this.dangle(hook);
     this.hookInFlight = null;
     chain.maxRopeLength = targetLength;
+  }
+
+  // `hook` is the chain's dangling tip from here: a body in the world that
+  // the ball meets as it meets any other, two-way. The throw carries a
+  // collision exception between the two, because it spawns the mouth on the
+  // rim, half inside the ball; dangling, the cuff is a lump of steel on the
+  // end of the chain that the ball rolls into, rides up over and rests on,
+  // and that rests on the ball. Kept, the cuff passed through the ball by
+  // construction, and once it turned as a body it swung into the ball about
+  // its hinge and hung there 14 cm deep (`session-311f`); held out one-way -
+  // the ball an infinite mass to it, so that nothing the tip meets reaches
+  // the ball - a ball rolling onto its cuff on the floor pressed it into the
+  // floor with nothing pushing back and sank 45 mm into it (`session-435f`
+  // f237-241). The one-way rule is the chain's (`BallChainRow.dangling`):
+  // what the cuff is pinned against, held by or weighs does not reach the
+  // ball through the chain. Touching the ball, it is a body like any other.
+  private dangle(hook: BallHook): void {
+    hook.removeCollisionExceptionWith(this);
+    this.chainTip = hook;
   }
 
   // START THE LEVEL ON THE ANCHOR: throw the chain straight up and fly the
@@ -1599,9 +1627,10 @@ export class BallPlayer extends RigidBody2D {
       return { prev, allowance: BallPlayer.CHAIN_MAX_LENGTH - base };
     };
     hook.registerChainOutCallback(() => this.deployTip(BallPlayer.CHAIN_MAX_LENGTH));
-    // Free - flying or dangling - the cuff trails the chain, hinge first.
+    // Thrown, the cuff trails the chain, hinge first; dangling it turns as the
+    // bar it is (`BallHook.alignToChain`).
     hook.facing = () => this.hookFacing(hook);
-    hook.chainTaut = () => this.chain?.isTaut ?? false;
+    hook.holder = this;
   }
 
   // A clamped ring has run off the OPEN end of its rail (see `RopeClamp.coast`):
@@ -1706,11 +1735,10 @@ export class BallPlayer extends RigidBody2D {
     const carried = anchor instanceof PhysicsBody2D ? anchor.velocityAtPoint(at) : Vec2.ZERO;
     hook.linearVelocity = carried.add(velocity);
     hook.endFlight();
-    hook.addCollisionExceptionWith(this);
     hook.registerAttachmentCallback((body, point, struck) => this.onHookAttached(hook, body, point, struck));
     this.wireDeploy(hook);
     this.spawnBody?.(hook);
-    this.chainTip = hook;
+    this.dangle(hook);
     this.anchorBody = null;
     this.anchorOnRail = false;
     this.anchorFacingLocal = null;
@@ -1783,6 +1811,14 @@ export class BallPlayer extends RigidBody2D {
     const at = chain.end.contact.globalPosition;
     this.chainStowed = false;
     const hook = this.dropChainEnd(chain, at, this.linearVelocity.sub(this.velocityAtPoint(at)));
+    // Hanging off the rim by its hinge, the bar pointing straight out of the
+    // ball. Born facing back along the coil it lay along the rim with its
+    // centre 8 cm from the ball's, most of the bar inside the ball, born 90 mm
+    // deep in a ball it collides with (`dangle`, `session-251f` f170). The chain's
+    // end is the hinge in the cuff's own frame, so turning the cuff here moves
+    // nothing the chain measures.
+    const out = at.sub(this.globalPosition);
+    if (out.lengthSquared() > 1e-12) hook.globalRotation = out.neg().angle();
     // The hinge on the coil's end, where the chain's length was measured to.
     hook.globalPosition = at.sub(hook.hingeOffset());
     return true;

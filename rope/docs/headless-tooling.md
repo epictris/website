@@ -197,6 +197,13 @@ against a faded bound of 11.60 and a cone of 15.32 (`session-477f` f170).
 The load-bearing contact is also chosen *before* the bound question is asked
 rather than from among the contacts that pass it, or a ball skidding on its rim is
 measured at whatever grazing touch its mounting loop happens to have.
+Ball runs also carry **`tip-rock`** (`TipRockMonitor`): the dangling tip may not turn more than 2 degrees one way and straight back for more than 6 frames running.
+While its rotation was driven no energy or contact check saw it turn; `session-339f`'s tip rocked 14 degrees each way at 30 Hz on the floor, the chain's end swinging with it (see [manacle](manacle.md)).
+And **`tip-hinge-flick`** (`TipHingeMonitor`): the dangling tip's hinge, the chain's end, may not jump further in a frame than three steps at the larger of the hinge point's speeds (`v + w x r`) plus a centimetre WHILE the cuff turns further than three steps of its spin plus 0.05 rad - a turn with no spin behind it, which is what `session-307f`'s driven cuff did, snapped 80 degrees in a frame with the hinge flicking 6-7 cm. The turn half is what lets a ball strike its cuff: since they collide, the cuff is thrown faster inside a frame than at either end.
+And **`tip-in-ball`** (in `checkBallInvariants`): the dangling cuff may not be more than a centimetre inside the ball it is chained to, which it collides with (`session-311f`, see [manacle](manacle.md)).
+And **`tip-teleport`** (`TipTeleportMonitor`): on a frame the sweep SEATED the dangling tip along its path (`BallHook.seatShift`, diagnostic only; the probe's push-out along a normal is not a seat), it may not move further than a step at the larger of its two speeds, 5 mm of push-out, and what its turn can move its centre, where the seat accounts for the excess. A dangling tip is no longer seated by any bounce (see [ball-coil-and-hook](ball-coil-and-hook.md)), so this now guards that rule.
+Only on such a frame, because the speeds at a frame's ends do not bound its travel: the island's substeps can haul a tip faster than it leaves (`ball-roll-wall-dangling` f125).
+`session-472f`'s tip, dragged along a hook-proof floor, was seated 15.5 mm ahead of a 6.3 mm step by a bounce off the sweep's speculative band (see [ball-coil-and-hook](ball-coil-and-hook.md)).
 Ball runs also carry **`grip-pin-buzz`** (`GripPinMonitor`): the steered ball's
 position pin may not teleport the ball more than 5 mm along the surface for more
 than 8 frames running.

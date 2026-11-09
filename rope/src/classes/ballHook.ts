@@ -16,6 +16,7 @@ import {
   LAYER_HOOK,
   RigidBody2D,
   StaticBody2D,
+  type CollisionObject2D,
   type CollisionShape2D,
   type PhysicsBody2D,
 } from "../engine/body";
@@ -23,7 +24,7 @@ import { PX } from "../engine/units";
 import { nearestSurfacePoint, shapeWorldVertices, type ShapeTransform } from "../engine/shapes";
 import { bodySweepConvex } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
-import { CONTACT_SLOP, GRAVITY, contactBounce } from "../engine/world";
+import { CONTACT_SLOP, contactBounce } from "../engine/world";
 import { Mathf } from "../engine/mathf";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
@@ -93,13 +94,11 @@ export class BallHook extends RigidBody2D {
   deployLimit: (() => { prev: Vec2; allowance: number } | null) | null = null;
   // Which way the cuff should face - from its centre back along the chain it
   // hangs from - or null when there is nothing to face (no chain, or a chain
-  // too short to have a direction). Set by the owner; read every step by
-  // `alignToChain`, which is the only thing that turns this body.
+  // too short to have a direction). Set by the owner; read every step of the
+  // throw by `alignToChain`, which is the only thing that turns it then.
   facing: (() => Vec2 | null) | null = null;
-  // Whether the chain is pulling on the cuff, set by the owner. A dangling tip
-  // resting on a surface lies flat on it, and only a taut chain may turn it
-  // round to face the other way (see `lieFlat`).
-  chainTaut: (() => boolean) | null = null;
+  // The ball this cuff is chained to, set by the owner: never bitten (`bites`).
+  holder: CollisionObject2D | null = null;
   private armed = true;
   // Pieces this hook does not bite, however armed it is: the viscous faces it
   // has already crept out of (`shed`). A cuff that drops out of mud is left
@@ -113,6 +112,15 @@ export class BallHook extends RigidBody2D {
   // hook becomes once the deploy ends. Only the throw gets the blocking-contact
   // backstop below; see `attachToBlockingContact`.
   private flying = true;
+  // How far this frame's swept bounce SEATED the hook along its path, zero on
+  // a frame with none: the sweep's seat at the touch, not the probe's, which
+  // stands the hook a margin clear along the surface's normal as a push-out
+  // does. Diagnostic only - written here, read by `TipTeleportMonitor`
+  // and by nothing else, so it cannot reach the sim. A seat is a position
+  // write with no velocity behind it, and by the end of the frame integrate
+  // and the contact solver have moved the body again, so a frame's motion
+  // alone cannot say whether the hook was flown or put there.
+  seatShift = 0;
 
   constructor() {
     super();
@@ -138,13 +146,13 @@ export class BallHook extends RigidBody2D {
     // on the scene: every throw ended on the frame it was fired. It cost nothing
     // while the chain end was a circle a chain-width wide.
     this.primaryShape().wrappable = false;
-    // The cuff's rotation is DRIVEN, not integrated: every step turns it to
-    // face back along the chain (`alignToChain`), the way a shackle on the end
-    // of a chain trails the chain, so the drawn cuff, the bar the sim collides
-    // and the hinge the chain is measured to cannot come apart. Told to the
-    // contact solver and the rope solver in the vocabulary they already have
-    // for the steered ball - infinite rotational inertia, no torque arm - so
-    // neither spends an impulse on a spin the next step overwrites.
+    // Through the throw the cuff's rotation is DRIVEN, not integrated: every
+    // step turns it to face back along the chain (`alignToChain`), so the
+    // hinge the flight is budgeted to cannot come apart from the bar the sweep
+    // flies. Told to the contact solver and the rope solver in the vocabulary
+    // they already have for the steered ball - infinite rotational inertia, no
+    // torque arm - so neither spends an impulse on a spin the next step
+    // overwrites. `endFlight` hands it to the physics.
     this.kinematicRotation = true;
     // Steel, like the chain it ends, and weighed as the ring it is: a band
     // `MANACLE_BAND` thick and `MANACLE_WIDTH` wide round a circle of radius
@@ -157,9 +165,9 @@ export class BallHook extends RigidBody2D {
     // and never the ball's: a dangling tip reaches the ball through nothing
     // (`BallChainRow.dangling`).
     this.mass = Density.STEEL * 2 * Mathf.Pi * MANACLE_RADIUS * MANACLE_BAND * MANACLE_WIDTH;
-    // The bar's own second moment. Nothing solves against it - the rotation is
-    // driven (above) - but it is what the energy bookkeeping reads, and a real
-    // figure keeps that honest.
+    // The bar's own second moment, which the solvers turn the cuff with once
+    // the throw is over: the chain's pull at the hinge, a corner's contact,
+    // gravity at the centre.
     this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
     // Impermeable (hook-proof) surfaces are bounced off rather than anchored to.
     // Very low restitution: the hook barely rebounds — mostly deflects and drops.
@@ -203,87 +211,31 @@ export class BallHook extends RigidBody2D {
     return shapeWorldVertices({ globalPosition: at, globalRotation: bs.globalRotation, shape: bs.shape });
   }
 
-  // Turn the cuff to face back along the chain (see `facing`), about its own
-  // centre. Every step, armed or not, before anything measures or sweeps it:
-  // the hinge the chain is budgeted to and the bar the sweep flies both follow
-  // from the rotation, so it has to be settled first. The angular velocity is
-  // held at zero so integration adds nothing to what was set here.
-  private alignToChain(dt: number): void {
+  // Turn the THROWN cuff to face back along the chain (see `facing`), about
+  // its own centre. Every step of the throw, before anything measures or
+  // sweeps it: the hinge the chain is budgeted to and the bar the sweep flies
+  // both follow from the rotation, so it has to be settled first. The angular
+  // velocity is held at zero so integration adds nothing to what was set here.
+  //
+  // Once the throw is over the cuff turns itself (`endFlight`): the chain
+  // pulls on its hinge, whatever it lies on pushes on its corners and gravity
+  // acts at its centre, and the island solves all three with the bar's real
+  // inertia. Driven instead, it was given one of two poses - face the chain,
+  // or lie flat on whatever a 5 mm probe found under it - and the poses a cuff
+  // really takes are between them. Hoisted by its hinge off a floor, it was
+  // lifted whole (a driven rotation cannot tip), the probe lost the floor, it
+  // was snapped 80 degrees to face the chain - the hinge, which is the chain's
+  // end, flicked 6-7 cm and the chain went that slack - and it landed and was
+  // laid flat again, every five or six frames while the ball wound it in over
+  // a ledge (`session-307f` f247-272, `session-256f` f191-201); lying flat it
+  // was turned about its centre and rocked 14 degrees a frame (`session-339f`,
+  // `tip-rock`); and every fix for one pose found the edge of the other.
+  private alignToChain(): void {
+    if (!this.flying) return;
     const chain = this.facing?.() ?? null;
-    if (chain !== null && (chain.x !== 0 || chain.y !== 0)) {
-      const flat = this.flying ? null : this.lieFlat(chain);
-      if (flat === null) this.globalRotation = chain.angle();
-      else {
-        // Laid down at a bounded rate rather than in one step: a tip that lands
-        // hanging hinge-up tips over onto the floor instead of popping flat.
-        const turn = Vec2.RIGHT.rotated(this.globalRotation).angleTo(flat);
-        const most = BallHook.LIE_DOWN_RATE * dt;
-        this.globalRotation += Mathf.clamp(turn, -most, most);
-      }
-    }
+    if (chain !== null && (chain.x !== 0 || chain.y !== 0)) this.globalRotation = chain.angle();
     this.angularVelocity = 0;
   }
-
-  // How fast a resting tip is laid flat, in rad/s: a quarter turn in about six
-  // frames, the pace of a ring falling over.
-  private static readonly LIE_DOWN_RATE = 15;
-
-  // Which way a DANGLING tip resting on a surface lies: flat along it, hinge
-  // toward the chain - or null when it is resting on nothing, and trails the
-  // chain like any free cuff.
-  //
-  // The chain's facing alone is wrong on a floor. With chain to spare the sim's
-  // span is a straight line from the tip to the ball's mounting loop, which
-  // orbits the rim as the ball rolls, so a tip lying still on the ground was
-  // turned after the loop every frame and rocked on its mouth corner with every
-  // roll of the ball (`session-391f`: 15 degrees each way, the tip never moving
-  // a millimetre). A slack chain is not pulling on anything; the cuff lies the
-  // way it fell. So which END faces which way is kept from the cuff's present
-  // facing while the chain is slack, and only a TAUT chain - one dragging the
-  // hinge - turns it round, once it is clearly pulling from the other side.
-  private lieFlat(chain: Vec2): Vec2 | null {
-    const normal = this.restingNormal();
-    if (normal === null) return null;
-    const along = normal.orthogonal();
-    const pull = along.dot(chain);
-    const taut = this.chainTaut?.() ?? false;
-    const now = along.dot(Vec2.RIGHT.rotated(this.globalRotation));
-    const side = taut && Mathf.abs(pull) > BallHook.TURN_ROUND_PULL ? pull : now !== 0 ? now : pull;
-    return side < 0 ? along.neg() : along;
-  }
-
-  // How squarely along the surface a taut chain must pull, as the cosine of
-  // its angle off it, before it turns a lying cuff round: a chain going
-  // straight up off the tip is lifting it, not dragging it one way or the other.
-  private static readonly TURN_ROUND_PULL = 0.5;
-
-  // The surface a dangling tip is lying on: the outward normal of the deepest
-  // contact the bar has, within the probe's margin, with anything it is in
-  // the way of - provided that surface holds it up against gravity (no steeper
-  // than `REST_SLOPE`). A wall the tip is leaning on is not a floor it lies on.
-  private restingNormal(): Vec2 | null {
-    if (!this.world) return null;
-    const bar = this.primaryShape();
-    const up = GRAVITY.normalized().neg();
-    let best: { normal: Vec2; depth: number } | null = null;
-    for (const body of this.world.intersectCircle(this.globalPosition, MANACLE_REACH + BallHook.PROBE_MARGIN)) {
-      if (body === this || body.name === "Player") continue;
-      if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
-      for (const s of body.getShapes()) {
-        if (!this.reaches(s)) continue;
-        for (const c of shapeContacts(bar, s, BallHook.PROBE_MARGIN)) {
-          if (c.normal.dot(up) < BallHook.REST_SLOPE) continue;
-          if (best === null || c.depth > best.depth) best = { normal: c.normal, depth: c.depth };
-        }
-      }
-    }
-    return best?.normal ?? null;
-  }
-
-  // The steepest surface a tip lies flat on, as the cosine of its slope: 60
-  // degrees, past the 31 the tip's static friction holds on, so a tip sliding
-  // down a slope lies along it too.
-  private static readonly REST_SLOPE = 0.5;
 
   // A weight on the end of the chain and nothing more: it no longer anchors to
   // what it touches. What a ring that has run off the open end of a rail comes
@@ -311,16 +263,25 @@ export class BallHook extends RigidBody2D {
   }
 
   // Attachable to this hook: in its way, not a piece it glances off (hook-proof
-  // or a launch surface, `hookDeflects`), and not a face it has shed.
+  // or a launch surface, `hookDeflects`), not a face it has shed, and not the
+  // ball it is chained to. The last was a collision exception's side effect
+  // while the two never met; dangling they collide (`BallPlayer.dangle`), and
+  // the cuff bit its own ball's mounting loop on the first frame it touched
+  // it, anchoring the chain 8 cm long to the ball it leaves
+  // (`ball-roll-wall-dangling` f66).
   private bites(piece: CollisionShape2D): boolean {
-    return this.reaches(piece) && !hookDeflects(piece) && !this.shed.has(piece);
+    return (
+      this.reaches(piece) && !hookDeflects(piece) && !this.shed.has(piece) && piece.owner !== this.holder
+    );
   }
 
-  // The throw is over — the hook falls from here on. Idempotent, and safe to
-  // call for any of the endings: attach, bounce, snag, out of length.
+  // The throw is over - the hook falls from here on, and turns as the bar it
+  // is (see `alignToChain`). Idempotent, and safe to call for any of the
+  // endings: attach, bounce, snag, out of length.
   endFlight(): void {
     this.gravityScale = 1;
     this.flying = false;
+    this.kinematicRotation = false;
   }
 
   // `piece` is the shape the hook actually reached - every attach path here
@@ -424,8 +385,9 @@ export class BallHook extends RigidBody2D {
   // of those frames and grew from 64 cm to 3.58 m.
   physicsStep(dt: number): void {
     // Before the turn: the tip as the last frame left it (see `biteWhereStruck`).
+    this.seatShift = 0;
     if (this.biteWhereStruck()) return;
-    this.alignToChain(dt);
+    this.alignToChain();
     if (!this.armed || !this.world) return;
     if (this.attachToBlockingContact()) return;
     const from = this.globalPosition;
@@ -488,7 +450,46 @@ export class BallHook extends RigidBody2D {
     // blocks that attach without bouncing if the chain runs out first — it is
     // the chain and not the surface that ends the flight.
     if (off) {
-      this.bounce(off.normal, from.add(motion.mul(off.t)), off.shape);
+      // Seated at the hit only when the hit is on the step itself. The sweep
+      // reaches `CONTACT_SLOP` past the step (`motionScale`), and a piece met
+      // in that band is one the bar does not reach this frame: it is deflected
+      // where it stands, as the solver's own speculative contact would act on
+      // the velocity and never the position. Seated at the hit, a tip dragged
+      // at 0.38 m/s along the hook-proof floor it was lying on - a 6.3 mm step
+      // swept as 16.3 mm - was put 15.5 mm ahead of where its velocity took
+      // it, then flown a step further by integrate; the chain went 1.1 cm
+      // slack and was yanked taut again every eight to thirteen frames, the
+      // slower the pull the larger the lurch against it (`session-472f`,
+      // `tip-teleport`).
+      const hit = from.add(motion.mul(off.t));
+      // And a dangling tip SLIDING along a face - closing on it no faster than
+      // the probe's resting gate - is not bounced at all, only reported, and
+      // the contact solver keeps it, friction and all, as it keeps a tip the
+      // probe finds resting (`PROBE_DEFLECT_MIN_SPEED`). Seated at the touch
+      // it was flown a whole step further by integrate: a tip dragged along
+      // the floor at 0.78 m/s, sinking into it at gravity's 0.09 m/s, met the
+      // floor 96% of the way through its step and moved 24 mm in the frame
+      // against a 13 mm step (`session-256f` f86), and the chain went slack
+      // and snapped taut again behind it. The report still goes out, because
+      // it is what a drag's sparks are made of (see sparks.md).
+      if (!this.flying && -this.linearVelocity.dot(off.normal) < BallHook.PROBE_DEFLECT_MIN_SPEED) {
+        this.reportTouch(hit, off.normal, off.shape);
+      } else {
+        // And a dangling tip is never seated at all: its bounce turns its
+        // velocity where it stands, as a speculative contact does, and its
+        // own swept step (`continuous`) carries it no further than the face.
+        // Seated at the touch, it had consumed that much of its step, and
+        // integrate then flew it a whole step more at the bounced velocity -
+        // 20 to 65 mm past where its motion takes it, every fast strike, the
+        // more often since the ball and its cuff collide and the ball throws
+        // it into walls (`ball-roll-wall-dangling` f347-638, `session-435f`
+        // f93). The thrown hook keeps its seat: its flight is budgeted to the
+        // touch (`deployLimit`), and stopped short of a face it bounced off
+        // thin air a fifth of a metre out.
+        const seat = !this.flying ? from : off.t * motionScale <= 1 ? hit : from;
+        this.seatShift += seat.distanceTo(from);
+        this.bounce(off.normal, seat, off.shape, hit);
+      }
       // A bounce does not end the deploy, and the chain does not stretch for
       // it: the deflected remainder of the frame is flown by World.integrate
       // at the bounced velocity, so the chain-out question has to be asked
@@ -875,7 +876,11 @@ export class BallHook extends RigidBody2D {
   // the elastic answer, if that is more) by the same `contactBounce`, and its
   // tangential speed kept. However the hook arrived - head on, glancing, or
   // lying on it with nothing - it leaves at the pad's speed.
-  private bounce(normal: Vec2, seatPos: Vec2, piece: CollisionShape2D): void {
+  //
+  // `touch` is where the bar meets the surface, which is what the bounce is
+  // reported at (sparks, sound); it is the seat unless the hit lies past the
+  // step (see the sweep's call).
+  private bounce(normal: Vec2, seatPos: Vec2, piece: CollisionShape2D, touch: Vec2 = seatPos): void {
     // Read before `endFlight` clears it: this is the one place that can tell a
     // throw ending on a wall from a deflection off a surface the hook was
     // already riding, and the two want opposite answers about which report of
@@ -888,7 +893,7 @@ export class BallHook extends RigidBody2D {
     if (vn < 0 && speed > BallHook.BOUNCE_MIN_SPEED) {
       // Before the reflection: the velocity the hook arrived with is what the
       // hit looked like (see registerBounceCallback).
-      for (const cb of this.bounceCallbacks) cb(seatPos, normal, this.linearVelocity, fromFlight, piece);
+      for (const cb of this.bounceCallbacks) cb(touch, normal, this.linearVelocity, fromFlight, piece);
       if (launch <= 0) {
         const glance = Math.abs(normal.cross(this.linearVelocity.mul(1 / speed)));
         const reflected = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
@@ -900,5 +905,12 @@ export class BallHook extends RigidBody2D {
       if (vn < out) this.linearVelocity = this.linearVelocity.add(normal.mul(out - vn));
     }
     this.globalPosition = seatPos;
+  }
+
+  // A dangling tip sliding along a hook-proof face: reported as a bounce is,
+  // with nothing about the tip changed (see the sweep's call).
+  private reportTouch(touch: Vec2, normal: Vec2, piece: CollisionShape2D): void {
+    if (this.linearVelocity.dot(normal) >= 0 || this.linearVelocity.length() <= BallHook.BOUNCE_MIN_SPEED) return;
+    for (const cb of this.bounceCallbacks) cb(touch, normal, this.linearVelocity, false, piece);
   }
 }

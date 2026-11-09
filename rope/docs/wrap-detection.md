@@ -64,6 +64,21 @@ The same reasoning applies at a span's END, where a corner near the end node has
 `cli contacts` `chain-sweep-start-gate` is the detector: the recording's block and its two spans exactly, ungated (the crossing where the finding says it, relocated to the pocket corner) and gated (none), with a span raised through the pocket corner mid-span as the control that the gate silences nothing deeper in.
 `playtests/regressions/session-391f.json.gz` is the recording, diverging at f250 where the phantom no longer forms; the ball rolls on up the face and swings home to its anchor.
 
+## A crossing is never wrapped behind the span's start
+
+A polygon that crossed from clear is wrapped at its tangent from the span's start - unless that tangent lies outside the span's own extent, behind its start or past its end, where the vertex that crossed is the wrap instead (`Rope.crossedWrapVertex`).
+A corner outside the span is not one the span can bend round; it is what the tangent construction answers when the start stands almost in the plane of one of the shape's faces, which it then sees edge-on, naming that face's far end.
+
+`session-435f` f254 is the finding.
+The ball sat on the floor just past the top corner of one of the floor's pieces, and its chain ran from the ball's underside along the floor to the cuff lying 60 cm to its left.
+A kink in that piece's top face, a centimetre proud of its neighbours and within a millimetre of the chain, crossed the span as the ball rolled - the chain lying on it - and the sweep reported it, rightly, at u = 0.41.
+The start stood 2 mm off the line of the piece's 45 degree underside, so the tangent from it was that face's far end: 1.1 m down and 1.1 m behind the start.
+The path read 4.28 m on a 1.8 m chain, the lease held the excess as slack so nothing pulled it back, and the chain ran through the floor to that corner for the rest of the run, which was seen as the chain stuck round the level's geometry (`chain-clip` on 277 frames from f254).
+Wrapped at the kink instead, the chain bends over it at 1.52 m of path and the run is clean.
+This is the third finding of one shape - `session-391f`'s pocket corner and `session-3649f`'s far-side corner were the same construction answering from a degenerate place - and the start gate and the last-look overlap each closed one place it can answer from; this closes the answer itself.
+`cli contacts` `chain-sweep-behind-start` is the detector: the recording's floor piece and its two spans exactly (the crossing at the kink, the tangent behind the start, the wrap at the kink), with a block raised clean through a span's middle as the control that a tangent inside the span is still the one taken.
+`playtests/regressions/session-435f.json.gz` is the recording.
+
 ## A corner two statics share is the span's own end
 
 A point that stood within a nanometre of the old span's line was **on** it, not on a side of it (`NO_SIDE` in `lib/spanSweep.ts`), and a crossing is only reported for a point that had a side to come from.

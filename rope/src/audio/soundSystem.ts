@@ -11,9 +11,9 @@
 // tab of the same browser switches to the new files on its next step, with no
 // reload; the editor's own ▶ Test shares the menu's copy outright.
 
+import type { AudioCamera } from "./spatialAudio";
 import type { Camera } from "../render/camera";
 import type { BallLevel } from "../level/ballLevel";
-import { PIXELS_PER_METER } from "../engine/units";
 import { AudioOut, type Audition, type SoundVolume } from "./audioOut";
 import { replaceSoundAssets, type SoundAsset } from "./library";
 import { replaceSoundBank, type SoundBank } from "./slots";
@@ -57,10 +57,9 @@ export class SoundSystem {
     this.out.push(this.observer.observe(level, dt));
   }
 
-  // The camera is the listener: a sound left of centre is heard on the left.
-  flush(camera: Camera): void {
-    const halfWidth = camera.viewportWidth / (2 * camera.zoom * PIXELS_PER_METER);
-    this.out.flush(camera.position.x, halfWidth);
+  // Sources stay in level space; the listener follows the visible camera.
+  flush(camera: Camera, renderedCamera?: AudioCamera | null): void {
+    this.out.flush(camera, renderedCamera);
   }
 
   // Nothing more will be stepped for now (the editor leaving ▶ Test): the

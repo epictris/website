@@ -11691,7 +11691,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         BALL_ZOOM,
         testLevel.cameraHang,
       );
-      testSound.flush(camera);
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();
       // A test is played in the game's own fixed 16:9 frame, fitted into the
@@ -11730,6 +11729,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         });
         scene3d!.render(testLevel3d!, camera, alpha, NO_ORBIT, null, null, testSnap);
       }
+      testSound.flush(camera, testIn3d ? scene3d!.camera : null);
       renderBall(
         ctx,
         view,

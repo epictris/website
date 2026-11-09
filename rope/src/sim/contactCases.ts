@@ -36,7 +36,7 @@ import { circleOverlap } from "../engine/collision";
 import { Mathf } from "../engine/mathf";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
-import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
+import { circleShape, polyCentroid, polyShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { CONTACT_SLOP, ContactAudit, GRAVITY, World } from "../engine/world";
 import { TieTuning } from "../engine/ties";
 import { MANACLE_HINGE, MANACLE_MOUTH, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
@@ -1929,6 +1929,70 @@ function caseHookSnapBand(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// dangling-landing-grip - a ball holding a dangling chain lands as a free ball.
+//
+// `session-372f` (2026-11-09): a missed throw's chain dangling, the ball landed
+// moving at 2.9 m/s and skidded 1.3 m along the floor, read as the ball losing
+// its friction whenever the hook was out. Since `b6cc767` (2026-10-19) a
+// dangling chain made the ball a body of the chain's island, and the island's
+// contact rows treat a motor-driven spin as no drive at all (`spinSlipOf`
+// reads a kinematic one only): the floor could brake the ball at its sliding
+// friction and could not turn the slide into a roll, where the world's own
+// solve, a free ball's, catches the spin on landing. A dangling tip is a
+// chain the ball is holding rather than one holding it, and the row already
+// treats the ball as an infinite mass it only reads, so the island no longer
+// holds the ball while the chain dangles (`BallChainRow.sync`).
+//
+// The rig: the ball launched left at 2.9 m/s from 40 cm over a flat floor with
+// the cursor up and to its right, run with the chain thrown and without. The
+// claim is the comparison, not a distance: with the chain out the ball stops
+// within half again the free ball's slide (0.73 m against 0.19 at `196d312`;
+// 0.045 against 0.12 before `b6cc767`).
+// ---------------------------------------------------------------------------
+function caseDanglingLandingGrip(): ContactResult {
+  const slide = (throwIt: boolean): { slid: number; chainOut: boolean } => {
+    const data = scaleLevelData(
+      {
+        player: { x: 0, y: 0, radius: 12 },
+        bodies: [{ kind: "static", x: 0, y: 60, rot: 0, shape: { kind: "rect", w: 3000, h: 40 }, friction: 1 }],
+      } as RawLevelData,
+      1,
+    );
+    const level = new BallLevel(data);
+    const ball = level.ball;
+    let prev = emptyFrameInput();
+    let landedX: number | null = null;
+    for (let f = 1; f <= 150; f++) {
+      if (f === 1) ball.linearVelocity = new Vec2(-2.9, 0);
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        mouseWorldPosition: ball.globalPosition.add(new Vec2(1.5, -0.6)),
+        fire: button(throwIt && f >= 2, prev.fire),
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+      // On the floor: the ball's centre a radius over the floor's top.
+      if (landedX === null && ball.globalPosition.y > 0.215) landedX = ball.globalPosition.x;
+    }
+    return { slid: landedX === null ? NaN : landedX - ball.globalPosition.x, chainOut: ball.chain !== null };
+  };
+  const free = slide(false);
+  const held = slide(true);
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  check(`the thrown run really has its chain out at the end (${held.chainOut})`, held.chainOut && !free.chainOut);
+  check(
+    `with the chain dangling the ball stops within half again the free ball's slide (${held.slid.toFixed(3)} m against ${free.slid.toFixed(3)} m)`,
+    Number.isFinite(held.slid) && Number.isFinite(free.slid) && held.slid <= 1.5 * free.slid,
+  );
+  return ok("dangling-landing-grip - a ball holding a dangling chain lands as a free ball", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // attach-keeps-length — anchoring a SLACK chain keeps the chain's length.
 //
 // A missed throw dangles the tip at the full deployed length, and a dangling
@@ -1967,17 +2031,20 @@ function caseChainAttachKeepsLength(): ContactResult {
   );
   const level = new BallLevel(data);
   let prev = emptyFrameInput();
-  // Straight up, nothing to hit: chain out to the full 1.8 m, tip falls back
-  // past the ball (they carry a collision exception) and lands on the floor
-  // beside it, where the probe anchors it.
+  // Up and a little to the side, nothing to hit: chain out to the full 1.8 m,
+  // tip falls back beside the ball and lands on the floor, where the probe
+  // anchors it. Straight up it fell back onto the ball, through which it
+  // passed until the dangling cuff and the ball collided (`BallPlayer.dangle`,
+  // 2026-11-09); now it rests on top, a bar on a circle being a stable rest.
   let lengthBeforeAttach = Number.NaN;
   let attachFrame = 0;
   let anchoredPath = Number.NaN;
   for (let f = 1; f <= 360 && attachFrame === 0; f++) {
     const input: FrameInput = {
       ...emptyFrameInput(),
-      // Aim at the ball's centre means "not aiming": the loop stays up.
-      mouseWorldPosition: level.ball.globalPosition,
+      // Aimed for the throw, then at the ball's centre, which means "not
+      // aiming": the loop stays where the throw left it.
+      mouseWorldPosition: f <= 6 ? level.ball.globalPosition.add(new Vec2(0.25, -1)) : level.ball.globalPosition,
       fire: button(f > 5, prev.fire),
     };
     prev = input;
@@ -7082,6 +7149,99 @@ function caseChainSweepStartGate(): ContactResult {
   );
 }
 
+// chain-sweep-behind-start - a crossing is never wrapped at a corner outside
+// the span's own extent.
+//
+// `session-435f` f254: the ball sat on the floor just past the top corner of
+// one of the floor's pieces, and its chain ran from the ball's underside along
+// the floor to the cuff lying 60 cm to its left. A kink in that piece's top
+// face, a centimetre proud of its neighbours and within a millimetre of the
+// chain, crossed the span as the ball rolled - the chain lying on it - and
+// the sweep reported it, rightly. The wrap was then placed at the piece's
+// tangent from the span's start, and the start stood 2 mm off the line of the
+// piece's 45 degree underside, which it therefore saw edge-on: the tangent was
+// that face's far end, 1.1 m down and 1.1 m BEHIND the start. The path read
+// 4.28 m on a 1.8 m chain, the lease held it as slack, and the chain ran
+// through the floor to that corner for the rest of the run (`chain-clip`
+// from f254, 277 frames of it).
+//
+// The rule (`Rope.crossedWrapVertex`): a tangent outside the span's extent is
+// not a corner the span can bend round, and the vertex that crossed is. The
+// case is the recording's floor piece and its two spans exactly; the control
+// is a block raised clean through a span's middle, whose tangent lies inside
+// the span and is still the one taken.
+function caseChainSweepBehindStart(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const at = (corners: readonly Vec2[]): StaticBody2D => {
+    const centre = polyCentroid(corners);
+    const body = new StaticBody2D();
+    body.globalPosition = centre;
+    body.setShape(polyShape(corners.map((c) => c.sub(centre))));
+    return body;
+  };
+  // The floor piece, in the world, as the recording has it.
+  const kink = new Vec2(10.8712108441582, 8.990368510636962);
+  const farCorner = new Vec2(12.200000000000003, 10.100000000000001);
+  const piece = at([
+    new Vec2(10.645314567617389, 9.008230076689028),
+    kink,
+    new Vec2(11.099999999999987, 8.999999999999995),
+    farCorner,
+  ]).primaryShape();
+  // The span from the ball's underside to the cuff's hinge, at the
+  // regeneration before and at f254's.
+  const roll = {
+    s0: new Vec2(11.117409440914464, 8.996379959113208),
+    e0: new Vec2(10.51828928688478, 8.981956086053463),
+    s1: new Vec2(11.120610601588142, 8.995983788335224),
+    e1: new Vec2(10.518289303024495, 8.98195608967045),
+  };
+  const span = new Segment(roll.s1, roll.e1);
+  const crossing = shapeCrossesSpan(piece, null, roll, () => true, Rope.WRAP_START_GATE);
+  check(
+    `the floor's kink crosses the chain lying on it (got ${crossing ? `${WrapDirection[crossing.side]} at ${crossing.point}` : "none"})`,
+    crossing !== null && crossing.point.distanceTo(kink) < 1e-9,
+  );
+  if (crossing === null) return ok("chain-sweep-behind-start - a crossing is never wrapped at a corner outside the span", false, details);
+  const corners = ShapeGeometry.getGlobalCorners(piece);
+  const tangent = RopeGeneration.calculateTangentVertexIndex(piece, crossing.side, span.start);
+  const behind = (p: Vec2): boolean => span.direction().dot(p.sub(span.start)) < 0;
+  check(
+    `the tangent from the span's start is the underside's far end, behind the start (got ${tangent === null ? "none" : corners[tangent]})`,
+    tangent !== null && corners[tangent]!.distanceTo(farCorner) < 1e-9 && behind(corners[tangent]!),
+  );
+  const chosen = Rope.crossedWrapVertex(piece, crossing.side, span, crossing.point);
+  check(
+    `...and the wrap is the kink that crossed (got ${chosen === null ? "none" : corners[chosen]})`,
+    chosen !== null && corners[chosen]!.distanceTo(kink) < 1e-9,
+  );
+
+  // The control: a 20 cm block raised up through the middle of a level 1 m
+  // span, which bends round the corner the tangent names.
+  const block = at([new Vec2(0.4, 0.1), new Vec2(0.6, 0.1), new Vec2(0.6, 0.3), new Vec2(0.4, 0.3)]).primaryShape();
+  const raise = { s0: new Vec2(0, 0), e0: new Vec2(1, 0), s1: new Vec2(0, 0.2), e1: new Vec2(1, 0.2) };
+  const through = new Segment(raise.s1, raise.e1);
+  const lift = shapeCrossesSpan(block, null, raise, () => true, Rope.WRAP_START_GATE);
+  const blockCorners = ShapeGeometry.getGlobalCorners(block);
+  const blockTangent =
+    lift === null ? null : RopeGeneration.calculateTangentVertexIndex(block, lift.side, through.start);
+  const blockChosen = lift === null ? null : Rope.crossedWrapVertex(block, lift.side, through, lift.point);
+  check(
+    `control: a block raised through a span's middle is wrapped at its tangent, inside the span (got ${blockChosen === null ? "none" : blockCorners[blockChosen]})`,
+    lift !== null &&
+      blockTangent !== null &&
+      blockChosen === blockTangent &&
+      !behind(blockCorners[blockTangent]!) &&
+      through.direction().dot(blockCorners[blockTangent]!.sub(through.end)) <= 0,
+  );
+  return ok("chain-sweep-behind-start - a crossing is never wrapped at a corner outside the span", passed, details);
+}
+
 // chain-graze-gate - a body the sweep watched pass through a span is wrapped
 // however little it has passed by.
 //
@@ -7681,6 +7841,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainSweep());
   results.push(caseChainSweepSlideOff());
   results.push(caseChainSweepStartGate());
+  results.push(caseChainSweepBehindStart());
   results.push(caseChainGrazeGate());
   results.push(caseChainOwnCorner());
   results.push(caseChainFaceRelease());
@@ -7693,6 +7854,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainOut());
   results.push(caseHookSnapBand());
   results.push(caseChainAttachKeepsLength());
+  results.push(caseDanglingLandingGrip());
   results.push(caseSpawnHang());
   results.push(caseHookRest());
   results.push(caseChainOutVsSolver());

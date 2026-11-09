@@ -26,11 +26,13 @@
     },
     "deploy": {
       "sounds": [
-        "chain-deploy-new-source-v18-799a2e13"
+        "deploy-timed-v28-d54dab74"
       ],
       "volume": -1,
       "refSpeed": 12,
-      "pitchJitter": 0
+      "pitchJitter": 0,
+      "pitchFollow": 0,
+      "paceFollow": 0
     },
     "land": {
       "volume": 0,
@@ -85,11 +87,20 @@
     },
     "slack": {
       "sounds": [
-        "chain-slack-new-source-v18-9a686a7b"
+        "slack-micro-v29-1-804bd39a",
+        "slack-micro-v29-2-2de164a9",
+        "slack-micro-v29-3-d8c733e5",
+        "slack-micro-v29-4-fc2701a0",
+        "slack-micro-v29-5-b69238a8",
+        "slack-micro-v29-6-76470f2a",
+        "slack-micro-v29-7-16afd552",
+        "slack-micro-v29-8-b7a2c990"
       ],
-      "volume": -3,
+      "volume": -10,
       "refSpeed": 1,
-      "pitchJitter": 0
+      "pitchJitter": 0.25,
+      "pitchFollow": 0,
+      "paceFollow": 0
     },
     "splash": {
       "volume": 0,
@@ -98,11 +109,11 @@
     },
     "taut": {
       "sounds": [
-        "chain-taut-new-source-v18-67695267"
+        "large-iron-chain-move-1-6d4e49f8"
       ],
       "volume": -3,
       "refSpeed": 3,
-      "pitchJitter": 0.25
+      "pitchJitter": 0
     },
     "wade": {
       "volume": -3,
@@ -110,9 +121,14 @@
       "pitchFollow": 0.3
     },
     "whoosh": {
+      "sounds": [
+        "speed-wind-v30-5d9c1f9b"
+      ],
       "volume": -6,
       "refSpeed": 12,
-      "pitchFollow": 0.3
+      "pitchJitter": 0,
+      "pitchFollow": 0,
+      "paceFollow": 0
     },
     "wind": {
       "sounds": [
@@ -125,117 +141,116 @@
       "pitchJitter": 0.4
     },
     "wrap": {
-      "sounds": [
-        "wind-chain-heavy-2-v18-f5190674"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
-      "pitchJitter": 0.25
+      "pitchJitter": 0.25,
+      "sounds": [
+        "chain-wrap-clink-v27-1-b0297ee8",
+        "chain-wrap-clink-v27-2-bb67048c",
+        "chain-wrap-clink-v27-3-57eb2ed7"
+      ]
     },
     "wrap.brick": {
-      "sounds": [
-        "chain-wrap-stone-new-source-v18-286ccb89"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
     },
     "wrap.metal": {
-      "sounds": [
-        "wind-chain-heavy-2-v18-f5190674"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
     },
     "wrap.moss": {
-      "sounds": [
-        "chain-wrap-earth-new-source-v18-301e3594"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
     },
     "wrap.mud": {
-      "sounds": [
-        "chain-wrap-soft-new-source-v18-c5026a77"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
     },
     "wrap.rubber": {
-      "sounds": [
-        "chain-wrap-soft-new-source-v18-c5026a77"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
     },
     "wrap.stone": {
-      "sounds": [
-        "chain-wrap-stone-new-source-v18-286ccb89"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
     },
     "wrap.vine": {
-      "sounds": [
-        "chain-wrap-wood-new-source-v18-34fada0a"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
     },
     "wrap.wood": {
-      "sounds": [
-        "chain-wrap-wood-new-source-v18-34fada0a"
-      ],
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
+    },
+    "chain-drag": {
+      "sounds": [
+        "chain-drag-timed-v28-d1ba876a"
+      ],
+      "pitchJitter": 0,
+      "pitchFollow": 0,
+      "paceFollow": 0,
+      "volume": -8,
+      "refSpeed": 1
+    },
+    "hook-drag": {
+      "sounds": [
+        "chain-drag-timed-v28-d1ba876a"
+      ],
+      "pitchJitter": 0,
+      "pitchFollow": 0,
+      "paceFollow": 0,
+      "volume": -8,
+      "refSpeed": 1
+    },
+    "chain-hit": {
+      "sounds": [
+        "chain-hit-micro-v29-1-3c9193af",
+        "chain-hit-micro-v29-2-e14ac42b",
+        "chain-hit-micro-v29-3-28e26b83",
+        "chain-hit-micro-v29-4-e1f085f2",
+        "chain-hit-micro-v29-5-89f3ec73",
+        "chain-hit-micro-v29-6-1e93f54e",
+        "chain-hit-micro-v29-7-5e953228",
+        "chain-hit-micro-v29-8-aa3466e6"
+      ],
+      "volume": -5,
+      "refSpeed": 2,
+      "pitchJitter": 0.25,
+      "pitchFollow": 0,
+      "paceFollow": 0
     }
   },
   "clips": {
     "attach-dirt-scatter-cannonball-v20-35ac2479": {
-      "volume": -4.02
-    },
-    "chain-deploy-new-source-v18-799a2e13": {
-      "volume": -1.41
-    },
-    "chain-slack-new-source-v18-9a686a7b": {
-      "volume": 0.2
-    },
-    "chain-taut-new-source-v18-67695267": {
-      "volume": 0.24
-    },
-    "chain-wrap-earth-new-source-v18-301e3594": {
-      "volume": -0.14
-    },
-    "chain-wrap-soft-new-source-v18-c5026a77": {
-      "volume": -0.35
-    },
-    "chain-wrap-stone-new-source-v18-286ccb89": {
-      "volume": 4.3
-    },
-    "chain-wrap-wood-new-source-v18-34fada0a": {
-      "volume": 1.84
+      "volume": -4.02,
+      "end": 0.416
     },
     "land-heavy-trimmed-cannonball-v20-179417-1911a881": {
-      "volume": -4.01
+      "volume": -4.01,
+      "end": 0.292
     },
     "land-light-soft-stone-cannonball-v20-179-823903c0": {
-      "volume": 14.29
+      "volume": 14.29,
+      "end": 0.282
     },
     "land-medium-cannonball-v20-1794179980091-806eb594": {
-      "volume": -1.19
+      "volume": -1.19,
+      "end": 0.316
     },
     "loop-touch-dry-v26-f499571c": {
       "volume": 0.51
     },
     "sphere-touch-low-v26-dddc7f5e": {
-      "volume": -1.72
+      "volume": -1.72,
+      "end": 0.126
     },
     "wind-chain-heavy-1-v18-48f3e88f": {
       "volume": 4.49
@@ -245,6 +260,10 @@
     },
     "wind-chain-heavy-3-v18-99cec948": {
       "volume": 2.84
+    },
+    "large-iron-chain-move-1-6d4e49f8": {
+      "end": 0.235,
+      "start": 0.099
     }
   }
 }

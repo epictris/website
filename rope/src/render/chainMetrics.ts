@@ -16,6 +16,9 @@
 // as the chain reels the links stay put in the world and the last one is
 // consumed into the ball rather than the whole chain compressing toward the
 // anchor. The sub-link remainder therefore falls at the far end, under the body.
+//
+// The ball's chain is laid at the pitch `chainLinkPitch` gives, so the number
+// of links out of the ball is its length's, never its drawn polyline's.
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
@@ -48,12 +51,35 @@ export interface ChainLink {
   // is the plane the camera looks along - the edge-on link.
   broad: boolean;
   index: number;
+  // Arc length from `points[0]` to `mid`.
+  at: number;
 }
 
-// Walk `points` and emit every whole link that fits. Emits nothing for a
-// degenerate path (fewer than two distinct points), which is what a chain with
-// its ends coincident is.
-export function walkChain(points: readonly Vec2[], emit: (link: ChainLink) => void): void {
+// The pitch to lay the ball's chain at along its drawn polyline (loop to
+// anchor, `drawnPath`), so that exactly `length / CHAIN_LINK_LEN` links fit
+// between the cuff and the loop: the NUMBER of links out of the ball is the
+// chain's length, never the polyline's. The drape only converges toward its
+// length, so the polyline runs a few percent long and breathes, and at a
+// fixed pitch every change in it slid the links along the chain and out of
+// the ball or back in (`session-339f`: 22 cm out and 12 cm back, the chain's
+// length never changing). The drape's error shows as a link drawn a few
+// percent long instead, and taut - where the polyline IS the length - the
+// pitch is exactly `CHAIN_LINK_LEN`.
+export function chainLinkPitch(drawnPath: readonly Vec2[], length: number): number {
+  let drawn = 0;
+  for (let i = 1; i < drawnPath.length; i++) drawn += drawnPath[i - 1]!.distanceTo(drawnPath[i]!);
+  if (!(length > 0) || !(drawn > 0)) return CHAIN_LINK_LEN;
+  return (CHAIN_LINK_LEN * drawn) / length;
+}
+
+// Walk `points` and emit every whole link that fits, one every `pitch` of arc
+// length. Emits nothing for a degenerate path (fewer than two distinct
+// points), which is what a chain with its ends coincident is.
+export function walkChain(
+  points: readonly Vec2[],
+  emit: (link: ChainLink) => void,
+  pitch: number = CHAIN_LINK_LEN,
+): void {
   // Cumulative arc length at each vertex, skipping degenerate repeats (a wrap
   // node landing on its neighbour) so no link takes its heading from a zero span.
   const verts: Vec2[] = [];
@@ -71,14 +97,14 @@ export function walkChain(points: readonly Vec2[], emit: (link: ChainLink) => vo
   }
   if (verts.length < 2) return;
 
-  const n = Math.floor(total / CHAIN_LINK_LEN);
+  const n = Math.floor(total / pitch);
   let seg = 0;
   for (let i = 0; i < n; i++) {
-    const s = (i + 0.5) * CHAIN_LINK_LEN;
+    const s = (i + 0.5) * pitch;
     while (seg + 2 < verts.length && at[seg + 1]! < s) seg++;
     const a = verts[seg]!;
     const b = verts[seg + 1]!;
     const dir = a.directionTo(b);
-    emit({ mid: a.add(dir.mul(s - at[seg]!)), dir, broad: i % 2 === 1, index: i });
+    emit({ mid: a.add(dir.mul(s - at[seg]!)), dir, broad: i % 2 === 1, index: i, at: s });
   }
 }

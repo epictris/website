@@ -1185,10 +1185,6 @@ function frame(now: number): void {
     level.cameraHang,
   );
 
-  // The frame's steps' sounds, heard from where the camera now is. A frame
-  // that ran no steps - paused, frozen, the panel open - fades them out.
-  sound.flush(camera);
-
   // Poll-based aim (gamepad sticks) refreshes per rendered frame, not per
   // physics step, so the reticle/crosshair moves at display rate on a monitor
   // faster than the 60 Hz sim.
@@ -1200,6 +1196,10 @@ function frame(now: number): void {
   const draw3dT0 = performance.now();
   scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract, shards, chainSnap);
   const draw3dMs = performance.now() - draw3dT0;
+  // Rendering resolves the level's actual lens and camera depth. Audio must
+  // use that same final transform, not a viewport-derived z estimate.
+  sound.flush(camera, scene3d?.camera);
+
 
   const draw2dT0 = performance.now();
   renderBall(

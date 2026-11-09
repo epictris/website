@@ -15,6 +15,9 @@ import {
   GripPinMonitor,
   GripAnchorMonitor,
   RollMonitor,
+  TipHingeMonitor,
+  TipRockMonitor,
+  TipTeleportMonitor,
   TunnelMonitor,
   WallClimbMonitor,
   kineticEnergy,
@@ -490,6 +493,9 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
   const tunnel = new TunnelMonitor();
   const runaway = new ContactRunawayMonitor();
   const wallClimb = new WallClimbMonitor();
+  const tipRock = new TipRockMonitor();
+  const tipTeleport = new TipTeleportMonitor();
+  const tipHinge = new TipHingeMonitor();
   const stateFirstFrame = new Map<string, number>();
 
   for (let f = 1; f <= script.frames && !resetFired; f++) {
@@ -516,6 +522,12 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
     if (cv) violations.push(cv);
     const wv = wallClimb.push(level);
     if (wv) violations.push(wv);
+    const kv = tipRock.push(level);
+    if (kv) violations.push(kv);
+    const tt = tipTeleport.push(level);
+    if (tt) violations.push(tt);
+    const th = tipHinge.push(level);
+    if (th) violations.push(th);
   }
 
   const assertResults = evaluateAsserts(script, digests, stateFirstFrame, stats, level.completedFrame);

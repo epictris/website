@@ -179,6 +179,17 @@ interface Candidate {
   readonly cuffed: boolean;
 }
 
+// Read-only per-step collision telemetry. Repeated constraint/collision passes
+// aggregate into one contact per node and shape; audio never feeds the solver.
+export interface DrapeContact {
+  readonly node: number;
+  readonly shape: CollisionShape2D;
+  readonly point: Vec2;
+  readonly normal: Vec2;
+  readonly normalSpeed: number;
+  readonly slideSpeed: number;
+}
+
 export class SlackChain {
   // Wall-clock budget for one step, milliseconds. The drape is visual only,
   // so it is the one simulation in the game allowed to do LESS work when the
@@ -200,12 +211,34 @@ export class SlackChain {
   // `renderFrom` is where each node ENDED the previous step, which is what the
   // renderer interpolates from — the two differ the moment a constraint or a
   // collision moves a node.
+  private audioDelta = 1 / 60;
+  private audioVelocities: Vec2[] = [];
+  private audioHits = new Map<CollisionShape2D, Map<number, DrapeContact>>();
+
+  contactSnapshot(): readonly DrapeContact[] {
+    return [...this.audioHits.values()].flatMap(hits => [...hits.values()].map(hit => {
+      const point = this.pos[hit.node]!;
+      const from = SlackChain.carried(hit.shape.owner as PhysicsBody2D, this.renderFrom[hit.node]!);
+      const velocity = point.sub(from).div(this.audioDelta);
+      const tangent = velocity.sub(hit.normal.mul(velocity.dot(hit.normal)));
+      return { ...hit, point, slideSpeed: tangent.length() };
+    }));
+  }
+
+  private beginAudioStep(delta: number): void {
+    this.audioDelta = delta;
+    this.audioHits.clear();
+  }
+
   private pos: Vec2[] = [];
   private prev: Vec2[] = [];
   private renderFrom: Vec2[] = [];
   // The chain's length as of the last step - the wrap path plus the slack -
-  // which is what a reel starts from.
+  // which is what a reel starts from, and what the renderers count the links
+  // by (`chainLength`). `lengthFrom` is its value a step earlier, interpolated
+  // from the way `renderFrom` is for the nodes.
   private length = 0;
+  private lengthFrom = 0;
   // Reeling in after a release (see `beginReel`): the chain still out, in
   // metres, going negative once the end has passed the loop and is being
   // swallowed toward the ball's centre. Null while the chain is deployed.
@@ -258,6 +291,7 @@ export class SlackChain {
   // One fixed step. Reads the frame's FINAL body transforms (call it at the
   // end of the physics frame) and moves only this class's own nodes.
   step(bodies: readonly PhysicsBody2D[], delta: number): void {
+    this.beginAudioStep(delta);
     // The wrap path, loop → far end: the start contact, every wrap (the coil's
     // rim samples included), and the end.
     const pathPoints = this.chain.path().map((n) => n.contact.globalPosition);
@@ -273,7 +307,8 @@ export class SlackChain {
     const clamp = ringEnd(end);
     if (clamp !== null) pathPoints[pathPoints.length - 1] = clamp.rimPoint();
 
-    if (this.pos.length !== SEGMENTS + 1) {
+    const first = this.pos.length !== SEGMENTS + 1;
+    if (first) {
       // First step: lay the chain along the wrap path it is deployed on, at
       // rest relative to the world. During the deploy that path is straight
       // and taut, so this is exact.
@@ -295,6 +330,7 @@ export class SlackChain {
     const slack = Math.max(0, this.chain.maxRopeLength - this.chain.getCurrentLength());
     const targetLen = pathLen + slack;
     const restLen = targetLen / SEGMENTS;
+    this.lengthFrom = first ? targetLen : this.length;
     this.length = targetLen;
 
     const pinA = pathPoints[0]!;
@@ -309,6 +345,7 @@ export class SlackChain {
       const speed = vel.length();
       if (speed > MAX_STEP) vel = vel.mul(MAX_STEP / speed);
       const next = this.pos[i]!.add(vel).add(gravityStep);
+      this.audioVelocities[i] = next.sub(this.pos[i]!).div(delta);
       this.prev[i] = this.pos[i]!;
       this.pos[i] = next;
     }
@@ -557,6 +594,19 @@ export class SlackChain {
           // it (see STICK_STEP).
           const step = p.sub(this.renderFrom[i]!).sub(surfaceStep);
           const st = step.sub(ov.normal.mul(step.dot(ov.normal)));
+          // Measure approach BEFORE contact damping, using the integrated
+          // velocity rather than repeated positional corrections as impulses.
+          const relative = (this.audioVelocities[i] ?? Vec2.ZERO).sub(surfaceStep.div(this.audioDelta));
+          const normalSpeed = Math.max(0, -relative.dot(ov.normal));
+          const slideSpeed = st.length() / this.audioDelta;
+          let hits = this.audioHits.get(c.shape);
+          if (!hits) this.audioHits.set(c.shape, hits = new Map());
+          const prior = hits.get(i);
+          if (!prior || normalSpeed > prior.normalSpeed || slideSpeed > prior.slideSpeed) {
+            hits.set(i, { node: i, shape: c.shape, point: p, normal: ov.normal,
+              normalSpeed: Math.max(prior?.normalSpeed ?? 0, normalSpeed),
+              slideSpeed: Math.max(prior?.slideSpeed ?? 0, slideSpeed) });
+          }
           if (st.length() < STICK_STEP) p = p.sub(st);
           const rel = p.sub(this.prev[i]!).sub(surfaceStep);
           const vn = ov.normal.mul(rel.dot(ov.normal));
@@ -590,6 +640,21 @@ export class SlackChain {
   // re-welded to their contacts' render transforms so the chain never visibly
   // detaches from the ball or the manacle between physics steps; the interior
   // interpolates the sim.
+  // The chain's real length - the wrap path plus the slack the solver is not
+  // using - at render time, interpolated between steps as the nodes are.
+  // The renderers count the links by THIS, not by the length of the polyline
+  // above: the drape only converges toward its length (a heap held by static
+  // friction, a hanging run left stretched by the passes), so its polyline
+  // runs a few percent long and breathes, and links laid along it at a fixed
+  // pitch slid out of the ball and back in for as long as it did - 22 cm out
+  // and 12 cm back on `session-339f` f230-250 with the chain's length fixed
+  // at 1.8 m. Counted by the length, a chain whose length does not change
+  // keeps its links; the drape's error shows as a pitch a few percent long
+  // instead (`chainLinkPitch`).
+  chainLength(alpha: number): number {
+    return this.lengthFrom + (this.length - this.lengthFrom) * alpha;
+  }
+
   pathLoopToAnchor(alpha: number): Vec2[] {
     const chain = this.chain;
     if (this.pos.length !== SEGMENTS + 1) {
@@ -652,6 +717,7 @@ export class SlackChain {
   // ball to its centre with the cuff trailing it in, so the cuff leaves the
   // picture under the ball rather than popping out of it at the rim.
   stepReel(bodies: readonly PhysicsBody2D[], delta: number): boolean {
+    this.beginAudioStep(delta);
     if (this.reel === null) return false;
     const start = this.chain.start.contact;
     const loop = start.globalPosition;
@@ -672,6 +738,7 @@ export class SlackChain {
       const speed = vel.length();
       if (speed > MAX_STEP) vel = vel.mul(MAX_STEP / speed);
       const next = this.pos[i]!.add(vel).add(gravityStep);
+      this.audioVelocities[i] = next.sub(this.pos[i]!).div(delta);
       this.prev[i] = this.pos[i]!;
       this.pos[i] = next;
     }

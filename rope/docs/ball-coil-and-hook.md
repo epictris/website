@@ -102,15 +102,14 @@ the solver's reach for ever - no loaded contact, no normal impulse, no
 friction cone however real the coefficients; below the gate the contact solver
 owns the tip, and above it the deflection (and the spark stream made of its
 reports, well over this speed in every recorded drag) is untouched.
-Its rotation is DRIVEN rather than integrated (`kinematicRotation`, the steered
-ball's own mechanism): every step turns the bar to face back along the chain
-(`BallHook.alignToChain`), so the contact solver and the rope's torque arms
-treat it as rotationally locked and no impulse is spent on a spin the next step
-overwrites. It used to be a disc with its inertia scaled by 1e4, because a
-circle with friction ROLLS - the contact point is stationary, the slip Coulomb
-acts on is zero, and the stiction gate reads a spin far over `STICK_SPIN` - so
-the hook trundled downhill with its friction fully satisfied; a bar does not
-roll, and its facing is the chain's (see [**The manacle**](manacle.md)).
+Thrown, its rotation is DRIVEN (`kinematicRotation`, the steered ball's own
+mechanism) to face back along the chain; dangling, it turns as the bar it is,
+with its own inertia, under the chain's pull at its hinge, its contacts and
+gravity (see [**The manacle**](manacle.md)). It used to be a disc with its
+inertia scaled by 1e4, because a circle with friction ROLLS - the contact point
+is stationary, the slip Coulomb acts on is zero, and the stiction gate reads a
+spin far over `STICK_SPIN` - so the hook trundled downhill with its friction
+fully satisfied; a bar does not roll.
 And `applyStaticGrip` no longer gates on depth (see [**Resting contacts**](contact-solver.md#resting-contacts)). Every
 ending calls it — the hook attaching, a bounce off a hook-proof surface (the deflected
 remainder does arc), the chain snagging geometry, and the chain running out of
@@ -121,6 +120,12 @@ The attach test **must out-reach the solver**, and that is why its sweep runs `C
 So a hook that stops short of a surface by under a centimetre never gets a second frame in which to touch it: the solver has already spent the approach, and what is left is tangential.
 In `session-593f` the hook fell 200 mm in one step at a hanging plank 193.7 mm away, the sweep wanted `t = 1.033` and returned null, and the solver converted 12 m/s of approach into a 4 m/s skate along the plank's face that carried the hook off its corner over the next twelve frames - a clean shot at a big target that simply did not stick, and which replayed **HEALTHY**, because nothing about it violates an invariant.
 The reach costs no accuracy: the anchor is still placed at the swept contact point, which is on the surface.
+A **bounce** in that band is a different matter: the bar does not reach the surface this step, so it is deflected where it stands, as the solver's own speculative contact acts on the velocity and never the position, and only a hit on the step itself is seated at the touch.
+Seated at the touch, a tip dragged at 0.38 m/s along the hook-proof floor it lay on - a 6.3 mm step swept as 16.3 mm - was put 15.5 mm ahead of where its velocity took it and then flown a step further by integrate: the chain went 1.1 cm slack and was yanked taut again every eight to thirteen frames, and the slower the pull the larger the lurch against it, since the band is a fixed centimetre on a shrinking step (`session-472f`; `tip-teleport` is the detector, see [headless-tooling](headless-tooling.md)).
+The bounce is still reported at the touch, so sparks and sound land on the surface.
+And a dangling tip **sliding** along a hook-proof face, closing on it slower than `PROBE_DEFLECT_MIN_SPEED`, is not bounced off it at all on the sweep path, the rule the probe already had: the touch is reported (it is what a drag's sparks are made of) and the contact solver keeps the tip, friction included.
+Bounced, it was seated at the touch and then flown a whole step further by integrate: a tip dragged at 0.78 m/s and sinking into the floor at gravity's 0.09 m/s met it 96% of the way through its step and moved 24 mm against a 13 mm step (`session-256f` f86), and the chain went slack and snapped taut behind it.
+And a dangling tip moving faster than that is bounced but never **seated**: its velocity is turned where it stands, as a speculative contact does, and its own swept step (`continuous`) carries it no further than the face. Seated at the touch it had used that much of its step, and integrate then flew it a whole step more, 20 to 65 mm past its motion on every fast strike - more often once the ball and its cuff collided and the ball threw it into walls (`ball-roll-wall-dangling`, `session-435f` f93). The thrown hook keeps its seat, since its flight is budgeted to the touch.
 The overlap probe's margin is deliberately **not** widened to match.
 The sweep extrapolates along a known direction of travel; the probe has none, so a `CONTACT_SLOP` probe would anchor to whatever is within a centimetre, float the anchor off the geometry (`session-601f`) and lengthen the chain's path enough to kick the ball as it anchors (it fails `rope-anchor-kick` on `session-576f`).
 A near-stationary hook needs no help from it in any case, since the sweep's reach never falls below `CONTACT_SLOP` however slow the hook is.
@@ -201,6 +206,13 @@ At the absolute max length
 (`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
 tip: the chain stays deployed at that length (solver-driven swing) until it
 touches a surface and anchors, is released, or is **reeled all the way in**.
+
+**A ball holding a dangling chain is a free ball** (since 2026-11-09).
+The chain's row holds the tip and reads the ball as an infinite mass it sends nothing to (`BallChainRow.dangling`), so the island does not hold the ball at all while the chain dangles (`BallChainRow.sync`): the world integrates it and solves its contacts, exactly as it does with no chain out.
+From `b6cc767` (2026-10-19) it held it, and the ball's floor contact was then an island row, which reads a motor-driven spin as no drive (`spinSlipOf` knows a kinematic spin only, and the steering has been a motor since `c8af9d9`): a ball landing with a missed throw's chain out could not catch any spin and skidded at its sliding friction, four times as far as the same ball with no chain - 0.73 m against 0.19 m, 1.3 m in `session-372f`, read as the ball losing its grip whenever the hook was out.
+Free, it lands as a free ball does, the floor turning the slide into a roll the aim then winds down, and stops within the free ball's slide.
+`cli contacts` `dangling-landing-grip` is the detector: the same landing with and without the chain, the dangling slide no more than half again the free one.
+An island row that reads a motor-driven spin as no drive is still what an ANCHORED ball's contacts are solved with; making `spinSlipOf` agree with the world's `spunByDriver` took the dangling slide only to 0.44 m, so it is not the whole of the difference, and for an anchored ball it is the chain machinery's regime to judge.
 Rolling winds the chain onto the rim, and against a dangling tip the winch pays for that by hauling the hook in, which is the whole of what reeling a missed throw means.
 The frame the hook's hinge reaches the rim with the path over the chain's length there is nothing left to haul, and the chain is **stowed** (`BallPlayer.stowIfWoundIn`): `Rope.closeCoil` winds the coil to exactly the chain's length and ends the rope there, a material point on the rim, the hook body leaves the world, and the cuff is drawn at the coil's end (`manaclePose`) riding the ball as part of it.
 Stowed, the ball is a free ball carrying its chain: `chainAnchored` and `chainAttached` are both false, so the chain phase skips it as it skips a hook in flight, nothing solves it, and it is no tether.
@@ -240,7 +252,7 @@ Because the one-way row refunds the spin nothing, the ball goes on turning and w
 
 A real wedge comes in two kinds, against the bar's 10.7 cm length and 4.4 cm thickness:
 
-1. Across a gap narrower than its length and wider than its thickness - a bar lying across a slot. Partly self-inflicted: a tip resting on a surface lies flat along it (`BallHook.lieFlat`), and a taut chain only turns it end for end, never towards the pull, so it stays broadside to a gap it could pass end first.
+1. Across a gap narrower than its length and wider than its thickness - a bar lying across a slot. It was partly self-inflicted while the dangling cuff's rotation was driven (`lieFlat`, which only ever turned it end for end); since 2026-11-09 it turns under the chain's pull and can tip into the gap end first, but nothing yet measures whether it does.
 2. Into a gap narrower than its thickness, which the chain passes and the bar does not. Physically that is an anchor, and the rule that nothing the tip meets reaches the ball makes it a tip that must get through anyway.
 
 The intended fix, in order:

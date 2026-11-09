@@ -5,6 +5,8 @@
 
 import { RootBendUnit } from "../level/rootBends";
 import { Vec2 } from "../engine/vec2";
+import { wrapAngle } from "../engine/mathf";
+import { MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import {
   AnimatableBody2D,
   CharacterBody2D,
@@ -830,6 +832,10 @@ const EMBED_TOLERANCE = 0.03;
 // A seated hook (bounce, probe, dangling rest) sits ON the surface - depth is
 // solver-band noise, well under a centimetre.
 const HOOK_EMBED_TOLERANCE = 0.01;
+// The cuff and the ball are bodies that meet, two-way (`BallPlayer.dangle`), so
+// what is left is the soft contact's own give: none of the corpus comes near a
+// centimetre.
+const TIP_IN_BALL_TOLERANCE = 0.01;
 
 // Ceiling on applied tangential impulse beyond the kinematic spin's traction
 // budget (`World.spinDriveOverspend`, N·s). The budget arithmetic is exact -
@@ -1113,6 +1119,191 @@ export class GripPinMonitor {
         `the steered grip's pin teleported the ball along the surface and straight ` +
         `back again for ${run} frames running, worst ${(worst * 1000).toFixed(1)} mm, ` +
         `with no velocity change to show for any of it`,
+    };
+  }
+}
+
+// ---- tip-rock ----------------------------------------------------------------
+const TIP_ROCK_TURN = 0.035; // 2 degrees a frame
+const TIP_ROCK_FRAMES = 6;
+
+// The dangling tip's rotation may not turn one way and straight back again,
+// frame after frame.
+//
+// The cuff's rotation is driven (`BallHook.alignToChain`), not integrated, so
+// nothing in the energy books or the contact solver sees it turn: a cuff that
+// alternates between two angles is invisible to every other check, while the
+// hinge the chain ends on - half the bar's length from its centre - swings with
+// it. On `session-339f` the tip lay on the floor with the chain slack and was
+// laid flat a quarter radian about its CENTRE, which lifted the corner it
+// stood on 8 mm, past the resting probe's 5 mm; on the next frame it was
+// resting on nothing, so it was snapped back to face the chain, its corner
+// dug into the floor again, and the cycle repeated: 14 degrees each way at
+// 30 Hz, the hinge 12.5 mm back and forth, and the drawn chain sliding in and
+// out of the ball with it, for as long as the ball sat still.
+//
+// Counted against the PREVIOUS frame's turn, so a cuff swinging round on a
+// chain that is genuinely pulling it - one way for many frames - never adds up.
+export class TipRockMonitor {
+  private run = 0;
+  private worst = 0;
+  private prevRot: number | null = null;
+  private prevTurn = 0;
+  private tip: BallHook | null = null;
+
+  push(level: BallLevel): Violation | null {
+    const tip = level.ball.chainTip;
+    if (tip === null || tip !== this.tip) {
+      this.tip = tip;
+      this.prevRot = tip?.globalRotation ?? null;
+      this.prevTurn = 0;
+      this.run = 0;
+      this.worst = 0;
+      return null;
+    }
+    const rot = tip.globalRotation;
+    const turn = wrapAngle(rot - this.prevRot!);
+    const reversed = turn * this.prevTurn < 0;
+    this.prevRot = rot;
+    this.prevTurn = turn;
+    if (Math.abs(turn) <= TIP_ROCK_TURN || !reversed) {
+      this.run = 0;
+      this.worst = 0;
+      return null;
+    }
+    this.run++;
+    this.worst = Math.max(this.worst, Math.abs(turn));
+    if (this.run <= TIP_ROCK_FRAMES) return null;
+    const run = this.run;
+    const worst = this.worst;
+    this.run = 0;
+    this.worst = 0;
+    return {
+      frame: level.frame,
+      kind: "tip-rock",
+      detail:
+        `the dangling tip turned one way and straight back again for ${run} frames running, ` +
+        `worst ${((worst * 180) / Math.PI).toFixed(1)} degrees a frame`,
+    };
+  }
+}
+
+// ---- tip-hinge-flick ---------------------------------------------------------
+const TIP_HINGE_GAIN = 3;
+const TIP_HINGE_SLACK = 0.01;
+
+// The dangling tip's hinge - the chain's end - may not move further in a
+// frame than the tip's own motion carries it: three steps at the larger of
+// the hinge point's speeds at the frame's two ends (`v + w x r`, so a turn
+// that swings the hinge is counted), plus a centimetre. Generous on purpose:
+// the island's substeps can haul a tip faster than it leaves a frame
+// (`tip-teleport`), and what this is for is a hinge put somewhere outright.
+//
+// That is what a cuff whose rotation was DRIVEN did: hoisted off a floor by
+// a chain rising to a ledge corner, it was lifted whole, lost the floor and
+// was snapped to face the chain in one frame with no spin to show for it,
+// the hinge flicking 6-7 cm and the chain going that slack, then laid flat
+// again and snapped again every five or six frames (`session-307f`
+// f247-272). Turned by the physics, the same swing is a spin.
+//
+// So a long hinge move is only a flick when the cuff also TURNED further
+// than its spin allows on the same measure (`TIP_TURN_SLACK` over three
+// steps at the larger of its angular speeds): a turn with no spin behind it.
+// Since the ball and its cuff collide (`BallPlayer.dangle`), a ball striking
+// the cuff throws it, hinge and all, faster inside the frame than at either
+// end, which is motion, not a flick (`ball-roll-wall-dangling` f302).
+const TIP_TURN_SLACK = 0.05;
+
+export class TipHingeMonitor {
+  private tip: BallHook | null = null;
+  private prev: Vec2 = Vec2.ZERO;
+  private prevSpeed = 0;
+  private prevRot = 0;
+  private prevSpin = 0;
+
+  push(level: BallLevel): Violation | null {
+    const tip = level.ball.chainTip;
+    const fresh = tip === null || tip !== this.tip;
+    this.tip = tip;
+    if (tip === null) return null;
+    const hinge = tip.hinge;
+    const speed = tip.velocityAtPoint(hinge).length();
+    const moved = hinge.distanceTo(this.prev);
+    const allowed = (TIP_HINGE_GAIN * Math.max(speed, this.prevSpeed)) / 60 + TIP_HINGE_SLACK;
+    const rot = tip.globalRotation;
+    const spin = Math.abs(tip.angularVelocity);
+    const turned = Math.abs(wrapAngle(rot - this.prevRot));
+    const turnAllowed = (TIP_HINGE_GAIN * Math.max(spin, this.prevSpin)) / 60 + TIP_TURN_SLACK;
+    this.prev = hinge;
+    this.prevSpeed = speed;
+    this.prevRot = rot;
+    this.prevSpin = spin;
+    if (fresh || moved <= allowed || turned <= turnAllowed) return null;
+    return {
+      frame: level.frame,
+      kind: "tip-hinge-flick",
+      detail:
+        `the dangling tip's hinge moved ${(moved * 1000).toFixed(1)} mm in a frame against ` +
+        `${(allowed * 1000).toFixed(1)} mm its motion allows, turning ${((turned * 180) / Math.PI).toFixed(1)} degrees ` +
+        `with no more than ${((turnAllowed * 180) / Math.PI).toFixed(1)} of spin behind it`,
+    };
+  }
+}
+
+// ---- tip-teleport ------------------------------------------------------------
+const TIP_TELEPORT_SLACK = 0.005;
+
+// The dangling tip may not be SEATED somewhere its velocity does not carry
+// it: on a frame its bounce wrote its position (`BallHook.seatShift`), it may
+// move no further than a step at the larger of its speeds at the frame's two
+// ends, plus a few millimetres for the contact solver's push-out, plus what
+// its driven turn moves a point of the bar (a tip laid flat is turned about
+// the corner it stands on, and its centre comes down with it -
+// `BallHook.alignToChain`). Asked only on such a frame, because the speeds at
+// the frame's ends do not bound a frame's travel: the island's substeps can
+// haul a tip faster than it leaves (`ball-roll-wall-dangling` f125: 3.9 m/s
+// mid-frame, 1.5 and 2.7 at the ends).
+//
+// `session-472f`: a tip dragged slowly along a hook-proof floor was swept
+// `CONTACT_SLOP` past its step, met the floor it was sliding on near the far
+// end of that reach, and was SEATED there by `BallHook.bounce` - 15.5 mm ahead
+// of a 6.3 mm step, then flown a step further by integrate. The chain went
+// 1.1 cm slack, the tip slowed, the ball took the slack up and yanked it
+// again: a lurch every eight to thirteen frames for as long as the drag went
+// on, worse the slower the pull.
+export class TipTeleportMonitor {
+  private tip: BallHook | null = null;
+  private prev: Vec2 = Vec2.ZERO;
+  private prevSpeed = 0;
+  private prevRot = 0;
+
+  push(level: BallLevel): Violation | null {
+    const tip = level.ball.chainTip;
+    const fresh = tip === null || tip !== this.tip;
+    this.tip = tip;
+    if (tip === null) return null;
+    const at = tip.globalPosition;
+    const speed = tip.linearVelocity.length();
+    const rot = tip.globalRotation;
+    const moved = at.distanceTo(this.prev);
+    // The centre's furthest from any point of the bar it can turn about.
+    const turned = Math.abs(wrapAngle(rot - this.prevRot)) * Math.sqrt(MANACLE_REACH * MANACLE_REACH + (MANACLE_THICKNESS / 2) * (MANACLE_THICKNESS / 2));
+    const allowed = Math.max(speed, this.prevSpeed) / 60 + TIP_TELEPORT_SLACK + turned;
+    this.prev = at;
+    this.prevSpeed = speed;
+    this.prevRot = rot;
+    // ...and the seat must account for the excess. Since the ball and its
+    // cuff collide (`BallPlayer.dangle`), a ball striking the cuff throws it
+    // faster inside the frame than at either end, so a frame can run long
+    // with a seat of a few millimetres somewhere in it that did none of it.
+    if (fresh || tip.seatShift === 0 || moved <= allowed || tip.seatShift < moved - allowed) return null;
+    return {
+      frame: level.frame,
+      kind: "tip-teleport",
+      detail:
+        `the dangling tip was seated ${(tip.seatShift * 1000).toFixed(1)} mm by a bounce and moved ` +
+        `${(moved * 1000).toFixed(1)} mm in the frame, against ${(allowed * 1000).toFixed(1)} mm ` +
+        `its velocity and the push-out allow`,
     };
   }
 }
@@ -2141,6 +2332,26 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         kind: "hook-embedded",
         detail: `depth=${(deepest * 1000).toFixed(1)}mm in ${where}`,
       });
+    }
+  }
+  // The dangling cuff may not be inside the ball it is chained to. The throw
+  // carries a collision exception between the two (it spawns the mouth on the
+  // rim); dangling, they collide (`BallPlayer.dangle`). With the exception
+  // kept, a cuff turned by the physics swung about its hinge into the ball and
+  // hung there 14 cm deep (`session-311f`).
+  // The ball's loop ride (`BallPlayer.applyLoopRide`) may not follow the
+  // ball's own dangling cuff: the cuff is moved by the ball's own winch, and a
+  // ride tracks its surface's speed, so riding it the ball chased a cuff it was
+  // whirling itself - 3.7 m/s a frame, 7.2 m/s in two (`session-291f` f186).
+  const riding = (level.ball as unknown as { ride: { body: unknown } | null }).ride;
+  if (riding !== null && level.ball.chainTip !== null && riding.body === level.ball.chainTip) {
+    out.push({ frame, kind: "ride-on-cuff", detail: "the ball's loop ride is following its own dangling cuff" });
+  }
+  const tip = level.ball.chainTip;
+  if (tip !== null && tip.hasShape()) {
+    const ov = circleOverlap(level.ball.globalPosition, level.ball.radius, tip.primaryShape());
+    if (ov !== null && ov.depth > TIP_IN_BALL_TOLERANCE) {
+      out.push({ frame, kind: "tip-in-ball", detail: `the dangling cuff is ${(ov.depth * 1000).toFixed(1)} mm inside the ball` });
     }
   }
   out.push(...checkSceneChains(frame, level.sceneChains));

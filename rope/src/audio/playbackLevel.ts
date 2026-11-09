@@ -4,6 +4,9 @@ import { CHAIN_LINK_LEN } from "../render/chainMetrics";
 // Rolling starts fading immediately on contact loss, but brief hops should
 // not slam its envelope shut. No contact latch or airborne gain target.
 export function loopGainFollow(family: SoundFamily): number {
+  // Payout must fade at attachment, rather than leaving a rattle tail.
+  if (family === "deploy") return 0.001;
+  if (family === "chain-drag" || family === "hook-drag") return 0.005;
   return family === "roll" ? 0.06 : 1 / 60;
 }
 
@@ -18,4 +21,30 @@ export function strikeLevel(family: SoundFamily, speed: number, refSpeed: number
     return Math.min(1, ratio) / Math.sqrt(overlap);
   }
   return Math.min(2, ratio);
+}
+
+// Buffer windows can end mid-waveform after an editor trim. Fade on the audio
+// clock, accounting for playback rate, so a crop never creates a cut click.
+export function scheduleShotEnvelope(
+  param: Pick<AudioParam, "setValueAtTime" | "linearRampToValueAtTime">,
+  gain: number, at: number, seconds: number,
+): void {
+  const attack = Math.min(0.0005, seconds / 4);
+  const release = Math.min(0.004, seconds / 4);
+  param.setValueAtTime(0, at);
+  param.linearRampToValueAtTime(gain, at + attack);
+  param.setValueAtTime(gain, at + seconds - release);
+  param.linearRampToValueAtTime(0, at + seconds);
+}
+
+// Native-pitch wind: speed supplies the bed, positive speed gain supplies a
+// bounded swell. Walking is silent; reference speed is the full rush level.
+export function windLevel(speed: number, acceleration: number, refSpeed: number): number {
+  if (!Number.isFinite(speed) || speed <= 0) return 0;
+  const ratio = speed / Math.max(refSpeed, 1e-3);
+  const u = Math.max(0, Math.min(1, (ratio - 0.25) / 0.3));
+  const gate = u * u * (3 - 2 * u);
+  const bed = Math.min(1.25, ratio * ratio) * gate;
+  const boost = 1 + 1.25 * Math.max(0, Math.min(1, Number.isFinite(acceleration) ? acceleration / 12 : 0));
+  return Math.min(2.2, bed * boost);
 }

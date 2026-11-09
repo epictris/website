@@ -16,7 +16,7 @@ import bank from "./soundBank.json";
 import type { SurfaceKind } from "./surfaces";
 import { SURFACE_KINDS } from "./surfaces";
 
-export type SoundFamily = "roll" | "land" | "land-light" | "land-medium" | "land-heavy" | "loop-hit" | "ball-settle" | "attach" | "bounce" | "wind" | "deploy" | "slack" | "taut" | "creak" | "wrap" | "whoosh" | "splash" | "wade";
+export type SoundFamily = "roll" | "land" | "land-light" | "land-medium" | "land-heavy" | "loop-hit" | "ball-settle" | "attach" | "bounce" | "wind" | "deploy" | "slack" | "chain-drag" | "hook-drag" | "chain-hit" | "taut" | "creak" | "wrap" | "whoosh" | "splash" | "wade";
 
 export interface SlotParams {
   // Library keys (`SOUND_ASSETS`). A one-shot picks one at random each time,
@@ -230,12 +230,39 @@ export const FAMILIES: readonly FamilySpec[] = [
   },
   {
     family: "slack",
-    label: "Slack chain",
-    help: "Loose links colliding while the slack chain moves, in the air or dragging on scenery. Quieter as it settles; silent at rest, taut, or stowed.",
-    loop: true,
+    label: "Loose-link clinks",
+    help: "Short, varied clinks triggered by local bending and relative link motion. No repeating movement loop; rigid translation and resting links stay silent.",
+    loop: false,
     surfaces: null,
     speedIs: "loose-link motion",
     defaults: { volume: -12, refSpeed: 1, pitchJitter: 0, pitchFollow: 0, paceFollow: 0.4 },
+  },
+  {
+    family: "hook-drag",
+    label: "Hook dragging",
+    help: "The free hook sliding over scenery in either direction, including when pulled up on a taut chain. Independent of loose-link motion.",
+    loop: true,
+    surfaces: SURFACE_KINDS,
+    speedIs: "hook surface sliding speed",
+    defaults: { volume: -8, refSpeed: 1, pitchJitter: 0, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "chain-drag",
+    label: "Chain dragging",
+    help: "Slack links sliding against scenery. Silent in the air and at rest; surface slots can override the default recording.",
+    loop: true,
+    surfaces: SURFACE_KINDS,
+    speedIs: "surface sliding speed",
+    defaults: { volume: -8, refSpeed: 1, pitchJitter: 0, pitchFollow: 0, paceFollow: 0 },
+  },
+  {
+    family: "chain-hit",
+    label: "Chain link impact",
+    help: "Short clinks from individual drape contacts. Approach speed selects intensity; nearby simultaneous hits combine, with repeated solver passes and resting contact suppressed.",
+    loop: false,
+    surfaces: SURFACE_KINDS,
+    speedIs: "chain arrival speed",
+    defaults: { volume: -6, refSpeed: 2, pitchJitter: 0, pitchFollow: 0, paceFollow: 0 },
   },
   {
     family: "taut",
@@ -258,7 +285,7 @@ export const FAMILIES: readonly FamilySpec[] = [
   {
     family: "wrap",
     label: "Chain wraps geometry",
-    help: "Metal links striking the contacted material as a taut chain catches or feeds over scenery. One short impact per link of travel; stationary wrapping and bend changes alone do not repeat it.",
+    help: "Metal links striking the contacted material as a taut chain catches or feeds over scenery. Short clinks follow link travel, with rapid crossings grouped into gestures at least 40 ms apart per contact. Stationary wrapping and bend changes alone do not repeat it.",
     loop: false,
     surfaces: SURFACE_KINDS,
     speedIs: "loaded contact motion",
@@ -267,11 +294,11 @@ export const FAMILIES: readonly FamilySpec[] = [
   {
     family: "whoosh",
     label: "Whoosh",
-    help: "The air rushing past the ball. Looped; silent at rest and rising with speed.",
+    help: "Wind rush at high player speed, swelling while gaining speed during swing wind-up. Constant-speed turning does not add acceleration boost. Native pitch; silent at walking speed and underwater.",
     loop: true,
     surfaces: null,
     speedIs: "speed through the air",
-    defaults: { volume: 0, refSpeed: 12, pitchJitter: 0, pitchFollow: 0.3, paceFollow: 0.3 },
+    defaults: { volume: -6, refSpeed: 12, pitchJitter: 0, pitchFollow: 0, paceFollow: 0 },
   },
   {
     family: "splash",

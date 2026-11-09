@@ -13,6 +13,9 @@ import {
   GripPinMonitor,
   GripAnchorMonitor,
   RollMonitor,
+  TipHingeMonitor,
+  TipRockMonitor,
+  TipTeleportMonitor,
   TunnelMonitor,
   WallClimbMonitor,
   digestsEqual,
@@ -160,6 +163,9 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
   const tunnel = new TunnelMonitor();
   const runaway = new ContactRunawayMonitor();
   const wallClimb = new WallClimbMonitor();
+  const tipRock = new TipRockMonitor();
+  const tipTeleport = new TipTeleportMonitor();
+  const tipHinge = new TipHingeMonitor();
   let divergedAtFrame: number | null = null;
   let divergedByStateFork: boolean | null = null;
   let bitDivergedAtFrame: number | null = null;
@@ -193,6 +199,12 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
     if (cv) violations.push(cv);
     const wv = wallClimb.push(level);
     if (wv) violations.push(wv);
+    const kv = tipRock.push(level);
+    if (kv) violations.push(kv);
+    const tt = tipTeleport.push(level);
+    if (tt) violations.push(tt);
+    const th = tipHinge.push(level);
+    if (th) violations.push(th);
     const expected = expectedDigestAt(i + 1);
     if (expected) {
       if (bitDivergedAtFrame === null && !digestsEqual(d, expected)) bitDivergedAtFrame = i + 1;

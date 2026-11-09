@@ -309,6 +309,10 @@ An **attached chain switches the regime off** entirely (`constraintTethered`), e
 A ride is a statement about a ball rolling on the ground; a chain gone taut is the one thing in the game that owns where the ball is instead, and the winch budget, the unwind and the lease are what police that era.
 A ride laid over the top of it is a second author of the same quantity, and it read as both bugs it could.
 
+And the ball's **own dangling cuff** is never a surface to ride, though the two collide (since 2026-11-09, see [manacle](manacle.md)).
+A ride follows its surface's speed, and the cuff's motion is the ball's own doing - its winch whirls it, its loop strikes it - so a ball that rested its loop on its cuff took it for the ground and chased it as the winch flung it away underneath: 3.7 m/s a frame, 7.2 m/s in two (`session-291f` f186-187, forty frames of riding over the run).
+The cuff is skipped as the ride's support; the ball still meets it, and rides up over it, through the contacts. `ride-on-cuff` is the detector.
+
 Finally, a ride may only ever write what a ride is **worth** - the fastest the profile can move at this spin, plus a step of gravity either side.
 Asked for more, the ball is not rolling on that surface and the ride sits the frame out rather than overruling whatever is.
 It sits out rather than releasing, because a bound this close to the mechanic's own scale will clip a real ride now and then and a release cannot be undone until the loop comes round again.

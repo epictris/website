@@ -21,6 +21,15 @@ with both ends welded to the render transforms so the chain never detaches from 
 ball or manacle); `cli render` overlays it in green over the wrap path's amber, which
 coincide exactly when the chain is taut.
 
+**The links are counted by the chain's length, not the polyline's.**
+Both renderers lay the ball's chain anchor first, so that a reeling chain is consumed into the ball, and they used to lay it at a fixed link pitch.
+But the drape only converges toward its length: a heap held by static friction and a hanging run the passes leave stretched draw a polyline a few percent long, and that error breathes.
+At a fixed pitch, every change in it slid the whole train of links along the chain, out of the ball and back in.
+On `session-339f` the drape over a ledge ran 1.80 to 2.01 m and back to 1.89 m with the chain's length fixed at 1.80 m, which was drawn as 47 to 53 to 50 links out of the ball: the chain growing and receding into the ball for no reason.
+The pitch is now `chainLinkPitch` (`render/chainMetrics.ts`), the drawn length over the chain's length (`SlackChain.chainLength`, interpolated between steps like the nodes), so exactly `length / CHAIN_LINK_LEN` links lie between the cuff and the loop.
+A chain whose length does not change keeps its links; the drape's error shows as links a few percent apart instead.
+Taut, the polyline is the length and the pitch is exactly `CHAIN_LINK_LEN`.
+
 Four mechanisms carry the requirements:
 
 - **Length is preserved.** The drape's rest length is the whole wrap-path length plus the
@@ -99,3 +108,7 @@ What is left is bounded rather than optimised: `SlackChain.timeBudgetMs` is a wa
 Every step runs at least one block, so the frame still ends clear of the scenery; a cut step loses convergence - a little stretch in a drape being flung about - and the next step takes it up.
 It is `Infinity` by default, which is what every tool and the self-replay verdict want (a drawn drape that depends on the machine is not a reference frame), and main.ts sets it to 0.5 ms for the live page, several times what the drape costs on an idle machine and 3% of the step, so it bites only when the machine is behind.
 Measured at the 4x throttle: the drape's share of the step fell from ~4 ms to 2 ms with the cache alone and to 1.1 ms with the budget, the floor being that first block; the step is ~10.5 ms on the hang now, and the rest of it is the coupled scene-chain sweep and the depenetration passes, which are the sim's and not the drape's to cut.
+
+### Audio contact telemetry
+
+`contactSnapshot()` exposes per-step contacts without changing the solve: one node/shape entry across repeated collision passes, with pre-damping normal approach and final surface-relative sliding. Audio uses these for individual link-impact gestures and scraping. Local bend changes drive separate articulation gestures. The snapshot remains cosmetic; it contributes no forces, digests, or replay state. Taut interior shuffle requires genuine endpoint/material transport before it can drive scraping (session-604f).
