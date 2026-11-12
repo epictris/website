@@ -4818,7 +4818,7 @@
           "gain": 1
         }
       ],
-      "source": "User-provided download: cannonball_drops.m4a (fourth impact, 5.758–5.918 s)",
+      "source": "User-provided download: cannonball_drops.m4a (fourth impact, 5.758\u20135.918 s)",
       "author": "",
       "license": ""
     },
@@ -4842,7 +4842,7 @@
           "gain": 1
         }
       ],
-      "source": "User-provided download: cannonball_rolls.m4a (8.6–13.4 s, bass rumble)",
+      "source": "User-provided download: cannonball_rolls.m4a (8.6\u201313.4 s, bass rumble)",
       "author": "",
       "license": ""
     },
@@ -4850,7 +4850,10 @@
       "name": "gentle-cannonball-contact-v24",
       "event": "loop-hit",
       "slot": "loop-hit",
-      "slots": ["loop-hit", "ball-settle"],
+      "slots": [
+        "loop-hit",
+        "ball-settle"
+      ],
       "seconds": 0.12,
       "recordedLayers": [
         {
@@ -4887,7 +4890,7 @@
           "gain": 1
         }
       ],
-      "source": "User-provided download: cannonball_rolls.m4a (8.6–13.4 s; narrow tonal resonance reduction)",
+      "source": "User-provided download: cannonball_rolls.m4a (8.6\u201313.4 s; narrow tonal resonance reduction)",
       "author": "",
       "license": ""
     },
@@ -4938,6 +4941,431 @@
       "source": "User-provided download: cannonball_drops.m4a (fourth impact; lower rounded sphere contact)",
       "author": "",
       "license": ""
+    },
+    {
+      "name": "wind-chain-heavy-3-v34",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.76944,
+          "end": 8.88944,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; replacement winding variation 3: 8.76944\u20138.88944 s, native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-dull-1-v35",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 1.65583,
+          "end": 1.77583,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 3500,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v35 3.5 kHz low-pass, native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-dull-2-v35",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 3500,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v35 3.5 kHz low-pass, native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-dull-3-v35",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.76944,
+          "end": 8.88944,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 3500,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; replacement winding variation 3: 8.76944\u20138.88944 s, native pitch; v35 3.5 kHz low-pass, native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-dull-1-v36",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 1.65583,
+          "end": 1.77583,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 6000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v36 6 kHz low-pass, native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-dull-2-v36",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 2.3144,
+          "end": 2.4344,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 6000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v36 6 kHz low-pass, native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "wind-chain-dull-3-v36",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.76944,
+          "end": 8.88944,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 6000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; replacement winding variation 3: 8.76944\u20138.88944 s, native pitch; v36 6 kHz low-pass, native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "name": "vine-grab-wet-1-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.3218583333333333,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 0.11004166666666666,
+          "end": 0.43189999999999995,
+          "pitch": 0,
+          "duration": 0.3218583333333333,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (0.11004\u20130.43190 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -1.2555107997449824
+    },
+    {
+      "name": "vine-grab-wet-2-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.32608749999999986,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 0.7293125,
+          "end": 1.0554,
+          "pitch": 0,
+          "duration": 0.32608749999999986,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (0.72931\u20131.05540 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 1.8506966908685385
+    },
+    {
+      "name": "vine-grab-wet-3-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.3246041666666668,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 1.3623958333333333,
+          "end": 1.687,
+          "pitch": 0,
+          "duration": 0.3246041666666668,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (1.36240\u20131.68700 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 1.398768015539904
+    },
+    {
+      "name": "vine-grab-wet-4-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.31907499999999933,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 2.2026250000000003,
+          "end": 2.5216999999999996,
+          "pitch": 0,
+          "duration": 0.31907499999999933,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (2.20263\u20132.52170 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -2.7129901817366644
+    },
+    {
+      "name": "vine-grab-wet-5-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.310670833333333,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 3.012729166666667,
+          "end": 3.3234,
+          "pitch": 0,
+          "duration": 0.310670833333333,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (3.01273\u20133.32340 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -0.6501291860390594
+    },
+    {
+      "name": "vine-grab-wet-6-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.3211958333333329,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 3.7346041666666667,
+          "end": 4.0558,
+          "pitch": 0,
+          "duration": 0.3211958333333329,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (3.73460\u20134.05580 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -2.036243798921131
+    },
+    {
+      "name": "vine-slide-wet-1-v38",
+      "event": "hook-drag",
+      "slot": "hook-drag.vine",
+      "loop": true,
+      "seconds": 0.75,
+      "recordedLayers": [
+        {
+          "name": "Wet vine slide",
+          "file": "sources/wet_movement.m4a",
+          "start": 4.75,
+          "end": 5.5,
+          "pitch": 0,
+          "duration": 0.75,
+          "fadeIn": 0.015,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_movement.m4a (4.75000\u20135.50000 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 2.1047091104167492
+    },
+    {
+      "name": "vine-slide-wet-2-v38",
+      "event": "hook-drag",
+      "slot": "hook-drag.vine",
+      "loop": true,
+      "seconds": 0.75,
+      "recordedLayers": [
+        {
+          "name": "Wet vine slide",
+          "file": "sources/wet_movement.m4a",
+          "start": 12.0,
+          "end": 12.75,
+          "pitch": 0,
+          "duration": 0.75,
+          "fadeIn": 0.015,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_movement.m4a (12.00000\u201312.75000 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 3.6071967089640076
+    },
+    {
+      "name": "vine-slide-wet-3-v38",
+      "event": "hook-drag",
+      "slot": "hook-drag.vine",
+      "loop": true,
+      "seconds": 0.75,
+      "recordedLayers": [
+        {
+          "name": "Wet vine slide",
+          "file": "sources/wet_movement.m4a",
+          "start": 15.25,
+          "end": 16.0,
+          "pitch": 0,
+          "duration": 0.75,
+          "fadeIn": 0.015,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_movement.m4a (15.25000\u201316.00000 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 3.6828277875044826
+    },
+    {
+      "name": "ivy-grab-leaves-1-v39",
+      "event": "attach",
+      "slot": "attach.ivy",
+      "seconds": 0.40065416666666664,
+      "recordedLayers": [
+        {
+          "name": "Leafy ivy grab",
+          "file": "sources/leaves_impact.m4a",
+          "start": 0.07064583333333334,
+          "end": 0.4713,
+          "pitch": 0,
+          "duration": 0.40065416666666664,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: leaves_impact.m4a (0.07065\u20130.47130 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 2.3544429423230007
     }
   ]
 }

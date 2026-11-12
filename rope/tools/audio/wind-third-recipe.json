@@ -1,0 +1,32 @@
+{
+  "sampleRate": 48000,
+  "seed": 1729,
+  "candidates": [
+    {
+      "name": "wind-chain-heavy-3-v34",
+      "event": "wind",
+      "slot": "wind",
+      "seconds": 0.14,
+      "recordedLayers": [
+        {
+          "name": "heavy-link",
+          "file": "sources/heavy-chain-movement-01kj.mp3",
+          "start": 8.76944,
+          "end": 8.88944,
+          "pitch": 0,
+          "highpass": 45,
+          "lowpass": 14000,
+          "duration": 0.12,
+          "fadeIn": 0.0003,
+          "fadeOut": 0.018,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "outputGainDb": 1.0618,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; replacement winding variation 3: 8.76944\u20138.88944 s, native pitch",
+      "author": "",
+      "license": ""
+    }
+  ]
+}

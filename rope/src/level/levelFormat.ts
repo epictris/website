@@ -593,6 +593,8 @@ export interface CollisionObjectData extends ObjectPlacement {
   // (`buildBodies.ts`), so each piece bringing its own material is what those
   // sums are for.
   material?: string;
+  // Independent audio identity. "auto" uses collision behaviour, not density.
+  soundMaterial?: string;
   // The piece's DENSITY, kg/m³, when it was typed rather than picked (Tris,
   // 2026-11-01: a material "should just allow you to set a preconfigured
   // density value"): a material is a preset density, and a density typed in
@@ -2482,6 +2484,7 @@ export interface LegacyBodyData {
   opacity?: number;
   friction?: number;
   material?: string;
+  soundMaterial?: string;
   thickness?: number;
   force?: number;
   flow?: number;
@@ -3079,6 +3082,7 @@ function objectsOfLegacy(b: LegacyBodyData): SceneObjectData[] {
         ? { impermeable: true }
         : {}),
       ...(b.material !== undefined ? { material: b.material } : {}),
+      ...(b.soundMaterial !== undefined ? { soundMaterial: b.soundMaterial } : {}),
       ...(b.thickness !== undefined ? { thickness: b.thickness } : {}),
     });
   }
@@ -3201,6 +3205,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       // A material is a name and scales by nothing; a thickness is a length in
       // z and scales exactly as the two lengths in the plane do.
       ...(o.material !== undefined ? { material: o.material } : {}),
+      ...(o.soundMaterial !== undefined ? { soundMaterial: o.soundMaterial } : {}),
       ...(o.density !== undefined ? { density: o.density } : {}),
       ...(o.thickness !== undefined ? { thickness: o.thickness * factor } : {}),
       // A colour and an opacity scale by nothing; the depth is a length in z,

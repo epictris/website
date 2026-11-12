@@ -371,6 +371,22 @@ function bodyIndex(vine: VineLine, segment: number): number {
   return Math.min(segment - 1, vine.links.length - 1);
 }
 
+// How far down `vine`'s line, in metres from the anchor, the material point
+// at (`segment`, `fraction`) lies on the line as it stands NOW. A ring's slide
+// is the change in this between two steps with both measured on the current
+// line, so the vine's own translation, swing and stretch never read as the
+// ring moving along it. Read by the render side and the sound (the slide's
+// leaves, `render/leafShed.ts`, and its scrape, `audio/soundObserver.ts`),
+// never by the sim.
+export function vineArc(vine: VineLine, segment: number, fraction: number): number {
+  const pts = linePoints(vine);
+  let length = 0;
+  for (let i = 1; i <= segment && i < pts.length; i++) {
+    length += pts[i]!.distanceTo(pts[i - 1]!) * (i === segment ? fraction : 1);
+  }
+  return length;
+}
+
 // The vine's line, top to bottom: the anchor, every link's centre, and the
 // second anchor of a span - against the sim transforms, or the render ones
 // for an `alpha`.

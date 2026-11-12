@@ -1,5 +1,52 @@
 # Sound
 
+Vine cuff sliding uses three native-pitch 750 ms snippets from the supplied
+`wet_movement.m4a` (4.75, 12.0 and 15.25 s), with short boundary fades, assigned
+to `hook-drag.vine`. The observer compares the attached `RopeVineClamp`'s segment
+and fraction on the current vine polyline, excluding whole-vine motion and
+stretch. Travel in either direction controls volume; stopping, detaching or
+submersion silences the cue through the existing hook-drag envelope. Reference
+slide speed is 0.25 m/s. The mixer exposes three `vine-slide-wet-…-v38` projects
+with original source windows. Rebuild with
+`tools/audio/.venv/bin/python tools/audio/build-vine-slide.py`.
+
+Vine grabs use six isolated impacts from the user-supplied `wet_impacts.m4a`
+at native pitch, assigned only to `attach.vine`. Short edge fades retain the
+wet tails; each cut is calibrated to −20 dBFS over its loudest 50 ms before
+the Attach event gain. The original recording/hash and editable source windows
+are retained in the audio catalog. Rebuild with
+`tools/audio/.venv/bin/python tools/audio/build-vine-grab.py`; the mixer lists
+them under Attach / Vine as `vine-grab-wet-1` through `6-v37`.
+
+When a coil first forms (including after fully unwinding), audio treats its
+initial geometric arc as a baseline rather than one frame of chain transport.
+This prevents an artificial high-speed first-link burst. Later link crossings
+retain their actual coiling speed and normal spacing; physics is unchanged.
+
+Wind link intensity now rises quadratically with actual coiling speed below
+its reference speed (3 m/s). Compared with the previous linear response,
+0.1 m/s is about 30 dB quieter and 0.3 m/s is 20 dB quieter. There is no
+audibility threshold; contact level tends smoothly to silence as winding stops.
+Reference/fast winding retains its existing overlap-limited level. Other chain
+contacts and the chosen winding recordings are unchanged.
+
+Winding v36 uses a 6 kHz low-pass on all three chosen source cuts, easing
+back the v35 3.5 kHz filter after feedback that it sounded too soft.
+Native pitch, source windows (including v34's replacement third click), fades
+and game controls are retained. The mixer exposes `wind-chain-dull-1/2/3-v36`
+with editable original-source layers. Rebuild with
+`tools/audio/.venv/bin/python tools/audio/dull-wind.py`. Earlier versions
+remain available for listening comparisons.
+
+Winding v34 replaces only variation 3 with a different 120 ms click from the
+original `heavy-chain-movement-01kj.mp3`, at 8.76944–8.88944 s. It uses the
+same native-pitch editing and level as variation 1; variations 1 and 2 remain
+original v18. This supersedes the v33 resonance-filtering trial at the user's
+request. Run `tools/audio/.venv/bin/python tools/audio/replace-wind-third.py` to
+rebuild and assign. The mixer exposes `wind-chain-heavy-3-v34` with its editable
+original source window. Selection used spectral similarity to variations 1/2;
+listening confirmation is still needed.
+
 The game's sound is files, assigned to the game's sound **events** in the editor's **Sounds** menu.
 Nothing is synthesised at run time: a first version (2026-11-06) generated every sound in the browser from physics - Hertz contact times, modal synthesis, roughness profiles played at the rolling speed - and was rejected on first listen as sounding awful.
 What survived it is everything upstream of the sound itself: the events, the surfaces, the timing.
@@ -17,7 +64,7 @@ For offline creation and feedback, see [the audio workstation](../tools/audio/RE
 
 Most of what is heard is read straight off the world: the ball's contacts (`World.frameContacts`), its velocity, how deep it is in water (`submerged`), and the coil (`Rope.coiledLength`, a read-only getter).
 The hook's touches are the exception, because the sim keeps them to itself - an attach removes the hook inside its own step, and a bounce is reflected before the contact solver sees it - so they come through `BallLevel.soundEvents` (`level/soundEvents.ts`), a per-frame list cleared at the top of every `physicsProcess`, written from the hook's attach and bounce callbacks in `spawnBody`, and never read by the sim.
-The bounce callback carries the struck piece for this, and every mounted shape carries its authored `material` (`CollisionShape2D.material`), which nothing in the sim reads either.
+The bounce callback carries the struck piece for this, and every mounted shape carries its independent `soundMaterial`, which nothing in the sim reads.
 `replay selftest` stays bit-exact and the bundle corpus replays as before.
 
 ## Contact-driven chain audio (v29)
@@ -45,7 +92,7 @@ V13 uses the user's `314625-Rock_impact_-single_stone_-light_4` for Medium and `
 
 V14 replaces Heavy with the user's `314632-Rock_impact_-single_stone_5`: source window 0.024–0.165 s and a 20 ms fade-out remove the trailing scraping while retaining the initial impact at original pitch. At the user's subsequent request, Light v14 uses the same stone-4 source as Medium, softened with a 2.8 kHz low-pass and 4 ms fade-in and shortened to source window 0.020–0.160 s with a 20 ms fade-out. Medium remains v13. Strength routing and levels are unchanged.
 - **Attach** and **Bounce**: the cuff's arrivals. A bounce is a strike only when it ends a flight or follows 2 silent steps (a dragged tip is re-deflected every step, and those normals are the face's facets, not new hits - the sparks' rule again), at its speed into the face; an attach at the cuff's whole speed, which it spends stopping in what it bit.
-- **Wind**: one cue per chain link (3.8 cm) the coil grows by, placed within the step where the link landed, at the winding speed. Unwinding does not trigger this cue; deploying and moving slack have their own rattles. The count restarts from wherever the coil is.
+- **Wind**: one cue per chain link (`CHAIN_LINK_LEN`, 3.7 cm) the coil grows by, placed within the step where the link landed, at the winding speed. Unwinding does not trigger this cue; deploying and moving slack have their own rattles. The count restarts from wherever the coil is.
 - **Deploy**: a continuous link rattle while the hook is flying out, at its flight speed. Playback stops on the step flight ends, with a 7 ms fade to near-silence. A throw attaching within one step has no continuing deployment cue. An already-attached spawn does not trigger it.
 - **Retract**: a let-go chain reeling back in through the loop ([chain-retract](chain-retract.md)) is one quiet gesture, not a texture for the whole reel, since it follows every release and must not wear or distract: a **zip** (**Chain retract**, one of three ~110 ms cuts) on the release step, at the loop. It is cut off at the moment within its step that the chain's end reaches the loop (the zip is the links running in), and by a new throw, which deletes the reel; a chain short enough to arrive on its release step is not heard at all. The zips are cut from the full rattle of the deploy's own recording, `large_iron_chain_drop_1.m4a` (0.08-0.31 s of the window the deploy loop is cut from), unfiltered as the deploy is, so they are the same chain going the other way; they sit 7 dB under it by level alone, the slot volume set from the measured RMS of both. Low-passed at 3 kHz (v31) they sounded "weirdly wet": the recording's character is nearly all above 3 kHz (74% of the deploy file's energy), and the low-pass left the dull body of each strike without its metal edge. `tools/audio/build-retract.py` builds and assigns them (windows in `tools/audio/retract-cuts.json`). Rejected by ear on 2026-11-09: the deploy's rattle looped for the length of the reel ("mimicing the deploy sound doesn't sound good"), chain-impact clinks every 20 ms ("i don't think this is the right fit"), and a **seat** - a sound as the end reaches the loop - in three forms: a cut of the deploy recording's last settling link ("like a wet sort of clicking"), the **Chain link impact** clinks ("it doesn't sound like the link sound effect"), and one **Wind link**; after the third Tris had the seat removed. (The loop-impact sound was never a candidate: it is the ball's loop striking the ground.) The reeling links' scenery impacts, scraping and link-to-link clinks are heard as the deployed chain's are (below).
 - **Loose-link clinks**: individual recorded gestures from local bend changes and relative node motion, silent at rest, during deployment, while taut, stowed or submerged. No slack recording loops independently of motion.
@@ -65,7 +112,7 @@ Strikes under 0.15 m/s are not played: a settling body reports a great many of t
 
 `audio/windMotion.ts` derives positive scalar speed gain in m/s², capped at 30 and smoothed with 45 ms attack/140 ms release. Spawn/reset has no acceleration burst; water suppression is applied after measuring raw speed, so crossing the waterline cannot create a fake acceleration. Wind follows player position with the same camera-relative spatial path as other loops.
 
-`windLevel` in `audio/playbackLevel.ts` fades in between 0.25 and 0.55 times reference speed (3–6.6 m/s at the default 12 m/s), grows approximately with speed squared, and adds up to a 2.25× swell for gaining speed (full boost at 12 m/s²). Overall gain is bounded at 2.2× before slot volume; default Whoosh volume is −6 dB. Coasting keeps the speed bed while the acceleration swell releases; slowing down reduces the bed. The Sounds menu's Whoosh volume/reference speed tune the overall loudness and onset range. `scripts/test-speed-wind.ts` checks these behaviours, including constant-speed swing rotation and water transitions.
+`windLevel` in `audio/playbackLevel.ts` fades in between 0.25 and 0.55 times reference speed (3–6.6 m/s at the default 12 m/s), grows approximately with speed squared, and adds up to a 2.25× swell for gaining speed (full boost at 12 m/s²). Overall gain is bounded at 2.2× before slot volume; the slot's default Whoosh volume is −6 dB, and the assigned volume in `soundBank.json` is −12 dB (halved in amplitude on 2026-11-09: "the wind gust feels too intense"). Coasting keeps the speed bed while the acceleration swell releases; slowing down reduces the bed. The Sounds menu's Whoosh volume/reference speed tune the overall loudness and onset range. `scripts/test-speed-wind.ts` checks these behaviours, including constant-speed swing rotation and water transitions.
 
 ## Spatial placement
 
@@ -79,9 +126,21 @@ Spatial panners initialize their source position immediately at creation, before
 
 ## Surfaces
 
-`audio/surfaces.ts` classifies a piece, most specific first: mud (`viscosity`), rubber (a belt), vine, wood (a root), the piece's authored `material`, metal (a rail), stone (hook-proof), wood (any moving body, whose mass was computed as wood), and otherwise **moss** - scenery the cuff bites.
-In `BALL` that puts the dark rocks and boulders on stone, the mossy rocks on moss and the roots on wood.
-Authoring `material` on a piece is how to give it a different sound.
+Each collision shape has separate **physics material** (density preset) and
+**sound material** selectors in the editor. Sound material is saved as
+`soundMaterial`, survives scaling/copying/grouping, and selects all surface
+impact and slide slots. It never affects mass, centre of mass or inertia.
+Choose **ivy** on the shapes that should sound leafy: `Attach / Ivy` uses the
+supplied `leaves_impact.m4a` at native pitch, with a short edit fade and the
+usual impact-level calibration. Its original and editable window are retained;
+rebuild with `tools/audio/.venv/bin/python tools/audio/build-ivy-grab.py`.
+
+An explicit sound material overrides mechanical classification. **Automatic**
+uses vines, viscous mud, belts, roots, rails, hook-proof faces, moving bodies
+and finally moss, without reading the density preset. For older files without
+`soundMaterial`, the loader/editor capture the former density-based sound
+choice; new saves state the independent choice, including `auto`. Changing
+physics material after loading therefore leaves sound material alone.
 
 ## Selected iron-chain recordings (2026-11-09)
 

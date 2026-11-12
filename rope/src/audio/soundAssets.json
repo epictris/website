@@ -5,7 +5,147 @@
     "bytes": 7212,
     "seconds": 0.506771,
     "name": "attach-dirt-scatter-cannonball-v20.wav",
-    "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758\u20136.078 s)",
+    "source": "User-provided download: 41584-FOLEY_IMPACT_EARTH_DIRT_SCATTER_01.mp3 + User-provided download: cannonball_drops.m4a (fourth impact, 5.758–6.078 s)",
+    "author": "",
+    "license": ""
+  },
+  "chain-drag-timed-v28-d1ba876a": {
+    "file": "/sounds/chain-drag-timed-v28-d1ba876a.ogg",
+    "sha256": "d1ba876a993a082cff8dbc62d5c4edbde340fc069d128a969f19d7f2e134d5df",
+    "bytes": 26233,
+    "seconds": 1.3,
+    "name": "chain-drag-timed-v28.ogg",
+    "source": "User-provided download: large_iron_chain_drag_on_stone.m4a; encoded source window 0.08–1.4s; 20ms circular crossfade; native pitch",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-1-3c9193af": {
+    "file": "/sounds/chain-hit-micro-v29-1-3c9193af.ogg",
+    "sha256": "3c9193af5e624e63b9873145e38a7c2a51f6bccb127e877079e0087105b8ff14",
+    "bytes": 1885,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-1.ogg",
+    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.070–0.120s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-2-e14ac42b": {
+    "file": "/sounds/chain-hit-micro-v29-2-e14ac42b.ogg",
+    "sha256": "e14ac42b0abb57a363ae30347c4696ea2df0b388c0a4736288d27e4aa0b271f6",
+    "bytes": 1730,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-2.ogg",
+    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.144–0.194s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-3-28e26b83": {
+    "file": "/sounds/chain-hit-micro-v29-3-28e26b83.ogg",
+    "sha256": "28e26b83d74afc54185c2fa8e198d662f11da8ffcc3e6c7476452c7345e1cd27",
+    "bytes": 1837,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-3.ogg",
+    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.214–0.264s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-4-e1f085f2": {
+    "file": "/sounds/chain-hit-micro-v29-4-e1f085f2.ogg",
+    "sha256": "e1f085f23c2b8158a6723802c8715cb716a8122af89389ced2f2dcf58f9b20d4",
+    "bytes": 1782,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-4.ogg",
+    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.320–0.370s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-5-89f3ec73": {
+    "file": "/sounds/chain-hit-micro-v29-5-89f3ec73.ogg",
+    "sha256": "89f3ec734c92a2dc720ca4ea5984726bdc237369f07f7b28aa6d2001242b530a",
+    "bytes": 1782,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-5.ogg",
+    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.494–0.544s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-6-1e93f54e": {
+    "file": "/sounds/chain-hit-micro-v29-6-1e93f54e.ogg",
+    "sha256": "1e93f54ed8cd3c2d3fc722fe61cee92115fe1aa1b8e06734c17412cb9c58aa71",
+    "bytes": 1995,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-6.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.252–0.302s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-7-5e953228": {
+    "file": "/sounds/chain-hit-micro-v29-7-5e953228.ogg",
+    "sha256": "5e9532280991df6f736e70bf8c26d694cd460751382c7269da4c4beac51904be",
+    "bytes": 1913,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-7.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.352–0.402s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-hit-micro-v29-8-aa3466e6": {
+    "file": "/sounds/chain-hit-micro-v29-8-aa3466e6.ogg",
+    "sha256": "aa3466e6d50b7a2663711338c3179c3f6506d01802dc1301fa73149124e98735",
+    "bytes": 1987,
+    "seconds": 0.05,
+    "name": "chain-hit-micro-v29-8.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.438–0.488s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-wrap-clink-v27-1-b0297ee8": {
+    "file": "/sounds/chain-wrap-clink-v27-1-b0297ee8.ogg",
+    "sha256": "b0297ee8a9485f8c1fdd09b515c2088e0ea03cae7b9a03d3a7c1bbbc29513018",
+    "bytes": 1972,
+    "seconds": 0.04,
+    "name": "chain-wrap-clink-v27-1.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.254–0.294 s; native pitch; 500 Hz high-pass; onset/tail fades; -18 dBFS sample peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-wrap-clink-v27-2-bb67048c": {
+    "file": "/sounds/chain-wrap-clink-v27-2-bb67048c.ogg",
+    "sha256": "bb67048c4f4a6384031009335af84b3be4bbaadaf5588611b958b241062d8ace",
+    "bytes": 1964,
+    "seconds": 0.04,
+    "name": "chain-wrap-clink-v27-2.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.350–0.390 s; native pitch; 500 Hz high-pass; onset/tail fades; -18 dBFS sample peak)",
+    "author": "",
+    "license": ""
+  },
+  "chain-wrap-clink-v27-3-57eb2ed7": {
+    "file": "/sounds/chain-wrap-clink-v27-3-57eb2ed7.ogg",
+    "sha256": "57eb2ed7f90d6ecd2e63751d1b163aa8d502a3dee84652533361389d47ebf07f",
+    "bytes": 1953,
+    "seconds": 0.04,
+    "name": "chain-wrap-clink-v27-3.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.397–0.437 s; native pitch; 500 Hz high-pass; onset/tail fades; -18 dBFS sample peak)",
+    "author": "",
+    "license": ""
+  },
+  "deploy-timed-v28-d54dab74": {
+    "file": "/sounds/deploy-timed-v28-d54dab74.ogg",
+    "sha256": "d54dab746e25074c852700a177573c40f2cd7e3a415f43b597a47868d0f87fb7",
+    "bytes": 8096,
+    "seconds": 0.333,
+    "name": "deploy-timed-v28.ogg",
+    "source": "User-provided download: large_iron_chain_drop_1.m4a; encoded source window 0.0–0.345s; 12ms circular crossfade; native pitch",
+    "author": "",
+    "license": ""
+  },
+  "ivy-grab-leaves-1-v39-1794242044486-2613aab4": {
+    "file": "/sounds/ivy-grab-leaves-1-v39-1794242044486-2613aab4.ogg",
+    "sha256": "2613aab41474ebc843a3a0417138c75beef284bbcaf777d64c5846929cfff61e",
+    "bytes": 4948,
+    "seconds": 0.407,
+    "name": "ivy-grab-leaves-1-v39-1794242044486.wav",
+    "source": "User-provided download: leaves_impact.m4a",
     "author": "",
     "license": ""
   },
@@ -39,66 +179,6 @@
     "author": "",
     "license": ""
   },
-  "loop-touch-dry-v26-f499571c": {
-    "file": "/sounds/loop-touch-dry-v26-f499571c.ogg",
-    "sha256": "f499571cd761de0497feefbc78864087a7c721a40c013db7ded459cd95dc2ebd",
-    "bytes": 2417,
-    "seconds": 0.096792,
-    "name": "loop-touch-dry-v26.wav",
-    "source": "User-provided download: cannonball_drops.m4a (fourth impact; short light loop tick)",
-    "author": "",
-    "license": ""
-  },
-  "roll-cannonball-dry-v25-3b285609": {
-    "file": "/sounds/roll-cannonball-dry-v25-3b285609.ogg",
-    "sha256": "3b2856091c26f4425196fcf45d953a03d8b8c0d530f69ee51e055151d129d040",
-    "bytes": 53011,
-    "seconds": 4.799521,
-    "name": "roll-cannonball-dry-v25.wav",
-    "source": "User-provided download: cannonball_rolls.m4a (8.6\u201313.4 s; narrow tonal resonance reduction)",
-    "author": "",
-    "license": ""
-  },
-  "sphere-touch-low-v26-dddc7f5e": {
-    "file": "/sounds/sphere-touch-low-v26-dddc7f5e.ogg",
-    "sha256": "dddc7f5e068498c50a21b5ba3473c436ba45037cfeaa0809707320efb0fff5cc",
-    "bytes": 2884,
-    "seconds": 0.158104,
-    "name": "sphere-touch-low-v26.wav",
-    "source": "User-provided download: cannonball_drops.m4a (fourth impact; lower rounded sphere contact)",
-    "author": "",
-    "license": ""
-  },
-  "wind-chain-heavy-1-v18-48f3e88f": {
-    "file": "/sounds/wind-chain-heavy-1-v18-48f3e88f.ogg",
-    "sha256": "48f3e88f82966ec0c214cb0577f42dbe9b1d90d90d08fe3d546dd7336093c607",
-    "bytes": 2655,
-    "seconds": 0.139979,
-    "name": "wind-chain-heavy-1-v18.wav",
-    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
-    "author": "",
-    "license": ""
-  },
-  "wind-chain-heavy-2-v18-f5190674": {
-    "file": "/sounds/wind-chain-heavy-2-v18-f5190674.ogg",
-    "sha256": "f519067447cc7e72bedd151fabd40b7a09916df970515943ed5bd96bec3adaa0",
-    "bytes": 2905,
-    "seconds": 0.139979,
-    "name": "wind-chain-heavy-2-v18.wav",
-    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
-    "author": "",
-    "license": ""
-  },
-  "wind-chain-heavy-3-v18-99cec948": {
-    "file": "/sounds/wind-chain-heavy-3-v18-99cec948.ogg",
-    "sha256": "99cec94884ed6ec3fe0836483b787fdfe4f0b9abaccca3ef6e49ca63e69f31b1",
-    "bytes": 2967,
-    "seconds": 0.139979,
-    "name": "wind-chain-heavy-3-v18.wav",
-    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3",
-    "author": "",
-    "license": ""
-  },
   "large-iron-chain-move-1-6d4e49f8": {
     "file": "/sounds/large-iron-chain-move-1-6d4e49f8.ogg",
     "sha256": "6d4e49f837d61fcc165182e140e9173abd009f5177d1c2dae8ed1696fa65c65e",
@@ -109,223 +189,13 @@
     "author": "",
     "license": ""
   },
-  "chain-wrap-clink-v27-1-b0297ee8": {
-    "file": "/sounds/chain-wrap-clink-v27-1-b0297ee8.ogg",
-    "sha256": "b0297ee8a9485f8c1fdd09b515c2088e0ea03cae7b9a03d3a7c1bbbc29513018",
-    "bytes": 1972,
-    "seconds": 0.04,
-    "name": "chain-wrap-clink-v27-1.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.254\u20130.294 s; native pitch; 500 Hz high-pass; onset/tail fades; -18 dBFS sample peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-wrap-clink-v27-2-bb67048c": {
-    "file": "/sounds/chain-wrap-clink-v27-2-bb67048c.ogg",
-    "sha256": "bb67048c4f4a6384031009335af84b3be4bbaadaf5588611b958b241062d8ace",
-    "bytes": 1964,
-    "seconds": 0.04,
-    "name": "chain-wrap-clink-v27-2.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.350\u20130.390 s; native pitch; 500 Hz high-pass; onset/tail fades; -18 dBFS sample peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-wrap-clink-v27-3-57eb2ed7": {
-    "file": "/sounds/chain-wrap-clink-v27-3-57eb2ed7.ogg",
-    "sha256": "57eb2ed7f90d6ecd2e63751d1b163aa8d502a3dee84652533361389d47ebf07f",
-    "bytes": 1953,
-    "seconds": 0.04,
-    "name": "chain-wrap-clink-v27-3.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.397\u20130.437 s; native pitch; 500 Hz high-pass; onset/tail fades; -18 dBFS sample peak)",
-    "author": "",
-    "license": ""
-  },
-  "deploy-timed-v28-d54dab74": {
-    "file": "/sounds/deploy-timed-v28-d54dab74.ogg",
-    "sha256": "d54dab746e25074c852700a177573c40f2cd7e3a415f43b597a47868d0f87fb7",
-    "bytes": 8096,
-    "seconds": 0.333,
-    "name": "deploy-timed-v28.ogg",
-    "source": "User-provided download: large_iron_chain_drop_1.m4a; encoded source window 0.0\u20130.345s; 12ms circular crossfade; native pitch",
-    "author": "",
-    "license": ""
-  },
-  "chain-drag-timed-v28-d1ba876a": {
-    "file": "/sounds/chain-drag-timed-v28-d1ba876a.ogg",
-    "sha256": "d1ba876a993a082cff8dbc62d5c4edbde340fc069d128a969f19d7f2e134d5df",
-    "bytes": 26233,
-    "seconds": 1.3,
-    "name": "chain-drag-timed-v28.ogg",
-    "source": "User-provided download: large_iron_chain_drag_on_stone.m4a; encoded source window 0.08\u20131.4s; 20ms circular crossfade; native pitch",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-1-3c9193af": {
-    "file": "/sounds/chain-hit-micro-v29-1-3c9193af.ogg",
-    "sha256": "3c9193af5e624e63b9873145e38a7c2a51f6bccb127e877079e0087105b8ff14",
-    "bytes": 1885,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-1.ogg",
-    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.070\u20130.120s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-2-e14ac42b": {
-    "file": "/sounds/chain-hit-micro-v29-2-e14ac42b.ogg",
-    "sha256": "e14ac42b0abb57a363ae30347c4696ea2df0b388c0a4736288d27e4aa0b271f6",
-    "bytes": 1730,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-2.ogg",
-    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.144\u20130.194s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-3-28e26b83": {
-    "file": "/sounds/chain-hit-micro-v29-3-28e26b83.ogg",
-    "sha256": "28e26b83d74afc54185c2fa8e198d662f11da8ffcc3e6c7476452c7345e1cd27",
-    "bytes": 1837,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-3.ogg",
-    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.214\u20130.264s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-4-e1f085f2": {
-    "file": "/sounds/chain-hit-micro-v29-4-e1f085f2.ogg",
-    "sha256": "e1f085f23c2b8158a6723802c8715cb716a8122af89389ced2f2dcf58f9b20d4",
-    "bytes": 1782,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-4.ogg",
-    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.320\u20130.370s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-5-89f3ec73": {
-    "file": "/sounds/chain-hit-micro-v29-5-89f3ec73.ogg",
-    "sha256": "89f3ec734c92a2dc720ca4ea5984726bdc237369f07f7b28aa6d2001242b530a",
-    "bytes": 1782,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-5.ogg",
-    "source": "User-provided download: large_iron_chain_drop_on_concrete.m4a (0.494\u20130.544s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-6-1e93f54e": {
-    "file": "/sounds/chain-hit-micro-v29-6-1e93f54e.ogg",
-    "sha256": "1e93f54ed8cd3c2d3fc722fe61cee92115fe1aa1b8e06734c17412cb9c58aa71",
-    "bytes": 1995,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-6.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.252\u20130.302s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-7-5e953228": {
-    "file": "/sounds/chain-hit-micro-v29-7-5e953228.ogg",
-    "sha256": "5e9532280991df6f736e70bf8c26d694cd460751382c7269da4c4beac51904be",
-    "bytes": 1913,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-7.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.352\u20130.402s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "chain-hit-micro-v29-8-aa3466e6": {
-    "file": "/sounds/chain-hit-micro-v29-8-aa3466e6.ogg",
-    "sha256": "aa3466e6d50b7a2663711338c3179c3f6506d01802dc1301fa73149124e98735",
-    "bytes": 1987,
-    "seconds": 0.05,
-    "name": "chain-hit-micro-v29-8.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.438\u20130.488s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-1-804bd39a": {
-    "file": "/sounds/slack-micro-v29-1-804bd39a.ogg",
-    "sha256": "804bd39a0ce845bcbf682bf9d19157256108be9ec4ddced90a8f04ffddf31ce0",
-    "bytes": 1814,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-1.ogg",
-    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.336\u20130.386s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-2-2de164a9": {
-    "file": "/sounds/slack-micro-v29-2-2de164a9.ogg",
-    "sha256": "2de164a9a4dca9c944e28a37607ce0b7f8a6bf56cb0e878b37d731655e300b1b",
-    "bytes": 1936,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-2.ogg",
-    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.440\u20130.490s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-3-d8c733e5": {
-    "file": "/sounds/slack-micro-v29-3-d8c733e5.ogg",
-    "sha256": "d8c733e55c9cbfd5d6935c9dd454c7ecb306956cd072e3368ec4e76043bdc999",
-    "bytes": 1985,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-3.ogg",
-    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.596\u20130.646s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-4-fc2701a0": {
-    "file": "/sounds/slack-micro-v29-4-fc2701a0.ogg",
-    "sha256": "fc2701a05fa39e748068ca1d4e825012a4d0b70be7f72bfd897e54743e91f35e",
-    "bytes": 1870,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-4.ogg",
-    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.700\u20130.750s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-5-b69238a8": {
-    "file": "/sounds/slack-micro-v29-5-b69238a8.ogg",
-    "sha256": "b69238a80494656a04dddcb2bcbf531229a6f259f4e9abd09236eae85f398908",
-    "bytes": 1853,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-5.ogg",
-    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.826\u20130.876s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-6-76470f2a": {
-    "file": "/sounds/slack-micro-v29-6-76470f2a.ogg",
-    "sha256": "76470f2aced41318b69921c1bd0d3a37a9d9a063470e20d86a3084005e8cd430",
-    "bytes": 1995,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-6.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.252\u20130.302s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-7-16afd552": {
-    "file": "/sounds/slack-micro-v29-7-16afd552.ogg",
-    "sha256": "16afd55207a9bfe5dc8c062ccfd67316a10611f739963a84dcbaa348de012024",
-    "bytes": 1913,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-7.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.352\u20130.402s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "slack-micro-v29-8-b7a2c990": {
-    "file": "/sounds/slack-micro-v29-8-b7a2c990.ogg",
-    "sha256": "b7a2c9902ff6f9c2cdd5052468264eaae2689297ed3366d63338a735e0469de6",
-    "bytes": 1987,
-    "seconds": 0.05,
-    "name": "slack-micro-v29-8.ogg",
-    "source": "User-provided download: large_iron_chain_rattle.m4a (0.438\u20130.488s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
-    "author": "",
-    "license": ""
-  },
-  "speed-wind-v30-5d9c1f9b": {
-    "file": "/sounds/speed-wind-v30-5d9c1f9b.ogg",
-    "sha256": "5d9c1f9bf4f19a0c88d54afa618ac5e3630d4f9b9775fdd06f68c4fc9cde5319",
-    "bytes": 232072,
-    "seconds": 15.8,
-    "name": "speed-wind-v30.ogg",
-    "source": "User-provided download: wind_gust.m4a (24\u201340 s; mono; 70 Hz high-pass; 200 ms circular crossfade; native pitch; -20 dBFS RMS)",
+  "loop-touch-dry-v26-f499571c": {
+    "file": "/sounds/loop-touch-dry-v26-f499571c.ogg",
+    "sha256": "f499571cd761de0497feefbc78864087a7c721a40c013db7ded459cd95dc2ebd",
+    "bytes": 2417,
+    "seconds": 0.096792,
+    "name": "loop-touch-dry-v26.wav",
+    "source": "User-provided download: cannonball_drops.m4a (fourth impact; short light loop tick)",
     "author": "",
     "license": ""
   },
@@ -356,6 +226,236 @@
     "seconds": 0.11,
     "name": "retract-zip-v32-3.ogg",
     "source": "User-provided download: large_iron_chain_drop_1.m4a (0.200-0.310s; unfiltered; raised-cosine fade in and out; native pitch and gain)",
+    "author": "",
+    "license": ""
+  },
+  "roll-cannonball-dry-v25-3b285609": {
+    "file": "/sounds/roll-cannonball-dry-v25-3b285609.ogg",
+    "sha256": "3b2856091c26f4425196fcf45d953a03d8b8c0d530f69ee51e055151d129d040",
+    "bytes": 53011,
+    "seconds": 4.799521,
+    "name": "roll-cannonball-dry-v25.wav",
+    "source": "User-provided download: cannonball_rolls.m4a (8.6–13.4 s; narrow tonal resonance reduction)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-1-804bd39a": {
+    "file": "/sounds/slack-micro-v29-1-804bd39a.ogg",
+    "sha256": "804bd39a0ce845bcbf682bf9d19157256108be9ec4ddced90a8f04ffddf31ce0",
+    "bytes": 1814,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-1.ogg",
+    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.336–0.386s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-2-2de164a9": {
+    "file": "/sounds/slack-micro-v29-2-2de164a9.ogg",
+    "sha256": "2de164a9a4dca9c944e28a37607ce0b7f8a6bf56cb0e878b37d731655e300b1b",
+    "bytes": 1936,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-2.ogg",
+    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.440–0.490s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-3-d8c733e5": {
+    "file": "/sounds/slack-micro-v29-3-d8c733e5.ogg",
+    "sha256": "d8c733e55c9cbfd5d6935c9dd454c7ecb306956cd072e3368ec4e76043bdc999",
+    "bytes": 1985,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-3.ogg",
+    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.596–0.646s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-4-fc2701a0": {
+    "file": "/sounds/slack-micro-v29-4-fc2701a0.ogg",
+    "sha256": "fc2701a05fa39e748068ca1d4e825012a4d0b70be7f72bfd897e54743e91f35e",
+    "bytes": 1870,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-4.ogg",
+    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.700–0.750s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-5-b69238a8": {
+    "file": "/sounds/slack-micro-v29-5-b69238a8.ogg",
+    "sha256": "b69238a80494656a04dddcb2bcbf531229a6f259f4e9abd09236eae85f398908",
+    "bytes": 1853,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-5.ogg",
+    "source": "User-provided download: large_iron_chain_pickup_7.m4a (0.826–0.876s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-6-76470f2a": {
+    "file": "/sounds/slack-micro-v29-6-76470f2a.ogg",
+    "sha256": "76470f2aced41318b69921c1bd0d3a37a9d9a063470e20d86a3084005e8cd430",
+    "bytes": 1995,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-6.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.252–0.302s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-7-16afd552": {
+    "file": "/sounds/slack-micro-v29-7-16afd552.ogg",
+    "sha256": "16afd55207a9bfe5dc8c062ccfd67316a10611f739963a84dcbaa348de012024",
+    "bytes": 1913,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-7.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.352–0.402s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "slack-micro-v29-8-b7a2c990": {
+    "file": "/sounds/slack-micro-v29-8-b7a2c990.ogg",
+    "sha256": "b7a2c9902ff6f9c2cdd5052468264eaae2689297ed3366d63338a735e0469de6",
+    "bytes": 1987,
+    "seconds": 0.05,
+    "name": "slack-micro-v29-8.ogg",
+    "source": "User-provided download: large_iron_chain_rattle.m4a (0.438–0.488s; 400 Hz high-pass; onset/decay fades; native pitch; -18 dBFS peak)",
+    "author": "",
+    "license": ""
+  },
+  "speed-wind-v30-5d9c1f9b": {
+    "file": "/sounds/speed-wind-v30-5d9c1f9b.ogg",
+    "sha256": "5d9c1f9bf4f19a0c88d54afa618ac5e3630d4f9b9775fdd06f68c4fc9cde5319",
+    "bytes": 232072,
+    "seconds": 15.8,
+    "name": "speed-wind-v30.ogg",
+    "source": "User-provided download: wind_gust.m4a (24–40 s; mono; 70 Hz high-pass; 200 ms circular crossfade; native pitch; -20 dBFS RMS)",
+    "author": "",
+    "license": ""
+  },
+  "sphere-touch-low-v26-dddc7f5e": {
+    "file": "/sounds/sphere-touch-low-v26-dddc7f5e.ogg",
+    "sha256": "dddc7f5e068498c50a21b5ba3473c436ba45037cfeaa0809707320efb0fff5cc",
+    "bytes": 2884,
+    "seconds": 0.158104,
+    "name": "sphere-touch-low-v26.wav",
+    "source": "User-provided download: cannonball_drops.m4a (fourth impact; lower rounded sphere contact)",
+    "author": "",
+    "license": ""
+  },
+  "vine-grab-wet-1-v37-7fa2e181": {
+    "file": "/sounds/vine-grab-wet-1-v37-7fa2e181.ogg",
+    "sha256": "7fa2e181e5c14302054df296fa19fda06732180d315228777fa53feb2c79c5d9",
+    "bytes": 6575,
+    "seconds": 0.3218583333333333,
+    "name": "vine-grab-wet-1-v37.wav",
+    "source": "User-provided download: wet_impacts.m4a (0.11004–0.43190 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-grab-wet-2-v37-6af0d5bd": {
+    "file": "/sounds/vine-grab-wet-2-v37-6af0d5bd.ogg",
+    "sha256": "6af0d5bd6f2a7e0932454d7682abfc0f40cb4384d4ebb3e32ae24fca7b4c73f8",
+    "bytes": 6018,
+    "seconds": 0.32608749999999986,
+    "name": "vine-grab-wet-2-v37.wav",
+    "source": "User-provided download: wet_impacts.m4a (0.72931–1.05540 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-grab-wet-3-v37-764ed5d9": {
+    "file": "/sounds/vine-grab-wet-3-v37-764ed5d9.ogg",
+    "sha256": "764ed5d9781ad7ed65f73ffa20554a4e43c08c4c606495b775df09e5d03ef6e2",
+    "bytes": 6233,
+    "seconds": 0.3246041666666668,
+    "name": "vine-grab-wet-3-v37.wav",
+    "source": "User-provided download: wet_impacts.m4a (1.36240–1.68700 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-grab-wet-4-v37-01f15752": {
+    "file": "/sounds/vine-grab-wet-4-v37-01f15752.ogg",
+    "sha256": "01f157525289ba522372d9c0a8a4d9f424aaedc783b29624b6f713019d97964c",
+    "bytes": 5846,
+    "seconds": 0.31907499999999933,
+    "name": "vine-grab-wet-4-v37.wav",
+    "source": "User-provided download: wet_impacts.m4a (2.20263–2.52170 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-grab-wet-5-v37-ee79c374": {
+    "file": "/sounds/vine-grab-wet-5-v37-ee79c374.ogg",
+    "sha256": "ee79c374e32c12115530dadf5605d529c070258a3574b416add7156f8a16025f",
+    "bytes": 5785,
+    "seconds": 0.310670833333333,
+    "name": "vine-grab-wet-5-v37.wav",
+    "source": "User-provided download: wet_impacts.m4a (3.01273–3.32340 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-grab-wet-6-v37-9e822dae": {
+    "file": "/sounds/vine-grab-wet-6-v37-9e822dae.ogg",
+    "sha256": "9e822daeb67d2a4d3ba8d592eb37c1a849b87ecf948f13b82747a40543aa0459",
+    "bytes": 6812,
+    "seconds": 0.3211958333333329,
+    "name": "vine-grab-wet-6-v37.wav",
+    "source": "User-provided download: wet_impacts.m4a (3.73460–4.05580 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-slide-wet-1-v38-a0b6d38b": {
+    "file": "/sounds/vine-slide-wet-1-v38-a0b6d38b.ogg",
+    "sha256": "a0b6d38b478dfa22089d8547d713df74fd801d0a53c3faca7255cdea1e7e4846",
+    "bytes": 16830,
+    "seconds": 0.75,
+    "name": "vine-slide-wet-1-v38.wav",
+    "source": "User-provided download: wet_movement.m4a (4.75000–5.50000 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-slide-wet-2-v38-0af8eb4c": {
+    "file": "/sounds/vine-slide-wet-2-v38-0af8eb4c.ogg",
+    "sha256": "0af8eb4c0af9b364182097a822f8e632e10ea9a7f51bf9a6b5786c66380f03bf",
+    "bytes": 15884,
+    "seconds": 0.75,
+    "name": "vine-slide-wet-2-v38.wav",
+    "source": "User-provided download: wet_movement.m4a (12.00000–12.75000 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "vine-slide-wet-3-v38-118c2382": {
+    "file": "/sounds/vine-slide-wet-3-v38-118c2382.ogg",
+    "sha256": "118c23827f998f15dade66d5b5733c50e0bfe59be8c631f302f954ac89254d66",
+    "bytes": 15568,
+    "seconds": 0.75,
+    "name": "vine-slide-wet-3-v38.wav",
+    "source": "User-provided download: wet_movement.m4a (15.25000–16.00000 s; native pitch)",
+    "author": "",
+    "license": ""
+  },
+  "wind-chain-dull-1-v36-cd510b34": {
+    "file": "/sounds/wind-chain-dull-1-v36-cd510b34.ogg",
+    "sha256": "cd510b34778d26fc7a5aaf75520730b2a9be18a30d18144e939111b17e98e8a2",
+    "bytes": 3468,
+    "seconds": 0.14,
+    "name": "wind-chain-dull-1-v36.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v36 6 kHz low-pass, native pitch",
+    "author": "",
+    "license": ""
+  },
+  "wind-chain-dull-2-v36-6a131f0b": {
+    "file": "/sounds/wind-chain-dull-2-v36-6a131f0b.ogg",
+    "sha256": "6a131f0b4fa0a0a56b3b92ac675beaaea22eb3d3894acb8cb93d44bb24f293a2",
+    "bytes": 3807,
+    "seconds": 0.14,
+    "name": "wind-chain-dull-2-v36.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v36 6 kHz low-pass, native pitch",
+    "author": "",
+    "license": ""
+  },
+  "wind-chain-dull-3-v36-a052eefc": {
+    "file": "/sounds/wind-chain-dull-3-v36-a052eefc.ogg",
+    "sha256": "a052eefc11ad2bfa1b5a3267b95dd72486d022c60c3fb829a758b81d74682ee9",
+    "bytes": 3563,
+    "seconds": 0.14,
+    "name": "wind-chain-dull-3-v36.wav",
+    "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; replacement winding variation 3: 8.76944–8.88944 s, native pitch; v36 6 kHz low-pass, native pitch",
     "author": "",
     "license": ""
   }

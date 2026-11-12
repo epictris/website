@@ -96,7 +96,61 @@
       "name": "cannonball-roll-dry-v25.wav",
       "file": "sources/cannonball-roll-dry-v25.wav",
       "seconds": 4.8,
-      "source": "User-provided download: cannonball_rolls.m4a (8.6\u201313.4 s; narrow tonal resonance reduction)",
+      "source": "User-provided download: cannonball_rolls.m4a (8.6–13.4 s; narrow tonal resonance reduction)",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-wind-dry-1-v33",
+      "name": "wind-dry-1-v33.wav",
+      "file": "out/wind-dry-1-v33/wind-dry-1-v33.wav",
+      "seconds": 0.14,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v33 narrow resonance cuts and 20 ms tail damping; original click attack/native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-wind-dry-2-v33",
+      "name": "wind-dry-2-v33.wav",
+      "file": "out/wind-dry-2-v33/wind-dry-2-v33.wav",
+      "seconds": 0.14,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v33 narrow resonance cuts and 20 ms tail damping; original click attack/native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-wind-dry-3-v33",
+      "name": "wind-dry-3-v33.wav",
+      "file": "out/wind-dry-3-v33/wind-dry-3-v33.wav",
+      "seconds": 0.14,
+      "source": "User-provided download: 01KJACN9FGFV9BA7QW7J5S2YX0.mp3; v33 narrow resonance cuts and 20 ms tail damping; original click attack/native pitch",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-15",
+      "name": "wet_impacts.m4a",
+      "file": "sources/wet_impacts.m4a",
+      "seconds": 4.388583333333333,
+      "source": "User-provided download: wet_impacts.m4a",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-16",
+      "name": "wet_movement.m4a",
+      "file": "sources/wet_movement.m4a",
+      "seconds": 17.275666666666666,
+      "source": "User-provided download: wet_movement.m4a",
+      "author": "",
+      "license": ""
+    },
+    {
+      "id": "source-17",
+      "name": "leaves_impact.m4a",
+      "file": "sources/leaves_impact.m4a",
+      "seconds": 0.5108541666666667,
+      "source": "User-provided download: leaves_impact.m4a",
       "author": "",
       "license": ""
     }
@@ -4300,6 +4354,946 @@
             "fadeOut": 0.035,
             "decay": 0,
             "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-dry-1-v33-78587bce",
+      "name": "wind-dry-1-v33",
+      "slot": "wind",
+      "assetKey": "wind-dry-1-v33-78587bce",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Damped click (processed v18 recording)",
+          "sourceId": "source-wind-dry-1-v33",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0,
+              "end": 0.14,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 0,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-dry-2-v33-7fcfb388",
+      "name": "wind-dry-2-v33",
+      "slot": "wind",
+      "assetKey": "wind-dry-2-v33-7fcfb388",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Damped click (processed v18 recording)",
+          "sourceId": "source-wind-dry-2-v33",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0,
+              "end": 0.14,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 0,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-dry-3-v33-08509b14",
+      "name": "wind-dry-3-v33",
+      "slot": "wind",
+      "assetKey": "wind-dry-3-v33-08509b14",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Damped click (processed v18 recording)",
+          "sourceId": "source-wind-dry-3-v33",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0,
+              "end": 0.14,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 0,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0,
+            "fadeOut": 0,
+            "decay": 0,
+            "normalize": false,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-heavy-3-v34-9c2dd616",
+      "name": "wind-chain-heavy-3-v34",
+      "slot": "wind",
+      "assetKey": "wind-chain-heavy-3-v34-9c2dd616",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.76944,
+              "end": 8.889439999999999,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 14000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-dull-1-v35-e22200c3",
+      "name": "wind-chain-dull-1-v35",
+      "slot": "wind",
+      "assetKey": "wind-chain-dull-1-v35-e22200c3",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 3500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-dull-2-v35-f60c7127",
+      "name": "wind-chain-dull-2-v35",
+      "slot": "wind",
+      "assetKey": "wind-chain-dull-2-v35-f60c7127",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 3500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-dull-3-v35-8db3ad86",
+      "name": "wind-chain-dull-3-v35",
+      "slot": "wind",
+      "assetKey": "wind-chain-dull-3-v35-8db3ad86",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.76944,
+              "end": 8.889439999999999,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 3500,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-dull-1-v36-cd510b34",
+      "name": "wind-chain-dull-1-v36",
+      "slot": "wind",
+      "assetKey": "wind-chain-dull-1-v36-cd510b34",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.65583,
+              "end": 1.77583,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 6000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-dull-2-v36-6a131f0b",
+      "name": "wind-chain-dull-2-v36",
+      "slot": "wind",
+      "assetKey": "wind-chain-dull-2-v36-6a131f0b",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.3144,
+              "end": 2.4344,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 6000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "wind--wind-chain-dull-3-v36-a052eefc",
+      "name": "wind-chain-dull-3-v36",
+      "slot": "wind",
+      "assetKey": "wind-chain-dull-3-v36-a052eefc",
+      "seconds": 0.14,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "heavy-link",
+          "sourceId": "source-8",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 8.76944,
+              "end": 8.889439999999999,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.9382000000000001,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 45,
+            "lowpass": 6000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0003,
+            "fadeOut": 0.018,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach_vine--vine-grab-wet-1-v37-7fa2e181",
+      "name": "vine-grab-wet-1-v37",
+      "slot": "attach.vine",
+      "assetKey": "vine-grab-wet-1-v37-7fa2e181",
+      "seconds": 0.3218583333333333,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine grab",
+          "sourceId": "source-15",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.11004166666666666,
+              "end": 0.43189999999999995,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -4.255510799744982,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0005,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach_vine--vine-grab-wet-2-v37-6af0d5bd",
+      "name": "vine-grab-wet-2-v37",
+      "slot": "attach.vine",
+      "assetKey": "vine-grab-wet-2-v37-6af0d5bd",
+      "seconds": 0.32608749999999986,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine grab",
+          "sourceId": "source-15",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.7293125,
+              "end": 1.0554,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.1493033091314615,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0005,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach_vine--vine-grab-wet-3-v37-764ed5d9",
+      "name": "vine-grab-wet-3-v37",
+      "slot": "attach.vine",
+      "assetKey": "vine-grab-wet-3-v37-764ed5d9",
+      "seconds": 0.3246041666666668,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine grab",
+          "sourceId": "source-15",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 1.3623958333333333,
+              "end": 1.687,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -1.6012319844600953,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0005,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach_vine--vine-grab-wet-4-v37-01f15752",
+      "name": "vine-grab-wet-4-v37",
+      "slot": "attach.vine",
+      "assetKey": "vine-grab-wet-4-v37-01f15752",
+      "seconds": 0.31907499999999933,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine grab",
+          "sourceId": "source-15",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 2.2026250000000003,
+              "end": 2.5216999999999996,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -5.712990181736664,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0005,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach_vine--vine-grab-wet-5-v37-ee79c374",
+      "name": "vine-grab-wet-5-v37",
+      "slot": "attach.vine",
+      "assetKey": "vine-grab-wet-5-v37-ee79c374",
+      "seconds": 0.310670833333333,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine grab",
+          "sourceId": "source-15",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.012729166666667,
+              "end": 3.3234,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -3.650129186039059,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0005,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach_vine--vine-grab-wet-6-v37-9e822dae",
+      "name": "vine-grab-wet-6-v37",
+      "slot": "attach.vine",
+      "assetKey": "vine-grab-wet-6-v37-9e822dae",
+      "seconds": 0.3211958333333329,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine grab",
+          "sourceId": "source-15",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 3.7346041666666667,
+              "end": 4.0558,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -5.036243798921129,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0005,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "hook-drag_vine--vine-slide-wet-1-v38-a0b6d38b",
+      "name": "vine-slide-wet-1-v38",
+      "slot": "hook-drag.vine",
+      "assetKey": "vine-slide-wet-1-v38-a0b6d38b",
+      "seconds": 0.75,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine slide",
+          "sourceId": "source-16",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 4.75,
+              "end": 5.5,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -0.8952908895832512,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.015,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "hook-drag_vine--vine-slide-wet-2-v38-0af8eb4c",
+      "name": "vine-slide-wet-2-v38",
+      "slot": "hook-drag.vine",
+      "assetKey": "vine-slide-wet-2-v38-0af8eb4c",
+      "seconds": 0.75,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine slide",
+          "sourceId": "source-16",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 12,
+              "end": 12.75,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 0.6071967089640069,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.015,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "hook-drag_vine--vine-slide-wet-3-v38-118c2382",
+      "name": "vine-slide-wet-3-v38",
+      "slot": "hook-drag.vine",
+      "assetKey": "vine-slide-wet-3-v38-118c2382",
+      "seconds": 0.75,
+      "loop": true,
+      "gainDb": 0,
+      "fadeOut": 0,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Wet vine slide",
+          "sourceId": "source-16",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 15.25,
+              "end": 16,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": 0.682827787504482,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.015,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
+            "drive": 0,
+            "delay": 0.15,
+            "delayMix": 0,
+            "reverb": 0,
+            "compression": 0
+          },
+          "mute": false,
+          "solo": false
+        }
+      ]
+    },
+    {
+      "id": "attach_ivy--ivy-grab-leaves-1-v39-45fe92bf",
+      "name": "ivy-grab-leaves-1-v39",
+      "slot": "attach.ivy",
+      "assetKey": "ivy-grab-leaves-1-v39-1794242044486-2613aab4",
+      "seconds": 0.40065416666666664,
+      "loop": false,
+      "gainDb": 0,
+      "fadeOut": 0.015,
+      "layers": [
+        {
+          "id": "layer-1",
+          "name": "Leafy ivy grab",
+          "sourceId": "source-17",
+          "clips": [
+            {
+              "id": "clip-1",
+              "start": 0.15420311942095724,
+              "end": 0.4713,
+              "at": 0,
+              "pitch": 0,
+              "gain": 1
+            }
+          ],
+          "effects": {
+            "gainDb": -0.6455570576769993,
+            "pitch": 0,
+            "pan": 0,
+            "highpass": 0,
+            "lowpass": 20000,
+            "bass": 0,
+            "treble": 0,
+            "fadeIn": 0.0005,
+            "fadeOut": 0.025,
+            "decay": 0,
+            "normalize": true,
             "drive": 0,
             "delay": 0.15,
             "delayMix": 0,

@@ -26,11 +26,22 @@ Both renderers lay the ball's chain anchor first, so that a reeling chain is con
 But the drape only converges toward its length: a heap held by static friction and a hanging run the passes leave stretched draw a polyline a few percent long, and that error breathes.
 At a fixed pitch, every change in it slid the whole train of links along the chain, out of the ball and back in.
 On `session-339f` the drape over a ledge ran 1.80 to 2.01 m and back to 1.89 m with the chain's length fixed at 1.80 m, which was drawn as 47 to 53 to 50 links out of the ball: the chain growing and receding into the ball for no reason.
-The pitch is now `chainLinkPitch` (`render/chainMetrics.ts`), the drawn length over the chain's length (`SlackChain.chainLength`, interpolated between steps like the nodes), so exactly `length / CHAIN_LINK_LEN` links lie between the cuff and the loop.
-A chain whose length does not change keeps its links; the drape's error shows as links a few percent apart instead.
-Taut, the polyline is the length and the pitch is exactly `CHAIN_LINK_LEN`.
+The count is now the chain's length's (`SlackChain.chainLength`, interpolated between steps like the nodes), never the polyline's, and the pitch is whatever lays that many along the polyline (`render/ballChainPath.ts`), each link drawn that long inside so neighbours always bear on each other.
+A chain whose length does not change keeps its links; the drape's error shows as links a few percent long instead.
 
-Four mechanisms carry the requirements:
+The chain is **shackled to the ball's loop** whenever no throw is paying it out: its last link hooked through the loop's hole, its end bar bearing on the inside of the loop's bar on the side the chain pulls toward.
+The loop lies in the gameplay plane, so that link is the edge-on one, as is the link on the cuff's hinge pin; both ends edge-on is an odd number of links, so a shackled chain always has the nearest odd count to its length in links (Tris, 2026-11-12).
+The length only changes while a throw pays out or a release reels in, so the count snaps only at the moment the chain stops moving (49 links for the 1.8 m chain).
+While a throw pays out, the chain is laid on past the loop into the ball's centre instead, as many links as fit, so they slide out of the ball as it goes.
+Laid that way at rest, the chain crossed the loop's bar and ran into the ball's surface beside it (`session-234f`).
+The loop the chain is shackled to is the ball model's (`BALL_LOOP_*` in `render/chainMetrics.ts`, measured off `iron-ball.glb`; the stand-in torus drawn before the model lands is the same), the glass ball's ring, or the 2D renderer's circle; the links' bar is the model loop's bar (13.2 mm on the 12 cm ball), and every other link dimension follows from it.
+The model's loop is centred 12.24 cm from the ball's centre with a 2.66 cm outside radius; the collision loop (`BallPlayer.LOOP_GAP`, `LOOP_RADIUS`) is centred 13.5 cm out with a 2 cm radius, so the drawn loop and the collided one do not quite coincide.
+
+Each link is laid as the chord between its two ends on the polyline, at `±pitch/2` from its centre (`walkChain`), which is what a rigid link hooked into its neighbours is.
+Laid on whichever span its centre fell on, a link at a sharp kink snapped between the two spans' headings on every sub-millimetre jiggle of the node it straddled, a quarter turn back and forth under a ball lying still (`session-685f` f600-685).
+With the bend limit below, links turning more than 30 degrees one frame and straight back the next went from 71 to 3 over that recording, the 3 during fast whips.
+
+Five mechanisms carry the requirements:
 
 - **Length is preserved.** The drape's rest length is the whole wrap-path length plus the
   slack the solver is not using, so the drawn chain is the length the chain actually has.
@@ -42,6 +53,15 @@ Four mechanisms carry the requirements:
   lateral gradient and Gauss-Seidel would leave the drawn chain simply shorter for ever.
   A segment compressed past a few percent is nudged perpendicular, alternating sides, and
   gravity plus the floor settle the folds into an honest pile.
+- **It bends no tighter than chain can.** One link can stand square to its neighbour (a
+  chain over a sharp edge) but cannot fold back on it, so real chain turns at most a
+  quarter turn per link pitch. The drape's segments are shorter than a link, and with
+  nothing holding that the buckling nudge pressed heaps into hairpins one segment wide.
+  A link laid across one had its two ends on the two arms and swung through a quarter
+  turn on every millimetre the fold moved (`session-685f` f639, f676-679).
+  `solveBend` holds the textbook PBD bend: a minimum distance from each node to the next
+  but one, `2·restLen·cos(θ/2)`, with `θ` the quarter turn shared out over the segments
+  in one pitch.
 - **Friction has a static half, in position.** Velocity friction cannot stop a drape on a
   slope for the reason the engine's position pin exists: the verlet step takes gravity's
   displacement before anything resists it, and the tangential remainder after the push-out

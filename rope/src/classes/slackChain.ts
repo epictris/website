@@ -60,7 +60,9 @@
 // solver still reported 8 cm of slack (`session-232f` f216-232).
 
 import { Vec2 } from "../engine/vec2";
+import { Mathf } from "../engine/mathf";
 import { PX } from "../engine/units";
+import { CHAIN_LINK_LEN } from "../render/chainMetrics";
 import { GRAVITY } from "../engine/world";
 import { shapeExtents } from "../engine/shapes";
 import { circleOverlapFrom } from "../engine/collision";
@@ -434,6 +436,7 @@ export class SlackChain {
       for (let k = 0; k < COLLIDE_EVERY; k++) {
         const iter = block * COLLIDE_EVERY + k;
         this.solveDistances(restLen, iter % 2 === 1);
+        this.solveBend(restLen);
         this.solveLongRange(restLen, pinA, pinB);
       }
       this.solveCollisions(candidates, cuff);
@@ -488,6 +491,42 @@ export class SlackChain {
         const half = corr.mul(0.5);
         this.pos[j] = a.add(half);
         this.pos[j + 1] = b.sub(half);
+      }
+    }
+  }
+
+  // The bend a chain of rigid links can make. One link can stand square to
+  // its neighbour - a chain over a sharp edge turns a quarter at one joint -
+  // but cannot fold back on it, so real chain turns at most a quarter turn
+  // per link pitch. The drape's segments are shorter than a link (2.8 cm at
+  // full reach against 4.2), and without this nothing stopped two of them
+  // folding straight back on each other: the buckling nudge above pressed a
+  // heap into hairpins one segment wide, a link laid across one had its two
+  // ends on the two arms, and it swung through a quarter turn on every
+  // millimetre the fold moved (`session-685f` f639, f676-679). Held as the
+  // textbook PBD bend: a minimum distance between a node and the next but
+  // one, `2·restLen·cos(θ/2)` for the most a node may turn, `θ`, which is
+  // the link's quarter turn shared out over the segments in one pitch.
+  private solveBend(restLen: number): void {
+    const turn = (Math.PI / 2) * Math.min(1, restLen / CHAIN_LINK_LEN);
+    const reach = 2 * restLen * Mathf.cos(turn / 2);
+    for (let j = 0; j + 2 <= SEGMENTS; j++) {
+      const a = this.pos[j]!;
+      const c = this.pos[j + 2]!;
+      const d = c.sub(a);
+      const len = d.length();
+      if (len >= reach || len < 1e-9) continue;
+      const corr = d.mul((reach - len) / len);
+      const aPinned = j === 0;
+      const cPinned = j + 2 === SEGMENTS;
+      if (aPinned) {
+        this.pos[j + 2] = c.add(corr);
+      } else if (cPinned) {
+        this.pos[j] = a.sub(corr);
+      } else {
+        const half = corr.mul(0.5);
+        this.pos[j] = a.sub(half);
+        this.pos[j + 2] = c.add(half);
       }
     }
   }

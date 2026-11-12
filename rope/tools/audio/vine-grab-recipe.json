@@ -1,0 +1,150 @@
+{
+  "sampleRate": 48000,
+  "seed": 1729,
+  "candidates": [
+    {
+      "name": "vine-grab-wet-1-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.3218583333333333,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 0.11004166666666666,
+          "end": 0.43189999999999995,
+          "pitch": 0,
+          "duration": 0.3218583333333333,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (0.11004\u20130.43190 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -1.2555107997449824
+    },
+    {
+      "name": "vine-grab-wet-2-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.32608749999999986,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 0.7293125,
+          "end": 1.0554,
+          "pitch": 0,
+          "duration": 0.32608749999999986,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (0.72931\u20131.05540 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 1.8506966908685385
+    },
+    {
+      "name": "vine-grab-wet-3-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.3246041666666668,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 1.3623958333333333,
+          "end": 1.687,
+          "pitch": 0,
+          "duration": 0.3246041666666668,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (1.36240\u20131.68700 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 1.398768015539904
+    },
+    {
+      "name": "vine-grab-wet-4-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.31907499999999933,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 2.2026250000000003,
+          "end": 2.5216999999999996,
+          "pitch": 0,
+          "duration": 0.31907499999999933,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (2.20263\u20132.52170 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -2.7129901817366644
+    },
+    {
+      "name": "vine-grab-wet-5-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.310670833333333,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 3.012729166666667,
+          "end": 3.3234,
+          "pitch": 0,
+          "duration": 0.310670833333333,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (3.01273\u20133.32340 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -0.6501291860390594
+    },
+    {
+      "name": "vine-grab-wet-6-v37",
+      "event": "attach",
+      "slot": "attach.vine",
+      "seconds": 0.3211958333333329,
+      "recordedLayers": [
+        {
+          "name": "Wet vine grab",
+          "file": "sources/wet_impacts.m4a",
+          "start": 3.7346041666666667,
+          "end": 4.0558,
+          "pitch": 0,
+          "duration": 0.3211958333333329,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_impacts.m4a (3.73460\u20134.05580 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": -2.036243798921131
+    }
+  ]
+}

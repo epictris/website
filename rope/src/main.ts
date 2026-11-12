@@ -16,6 +16,8 @@ import { drawPerfHud } from "./render/perfHud";
 import { drawOpeningFade, openingFadeAlpha } from "./render/openingFade";
 import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
+import { LeafShed } from "./render/leafShed";
+import { VineSlime } from "./render/vineSlime";
 import { ChainRetract } from "./render/chainRetract";
 import { ChainSnap } from "./render/chainSnap";
 import { NO_ORBIT } from "./render3d/space";
@@ -327,6 +329,12 @@ const sparks = new SparkSystem();
 // same shape as the sparks, and for the same reason - the sim hands it one fact
 // per break and it owns everything else.
 const debris = new DebrisSystem();
+// The leaves the cuff knocks off ivy (see render/leafShed.ts), and the slime it
+// flings off a vine it grabs or slides along (see render/vineSlime.ts): the
+// sparks' shape again - each reads each step, flies on the render clock, and
+// is cleared with the level.
+const leaves = new LeafShed();
+const slime = new VineSlime();
 // The glass ball's shards (see render/glassShards.ts): the debris' shape again,
 // fed the sim's one fact per break, drawn by the 3D scene (or the 2D canvas on
 // the 2D path), and cleared with the level.
@@ -359,6 +367,8 @@ function buildRun(): void {
   // that is standing again.
   sparks.reset();
   debris.reset();
+  leaves.reset();
+  slime.reset();
   shards.reset();
   chainRetract.reset();
   chainSnap.reset();
@@ -683,6 +693,8 @@ const replayHost: ReplayHost = {
     // level in a handful of rendered frames.
     sparks.reset();
     debris.reset();
+    leaves.reset();
+    slime.reset();
     shards.reset();
     chainRetract.reset();
     chainSnap.reset();
@@ -885,6 +897,9 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     // Per step for the same reason: a break that happens on a caught-up step is
     // the only frame its event exists on (see `BallLevel.breakEvents`).
     debris.ingest(level.breakEvents);
+    // ...and the leaves and slime the cuff knocked loose on this step.
+    leaves.ingest(level);
+    slime.ingest(level, STEP);
     // ...and the glass ball breaking, which happens on one step only.
     shards.ingest(level.shatterEvents);
     // Likewise per step, so a chain let go and re-thrown across two steps of
@@ -1167,6 +1182,8 @@ function frame(now: number): void {
   // fixed step entirely, like the camera ease.
   sparks.advance(dt);
   debris.advance(dt);
+  leaves.advance(dt);
+  slime.advance(dt);
   shards.advance(dt, level);
 
   // Camera: eased follow of the avatar, reshaped by the level's camera regions.
@@ -1192,7 +1209,7 @@ function frame(now: number): void {
   // interpolated state at the same `alpha` and the same camera, so they are one
   // picture rather than two that agree most of the time.
   const draw3dT0 = performance.now();
-  scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract, shards, chainSnap);
+  scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract, shards, chainSnap, leaves, slime);
   const draw3dMs = performance.now() - draw3dT0;
   // Rendering resolves the level's actual lens and camera depth. Audio must
   // use that same final transform, not a viewport-derived z estimate.
@@ -1216,6 +1233,8 @@ function frame(now: number): void {
     showDebug,
     cameraCtl.held,
     chainSnap,
+    leaves,
+    slime,
   );
   const draw2dMs = performance.now() - draw2dT0;
 

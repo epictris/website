@@ -50,9 +50,42 @@ vec3 botanicalPosition(vec3 p) {
 }
 `;
 
-function patchLeafVertex(source: string, normals: boolean): string {
-  source = source.replace("#include <common>", "#include <common>\n" + leafVertexDeclarations)
-    .replace("#include <begin_vertex>", "#include <begin_vertex>\ntransformed = botanicalPosition(transformed);\nvBotanicalUv = uv;");
+// A leaf knocked loose (render/leafShed.ts) wears the vine's own leaf
+// material with one thing added: it can FADE, per instance, without being
+// transparent. An instanced mesh drawn blended would have to be sorted leaf by
+// leaf against itself and the scene; this keeps it opaque and depth-written,
+// and instead dissolves the blade - `leafFade` 1 is all of it, 0 none - eaten
+// from the rim inward in ragged patches, the way a leaf seen going to bits
+// would, and the shadow passes cut the same holes so its shadow goes with it.
+const fadeVertexDeclarations = /* glsl */`
+attribute float leafFade;
+varying float vLeafFade;
+varying float vLeafSeed;
+`;
+const fadeFragmentDeclarations = /* glsl */`
+varying float vLeafFade;
+varying float vLeafSeed;
+float leafHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float leafNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(leafHash(i), leafHash(i + vec2(1, 0)), f.x),
+    mix(leafHash(i + vec2(0, 1)), leafHash(i + vec2(1, 1)), f.x), f.y);
+}
+`;
+const fadeFragment = /* glsl */`
+  if (vLeafFade < 1.0) {
+    vec2 leafAt = vBotanicalUv * vec2(5.0, 9.0) + vLeafSeed;
+    float rim = max(abs(vBotanicalUv.x - .5) * 2.0, abs(vBotanicalUv.y - .5) * 2.0);
+    if (.55 * leafNoise(leafAt) + .45 * rim >= vLeafFade) discard;
+  }
+`;
+
+function patchLeafVertex(source: string, normals: boolean, fading = false): string {
+  source = source.replace("#include <common>", "#include <common>\n" + leafVertexDeclarations +
+      (fading ? fadeVertexDeclarations : ""))
+    .replace("#include <begin_vertex>", "#include <begin_vertex>\ntransformed = botanicalPosition(transformed);\nvBotanicalUv = uv;" +
+      (fading ? "\nvLeafFade = leafFade;\nvLeafSeed = float(gl_InstanceID) * 7.31;" : ""));
   if (normals) source = source.replace("#include <beginnormal_vertex>", /* glsl */`
     #include <beginnormal_vertex>
     float leafT = uv.y;
@@ -79,11 +112,18 @@ function patchLeafVertex(source: string, normals: boolean): string {
   return source;
 }
 
-export function makeVineLeafMaterial(): THREE.MeshStandardMaterial {
+// `fading`: the falling leaves' variant, which also reads a per-instance
+// `leafFade` attribute (see `fadeFragment`).
+export function makeVineLeafMaterial(fading = false): THREE.MeshStandardMaterial {
   const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .68, side: THREE.DoubleSide });
-  material.customProgramCacheKey = () => "botanical-vine-leaf-v2";
+  material.customProgramCacheKey = () => fading ? "botanical-vine-leaf-fading-v1" : "botanical-vine-leaf-v2";
   material.onBeforeCompile = shader => {
-    shader.vertexShader = patchLeafVertex(shader.vertexShader, true);
+    shader.vertexShader = patchLeafVertex(shader.vertexShader, true, fading);
+    if (fading) {
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\n" + fadeFragmentDeclarations)
+        .replace("#include <clipping_planes_fragment>", "#include <clipping_planes_fragment>\n" + fadeFragment);
+    }
     shader.fragmentShader = shader.fragmentShader.replace("#include <common>", /* glsl */`
       #include <common>
       varying vec2 vBotanicalUv;
@@ -120,10 +160,17 @@ export function makeVineLeafMaterial(): THREE.MeshStandardMaterial {
   return material;
 }
 
-export function makeVineLeafShadowMaterial(distance: boolean): THREE.Material {
+export function makeVineLeafShadowMaterial(distance: boolean, fading = false): THREE.Material {
   const material = distance ? new THREE.MeshDistanceMaterial({ side: THREE.DoubleSide }) :
     new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
-  material.customProgramCacheKey = () => "botanical-vine-shadow-v2";
-  material.onBeforeCompile = shader => { shader.vertexShader = patchLeafVertex(shader.vertexShader, false); };
+  material.customProgramCacheKey = () => fading ? "botanical-vine-shadow-fading-v1" : "botanical-vine-shadow-v2";
+  material.onBeforeCompile = shader => {
+    shader.vertexShader = patchLeafVertex(shader.vertexShader, false, fading);
+    if (fading) {
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nvarying vec2 vBotanicalUv;\n" + fadeFragmentDeclarations)
+        .replace("#include <clipping_planes_fragment>", "#include <clipping_planes_fragment>\n" + fadeFragment);
+    }
+  };
   return material;
 }

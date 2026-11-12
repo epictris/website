@@ -57,6 +57,7 @@ const steps: Step[] = [
   { name: "berry vines", cmd: ["bun", "run", "scripts/test-berry-vines.ts"] },
   { name: "grain", cmd: ["bun", "run", "scripts/test-grain.ts"] },
   { name: "chain sound", cmd: ["bun", "run", "scripts/test-chain-sound.ts"] },
+  { name: "sound materials", cmd: ["bun", "run", "scripts/test-sound-materials.ts"] },
   { name: "landing sound", cmd: ["bun", "run", "scripts/test-landing-sound.ts"] },
   { name: "sound levels", cmd: ["bun", "run", "scripts/test-sound-levels.ts"] },
   { name: "spatial audio", cmd: ["bun", "run", "scripts/test-spatial-audio.ts"] },

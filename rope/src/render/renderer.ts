@@ -18,6 +18,8 @@ import { Debug } from "../engine/debug";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import type { SparkSystem } from "./sparks";
 import type { DebrisSystem } from "./debris";
+import type { LeafShed } from "./leafShed";
+import type { VineSlime } from "./vineSlime";
 import type { GlassShards } from "./glassShards";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -29,7 +31,8 @@ import type { TieChain } from "../engine/ties";
 import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
-import { CHAIN_LINK_LEN, CHAIN_LINK_W, chainLinkPitch, walkChain } from "./chainMetrics";
+import { CHAIN_LINK_BEND, CHAIN_LINK_LEN, CHAIN_LINK_SIDE, walkChain } from "./chainMetrics";
+import { ballChainLayout } from "./ballChainPath";
 import type { ChainRetract } from "./chainRetract";
 import type { ChainSnap } from "./chainSnap";
 import { MANACLE_HINGE, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
@@ -711,24 +714,30 @@ function drawChainPolyline(
   // the alternation still reads as interlocking loops.
   colors: { broad: string; narrow: string } = { broad: CHAIN, narrow: CHAIN_DARK },
   // How far apart the links fall: `CHAIN_LINK_LEN`, except for the ball's
-  // chain over its drape (`chainLinkPitch`).
+  // chain (`ballChainLayout`). A link is drawn that long inside, so
+  // neighbours always bear on each other. `count`: how many to lay.
   pitch: number = CHAIN_LINK_LEN,
+  count?: number,
 ): void {
-  const half = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
   ctx.lineWidth = PX;
+  const stretch = pitch / CHAIN_LINK_LEN;
+  const side = CHAIN_LINK_SIDE + (stretch - 1) * (CHAIN_LINK_LEN / 2);
   walkChain(points, ({ mid, dir, broad }) => {
-    const w = broad ? CHAIN_LINK_W : CHAIN_LINK_W * 0.5;
+    // The link's bar centreline (render/chainMetrics.ts): a stadium, two
+    // straight sides and two semicircular ends. The narrow link is the same
+    // link seen edge-on, drawn at half its width.
+    const w = broad ? CHAIN_LINK_BEND : CHAIN_LINK_BEND * 0.5;
     ctx.strokeStyle = broad ? colors.broad : colors.narrow;
     ctx.beginPath();
-    // Oval link as a rounded capsule: two side arcs are approximated by an
-    // ellipse aligned to the span.
     ctx.save();
     ctx.translate(mid.x, mid.y);
     ctx.rotate(Math.atan2(dir.y, dir.x));
-    ctx.ellipse(0, 0, half, w, 0, 0, Math.PI * 2);
+    ctx.ellipse(side, 0, CHAIN_LINK_BEND, w, 0, -Math.PI / 2, Math.PI / 2);
+    ctx.ellipse(-side, 0, CHAIN_LINK_BEND, w, 0, Math.PI / 2, (3 * Math.PI) / 2);
+    ctx.closePath();
     ctx.restore();
     ctx.stroke();
-  }, pitch);
+  }, pitch, count);
 }
 
 // How far a chain's links are pushed toward the backdrop: the fill they are
@@ -978,6 +987,11 @@ export function renderBall(
   // where the chain is, so with the chain it belongs to the 3D scene under
   // `overlayOnly`.
   snap: ChainSnap | null = null,
+  // The leaves the cuff knocked loose (see render/leafShed.ts): drawn here on
+  // the 2D path only, since in 3D they are lit leaves in the scene.
+  leaves: LeafShed | null = null,
+  // ...and the slime it flung off a vine (see render/vineSlime.ts), likewise.
+  slime: VineSlime | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   // The sim instant that carries every conveyor's tread (`beltRenderTime`).
@@ -1059,9 +1073,15 @@ export function renderBall(
     // point the drawn cuff is shackled at, with nothing trimmed or lifted.
     // As many links out of the ball as the chain's length holds, however long
     // the drape's polyline is drawn (`chainLinkPitch`).
-    const pitch = ball.chainSlack ? chainLinkPitch(loopToAnchor, ball.chainSlack.chainLength(alpha)) : CHAIN_LINK_LEN;
-    const path = [...loopToAnchor.reverse(), ball.renderPosition(alpha)];
-    drawChainPolyline(ctx, path, ball.glass ? GLASS_LINKS : undefined, pitch);
+    //
+    // Shackled to the loop whenever no throw is paying out (`ballChainLayout`),
+    // the loop being the circle drawn below, stroked one pixel wide.
+    const layout = ballChainLayout(ball, loopToAnchor, alpha, {
+      centre: ball.renderLoopCenter(alpha),
+      inner: BallPlayer.LOOP_RADIUS - PX / 2,
+      outer: BallPlayer.LOOP_RADIUS + PX / 2,
+    });
+    drawChainPolyline(ctx, layout.path, ball.glass ? GLASS_LINKS : undefined, layout.pitch, layout.count);
     // The manacle at the chain's far end (flying hook, dangling tip, or anchor),
     // wherever the sim says it is (`BallPlayer.manaclePose`): a free cuff is
     // the hook body itself, at its own pose; a bitten one stands on the face's
@@ -1102,6 +1122,8 @@ export function renderBall(
     ctx.stroke();
   }
   if (!overlayOnly) shards?.draw(ctx);
+  if (!overlayOnly) leaves?.draw(ctx);
+  if (!overlayOnly) slime?.draw(ctx);
 
   debris?.draw(ctx);
   sparks?.draw(ctx);

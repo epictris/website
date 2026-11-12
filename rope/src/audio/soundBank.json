@@ -8,6 +8,27 @@
       "refSpeed": 12,
       "pitchJitter": 0.25
     },
+    "attach.ivy": {
+      "sounds": [
+        "ivy-grab-leaves-1-v39-1794242044486-2613aab4"
+      ],
+      "volume": -2,
+      "refSpeed": 12,
+      "pitchJitter": 0
+    },
+    "attach.vine": {
+      "sounds": [
+        "vine-grab-wet-1-v37-7fa2e181",
+        "vine-grab-wet-2-v37-6af0d5bd",
+        "vine-grab-wet-3-v37-764ed5d9",
+        "vine-grab-wet-4-v37-01f15752",
+        "vine-grab-wet-5-v37-ee79c374",
+        "vine-grab-wet-6-v37-9e822dae"
+      ],
+      "volume": -2,
+      "refSpeed": 12,
+      "pitchJitter": 0
+    },
     "ball-settle": {
       "sounds": [
         "sphere-touch-low-v26-dddc7f5e"
@@ -21,6 +42,33 @@
       "refSpeed": 8,
       "pitchJitter": 1
     },
+    "chain-drag": {
+      "sounds": [
+        "chain-drag-timed-v28-d1ba876a"
+      ],
+      "volume": -14,
+      "refSpeed": 1,
+      "pitchJitter": 0,
+      "pitchFollow": 0,
+      "paceFollow": 0
+    },
+    "chain-hit": {
+      "sounds": [
+        "chain-hit-micro-v29-1-3c9193af",
+        "chain-hit-micro-v29-2-e14ac42b",
+        "chain-hit-micro-v29-3-28e26b83",
+        "chain-hit-micro-v29-4-e1f085f2",
+        "chain-hit-micro-v29-5-89f3ec73",
+        "chain-hit-micro-v29-6-1e93f54e",
+        "chain-hit-micro-v29-7-5e953228",
+        "chain-hit-micro-v29-8-aa3466e6"
+      ],
+      "volume": -5,
+      "refSpeed": 2,
+      "pitchJitter": 0.25,
+      "pitchFollow": 0,
+      "paceFollow": 0
+    },
     "creak": {
       "pitchJitter": 0
     },
@@ -30,6 +78,28 @@
       ],
       "volume": -9,
       "refSpeed": 12,
+      "pitchJitter": 0,
+      "pitchFollow": 0,
+      "paceFollow": 0
+    },
+    "hook-drag": {
+      "sounds": [
+        "chain-drag-timed-v28-d1ba876a"
+      ],
+      "volume": -14,
+      "refSpeed": 1,
+      "pitchJitter": 0,
+      "pitchFollow": 0,
+      "paceFollow": 0
+    },
+    "hook-drag.vine": {
+      "sounds": [
+        "vine-slide-wet-1-v38-a0b6d38b",
+        "vine-slide-wet-2-v38-0af8eb4c",
+        "vine-slide-wet-3-v38-118c2382"
+      ],
+      "volume": -14,
+      "refSpeed": 0.25,
       "pitchJitter": 0,
       "pitchFollow": 0,
       "paceFollow": 0
@@ -75,6 +145,16 @@
       "volume": -5,
       "refSpeed": 1.5,
       "pitchJitter": 0
+    },
+    "retract": {
+      "sounds": [
+        "retract-zip-v32-1-c759f148",
+        "retract-zip-v32-2-065ad988",
+        "retract-zip-v32-3-371f3ba6"
+      ],
+      "volume": -16,
+      "refSpeed": 12,
+      "pitchJitter": 0.25
     },
     "roll": {
       "sounds": [
@@ -124,7 +204,7 @@
       "sounds": [
         "speed-wind-v30-5d9c1f9b"
       ],
-      "volume": -6,
+      "volume": -12,
       "refSpeed": 12,
       "pitchJitter": 0,
       "pitchFollow": 0,
@@ -132,23 +212,23 @@
     },
     "wind": {
       "sounds": [
-        "wind-chain-heavy-1-v18-48f3e88f",
-        "wind-chain-heavy-2-v18-f5190674",
-        "wind-chain-heavy-3-v18-99cec948"
+        "wind-chain-dull-1-v36-cd510b34",
+        "wind-chain-dull-2-v36-6a131f0b",
+        "wind-chain-dull-3-v36-a052eefc"
       ],
       "volume": 0,
       "refSpeed": 3,
       "pitchJitter": 0.4
     },
     "wrap": {
-      "volume": -4,
-      "refSpeed": 1.5,
-      "pitchJitter": 0.25,
       "sounds": [
         "chain-wrap-clink-v27-1-b0297ee8",
         "chain-wrap-clink-v27-2-bb67048c",
         "chain-wrap-clink-v27-3-57eb2ed7"
-      ]
+      ],
+      "volume": -4,
+      "refSpeed": 1.5,
+      "pitchJitter": 0.25
     },
     "wrap.brick": {
       "volume": -4,
@@ -189,91 +269,44 @@
       "volume": -4,
       "refSpeed": 1.5,
       "pitchJitter": 0.25
-    },
-    "chain-drag": {
-      "sounds": [
-        "chain-drag-timed-v28-d1ba876a"
-      ],
-      "pitchJitter": 0,
-      "pitchFollow": 0,
-      "paceFollow": 0,
-      "volume": -14,
-      "refSpeed": 1
-    },
-    "hook-drag": {
-      "sounds": [
-        "chain-drag-timed-v28-d1ba876a"
-      ],
-      "pitchJitter": 0,
-      "pitchFollow": 0,
-      "paceFollow": 0,
-      "volume": -14,
-      "refSpeed": 1
-    },
-    "chain-hit": {
-      "sounds": [
-        "chain-hit-micro-v29-1-3c9193af",
-        "chain-hit-micro-v29-2-e14ac42b",
-        "chain-hit-micro-v29-3-28e26b83",
-        "chain-hit-micro-v29-4-e1f085f2",
-        "chain-hit-micro-v29-5-89f3ec73",
-        "chain-hit-micro-v29-6-1e93f54e",
-        "chain-hit-micro-v29-7-5e953228",
-        "chain-hit-micro-v29-8-aa3466e6"
-      ],
-      "volume": -5,
-      "refSpeed": 2,
-      "pitchJitter": 0.25,
-      "pitchFollow": 0,
-      "paceFollow": 0
-    },
-    "retract": {
-      "sounds": [
-        "retract-zip-v32-1-c759f148",
-        "retract-zip-v32-2-065ad988",
-        "retract-zip-v32-3-371f3ba6"
-      ],
-      "volume": -16.0,
-      "refSpeed": 12,
-      "pitchJitter": 0.25
     }
   },
   "clips": {
     "attach-dirt-scatter-cannonball-v20-35ac2479": {
-      "volume": -4.02,
-      "end": 0.416
+      "end": 0.416,
+      "volume": -4.02
     },
     "land-heavy-trimmed-cannonball-v20-179417-1911a881": {
-      "volume": -4.01,
-      "end": 0.292
+      "end": 0.292,
+      "volume": -4.01
     },
     "land-light-soft-stone-cannonball-v20-179-823903c0": {
-      "volume": 14.29,
-      "end": 0.282
+      "end": 0.282,
+      "volume": 14.29
     },
     "land-medium-cannonball-v20-1794179980091-806eb594": {
-      "volume": -1.19,
-      "end": 0.316
+      "end": 0.316,
+      "volume": -1.19
+    },
+    "large-iron-chain-move-1-6d4e49f8": {
+      "start": 0.099,
+      "end": 0.235
     },
     "loop-touch-dry-v26-f499571c": {
       "volume": 0.51
     },
     "sphere-touch-low-v26-dddc7f5e": {
-      "volume": -1.72,
-      "end": 0.126
+      "end": 0.126,
+      "volume": -1.72
     },
-    "wind-chain-heavy-1-v18-48f3e88f": {
+    "wind-chain-dull-1-v36-cd510b34": {
       "volume": 4.49
     },
-    "wind-chain-heavy-2-v18-f5190674": {
+    "wind-chain-dull-2-v36-6a131f0b": {
       "volume": 4.27
     },
-    "wind-chain-heavy-3-v18-99cec948": {
-      "volume": 2.84
-    },
-    "large-iron-chain-move-1-6d4e49f8": {
-      "end": 0.235,
-      "start": 0.099
+    "wind-chain-dull-3-v36-a052eefc": {
+      "volume": 4.49
     }
   }
 }

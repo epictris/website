@@ -42,7 +42,6 @@ import { RopeVineClamp } from "../lib/vineClamp";
 import { RAIL_KINETIC_FRICTION, RAIL_STATIC_FRICTION, RopeClamp } from "../lib/rail";
 import { creepSpeed } from "../lib/viscous";
 import { MANACLE_HINGE, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
-import { CHAIN_LINK_BAR } from "../render/chainMetrics";
 import {
   AnimatableBody2D,
   PhysicsBody2D,
@@ -1566,7 +1565,7 @@ export function viscousRopeImpulse(
 // PIN FRICTION (Tris, 2026-10-19): where a chain hooks a body that turns -
 // a lamp's ring on its chain, a ball's ring on a lamp's bail, the cuff's
 // hinge on the loop of a ball that is not being steered - the link turns on
-// a pin of its own bar's radius (`CHAIN_LINK_BAR`), and dry steel on steel
+// a pin of its own bar's radius (`PIN_RADIUS`), and dry steel on steel
 // resists that turn with a torque of `PIN_FRICTION·T·r`, the chain's tension
 // pressing the link onto the pin. Without it the rows held such a chain
 // losslessly: a ball hung from a lamp hung on a chain rocked the lamp at
@@ -1576,6 +1575,13 @@ export function viscousRopeImpulse(
 // nothing to it, and in proportion to the load, so a chain under a heavy
 // swing loses a few joules a radian of bend.
 export const PIN_FRICTION = 0.57;
+// The pin's radius: the link bar as it was when pin friction was tuned (7.56 mm
+// across 15.1 mm), and held there on purpose. The drawn links were thinned to
+// the ball loop's 13.2 mm bar on 2026-11-12 (`CHAIN_LINK_BAR`); following them
+// here cut the bound 13%, moved every chain-hung recording and turned
+// `session-1118f-bridge` red with two invariant violations, which is a physics
+// change to make and playtest on its own rather than a side effect of a look.
+const PIN_RADIUS = 1.8 * PX * 0.42;
 
 // One pin's friction row (see `PIN_FRICTION`): the accumulated impulse of a
 // substep, against the turn of body `a` at the near node relative to the span
@@ -1622,7 +1628,7 @@ class PinRow {
       rate -= n.dot(b.velocityAtPoint(pb)) / length;
     }
     if (k <= 0) return;
-    const bound = PIN_FRICTION * CHAIN_LINK_BAR * load;
+    const bound = PIN_FRICTION * PIN_RADIUS * load;
     const next = Math.min(bound, Math.max(-bound, this.impulse - rate / k));
     const p = next - this.impulse;
     this.impulse = next;

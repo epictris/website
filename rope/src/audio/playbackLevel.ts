@@ -35,7 +35,11 @@ export function strikeLevel(family: SoundFamily, speed: number, refSpeed: number
   const ratio = speed / Math.max(refSpeed, 1e-3);
   if (family === "wind" || family === "wrap") {
     const overlap = Math.max(1, speed / CHAIN_LINK_LEN * seconds);
-    return Math.min(1, ratio) / Math.sqrt(overlap);
+    // A slowly seated winding link is a gentle contact, not a full click
+    // spaced farther apart. A quadratic response below reference speed makes
+    // creeping quiet without a threshold that would abruptly switch it off.
+    const level = Math.min(1, ratio);
+    return (family === "wind" ? level * level : level) / Math.sqrt(overlap);
   }
   return Math.min(2, ratio);
 }

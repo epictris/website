@@ -26,6 +26,7 @@ import { ChainSurfaceAudio, type ChainSurfaceCue, type ChainImpactCue } from "./
 import { ChainArticulationAudio, type ChainJingleCue } from "./chainArticulationAudio";
 import { WindMotion } from "./windMotion";
 import { BallPlayer } from "../classes/ballPlayer";
+import { RopeVineClamp, vineArc } from "../lib/vineClamp";
 
 // One surface the ball is rolling on this step.
 export interface RollState {
@@ -143,6 +144,7 @@ export class SoundObserver {
   private coilChain: unknown = null;
   private coilLength = 0;
   private coilMark = 0;
+  private vineSlide: { clamp: RopeVineClamp; segment: number; fraction: number } | null = null;
   private motionChain: unknown = null;
   private materialCoil = 0;
   private previousNodes: readonly Vec2[] = [];
@@ -255,6 +257,7 @@ export class SoundObserver {
     this.coilChain = null;
     this.coilLength = 0;
     this.coilMark = 0;
+    this.vineSlide = null;
     // A level may open already attached. That initial chain is not a throw.
     this.motionChain = level.ball.chain;
     this.previousNodes = [];
@@ -349,6 +352,21 @@ export class SoundObserver {
       }
     }
     out.strikes.push(...best.values());
+    const clamp = level.ball.chain?.end;
+    if (clamp instanceof RopeVineClamp && !level.ball.hookInFlight) {
+      const previous = this.vineSlide;
+      this.vineSlide = { clamp, segment: clamp.segment, fraction: clamp.fraction };
+      if (previous?.clamp === clamp) {
+        // Compare both material coordinates on the current polyline. The
+        // vine's translation, swing and stretch cannot masquerade as sliding.
+        const speed = Math.abs(vineArc(clamp.vine, clamp.segment, clamp.fraction) -
+          vineArc(clamp.vine, previous.segment, previous.fraction)) / this.dt * (1 - level.ball.submerged);
+        if (speed > .005) {
+          const point = clamp.contact.globalPosition;
+          out.hookDrag = { speed, x: point.x, y: point.y, surface: "vine" };
+        }
+      }
+    } else this.vineSlide = null;
   }
 
   private readBallContacts(level: BallLevel, out: SoundStep): void {
@@ -457,6 +475,14 @@ export class SoundObserver {
     }
     const before = this.coilLength;
     this.coilLength = length;
+    if (before <= 0 && length > 0) {
+      // A newly formed coil includes the initial geometric arc around the
+      // ball. It was not all transported in this step: dividing that jump by
+      // dt makes the first link sound like a fast impact even at a crawl.
+      // Establish its arc as the baseline; count only subsequent winding.
+      this.coilMark = length;
+      return;
+    }
     if (length < this.coilMark) {
       // Unwinding lifts links off the ball, which strikes nothing; the mark
       // follows it down, so winding back on clinks from where it now is.

@@ -36,11 +36,13 @@ import { HOLLOW_GLASS_ORDER, hollowGlassMaterial, solidGlassMaterial } from "./g
 import { glassBallSolid, glassWall } from "./glassWall";
 import { FrameCopy } from "./frameCopy";
 import { orientTo, placeAt, threeY } from "./space";
+import { BALL_LOOP_CENTRE, BALL_LOOP_INNER, BALL_LOOP_OUTER } from "../render/chainMetrics";
 
-// How much thicker than the collision radius the mounting loop's ring is drawn.
-// The loop is a 2 cm collision circle (`BallPlayer.LOOP_RADIUS`) and a torus of
-// exactly that radius reads as a dot; the tube is what makes it a forged ring.
-const LOOP_TUBE = BallPlayer.LOOP_RADIUS * 0.42;
+// The glass ball's loop: a ring of the 2 cm collision circle's radius
+// (`BallPlayer.LOOP_RADIUS`), at the collision loop's centre, with this tube -
+// a torus of exactly that radius reads as a dot. Exported because the chain is
+// shackled through it (`ChainLayer.shackleLoop`).
+export const GLASS_LOOP_TUBE = BallPlayer.LOOP_RADIUS * 0.42;
 
 // What the whole assembly - ball, loop, every chain link, the manacle - is made
 // of: one set of OIL STROKES on steel (`TEXTURE_ASSETS`, keyed "painted steel",
@@ -208,14 +210,17 @@ export class BallVisual {
     body.receiveShadow = true;
     stand.add(body);
 
-    // The loop, at the material point the chain leaves through: the top of the
-    // ball at rotation 0, which in the ball's own frame is
-    // `-(radius + LOOP_GAP)` in y - so +y once negated into three's frame.
-    const torus = new THREE.TorusGeometry(BallPlayer.LOOP_RADIUS, LOOP_TUBE, 10, 20);
+    // The loop, at the material point the chain is shackled to: the top of the
+    // ball at rotation 0, which in the ball's own frame is -y - so +y once
+    // negated into three's frame. The model's loop exactly (`BALL_LOOP_*`),
+    // so the chain's last link bears on the same bar before the model has
+    // landed as after.
+    const loopTube = ((BALL_LOOP_OUTER - BALL_LOOP_INNER) / 2) * ball.radius;
+    const torus = new THREE.TorusGeometry(BALL_LOOP_INNER * ball.radius + loopTube, loopTube, 10, 20);
     this.owned.push(torus);
     const loop = new THREE.Mesh(torus, forgedMetal(FORGED_SMALL));
     loop.castShadow = true;
-    loop.position.set(0, threeY(-(ball.radius + BallPlayer.LOOP_GAP)), 0);
+    loop.position.set(0, threeY(-BALL_LOOP_CENTRE * ball.radius), 0);
     stand.add(loop);
     this.root.add(stand);
 
@@ -281,9 +286,9 @@ export class BallVisual {
     this.ownedMaterials.push(glass);
     // The loop in solid quartz, where the iron one is (see the constructor): a
     // bar of its tube's radius, seeing the room through the same probe.
-    const torus = new THREE.TorusGeometry(BallPlayer.LOOP_RADIUS, LOOP_TUBE, 16, 32);
+    const torus = new THREE.TorusGeometry(BallPlayer.LOOP_RADIUS, GLASS_LOOP_TUBE, 16, 32);
     this.owned.push(torus);
-    const ring = solidGlassMaterial(LOOP_TUBE);
+    const ring = solidGlassMaterial(GLASS_LOOP_TUBE);
     const loop = new THREE.Mesh(torus, ring);
     loop.position.set(0, threeY(-(this.ball.radius + BallPlayer.LOOP_GAP)), 0);
     loop.renderOrder = 1;

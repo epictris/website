@@ -1,0 +1,30 @@
+{
+  "sampleRate": 48000,
+  "seed": 1729,
+  "candidates": [
+    {
+      "name": "ivy-grab-leaves-1-v39",
+      "event": "attach",
+      "slot": "attach.ivy",
+      "seconds": 0.40065416666666664,
+      "recordedLayers": [
+        {
+          "name": "Leafy ivy grab",
+          "file": "sources/leaves_impact.m4a",
+          "start": 0.07064583333333334,
+          "end": 0.4713,
+          "pitch": 0,
+          "duration": 0.40065416666666664,
+          "fadeIn": 0.0005,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: leaves_impact.m4a (0.07065\u20130.47130 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 2.3544429423230007
+    }
+  ]
+}

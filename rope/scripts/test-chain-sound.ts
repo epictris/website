@@ -8,6 +8,7 @@ import { emptyFrameInput } from "../src/input/frameInput";
 import { StaticBody2D } from "../src/engine/body";
 import { RopeContact, RopeWrap } from "../src/lib/ropeContact";
 import { WrapDirection } from "../src/lib/types";
+import { RopeVineClamp } from "../src/lib/vineClamp";
 
 const dt = 1 / 60;
 const level = new BallLevel({ player: { x: 0, y: 0, radius: 8 }, bodies: [] });
@@ -36,6 +37,29 @@ assert.ok(flightFrames > 1, "real throw ran for several steps");
 assert.equal(observer.observe(level, dt).deploy.speed, 0, "deployment stops after the throw");
 assert.ok(level.ball.chain && level.ball.chainSlack);
 const chain = level.ball.chain;
+// Coil formation introduces a geometric arc, not one frame of fast link
+// transport. Subsequent crossings must still use actual coiling speed.
+{
+  const coilObserver = new SoundObserver();
+  let coil = 0;
+  Object.defineProperty(chain, "coiledLength", { configurable: true, get: () => coil });
+  coilObserver.observe(level, dt);
+  coil = 0.3;
+  assert.equal(coilObserver.observe(level, dt).clinks.length, 0, "initial coil arc cannot burst into loud links");
+  let clicks = 0;
+  for (let i = 0; i < 50; i++) {
+    coil += .001;
+    const cues = coilObserver.observe(level, dt).clinks;
+    for (const cue of cues) assert.ok(Math.abs(cue.speed - .06) < 1e-9, "first real click uses slow material speed");
+    clicks += cues.length;
+  }
+  assert.equal(clicks, 1, "subsequent winding still counts link crossings");
+  coil = 0;
+  coilObserver.observe(level, dt);
+  coil = .25;
+  assert.equal(coilObserver.observe(level, dt).clinks.length, 0, "reforming a fully unwound coil also establishes a baseline");
+  Reflect.deleteProperty(chain, "coiledLength");
+}
 chain.maxRopeLength = chain.getCurrentLength() + 1;
 let nodes = [new Vec2(0, 0), new Vec2(0.4, 0.2), new Vec2(0.8, 0.2), new Vec2(1.2, 0)];
 level.ball.chainSlack.nodePositions = () => nodes;
@@ -94,7 +118,7 @@ observer.observe(level, dt);
 const corner = new StaticBody2D();
 corner.globalPosition = level.ball.globalPosition.add(new Vec2(0.7, 0.4));
 corner.setShape({ kind: "rect", w: 0.2, h: 0.2 });
-corner.primaryShape().material = "stone";
+corner.primaryShape().soundMaterial = "stone";
 const wrapAt = (offset: number) => new RopeWrap(new RopeContact(corner, new Vec2(offset, -0.1)), WrapDirection.Clockwise);
 chain.wraps = [wrapAt(0.1)];
 chain.maxRopeLength = chain.getCurrentLength();
@@ -149,7 +173,7 @@ const { ChainArticulationAudio } = await import("../src/audio/chainArticulationA
 const surfaces = new ChainSurfaceAudio();
 const floor = new StaticBody2D();
 floor.setShape({ kind: "rect", size: new Vec2(10, 0.2) });
-floor.primaryShape().material = "stone";
+floor.primaryShape().soundMaterial = "stone";
 const excluded = level.ball;
 const hit = (node: number, x: number, normalSpeed = 1, slideSpeed = 0) => ({
   node, shape: floor.primaryShape(), point: new Vec2(x, -0.109), normal: Vec2.UP, normalSpeed, slideSpeed,
@@ -222,3 +246,37 @@ assert.ok(stillTaut.observe(level, dt).drag, "genuine taut-chain travel still sc
 assert.equal(stillTaut.observe(level, dt).drag, null, "scraping stops on the first motionless step");
 level.ball.chainSlack!.contactSnapshot = actualSnapshot;
 console.log("PASS: taut solver jitter cannot sustain scraping; real travel starts and stops it");
+
+// Attached cuffs move along vine material without free-hook collision events.
+{
+  const reader = new SoundObserver();
+  const clamp = Object.create(RopeVineClamp.prototype) as RopeVineClamp;
+  const points = [new Vec2(0, 0), new Vec2(0, 1), new Vec2(0, 2)];
+  Object.defineProperties(clamp, {
+    vine: { value: { anchorContact: { get globalPosition() { return points[0]; } },
+      links: [1, 2].map(i => ({ get globalPosition() { return points[i]; } })), anchor2Contact: null } },
+    contact: { value: { get globalPosition() { return points[1]; } } },
+  });
+  clamp.segment = 1;
+  clamp.fraction = .5;
+  const fake = { ball: { chain: { end: clamp }, hookInFlight: false, submerged: 0, chainTip: null },
+    soundEvents: [], world: { frameContacts: [] } } as unknown as BallLevel;
+  const sample = () => {
+    const out = new SoundObserver().observe(level, dt);
+    out.hookDrag = null;
+    reader["readHook"](fake, out);
+    return out.hookDrag;
+  };
+  assert.equal(sample(), null, "new vine grab has no fabricated slide");
+  clamp.fraction += .01;
+  assert.ok(Math.abs(sample()!.speed - .6) < 1e-9, "slide reads movement along the cord");
+  assert.equal(sample(), null, "stationary cuff stops movement audio immediately");
+  points[0] = new Vec2(2, 0); points[1] = new Vec2(2, 2); points[2] = new Vec2(2, 4);
+  assert.equal(sample(), null, "vine translation and stretch cannot trigger sliding");
+  clamp.fraction -= .005;
+  assert.equal(sample()!.surface, "vine", "upward travel selects vine override");
+  fake.ball.submerged = 1;
+  clamp.fraction += .01;
+  assert.equal(sample(), null, "submerged cuff sliding is silent");
+}
+console.log("PASS: vine sliding, stationary/sway suppression and submersion");

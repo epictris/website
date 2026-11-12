@@ -1,5 +1,28 @@
 # Ball & chain audio workstation
 
+**v40 rolling refinement** follows listening feedback: v39 variant 2 is preferred,
+but contains unrelated bumps and intermittent high ringing. Run
+`tools/audio/.venv/bin/python tools/audio/refine-roll.py` after building v39.
+In the lab select **v40**: 1 preferred reference, 2 short peaks attenuated,
+3 the same with time-varying narrow resonance reduction. All retain chronological
+playback and native pitch, with matching RMS. Peak-to-RMS falls from 24.22 to
+about 18.3 dB; this measures transient reduction, not perceptual success.
+No game assignment changes. Larger surface bumps should come from game contact
+events; these auditions aim to supply a less eventful continuous texture.
+
+**v39 rolling comparison**: run `tools/audio/.venv/bin/python tools/audio/compare-roll.py`,
+then load rendered candidates in `/sound-lab.html` and select **v39**. Compare
+1 original (8.6–13.4 s), 2 assigned processed OGG, 3 production granular renderer
+at steady reference speed, and 4 minimally processed continuous loop. Files share
+an RMS target with a −3 dBFS sample-peak ceiling; this is not perceptual loudness
+matching. Candidate 4 uses a measurement-selected 10.35–12.35 s source window,
+35 Hz high-pass and 100 ms complementary loop crossfade. Selection cannot identify
+background sounds by meaning; listening approval is pending. Candidate 3 includes
+the reference-speed tone filter but excludes spatialization and motion envelopes.
+Source hashes, edits, measurements, and REAPER projects accompany each WAV.
+Game assignments are unchanged. The main renderer rebuilds the manifest, so rerun
+this comparison builder afterward to restore these entries.
+
 **v32 chain retract** (2026-11-09): `tools/audio/.venv/bin/python tools/audio/build-retract.py` cuts the released chain's **zip** (three ~110 ms windows of the full rattle, 0.08-0.31 s) from the deploy's own source, `large_iron_chain_drop_1.m4a`, unfiltered at native gain with a 10 ms fade in, and assigns **Chain retract** at the volume that puts it 7 dB under the deploy by measured RMS (−16 dB since the deploy went to −9 dB; rerun it after changing the deploy's volume). v31 low-passed them at 3 kHz and they sounded wet. There is no seat (a sound as the chain's end reaches the loop): a cut of the source's last settling link, the Chain link impact clinks and one Wind link were each rejected by ear, and the slot was removed. Windows are recorded in `retract-cuts.json`; rebuilding replaces the previous cuts. Waveform-selected and level-matched, awaiting listening (docs/sound.md, Retract).
 
 Latest: **v26 distinct quiet loop/sphere contacts**, **v25 cleaned rolling texture**, **v20 impact beds**, and **v18 chains**. Rolling uses random short grains instead of repeating the recording's multi-second envelope. The fourth drop remains the impact overlay source. All retain native pitch, archived originals and editable authoring sources. Open `/sound-layers.html` to edit event layers, preview, save drafts and apply mixes.

@@ -25,6 +25,8 @@
 import { renderBall } from "./render/renderer";
 import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
+import { LeafShed } from "./render/leafShed";
+import { VineSlime } from "./render/vineSlime";
 import { GlassShards } from "./render/glassShards";
 import { glassOptionsFrom } from "./render3d/glassMaterial";
 import { glassProbeFar, PROBE_FAR } from "./render3d/reflectionProbe";
@@ -331,6 +333,9 @@ const sparks = new SparkSystem();
 // ...and the debris of anything that broke, on the same clock and with its own
 // seed, for the same reason (see render/debris.ts).
 const debris = new DebrisSystem();
+// ...and the leaves the cuff knocks loose, likewise (see render/leafShed.ts).
+const leaves = new LeafShed();
+const slime = new VineSlime();
 // ...and the glass ball's shards, likewise (see render/glassShards.ts), made
 // before the prewarm (see `shards`).
 // The released chain reeling back in (see render/chainRetract.ts), driven at
@@ -346,6 +351,10 @@ const advanceTo = (target: number): void => {
     sparks.advance(1 / 60);
     debris.ingest(level.breakEvents);
     debris.advance(1 / 60);
+    leaves.ingest(level);
+    leaves.advance(1 / 60);
+    slime.ingest(level, 1 / 60);
+    slime.advance(1 / 60);
     shards.ingest(level.shatterEvents);
     shards.advance(1 / 60, level);
     chainRetract.observe(level, 1 / 60);
@@ -427,7 +436,7 @@ function drawFrame(frame: number): void {
     // Measured from the first frame rather than from frame 0, so a single grab
     // pins it at exactly 0 as it always has and its PNG is unchanged.
     scene3d.pinClock((frame - frames[0]!) / 60);
-    scene3d.render(level, camera, 1, orbit, chainRetract, shards, chainSnap);
+    scene3d.render(level, camera, 1, orbit, chainRetract, shards, chainSnap, leaves, slime);
     if (q.get("probe") !== null) {
       // The waking lights' levels too, where the level has any: a filmstrip of
       // a mushroom rising is otherwise a claim read off the pictures alone.
@@ -483,6 +492,8 @@ function drawFrame(frame: number): void {
     false,
     null,
     chainSnap,
+    leaves,
+    slime,
   );
 }
 

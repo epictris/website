@@ -177,5 +177,32 @@
     "source": "User-provided download: wind_gust.m4a",
     "author": "",
     "license": ""
+  },
+  {
+    "name": "wet_impacts.m4a",
+    "file": "wet_impacts.m4a",
+    "originalName": "wet_impacts.m4a",
+    "sha256": "e66ff5dec0cb741af3053752b750b61537a2c41ded6162b4aee0a6c2d649d8b9",
+    "source": "User-provided download: wet_impacts.m4a",
+    "author": "",
+    "license": ""
+  },
+  {
+    "name": "wet_movement.m4a",
+    "file": "wet_movement.m4a",
+    "originalName": "wet_movement.m4a",
+    "sha256": "56cd0e074679ddbe809dfa1a266216bb1ae18a702274895d8790f50b0b471fe7",
+    "source": "User-provided download: wet_movement.m4a",
+    "author": "",
+    "license": ""
+  },
+  {
+    "name": "leaves_impact.m4a",
+    "file": "leaves_impact.m4a",
+    "originalName": "leaves_impact.m4a",
+    "sha256": "8429cea7f02bf595a91dc1c8be2d76e9ace1c44991016d489a9eca44888a6196",
+    "source": "User-provided download: leaves_impact.m4a",
+    "author": "",
+    "license": ""
   }
 ]

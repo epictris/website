@@ -11,6 +11,7 @@
 // body still gets is a place to stand, which is what `BuiltBody.origin` is for.
 
 import { dmath } from "../engine/dmath";
+import { soundMaterialOf } from "../lib/soundMaterial";
 import { Vec2 } from "../engine/vec2";
 import {
   AnimatableBody2D,
@@ -358,9 +359,10 @@ interface Piece {
   // Its slip floor (`CollisionObjectData.slipFloor`, newtons, 0 = none).
   slipFloor: number;
   // The authored material's NAME (`CollisionObjectData.material`), or null where
-  // the piece names none - kept for the mounted shape's `material`, which only
-  // the sound of the surface reads. Its density has gone into `mass`.
+  // the piece names none. Its density has gone into `mass`; soundMaterial is
+  // the separate audio identity, migrated once for older authored levels.
   material: string | null;
+  soundMaterial: string | null;
   // The BELT this piece is part of (`ShapeData`'s `belt`), or null. Shared by
   // every piece one belt builds, exactly as `rail` is by the pieces of one
   // curve, and turned by `attachBelts` into the `BeltLoop` they all carry.
@@ -533,6 +535,7 @@ function makePiece(
     // Likewise a floor that is not a positive number is no floor.
     slipFloor: typeof o.slipFloor === "number" && o.slipFloor > 0 ? o.slipFloor : 0,
     material: typeof o.material === "string" && o.material !== "" ? o.material : null,
+    soundMaterial: soundMaterialOf(o),
     // The piece's own material and thickness, not the body's: they are the one
     // authored property a body does not have just one of, and every sum below -
     // centre of mass, mass, inertia - is written over the pieces precisely so
@@ -573,6 +576,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     shape.viscosity = only.viscosity;
     shape.slipFloor = only.slipFloor;
     shape.material = only.material;
+    shape.soundMaterial = only.soundMaterial;
     return;
   }
   body.globalPosition = centre;
@@ -585,6 +589,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     shape.viscosity = p.viscosity;
     shape.slipFloor = p.slipFloor;
     shape.material = p.material;
+    shape.soundMaterial = p.soundMaterial;
   }
 }
 

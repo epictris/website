@@ -1,0 +1,81 @@
+{
+  "sampleRate": 48000,
+  "seed": 1729,
+  "candidates": [
+    {
+      "name": "vine-slide-wet-1-v38",
+      "event": "hook-drag",
+      "slot": "hook-drag.vine",
+      "loop": true,
+      "seconds": 0.75,
+      "recordedLayers": [
+        {
+          "name": "Wet vine slide",
+          "file": "sources/wet_movement.m4a",
+          "start": 4.75,
+          "end": 5.5,
+          "pitch": 0,
+          "duration": 0.75,
+          "fadeIn": 0.015,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_movement.m4a (4.75000\u20135.50000 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 2.1047091104167492
+    },
+    {
+      "name": "vine-slide-wet-2-v38",
+      "event": "hook-drag",
+      "slot": "hook-drag.vine",
+      "loop": true,
+      "seconds": 0.75,
+      "recordedLayers": [
+        {
+          "name": "Wet vine slide",
+          "file": "sources/wet_movement.m4a",
+          "start": 12.0,
+          "end": 12.75,
+          "pitch": 0,
+          "duration": 0.75,
+          "fadeIn": 0.015,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_movement.m4a (12.00000\u201312.75000 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 3.6071967089640076
+    },
+    {
+      "name": "vine-slide-wet-3-v38",
+      "event": "hook-drag",
+      "slot": "hook-drag.vine",
+      "loop": true,
+      "seconds": 0.75,
+      "recordedLayers": [
+        {
+          "name": "Wet vine slide",
+          "file": "sources/wet_movement.m4a",
+          "start": 15.25,
+          "end": 16.0,
+          "pitch": 0,
+          "duration": 0.75,
+          "fadeIn": 0.015,
+          "fadeOut": 0.025,
+          "normalize": true,
+          "gain": 1
+        }
+      ],
+      "source": "User-provided download: wet_movement.m4a (15.25000\u201316.00000 s; native pitch)",
+      "author": "",
+      "license": "",
+      "outputGainDb": 3.6828277875044826
+    }
+  ]
+}

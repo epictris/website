@@ -38,6 +38,10 @@ import type { ChainRetract } from "../render/chainRetract";
 import type { ChainSnap } from "../render/chainSnap";
 import type { GlassShards } from "../render/glassShards";
 import { ShardLayer } from "./shardVisual";
+import { LeafShedLayer } from "./leafShedVisual";
+import type { LeafShed } from "../render/leafShed";
+import { VineSlimeLayer } from "./vineSlimeVisual";
+import type { VineSlime } from "../render/vineSlime";
 import { bakeGlassWear } from "./glassWear";
 import { BALL_GLOW, BALL_GLOW_INTENSITY, BALL_GLOW_RANGE, glassWearShown } from "./glassMaterial";
 import type { CameraRule } from "../render/cameraController";
@@ -261,6 +265,10 @@ export class Scene3D {
   private chains: ChainLayer;
   // The glass ball's shards, when it has broken (see render/glassShards.ts).
   private readonly shardLayer: ShardLayer;
+  // The leaves the cuff knocks loose (see render/leafShed.ts).
+  private readonly leafLayer: LeafShedLayer;
+  // ...and the slime it flings off a vine (see render/vineSlime.ts).
+  private readonly slimeLayer: VineSlimeLayer;
   private probe: THREE.Mesh | null = null;
   // Picking and highlighting (editor only; the game never clicks the scene).
   private readonly raycaster = new THREE.Raycaster();
@@ -345,6 +353,8 @@ export class Scene3D {
     this.envKey = JSON.stringify(null);
     this.chains = new ChainLayer(this.scene);
     this.shardLayer = new ShardLayer(this.scene);
+    this.leafLayer = new LeafShedLayer(this.scene);
+    this.slimeLayer = new VineSlimeLayer(this.scene);
     this.editorLayer.name = "editor-layer";
     this.scene.add(this.editorLayer);
     this.raycaster.params.Line2 = { threshold: LINE_PICK_PX };
@@ -564,6 +574,8 @@ export class Scene3D {
     this.splashes.reset();
     this.chains.clear();
     this.shardLayer.clear();
+    this.leafLayer.clear();
+    this.slimeLayer.clear();
     this.shardCollisionVersion++;
     return previous;
   }
@@ -759,6 +771,9 @@ export class Scene3D {
     // The glass ball's shards are drawn only once it breaks, and compiled here
     // with everything else (see `ShardLayer.prewarming`).
     this.shardLayer.prewarming = level.ball?.glass === true;
+    // ...and the leaves the cuff knocks loose, which any level may throw.
+    this.leafLayer.prewarming = true;
+    this.slimeLayer.prewarming = true;
     // As a frame would: reconcile the visuals, settle the camera and the
     // environment, size the shadow maps.
     this.render(level, camera, 1, NO_ORBIT, null, shards);
@@ -782,6 +797,10 @@ export class Scene3D {
 
     this.drawEverythingOnce();
     this.shardLayer.prewarming = false;
+    this.leafLayer.prewarming = false;
+    this.leafLayer.clear();
+    this.slimeLayer.prewarming = false;
+    this.slimeLayer.clear();
 
     for (const material of materials) {
       // `WebGLProperties.get` is typed as an opaque bag; what is in it for a
@@ -1317,6 +1336,11 @@ export class Scene3D {
     // The two halves of a chain that snapped (see render/chainSnap.ts), the
     // host's like the reel.
     snap: ChainSnap | null = null,
+    // The leaves the cuff knocked loose, the host's like the sparks (see
+    // render/leafShed.ts).
+    leaves: LeafShed | null = null,
+    // ...and the slime it flung off a vine (see render/vineSlime.ts).
+    slime: VineSlime | null = null,
   ): void {
     const rect = this.viewportRect;
     // The level's own visuals, built the first time it is drawn if nothing
@@ -1433,6 +1457,8 @@ export class Scene3D {
       slot.ballGlow.position.copy(slot.ballVisual.root.position);
     }
     this.shardLayer.sync(shards);
+    this.leafLayer.sync(leaves, this.depthOf);
+    this.slimeLayer.sync(slime);
     this.splashes.update(
       clock,
       this.foamSurfaces(),
@@ -1733,6 +1759,8 @@ export class Scene3D {
     this.retiring.length = 0;
     this.chains.dispose();
     this.shardLayer.dispose();
+    this.leafLayer.dispose();
+    this.slimeLayer.dispose();
     this.glassWear?.dispose();
     this.env.dispose();
     this.reflectionProbe.dispose();

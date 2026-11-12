@@ -1,0 +1,21 @@
+[
+  {
+    "name": "wind-dry-3-v33",
+    "original": "wind-chain-heavy-3-v18",
+    "originalSha256": "1b8115e965eb02da7fd226eb55517df6f5c62e5de091d64081597967ce453192",
+    "notchHz": [
+      5783.2,
+      2408.2,
+      4927.73,
+      7904.3,
+      6093.75
+    ],
+    "notchQ": 12,
+    "clickMs": 74.92,
+    "preservedAttackMs": 4,
+    "blendEndMs": 8,
+    "decayMs": 20,
+    "tailReductionDb": -9.64,
+    "peakDb": -10.9
+  }
+]

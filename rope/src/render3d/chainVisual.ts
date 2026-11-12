@@ -23,20 +23,92 @@ import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import type { CollisionObject2D } from "../engine/body";
 import { PX } from "../engine/units";
-import { CHAIN_LINK_BAR, CHAIN_LINK_LEN, CHAIN_LINK_W, chainLinkPitch, walkChain } from "../render/chainMetrics";
+import {
+  BALL_LOOP_CENTRE,
+  BALL_LOOP_INNER,
+  BALL_LOOP_OUTER,
+  CHAIN_LINK_BAR,
+  CHAIN_LINK_BEND,
+  CHAIN_LINK_LEN,
+  CHAIN_LINK_SIDE,
+  walkChain,
+} from "../render/chainMetrics";
+import { ballChainLayout, type ShackleLoop } from "../render/ballChainPath";
 import type { ChainRetract } from "../render/chainRetract";
 import type { ChainSnap } from "../render/chainSnap";
 import { MANACLE_BAND, MANACLE_HINGE, MANACLE_RADIUS, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
-import { FORGED_SMALL, forgedMetal } from "./ballVisual";
+import { FORGED_SMALL, forgedMetal, GLASS_LOOP_TUBE } from "./ballVisual";
 import { solidGlassMaterial } from "./glassMaterial";
 import { setProbe } from "./reflectionProbe";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
 
-// A link is an oval ring: a torus stretched along the path. The tube is the bar
-// stock it is forged from, and it is what a chain's weight reads as.
+// A link is a short link of a real chain (render/chainMetrics.ts): a round bar
+// bent into a stadium, two straight sides and two semicircular ends. The tube
+// is the bar stock it is forged from, and it is what a chain's weight reads as.
+// The section is uniform all the way round, as a bent bar's is - a torus
+// squashed into an oval thins its sides, which is what the links used to be.
 const LINK_TUBE = CHAIN_LINK_BAR;
-const LINK_HALF_LEN = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
+// Segments round each end bend, and round the bar's section. The straight sides
+// need none of their own: a tube along a straight line is exact at any count.
+const LINK_BEND_SEGMENTS = 10;
+const LINK_SECTION_SEGMENTS = 10;
+
+// The link's mesh, in the XY plane along +x (the broad link; the narrow one is
+// the instance twisted about x). UVs as `TorusGeometry` lays them - u round the
+// link by arc length, v round the section - so the forged surface wears it at
+// the grain it wore the torus.
+function linkGeometry(): THREE.BufferGeometry {
+  // The centreline: CCW round the stadium, each sample with its outward normal
+  // in the plane. A bend's ends share their normal with the straight beyond.
+  const centre: { x: number; y: number; nx: number; ny: number }[] = [];
+  for (const [cx, from] of [[CHAIN_LINK_SIDE, -Math.PI / 2], [-CHAIN_LINK_SIDE, Math.PI / 2]] as const) {
+    for (let i = 0; i <= LINK_BEND_SEGMENTS; i++) {
+      const a = from + (i / LINK_BEND_SEGMENTS) * Math.PI;
+      const nx = Math.cos(a);
+      const ny = Math.sin(a);
+      centre.push({ x: cx + nx * CHAIN_LINK_BEND, y: ny * CHAIN_LINK_BEND, nx, ny });
+    }
+  }
+  centre.push(centre[0]!); // closed, with the seam doubled for its UVs
+  const along: number[] = [0];
+  for (let i = 1; i < centre.length; i++) {
+    along.push(along[i - 1]! + Math.hypot(centre[i]!.x - centre[i - 1]!.x, centre[i]!.y - centre[i - 1]!.y));
+  }
+  const total = along[along.length - 1]!;
+
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  for (let i = 0; i < centre.length; i++) {
+    const c = centre[i]!;
+    for (let j = 0; j <= LINK_SECTION_SEGMENTS; j++) {
+      const t = (j / LINK_SECTION_SEGMENTS) * 2 * Math.PI;
+      const nx = Math.cos(t) * c.nx;
+      const ny = Math.cos(t) * c.ny;
+      const nz = Math.sin(t);
+      positions.push(c.x + nx * LINK_TUBE, c.y + ny * LINK_TUBE, nz * LINK_TUBE);
+      normals.push(nx, ny, nz);
+      uvs.push(along[i]! / total, j / LINK_SECTION_SEGMENTS);
+    }
+  }
+  const ring = LINK_SECTION_SEGMENTS + 1;
+  const indices: number[] = [];
+  for (let i = 0; i + 1 < centre.length; i++) {
+    for (let j = 0; j < LINK_SECTION_SEGMENTS; j++) {
+      const a = i * ring + j;
+      const b = (i + 1) * ring + j;
+      // Along the centreline then round the section is outward-facing CCW.
+      indices.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  return geometry;
+}
 
 // Fixed alternation, as in 2D: a broad link lies in the gameplay plane, the next
 // is the same link twisted 90 degrees about the path tangent. In 2D that twist
@@ -183,11 +255,10 @@ export class ChainLayer {
   constructor(private readonly scene: THREE.Scene) {
     // Built along +x so the instance rotation is "turn +x onto the tangent",
     // which is the same statement the 2D renderer makes with `atan2`.
-    const torus = new THREE.TorusGeometry(LINK_HALF_LEN, LINK_TUBE, 10, 20);
-    torus.scale(1, CHAIN_LINK_W / LINK_HALF_LEN, 1);
-    this.geometry = torus;
-    this.sceneLinks = new LinkBuffer(scene, SCENE_CHAIN_MESH, torus, forgedMetal(FORGED_SMALL), true);
-    this.avatarLinks = new LinkBuffer(scene, AVATAR_CHAIN_MESH, torus, forgedMetal(FORGED_SMALL), true);
+    const link = linkGeometry();
+    this.geometry = link;
+    this.sceneLinks = new LinkBuffer(scene, SCENE_CHAIN_MESH, link, forgedMetal(FORGED_SMALL), true);
+    this.avatarLinks = new LinkBuffer(scene, AVATAR_CHAIN_MESH, link, forgedMetal(FORGED_SMALL), true);
     this.target = this.sceneLinks;
 
     this.manacle = buildManacle(this.manacleGeometry);
@@ -274,12 +345,13 @@ export class ChainLayer {
         // free or bitten; the rim the drape is pinned to around a rail - so the
         // links run to exactly where the cuff is shackled. See the 2D renderer,
         // whose placement this mirrors.
+        // Shackled to the loop whenever no throw is paying out, and run on into
+        // the ball while one is (`ballChainLayout`), against the loop this
+        // file draws: the model's, or the glass ball's own.
+        const layout = ballChainLayout(ball, loopToAnchor, alpha, this.shackleLoop(ball, alpha));
         this.path.length = 0;
-        for (let i = loopToAnchor.length - 1; i >= 0; i--) {
-          this.path.push(loopToAnchor[i]!);
-        }
-        this.path.push(ball.renderPosition(alpha));
-        if (ball.glass) stopAtLoop(this.path, ball.radius);
+        for (const p of layout.path) this.path.push(p);
+        if (ball.glass && !layout.shackled) stopAtLoop(this.path, ball.radius);
         this.tint.set(DEFAULT_CHAIN_COLOR);
 
         // BITTEN INTO SET-BACK SCENERY - a root, a grate, anything hook-only,
@@ -297,12 +369,7 @@ export class ChainLayer {
           const wrap = nodes.length >= 3 ? nodes[nodes.length - 2]!.contact.renderGlobalPosition(alpha) : null;
           this.anchorReach = Math.max(CHAIN_LINK_LEN, hinge.distanceTo(wrap ?? ball.renderPosition(alpha)));
         }
-        // As many links out of the ball as the chain's length holds, however
-        // long the drape's polyline is drawn (`chainLinkPitch`).
-        const pitch = ball.chainSlack
-          ? chainLinkPitch(loopToAnchor, ball.chainSlack.chainLength(alpha))
-          : CHAIN_LINK_LEN;
-        this.lay(this.path, this.anchorDepth !== 0, pitch);
+        this.lay(this.path, this.anchorDepth !== 0, layout.pitch, layout.count);
 
         // The manacle at the far end - the flying hook, the dangling tip, or the
         // anchor - wherever the sim says it is (`BallPlayer.manaclePose`).
@@ -358,15 +425,35 @@ export class ChainLayer {
     this.avatarLinks.finish();
   }
 
+  // The loop the ball's chain is shackled to, as this file draws it: the
+  // model's forged loop (whose proportions the stand-in torus shares, see
+  // `BallVisual`), or the glass ball's ring at the collision loop.
+  private shackleLoop(ball: BallPlayer, alpha: number): ShackleLoop {
+    if (ball.glass) {
+      return {
+        centre: ball.renderLoopCenter(alpha),
+        inner: BallPlayer.LOOP_RADIUS - GLASS_LOOP_TUBE,
+        outer: BallPlayer.LOOP_RADIUS + GLASS_LOOP_TUBE,
+      };
+    }
+    return {
+      centre: ball.renderPosition(alpha).add(ball.renderLoopDirection(alpha).mul(BALL_LOOP_CENTRE * ball.radius)),
+      inner: BALL_LOOP_INNER * ball.radius,
+      outer: BALL_LOOP_OUTER * ball.radius,
+    };
+  }
+
   // `toAnchor`: the ball's chain bitten into set-back scenery, laid from its
   // anchored end at `anchorDepth` straight forward to the plane over
   // `anchorReach` (see `sync`). `pitch`: how far apart the links fall, which
-  // only the ball's chain over its drape sets (`chainLinkPitch`).
-  private lay(points: readonly Vec2[], toAnchor = false, pitch: number = CHAIN_LINK_LEN): void {
+  // only the ball's chain sets (`ballChainLayout`); a link is drawn that long
+  // inside, so neighbours always bear on each other. `count`: how many to lay.
+  private lay(points: readonly Vec2[], toAnchor = false, pitch: number = CHAIN_LINK_LEN, count?: number): void {
     // The depth along the chain is a straight line from the anchor, so every
     // link on that run leans into it by the same angle.
     const slope = toAnchor ? -this.anchorDepth / this.anchorReach : 0;
     const lean = Math.atan(slope);
+    this.scl.set(pitch / CHAIN_LINK_LEN, 1, 1);
     walkChain(points, ({ mid, dir, broad, at: s }) => {
       const i = this.target.count++;
       // Turn the link's +x onto the tangent (in three's frame), then twist every
@@ -392,7 +479,7 @@ export class ChainLayer {
       this.pos.set(mid.x, threeY(mid.y), z);
       this.m.compose(this.pos, this.q, this.scl);
       this.target.set(i, this.m, this.tint);
-    }, pitch);
+    }, pitch, count);
   }
 
   // The manacle at `centre`, its hinge pointing along `dir`. Turned about z to

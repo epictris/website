@@ -11,6 +11,7 @@
 // its layer does not use, so nothing meaningless reaches disk.
 
 import { Vec2 } from "../engine/vec2";
+import { soundMaterialOf, type SoundMaterial } from "../lib/soundMaterial";
 import type { StarberrySettings } from "../level/starberry";
 import { MANACLE_BORE } from "../lib/manacle";
 import { strokeCurve } from "../lib/stroke";
@@ -604,6 +605,7 @@ export interface EdItem {
   // cubic metre, picking a material sets it to that material's, and typing a
   // density makes the material `custom` (`CollisionObjectData.density`).
   material: MaterialName | typeof CUSTOM_MATERIAL;
+  soundMaterial?: SoundMaterial;
   density: number; // kg/m³
   thickness: number; // metres
   // Whether this piece is drawn in 3D, and how (see `CollisionObjectData.debug`).
@@ -1264,11 +1266,12 @@ function materialName(name: string | undefined): MaterialName {
 // own number wherever the file states a density, whatever material it also
 // names (a stated density is what the piece weighs, `pieceDensity`), and the
 // named preset at its own density otherwise.
-function materialOf(o: { material?: string; density?: number }): Pick<EdItem, "material" | "density"> {
+function materialOf(o: { material?: string; density?: number; soundMaterial?: string; viscosity?: number; root?: unknown; shape?: { kind: string } }): Pick<EdItem, "material" | "density" | "soundMaterial"> {
   const density = pieceDensity(o.material, o.density);
-  if (o.density !== undefined && density === o.density) return { material: CUSTOM_MATERIAL, density };
+  const soundMaterial = soundMaterialOf(o);
+  if (o.density !== undefined && density === o.density) return { material: CUSTOM_MATERIAL, density, soundMaterial };
   const material = materialName(o.material);
-  return { material, density: MATERIALS[material] };
+  return { material, density: MATERIALS[material], soundMaterial };
 }
 
 // Metre-space LevelData → editor model.
@@ -2294,6 +2297,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         // a thing is made of is a fact about the shape rather than about the
         // model drawn over it.
         ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
+        soundMaterial: i.soundMaterial ?? "auto",
         // A typed density, and only then: a preset's is its material's.
         ...(i.material === CUSTOM_MATERIAL ? { density: i.density } : {}),
         ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),

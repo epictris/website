@@ -27,7 +27,7 @@ import { makeVineLeafMaterial, makeVineLeafShadowMaterial } from "./vineLeafMate
 import { VineLeafLag } from "./vineLeafLag";
 import { LEAF_CHORD, RING_HALF_WIDTH, VineLeafFold, wrapRadius } from "./vineLeafFold";
 import { vineRandom } from "../render/vineGrowth";
-import { forEachVineLeaf } from "../render/vineLeaves";
+import { VINE_LEAF_TONES, forEachVineLeaf } from "../render/vineLeaves";
 import { braidLeafAttachment } from "../render/vineBraid";
 import { ROPE_COLOR } from "../render/ropeLay";
 import { threeY } from "./space";
@@ -364,8 +364,7 @@ export class VineLayer {
       this.scl.set(length * (1 + turn * .18), length, length);
       this.m.compose(this.pos, this.q, this.scl);
       this.leafMesh.setMatrixAt(j, this.m);
-      const green = tone === 0 ? [0.08, 0.18, 0.05] :
-        tone === 1 ? [0.13, 0.26, 0.065] : [0.23, 0.34, 0.1];
+      const green = VINE_LEAF_TONES[tone] ?? VINE_LEAF_TONES[2]!;
       this.leafMesh.instanceColor?.setXYZ(j, green[0]!, green[1]!, green[2]!);
     }, this.curve, tube.growthLength);
     this.scl.set(1, 1, 1);

@@ -213,7 +213,7 @@ export const FAMILIES: readonly FamilySpec[] = [
   {
     family: "wind",
     label: "Wind link",
-    help: "One link of chain winding onto the ball as it turns - played once per link, so a fast wind is a rattle.",
+    help: "One link of chain winding onto the ball as it turns. Slow winding makes gentle clicks; faster winding grows into a rattle, reaching full intensity at the reference speed.",
     loop: false,
     surfaces: null,
     speedIs: "winding speed",

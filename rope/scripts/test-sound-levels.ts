@@ -14,6 +14,17 @@ for (const family of ["wind", "wrap"] as const) {
   assert.equal(strikeLevel(family, 0, 3, 0.1), 0);
 }
 assert.equal(strikeLevel("land", 8, 8, 0.15), 1, "isolated impact keeps its reference level");
+// Creeping winding contacts must be much quieter than the old linear curve;
+// normal winding retains its level and other link contacts retain their curve.
+for (const speed of [0.03, 0.1, 0.3, 0.75]) {
+  const oldLevel = strikeLevel("wrap", speed, 3, 0.14);
+  const reductionDb = 20 * Math.log10(strikeLevel("wind", speed, 3, 0.14) / oldLevel);
+  assert.ok(reductionDb <= -12, "slow winding is at least 12 dB quieter than a linear response");
+}
+for (const speed of [3, 6, 12]) {
+  assert.equal(strikeLevel("wind", speed, 3, 0.14), strikeLevel("wrap", speed, 3, 0.14),
+    "normal/fast winding retains its established density-limited level");
+}
 assert.equal(strikeLevel("attach", 24, 12, 0.5), 2, "isolated impacts retain their dynamic range");
 for (const speed of [NaN, Infinity, -1]) assert.equal(strikeLevel("wind", speed, 3, 0.1), 0);
 console.log("PASS: link density preserves power, slow-motion fade, isolated impact dynamics, invalid speeds");

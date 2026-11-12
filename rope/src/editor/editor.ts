@@ -3,6 +3,7 @@
 // and saves/loads levels from disk through the dev-server API.
 
 import { Vec2 } from "../engine/vec2";
+import { SOUND_MATERIALS, type SoundMaterial } from "../lib/soundMaterial";
 import { uiIcon } from "./uiIcons";
 import { ROOT_BARK_VARIANTS, ROOT_BARK_LABELS, rootBarkVariant } from "../level/rootAppearance";
 import { setRootBark } from "./rootEditing";
@@ -24,6 +25,8 @@ import { ChainSnap } from "../render/chainSnap";
 import { ChainRetract } from "../render/chainRetract";
 import { ROPE_COLOR } from "../render/ropeLay";
 import { DebrisSystem } from "../render/debris";
+import { LeafShed } from "../render/leafShed";
+import { VineSlime } from "../render/vineSlime";
 import { BallLevel } from "../level/ballLevel";
 // The ball's density, for the panel's "what speed breaks this" readout: the
 // number an author is choosing is a speed, and only the ball's own mass turns
@@ -1932,7 +1935,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ...body,
         objects: b.objects.map((o) => {
           if (o.type === "collision" && o.shape.kind !== "belt") {
-            const { shape: _s, x: _ox, y: _oy, rot: _or, thickness: _t, material: _m, density: _dn, debug: _d, ...kept } = o;
+            const { shape: _s, x: _ox, y: _oy, rot: _or, thickness: _t, material: _m, soundMaterial: _sm, density: _dn, debug: _d, ...kept } = o;
             // Bark switches only rebuild this body's root visuals, not the
             // entire river scene and its lighting/shader warmup.
             if (o.root) {
@@ -2103,6 +2106,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // same terms: a level whose breakable geometry is being authored has to be
   // seen breaking from inside the editor.
   const testDebris = new DebrisSystem();
+  // ...and the leaves and slime the cuff knocks loose in it (see
+  // render/leafShed.ts, render/vineSlime.ts).
+  const testLeaves = new LeafShed();
+  const testSlime = new VineSlime();
   // ...and a chain that snaps in it (see render/chainSnap.ts).
   const testSnap = new ChainSnap();
   // ...and a chain let go in it, reeling back into the ball (see
@@ -2235,6 +2242,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lastNow = -1;
     testSparks.reset();
     testDebris.reset();
+    testLeaves.reset();
+    testSlime.reset();
     testSnap.reset();
     testRetract.reset();
     mode = "test";
@@ -5173,7 +5182,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // vertex count is - a canvas resize changes it while the panel is
   // deliberately not rebuilt.
   function addMaterialFields(g: HTMLElement, items: EdItem[]): void {
-    const mw = fieldRow("material");
+    const mw = fieldRow("physics material");
     const ms = document.createElement("select");
     ms.className = "ed-select";
     const sharedMaterial = items.every((b) => b.material === items[0]!.material)
@@ -5215,6 +5224,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     });
     mw.appendChild(ms);
     g.appendChild(mw);
+
+    const sw = fieldRow("sound material");
+    const ss = document.createElement("select");
+    ss.className = "ed-select";
+    const sharedSound = items.every(b => (b.soundMaterial ?? "auto") === (items[0]!.soundMaterial ?? "auto"))
+      ? items[0]!.soundMaterial ?? "auto" : null;
+    if (sharedSound === null) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "mixed";
+      ss.appendChild(option);
+    }
+    for (const value of ["auto", ...SOUND_MATERIALS] as const) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value === "auto" ? "automatic (surface behaviour)" : value;
+      ss.appendChild(option);
+    }
+    ss.value = sharedSound ?? "";
+    ss.addEventListener("change", () => {
+      if (!ss.value) return;
+      beginAction();
+      for (const item of items) item.soundMaterial = ss.value as SoundMaterial;
+      markDirty();
+      refreshFields();
+    });
+    sw.appendChild(ss);
+    g.appendChild(sw);
 
     // ...and the density itself is editable: typing one makes the material
     // `custom`, the picker showing so as it is typed rather than once the
@@ -5260,7 +5297,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(row);
     readouts.push({ el: val, get: mass });
     describe(g,
-      "A material is a preset density: picking one sets the density (kg/m³), and typing a density makes the material custom. Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. All three are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the density also fixes where a body's centre of mass — the point it rotates about — sits.");
+      "Physics material sets a density preset. Sound material independently chooses impact and sliding sounds; automatic uses surface behaviour, never density. Set it to ivy for leafy attachment sounds. Both are per shape, including pieces of a compound body. Mass is area × thickness × density; sound material does not change physics.");
   }
 
   // Debug geometry (see `CollisionObjectData.debug`): whether the shape is drawn
@@ -11657,6 +11694,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // runs several steps must not drop the caught-up steps' events.
         testSparks.ingest(testLevel.sparkEvents);
         testDebris.ingest(testLevel.breakEvents);
+        testLeaves.ingest(testLevel);
+        testSlime.ingest(testLevel, STEP);
         testRetract.observe(testLevel, STEP);
         testSnap.observe(testLevel, STEP, testSparks);
         testSound.observe(testLevel, STEP, testRetract);
@@ -11689,6 +11728,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Once per rendered frame, on the render clock (see main.ts).
       testSparks.advance(dt);
       testDebris.advance(dt);
+      testLeaves.advance(dt);
+      testSlime.advance(dt);
       testCameraCtl.update(
         camera,
         dt,
@@ -11733,7 +11774,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           w,
           h,
         });
-        scene3d!.render(testLevel3d!, camera, alpha, NO_ORBIT, testRetract, null, testSnap);
+        scene3d!.render(testLevel3d!, camera, alpha, NO_ORBIT, testRetract, null, testSnap, testLeaves, testSlime);
       }
       testSound.flush(camera, testIn3d ? scene3d!.camera : null);
       renderBall(
@@ -11752,6 +11793,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         testShowDebug,
         testCameraCtl.held,
         testSnap,
+        testLeaves,
+        testSlime,
       );
     } else {
       syncViewUrl(now);

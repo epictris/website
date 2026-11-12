@@ -39,3 +39,11 @@ export function forEachVineLeaf(
     }
   }
 }
+
+// A vine leaf's colour by its `tone`, linear RGB (render3d/vineVisual.ts),
+// and the leaves knocked loose wear the same (render/leafShed.ts).
+export const VINE_LEAF_TONES: readonly (readonly [number, number, number])[] = [
+  [0.08, 0.18, 0.05],
+  [0.13, 0.26, 0.065],
+  [0.23, 0.34, 0.1],
+];
