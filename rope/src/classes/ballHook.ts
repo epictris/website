@@ -872,10 +872,11 @@ export class BallHook extends RigidBody2D {
   // surviving speed points away from the wall.
   //
   // A LAUNCH surface is the other rule: it throws the hook as the contact solve
-  // throws everything else, its normal speed out set to the pad's launch (or
-  // the elastic answer, if that is more) by the same `contactBounce`, and its
-  // tangential speed kept. However the hook arrived - head on, glancing, or
-  // lying on it with nothing - it leaves at the pad's speed.
+  // throws everything else, its normal speed out set to the pad's throw for the
+  // hook's mass (or the elastic answer, if that is more) by the same
+  // `contactBounce`, and its tangential speed kept. However the hook arrived -
+  // head on, glancing, or lying on it with nothing - it leaves at the pad's
+  // throw, which for the 1.7 kg cuff is 1.94x the launch (`launchThrow`).
   //
   // `touch` is where the bar meets the surface, which is what the bounce is
   // reported at (sparks, sound); it is the seat unless the hit lies past the
@@ -901,7 +902,9 @@ export class BallHook extends RigidBody2D {
       }
     }
     if (launch > 0) {
-      const out = contactBounce(-vn, Math.max(this.restitution, piece.owner.restitution), launch);
+      // Weighed against the hook's own mass: the pad's face is the ball's, so the
+      // 1.7 kg cuff leaves at nearly twice the launch (`launchThrow`).
+      const out = contactBounce(-vn, Math.max(this.restitution, piece.owner.restitution), launch, this.inverseMass);
       if (vn < out) this.linearVelocity = this.linearVelocity.add(normal.mul(out - vn));
     }
     this.globalPosition = seatPos;

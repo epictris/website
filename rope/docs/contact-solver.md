@@ -120,9 +120,21 @@ A surface states how it throws back what meets it with two body properties, `res
 
 **Restitution is a ratio** and has the usual dead zone: below `RESTITUTION_THRESHOLD` (1 m/s of approach) it gives nothing back, so a body resting on a lively floor does not hum on the velocity gravity re-adds each frame.
 
-**A launch is a speed, and nothing may rest on it.**
-Any contact that touches a launch surface leaves at the full launch, however it arrived - dropped 2 mm or 2 m, resting, already leaving slowly, or hanging on the ball's chain.
+**A launch is the speed it throws the ball, and nothing may rest on it.**
+Any contact that touches a launch surface leaves at the full throw, however it arrived - dropped 2 mm or 2 m, resting, already leaving slowly, or hanging on the ball's chain.
 There is no dead zone and no ramp.
+
+**What a pad throws depends on what it throws** (since 2026-11-12).
+Every pad in `ball.json` was tuned with the ball as the only thing that would touch it, so `launch` means the speed the pad throws the ball.
+The pad's face is a mass, `LAUNCH_FACE_MASS` (the iron ball's 52.1 kg), moving out at `launch`, and what it gives a body of effective mass `m` at the contact is an elastic hit from that face with the body at rest: `2·M·launch / (M + m)` (`launchThrow`, `engine/bounce.ts`).
+The ball leaves at exactly `launch`; a 105 kg root at 0.66x; a 33 kg root segment about 1.2x; the 1.7 kg cuff at 1.94x, and nothing past 2x.
+`m` is the contact's inverse effective mass along the normal as each solve computes it, both bodies, lever arms included.
+The arrival is never the face's: an elastic hit off a face always moving at `launch` hands a body lighter than the face up to `2·launch` more on every bounce, and a link bouncing on a pad would pump itself without limit, so the face throws from rest and the arrival is the restitution's.
+Until then a launch was a speed floor for everything, and `session-406f`'s 33 kg root segment, hinged to a static, came off a mushroom at the ball's 6.5 m/s at the contact, solved against its free-body mass.
+The island pays a launch after its substeps, against each contact's free-body mass, so a jointed body is thrown as if it were loose and its joints take the excess back the next frame.
+An impulse is what survives that: a hinge's reaction acts through the hinge point and cannot touch the angular momentum the throw gave the body about it.
+With its chain let go just before the bounce, the segment now leaves at 10.9 rad/s (660 J), where it left at 9.0 (440 J).
+With the ball still hanging from it, most of either throw goes into yanking the ball up through the chain: 3.3 rad/s against 2.7.
 Until 2026-11-06 the launch faded in between 1 and 2 m/s of approach so a body could settle on a pad, and the ball dropping 8 cm onto one left at 1.7 m/s where a 25 cm drop left at 10 (`session-188f` f42 against f135).
 
 "Touches" is each solver's own question:
@@ -133,7 +145,7 @@ Until 2026-11-06 the launch faded in between 1 and 2 m/s of approach so a body c
 - The island pays any contact row that carried load in its substeps (`maxN > 0`), after them, as Box2D applies restitution.
   The ball's contacts are the island's whenever its chain is anchored, and before the island knew of launches a ball swung into a pad on its chain came to rest against it (`session-68f` f56-68).
 
-**The hook glances off a launch surface** as it does off a hook-proof one (`hookDeflects`, see [hook-surfaces](hook-surfaces.md)): every attach path declines it, and its deflection sets the normal speed to the launch and keeps the tangential, where a hook-proof face scales the reflection by how glancing the hit was.
+**The hook glances off a launch surface** as it does off a hook-proof one (`hookDeflects`, see [hook-surfaces](hook-surfaces.md)): every attach path declines it, and its deflection sets the normal speed to the pad's throw for the hook's mass (1.94x the launch) and keeps the tangential, where a hook-proof face scales the reflection by how glancing the hit was.
 A dangling tip lying on a pad is thrown by the probe however slowly it is moving.
 The strike is heard (the bounce sound event) but strikes no sparks, which are hook-proof steel's.
 

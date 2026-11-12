@@ -485,10 +485,22 @@ export class BallPlayer extends RigidBody2D {
     // the ball arrived, so holding it down to what the arrival earned would put
     // the pad's answer back at the mercy of the loop's rotation phase - the
     // exact fault this cap exists to remove.
+    // The launch weighed against the contact's effective mass exactly as the
+    // solve weighed it (`World.solveContacts`), so the cap allows the throw the
+    // solve paid.
+    const bRigid = best.b instanceof RigidBody2D ? best.b : null;
+    const rAxN = r.cross(normal);
+    const rBxN = best.point.sub(best.b.globalPosition).cross(normal);
+    const invEffN =
+      this.inverseMass +
+      (bRigid ? bRigid.inverseMass : 0) +
+      rAxN * rAxN * (this.kinematicRotation ? 0 : this.inverseInertia) +
+      (bRigid && !bRigid.kinematicRotation ? rBxN * rBxN * bRigid.inverseInertia : 0);
     const surfaceBounce = contactBounce(
       approach,
       Math.max(this.restitution, best.b.restitution),
       Math.max(this.launchSpeed, best.b.launchSpeed),
+      invEffN,
     );
     const allowed = Math.max(this.restitution * approach, surfaceBounce, solved - spinNormal);
 

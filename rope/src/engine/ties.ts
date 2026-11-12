@@ -1347,7 +1347,7 @@ function applyRestitution(r: ContactRow): boolean {
   if (invEffN <= 1e-9) return false;
   const vn = A.velocityAtPoint(pa).sub(B.velocityAtPoint(pb)).dot(n);
   const inc = launching
-    ? (contactBounce(-r.vn0, r.restitution, r.launch) - vn) / invEffN
+    ? (contactBounce(-r.vn0, r.restitution, r.launch, invEffN) - vn) / invEffN
     : -(vn + r.restitution * r.vn0) / invEffN;
   const total = Math.max(r.n + inc, 0);
   const applied = total - r.n;

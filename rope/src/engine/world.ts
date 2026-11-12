@@ -2044,7 +2044,7 @@ export class World {
       const launching =
         Math.max(c.a.launchSpeed, c.b.launchSpeed) > 0 && (gap === 0 || -vn * dt >= gap);
       const launch = launching ? Math.max(c.a.launchSpeed, c.b.launchSpeed) : 0;
-      const bounce = contactBounce(-vn, restitution, launch);
+      const bounce = contactBounce(-vn, restitution, launch, invEffN);
       // Only when the pad's own throw is what the contact will be solved to.
       // A body that arrives faster than the pad throws is bouncing off it
       // elastically and takes away no more than it brought, which is not a

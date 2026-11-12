@@ -570,14 +570,17 @@ export abstract class CollisionObject2D {
   // It is a RATIO, so what a body leaves with is proportional to what it arrived
   // with, and a body that arrives slowly leaves slowly.
   //
-  // `launchSpeed` is the m/s the surface throws with regardless of that - the
-  // spring in a trampoline, which is stored in the pad and not in the arrival.
-  // It is a FLOOR under the outgoing normal speed, so a ball that has dropped
-  // 20 cm leaves at the same speed as one that has fallen the height of the
-  // level, which is the whole of what makes a pad a launcher rather than a
-  // bouncy floor. It is paid at ANY touch, so nothing can rest on a pad - the
-  // ball on its chain and the hook included (`hookDeflects`). See
-  // `contactBounce` (engine/bounce.ts) for how the two combine.
+  // `launchSpeed` is the m/s the surface throws THE BALL with regardless of that
+  // - the spring in a trampoline, which is stored in the pad and not in the
+  // arrival. It is a FLOOR under the outgoing normal speed, so a ball that has
+  // dropped 20 cm leaves at the same speed as one that has fallen the height of
+  // the level, which is the whole of what makes a pad a launcher rather than a
+  // bouncy floor. Anything else is thrown by the same pad face - the ball's
+  // mass moving out at this speed - so heavier bodies leave slower and lighter
+  // ones faster, up to twice it (`launchThrow`). It is paid at ANY touch, so
+  // nothing can rest on a pad - the ball on its chain and the hook included
+  // (`hookDeflects`). See `contactBounce` (engine/bounce.ts) for how the two
+  // combine.
   restitution = 0;
   launchSpeed = 0;
 

@@ -38,6 +38,7 @@ import { PIXELS_PER_METER, PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyCentroid, polyShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { CONTACT_SLOP, ContactAudit, GRAVITY, World } from "../engine/world";
+import { LAUNCH_FACE_MASS } from "../engine/bounce";
 import { TieTuning } from "../engine/ties";
 import { MANACLE_HINGE, MANACLE_MOUTH, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
@@ -2830,7 +2831,9 @@ function caseTrampoline(): ContactResult {
     const ball = new RigidBody2D();
     ball.globalPosition = new Vec2(0, PAD_TOP - RADIUS - drop);
     ball.setShape(circleShape(RADIUS));
-    ball.mass = ShapeGeometry.computeMass(ball.primaryShape());
+    // The ball's own mass: a pad's launch is the speed it throws THE BALL, and
+    // anything else leaves by its mass against the pad's face (`launchThrow`).
+    ball.mass = LAUNCH_FACE_MASS;
     ball.inertia = ShapeGeometry.computeMomentOfInertia(ball.primaryShape(), ball.mass);
     ball.contactFriction = RIGID_KINETIC_FRICTION;
     ball.staticFriction = RIGID_STATIC_FRICTION;
