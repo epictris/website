@@ -213,6 +213,22 @@ before and are identical now).
 The high spin is what stops the hop coming back as a threshold nobody notices:
 the phases agree just as well when a launch is being written over them.
 
+### When the loop meets something that moves
+
+The cap was written for the ground, which cannot move, so what it took off the ball went nowhere and nothing was owed.
+Against a dynamic body that is wrong twice over.
+The solve paid the ball and that body equal and opposite, so taking back the ball's share alone deletes momentum.
+And the approach was measured from the ball's own velocity, so a body swinging INTO a ball that was standing still read as the ball leaving with no approach of its own, and the cap took the whole push away.
+In `session-204f` a 33 kg plank hung on two chains swung into the hanging, winding 52 kg ball at 4.4 m/s; over the two frames the loop was down on the plank's end (f179-f180) the cap took 107 N·s off the ball with nothing in return, the ball stopped dead sideways, and the plank kept bleeding speed pushing it (4.42 to 1.72 m/s, where the collision alone left it 2.5).
+
+So the cap now measures the PAIR, as the solve does.
+The approach and the departure are relative to the struck surface's velocity at the contact point, the surface's "before" taken from a snapshot of every solid dynamic body at the same instant as the ball's own (`snapshotSurfaceVelocities`, taken in `BallLevel` before the world steps); a mover is read where it stands, since its velocity is scripted and the contact cannot have changed it.
+Against a dynamic body the excess is taken back as the equal and opposite impulse that closes the pair's separation by it, the ball's share linear only (its spin is the player's), so the pair's momentum is exactly what the solve left it.
+Against static scenery the old arithmetic runs unchanged, so every recorded landing on a static replays bit for bit.
+On `session-204f` the pair now carries 181 N·s out of the strike instead of 79, and the plank leaves at 2.83 m/s.
+
+`cli contacts` `loop-cap-struck` is the detector: a block flown into a spinning ball in mid-air at three spins and eight loop phases, the pair's momentum measured around every call of the cap (it moved 58-74 N·s before, 7e-15 now), with the cap required to have engaged on the block at every spin so the case cannot pass by never meeting the loop.
+
 The cap is one half of the loop, and the **friction cone** is the other.
 A shape mounted at the body's own centre reaches a contact only as slip - its
 contact point lies along the normal, so `omega x r` there is purely tangential -

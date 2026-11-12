@@ -42,7 +42,7 @@ import { LAUNCH_FACE_MASS } from "../engine/bounce";
 import { TieTuning } from "../engine/ties";
 import { MANACLE_HINGE, MANACLE_MOUTH, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
-import { BallPlayer } from "../classes/ballPlayer";
+import { BallPlayer, snapshotSurfaceVelocities } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { buildLevelBodies, RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
 import {
@@ -1096,13 +1096,15 @@ function caseLoopCap(sims: Sim[]): ContactResult {
       // The ball's velocity as the previous frame left it — what the cap measures
       // against, standing in for BallLevel's pre-contact snapshot.
       let before = ball.linearVelocity;
+      let surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
       let launch = 0;
       sim.step(90, () => {
         // What aim steering does every frame: drive the spin kinematically.
         ball.kinematicRotation = true;
         ball.angularVelocity = spin;
-        ball.applyLoopCap(sim.world.frameContacts, before);
+        ball.applyLoopCap(sim.world.frameContacts, before, surfaces);
         before = ball.linearVelocity;
+        surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
         launch = Math.max(launch, -ball.linearVelocity.y);
       });
       out.push(launch);
@@ -1126,6 +1128,89 @@ function caseLoopCap(sims: Sim[]): ContactResult {
         `${r.hi < NO_HOP && r.spread < 0.05 ? "ok  " : "BAD "} ${r.spin} rad/s: peaked at ` +
         `${r.hi.toFixed(3)} m/s (want <${NO_HOP}), ${PHASES} phases spread ` +
         `${(r.spread * 100).toFixed(1)}cm/s (want <5)`,
+    ),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// loop-cap-struck: the loop cap may never change the momentum of a pair it
+// caps.
+//
+// `loop-cap` drives the loop into the GROUND, which cannot move, so what the cap
+// takes off the ball goes nowhere and nothing is owed. A dynamic body is another
+// matter: the solve paid the ball and that body equal and opposite, and a cap
+// that takes the ball's share back alone deletes momentum. It did so measured
+// against the ball's own velocity, too, so a body swinging INTO a ball at rest
+// read as the ball leaving with no approach of its own, and the whole push was
+// capped away: a 33 kg plank on two chains swung into a hanging, winding ball
+// at 4.4 m/s, and over the two frames the loop was down on the plank's end the
+// cap took 107 N.s off the ball with nothing in return (`session-204f`
+// f179-f180) - the ball stopped dead sideways and the plank kept losing speed
+// pushing it.
+//
+// So: a block flown into a spinning ball in mid-air, at three spins and eight
+// loop phases. Around every call of the cap the pair's momentum must not move,
+// and the cap must actually have engaged on the block in each spin's runs - a
+// case where the loop is never what is struck says nothing.
+// ---------------------------------------------------------------------------
+function caseLoopCapStruck(sims: Sim[]): ContactResult {
+  const SPINS = [-27, 27, 45];
+  const PHASES = 8;
+  const SPEED = 4;
+  // Momentum the cap may move, N.s: rounding, against impulses of tens.
+  const TOLERANCE = 1e-9;
+
+  type Run = { spin: number; drift: number; engaged: number; struck: number };
+  const run = (spin: number): Run => {
+    let drift = 0;
+    let engaged = 0;
+    let struck = 0;
+    for (let i = 0; i < PHASES; i++) {
+      const sim = new Sim(`loop-cap-struck-${spin}-${i}`);
+      sims.push(sim);
+      const ball = new BallPlayer(0.12);
+      ball.globalPosition = new Vec2(0, -5);
+      ball.globalRotation = (i * 2 * Math.PI) / PHASES;
+      sim.world.add(ball);
+      // A block level with the ball, its face 25 cm short of the loop's reach,
+      // flying at it.
+      const reach = ball.radius + BallPlayer.LOOP_EXCESS;
+      const block = sim.addRigid(rectShape(0.8, 0.12), new Vec2(-(reach + 0.25 + 0.4), -5));
+      block.linearVelocity = new Vec2(SPEED, 0);
+      const momentum = (): Vec2 => ball.linearVelocity.mul(ball.mass).add(block.linearVelocity.mul(block.mass));
+      let before = ball.linearVelocity;
+      let surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
+      let hit = false;
+      let capped = false;
+      sim.step(30, () => {
+        ball.kinematicRotation = true;
+        ball.angularVelocity = spin;
+        const loopOnBlock = sim.world.frameContacts.some(
+          (c) => c.a === ball && c.b === block && c.shapeA === BallPlayer.LOOP_SHAPE_INDEX && c.normalImpulse > 0,
+        );
+        const p0 = momentum();
+        const v0 = ball.linearVelocity;
+        ball.applyLoopCap(sim.world.frameContacts, before, surfaces);
+        drift = Math.max(drift, momentum().sub(p0).length());
+        if (loopOnBlock) hit = true;
+        if (loopOnBlock && ball.linearVelocity.sub(v0).length() > 1e-6) capped = true;
+        before = ball.linearVelocity;
+        surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
+      });
+      if (hit) struck++;
+      if (capped) engaged++;
+    }
+    return { spin, drift, engaged, struck };
+  };
+
+  const runs = SPINS.map(run);
+  const passed = runs.every((r) => r.drift <= TOLERANCE && r.engaged > 0);
+  return ok("loop-cap-struck — the cap never changes the momentum of a struck pair", passed, [
+    ...runs.map(
+      (r) =>
+        `${r.drift <= TOLERANCE && r.engaged > 0 ? "ok  " : "BAD "} ${r.spin} rad/s: the cap moved the ` +
+        `pair's momentum by up to ${r.drift.toExponential(2)} N.s (want <=${TOLERANCE}); the loop struck ` +
+        `the block in ${r.struck}/${PHASES} phases and the cap engaged in ${r.engaged} (want >0)`,
     ),
   ]);
 }
@@ -1193,12 +1278,14 @@ function caseLoopRide(sims: Sim[]): ContactResult {
       ball.globalRotation = (i * 2 * Math.PI) / PHASES;
       sim.world.add(ball);
       let before = ball.linearVelocity;
+      let surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
       sim.step(FRAMES, (n) => {
         // What aim steering does every frame: drive the spin kinematically.
         ball.kinematicRotation = true;
         ball.angularVelocity = spin;
-        ball.applyLoopCap(sim.world.frameContacts, before);
+        ball.applyLoopCap(sim.world.frameContacts, before, surfaces);
         before = ball.linearVelocity;
+        surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
         if (n <= SETTLE) return;
         const own = sim.world.frameContacts.filter((c) => c.a === ball);
         if (!own.some((c) => c.depth > -TOUCH)) air++;
@@ -1299,12 +1386,14 @@ function caseLoopWall(sims: Sim[]): ContactResult {
       sim.world.add(ball);
       const restY = ball.globalPosition.y;
       let before = ball.linearVelocity;
+      let surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
       sim.step(240, () => {
         // What aim steering does every frame: drive the spin kinematically.
         ball.kinematicRotation = true;
         ball.angularVelocity = spin;
-        ball.applyLoopCap(sim.world.frameContacts, before);
+        ball.applyLoopCap(sim.world.frameContacts, before, surfaces);
         before = ball.linearVelocity;
+        surfaces = snapshotSurfaceVelocities(sim.world.bodies, ball);
         // Up is -y: how far above its resting height the wall has carried it.
         worst = Math.max(worst, restY - ball.globalPosition.y);
       });
@@ -7813,6 +7902,7 @@ export function runContactCases(): ContactResult[] {
     caseSpinDrive(sims),
     caseRollDrive(sims),
     caseLoopCap(sims),
+    caseLoopCapStruck(sims),
     caseLoopRide(sims),
     caseLoopWall(sims),
     caseGripReseed(sims),

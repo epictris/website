@@ -50,6 +50,24 @@ export interface ManaclePose {
   open: number;
 }
 
+// Every solid dynamic body's velocity at one instant: what `applyLoopCap` reads
+// the struck surface's approach from. Taken before the world steps, beside the
+// ball's own `velocityBefore`, because by the time the cap runs the solve has
+// already traded the pair's approach between them - a plank that swung into the
+// ball at 4.4 m/s is leaving it at 2.5 (`session-204f` f178). Scenery is left
+// out: a static has no velocity, and a mover's is scripted, so the contact
+// cannot have changed it and it is read where it stands.
+export type SurfaceVelocities = ReadonlyMap<CollisionObject2D, { linear: Vec2; angular: number }>;
+
+export function snapshotSurfaceVelocities(bodies: readonly CollisionObject2D[], ball: BallPlayer): SurfaceVelocities {
+  const out = new Map<CollisionObject2D, { linear: Vec2; angular: number }>();
+  for (const b of bodies) {
+    if (b === ball || !(b instanceof RigidBody2D) || b.removed || !b.isSolid) continue;
+    out.set(b, { linear: b.linearVelocity, angular: b.angularVelocity });
+  }
+  return out;
+}
+
 export class BallPlayer extends RigidBody2D {
   // The avatar is never put to sleep: input can move it on any frame, and a
   // player pressing a direction against a ball the engine had stopped
@@ -444,8 +462,16 @@ export class BallPlayer extends RigidBody2D {
   //
   // `velocityBefore` is the ball's velocity before the contacts ran, which is
   // what makes the cap a statement about the ball's own motion rather than about
-  // what the solve made of the spin.
-  applyLoopCap(contacts: readonly ContactConstraint[], velocityBefore: Vec2): void {
+  // what the solve made of the spin. `surfacesBefore` is the same snapshot of
+  // every body the loop could have struck (`snapshotSurfaceVelocities`), taken
+  // at the same instant: the approach and the bounce are the PAIR's, so a plank
+  // swinging into a ball that was itself standing still is an approach, not a
+  // ball leaving on its own (`session-204f`).
+  applyLoopCap(
+    contacts: readonly ContactConstraint[],
+    velocityBefore: Vec2,
+    surfacesBefore: SurfaceVelocities,
+  ): void {
     let best: ContactConstraint | null = null;
     for (const c of contacts) {
       // The loop is this body's second shape, and only as `a`: `a` is always the
@@ -460,8 +486,33 @@ export class BallPlayer extends RigidBody2D {
     // The normal points out of the surface toward the ball, so a positive
     // component along it is the ball leaving.
     const normal = best.normal;
-    const approach = Math.max(0, -velocityBefore.dot(normal));
-    const solved = Math.max(0, this.linearVelocity.dot(normal));
+    // What was struck, and whether it can be pushed: a dynamic body took the
+    // other half of every impulse the solve spent here.
+    const bRigid = best.b instanceof RigidBody2D ? best.b : null;
+    const rB = best.point.sub(best.b.globalPosition);
+    const rBxN = rB.cross(normal);
+    const yieldN =
+      (bRigid ? bRigid.inverseMass : 0) +
+      (bRigid && !bRigid.kinematicRotation ? rBxN * rBxN * bRigid.inverseInertia : 0);
+    // Approach and departure are the PAIR's, as the solve measures them. Against
+    // scenery that is the ball's own velocity, read exactly as it always was so
+    // every recorded landing on a static stays bit-identical. Against anything
+    // whose surface moves it is relative: a plank swinging into a ball standing
+    // still is an approach, and taking it for the ball leaving under its own
+    // steam is what capped away the whole of `session-204f`'s push.
+    const moves = yieldN > 0 || best.b.surfaceMoves;
+    let relativeBefore = velocityBefore;
+    let relativeNow = this.linearVelocity;
+    if (moves) {
+      const snap = surfacesBefore.get(best.b);
+      const surfaceBefore = snap
+        ? snap.linear.add(new Vec2(-rB.y, rB.x).mul(snap.angular))
+        : best.b.velocityAtPoint(best.point);
+      relativeBefore = velocityBefore.sub(surfaceBefore);
+      relativeNow = this.linearVelocity.sub(best.b.velocityAtPoint(best.point));
+    }
+    const approach = Math.max(0, -relativeBefore.dot(normal));
+    const solved = Math.max(0, relativeNow.dot(normal));
     // What the SPIN was worth at this contact, along the normal: the loop's own
     // velocity about the ball's centre, which is the whole of what the phase
     // contributes and the only part of the solve's answer that has no business
@@ -475,8 +526,8 @@ export class BallPlayer extends RigidBody2D {
     // approach: it cancels it and adds the bounce on top.
     const spinNormal = Math.abs(spinAtPoint.dot(normal)) * (1 + this.restitution);
     // Two floors under the cap. The first is the ball's own plain restitution
-    // against its own approach, which is the line this has always been and what
-    // an ordinary surface is worth.
+    // against the approach (the ball's own, against scenery), which is the line
+    // this has always been and what an ordinary surface is worth.
     //
     // The second is what the SURFACE states, asked of the pair exactly as the
     // solve asks it, and it is zero everywhere a level authors no bounce. On a
@@ -488,9 +539,7 @@ export class BallPlayer extends RigidBody2D {
     // The launch weighed against the contact's effective mass exactly as the
     // solve weighed it (`World.solveContacts`), so the cap allows the throw the
     // solve paid.
-    const bRigid = best.b instanceof RigidBody2D ? best.b : null;
     const rAxN = r.cross(normal);
-    const rBxN = best.point.sub(best.b.globalPosition).cross(normal);
     const invEffN =
       this.inverseMass +
       (bRigid ? bRigid.inverseMass : 0) +
@@ -504,11 +553,22 @@ export class BallPlayer extends RigidBody2D {
     );
     const allowed = Math.max(this.restitution * approach, surfaceBounce, solved - spinNormal);
 
-    const along = this.linearVelocity.dot(normal);
+    const along = relativeNow.dot(normal);
     // This only ever takes speed away: what the solve did to keep the loop out
     // of the ground stays, what it paid the ball for the loop's phase does not.
     if (along > allowed) {
-      this.linearVelocity = this.linearVelocity.add(normal.mul(allowed - along));
+      if (yieldN > 0) {
+        // Taken back from the PAIR, as the equal and opposite impulse that
+        // closes their separation by the excess - the solve paid both, so both
+        // return it, and the pair's momentum is what it was (`loop-cap-struck`).
+        // The ball's share is linear only, as below: its spin is the player's,
+        // and nothing here may write it.
+        const p = (along - allowed) / (this.inverseMass + yieldN);
+        this.linearVelocity = this.linearVelocity.sub(normal.mul(p * this.inverseMass));
+        bRigid!.applyImpulse(normal.mul(p), bRigid!.kinematicRotation ? Vec2.ZERO : rB);
+      } else {
+        this.linearVelocity = this.linearVelocity.add(normal.mul(allowed - along));
+      }
     }
   }
 

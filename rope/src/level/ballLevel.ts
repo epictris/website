@@ -18,7 +18,7 @@ import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
 import { PUSH_OUT_MIN_DEPTH, World, isRealPush, type PushOut } from "../engine/world";
 import { bodySweepCircle } from "../engine/collision";
-import { BallPlayer } from "../classes/ballPlayer";
+import { BallPlayer, snapshotSurfaceVelocities } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { FinishLine } from "../classes/finishLine";
 import { NO_BUTTON, type FrameInput } from "../input/frameInput";
@@ -1448,6 +1448,9 @@ export class BallLevel {
     this.ball.constraintTethered = this.ball.chainAttached;
 
     const ballVelocityBeforeContacts = this.ball.linearVelocity;
+    // And every body the loop could strike, at the same instant: the loop cap
+    // weighs the PAIR's approach (see `applyLoopCap`).
+    const surfacesBeforeContacts = snapshotSurfaceVelocities(this.world.bodies, this.ball);
     // The ball's pose BEFORE the contact solve answers it. Sparks are struck by
     // the arrival, and by the time `collectContactSparks` runs the solve has
     // already cancelled it (see there).
@@ -1486,7 +1489,7 @@ export class BallLevel {
     // written here, after the contacts and the depenetration sweep, because it
     // REPLACES what the solve made of the loop's landing — a phase-dependent
     // launch the player cannot aim (session-1594f).
-    this.ball.applyLoopCap(this.world.frameContacts, ballVelocityBeforeContacts);
+    this.ball.applyLoopCap(this.world.frameContacts, ballVelocityBeforeContacts, surfacesBeforeContacts);
     PhaseTrace.mark("loop-cap", this.world);
 
     this.collectContactSparks(ballVelocityBeforeContacts, ballSpinBeforeContacts);
