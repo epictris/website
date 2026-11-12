@@ -60,6 +60,13 @@ const CHAIN_LINK_INNER_W = 1.4 * BAR_D;
 // length of its straight sides.
 export const CHAIN_LINK_BEND = CHAIN_LINK_INNER_W / 2 + CHAIN_LINK_BAR;
 export const CHAIN_LINK_SIDE = (CHAIN_LINK_LEN - CHAIN_LINK_INNER_W) / 2;
+// Half the broad link's OUTSIDE width (22.4 mm at the 13.2 mm bar): how far
+// the chain reaches either side of its centreline in the gameplay plane, the
+// broad links lying in it. This is the clearance the drape keeps off
+// everything it touches (`SlackChain` NODE_RADIUS) - a chain resting on a
+// surface rests on its broad links - so it is derived here, from the one link
+// both renderers draw, and cannot fall behind a change of gauge.
+export const CHAIN_LINK_HALF_WIDTH = CHAIN_LINK_BEND + CHAIN_LINK_BAR;
 
 export interface ChainLink {
   // Centre of the link, in world metres: the midpoint of its chord (see

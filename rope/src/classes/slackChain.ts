@@ -62,7 +62,7 @@
 import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
 import { PX } from "../engine/units";
-import { CHAIN_LINK_LEN } from "../render/chainMetrics";
+import { CHAIN_LINK_HALF_WIDTH, CHAIN_LINK_LEN } from "../render/chainMetrics";
 import { GRAVITY } from "../engine/world";
 import { shapeExtents } from "../engine/shapes";
 import { circleOverlapFrom } from "../engine/collision";
@@ -77,11 +77,16 @@ import { Rope } from "./rope";
 // on a fully deployed 1.8 m chain — under one drawn link, so the polyline is
 // never the resolution bottleneck.
 export const SEGMENTS = 64;
-// Half the broad link's width: the chain's physical half-thickness, which is
-// the radius each node keeps clear of geometry. A chain lying on the floor
-// then rests ON the floor, and one bent over a corner clears it by exactly a
-// link's half-width, which is where a real chain's centreline sits.
-export const NODE_RADIUS = 0.9 * PX;
+// Half the broad link's outside width: the chain's physical half-thickness,
+// which is the radius each node keeps clear of geometry. A chain lying on the
+// floor then rests ON the floor, and one bent over a corner clears it by
+// exactly a link's half-width, which is where a real chain's centreline sits.
+// It was a hard-coded 9 mm, half the 1.8 cm link of its day, and stayed 9 mm
+// when the links became DIN 766 at the loop's 13.2 mm bar (44.8 mm across):
+// every broad link of a resting drape then sat 13.4 mm inside whatever it lay
+// on, read as the chain passing through the box it was wrapped round
+// (`session-276f`).
+export const NODE_RADIUS = CHAIN_LINK_HALF_WIDTH;
 // Per-frame velocity retention. Iron is heavy and air is not what stops it —
 // contact friction is — so the drag here is a whisper, just enough to bleed
 // the numerical hum out of a hanging catenary.
@@ -287,6 +292,10 @@ export class SlackChain {
   private pos: Vec2[] = [];
   private prev: Vec2[] = [];
   private renderFrom: Vec2[] = [];
+  // Where the sag bound put each node it moved this step (null where it moved
+  // none): the side such a node is pushed out of the scenery by (see the
+  // bound in `step`).
+  private boundAt: (Vec2 | null)[] = [];
   // The chain's length as of the last step - the wrap path plus the slack -
   // which is what a reel starts from (render/chainReel.ts), and what the
   // renderers count the links by (`chainLength`). `lengthFrom` is its value a
@@ -402,6 +411,19 @@ export class SlackChain {
     // what winds the drape onto the coil: the solver's rim samples are part of
     // the path, so a chain coming tight on a wound ball is drawn round the rim
     // exactly where the solver says the coil is.
+    //
+    // A node the bound moves is pushed out of the scenery by the side the
+    // bound put it on, not the side it started the step on. The solver's path
+    // is the chain, so the bound is always moving a node toward the right side
+    // of anything the chain is wrapped round; but a drape whose slack sagged
+    // under a box's corner while the solver's straight span passed over it
+    // started every step on the wrong side, and the came-from push-out handed
+    // each node straight back there. Taut, with the bound at zero, the drape
+    // then ran under a 20 x 10 cm box the chain was wrapped over, for good
+    // (`session-256f`, `session-386f`, `session-276f`: 203, 343 and 228
+    // frames; `scripts/test-chain-drape.ts`).
+    const boundAt: (Vec2 | null)[] = new Array<Vec2 | null>(SEGMENTS + 1).fill(null);
+    this.boundAt = boundAt;
     if (pathLen > 1e-9) {
       const bound = SAG_BOUND_FACTOR * Math.sqrt(pathLen * slack);
       const target = SlackChain.sampleByArc(pathPoints, SEGMENTS);
@@ -410,6 +432,7 @@ export class SlackChain {
         const dist = off.length();
         if (dist <= bound) continue;
         this.pos[i] = bound > 0 ? target[i]!.add(off.mul(bound / dist)) : target[i]!;
+        boundAt[i] = this.pos[i]!;
       }
     }
 
@@ -581,10 +604,11 @@ export class SlackChain {
           // the lantern's chimney down past its middle left by the SIDE, and
           // the chain it was part of then cut straight through the glass,
           // its two neighbours held 11 cm apart on opposite faces by the
-          // push-out (`session-1038f` f858-862).
-          const from = c.moving
+          // push-out (`session-1038f` f858-862). A node the sag bound moved
+          // came from where the bound put it, already in this frame's pose.
+          const from = this.boundAt[i] ?? (c.moving
             ? bodyCarried(c.owner, this.renderFrom[i]!)
-            : this.renderFrom[i]!;
+            : this.renderFrom[i]!);
           const ov = circleOverlapFrom(p, NODE_RADIUS, c.shape, from);
           if (!ov) continue;
           hit = true;

@@ -10,7 +10,9 @@ When the chain is let go the same drape carries on as the reel that hauls it bac
 **The coil is part of the drape, not a kinematic prefix to it.**
 The solver's coil is the angle of rim between the loop and the tangent point toward the next node, which is the right reading of a chain under tension and a fiction for one with length to spare: nothing holds a slack chain against the rim, so it hangs from the loop and lies wherever gravity and the scenery put it, and the ball's own rim is scenery the drape collides with like any other.
 Pinned at the tangent point instead, the drape started a quarter turn round the ball from the loop and only the run beyond the tangent had the slack in it, so a ball that had rolled over its own chain drew the chain hugging its underside and climbing its far flank to leave cleanly toward the anchor with 13 cm of slack folded into the last span (`session-232f` f184-232, reported as the chain sticking to the side of the ball instead of drooping).
-At taut the sag bound below puts the nodes onto the solver's rim samples exactly, so a wound-tight ball still draws its coil where the solver says it is (`cli shot` on a `ball-ground-wind-up` recording is the check).
+At taut the sag bound below carries the nodes onto the solver's rim samples, and the collision pass that ends every step then stands them off the rim by the chain's half-width, so a wound-tight ball draws its coil where the solver says it is, lifted onto its broad links (`cli shot` on a `ball-ground-wind-up` recording is the check).
+That lift is the one place the drawn chain cannot be its own length: the solver winds a rope of no thickness onto the rim, and a centreline a half-width `h` out is `h` longer per radian of wrap, so a coil drawn round the 12 cm ball runs 18.7% long and its links are drawn that much longer (see "The links are counted by the chain's length" below).
+The same holds, by `h` times the angle turned, round any corner a taut chain wraps.
 It is strictly one-way: it reads body transforms and the wrap path at the END of the physics
 frame (`BallLevel.physicsProcess` steps it last) and writes nothing back - no forces, no
 impulses, no positions - so every replay, digest and invariant is bit-identical with it in
@@ -74,6 +76,14 @@ Five mechanisms carry the requirements:
   links and hook-only grates are excluded and the ball's own rim is not), with dead
   restitution and strong tangential friction; the far-end body itself is skipped, since the
   chain threads into the manacle.
+  A node keeps **half the broad link's outside width** clear (`NODE_RADIUS` =
+  `CHAIN_LINK_HALF_WIDTH`, derived from the link in `render/chainMetrics.ts`, 22.4 mm at
+  the 13.2 mm bar): the broad links lie in the gameplay plane, so they are what a chain
+  rests on. It was a hard-coded 9 mm, half the 1.8 cm link of its day, and stayed 9 mm when
+  the links grew to DIN 766 proportions; every broad link of a resting drape then sat
+  13.4 mm inside what it lay on, read as the chain passing through the box it was wrapped
+  round (`session-276f`, 14-16 nodes at that depth in the box and the ball on every frame
+  from f214). The reel and the snapped halves share the constant.
   Three things about the push-out were each found on `session-1038f`, the slack chain
   draped over the swinging lantern falling through it, and none of them is optional.
   Friction is measured **relative to the surface** (the body's frame-start pose is its
@@ -93,6 +103,29 @@ Five mechanisms carry the requirements:
   have come from. Remembering each node's last clear position as its came-from side was
   tried instead and is worse: a node on the taut path touches a surface every step, so
   that memory dates from before the previous taut episode and points the wrong way.
+  **A node the sag bound moved came from where the bound put it.** The solver's path is
+  the chain, so the bound only ever moves a node toward the right side of what the chain
+  is wrapped round. But a drape thrown round a 20 x 10 cm box sags under a corner while the
+  solver's straight span passes over it (honestly: the solver's spans do not sag), and
+  every step after, the bound pulled its nodes onto the solver's side and the came-from
+  push-out, reading the side they started the step on, handed them straight back. Taut,
+  the drape ran under the box while the chain was wrapped over it, for good: 203, 343 and
+  228 frames of `session-256f`, `session-386f` and `session-276f`. Pushed out by the bound's
+  side, the drape is on the solver's side on every taut frame of all three
+  (`scripts/test-chain-drape.ts`, which is red on all three without it). What is left is
+  the few frames of a throw in which the drape's sag is under a corner the solver's
+  straight span is over: 6, 4 and 3 frames.
+  **A swept push-out was built and taken out.** The long-range attachments clamp a node
+  to a straight-line reach of its pin, through whatever the chain is wrapped round: with
+  the ball pulling away at 6 m/s one pass carried a node 16.6 cm from the top face of the
+  box to below its bottom face (`session-256f` f38), where it ended outside the box and the
+  push-out saw nothing. Sweeping each node from where it last stood clear, and sampling
+  spans stretched past 1.5 node radii so a corner could not pass between two nodes, was
+  tried on 2026-11-12. With the bound's side in place it bought 1-3 frames of a throw on
+  those recordings, cost a quarter more drape time, and the test was green without it.
+  A ball resting against the piece the chain is wrapped round leaves a gap the solver's
+  chain, which has no thickness, fits and the drawn one does not; the drape is pressed
+  into the ball there (`session-256f` f173, `session-386f` f368, up to 18 mm).
 - **Taut is the limit of almost-taut.** Sag grows like the square root of slack, so even
   millimetres of slack sag visibly, and a renderer that switched representation at taut
   would show the chain snapping straight in one frame.

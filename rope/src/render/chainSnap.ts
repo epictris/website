@@ -23,6 +23,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { GRAVITY } from "../engine/world";
+import { PX } from "../engine/units";
 import { shapeExtents } from "../engine/shapes";
 import { circleOverlapFrom } from "../engine/collision";
 import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
@@ -54,7 +55,7 @@ const KEPT_HALVES = 10;
 // `SLEEP_STEPS` steps running, stops being stepped until its pin moves: ten
 // halves hanging still would otherwise cost a collision pass each, every step,
 // for the rest of the run. Under a tenth of a pixel a step is a chain at rest.
-const SLEEP_MOTION = 0.1 * NODE_RADIUS;
+const SLEEP_MOTION = 0.09 * PX;
 const SLEEP_STEPS = 30;
 
 // One half of a snapped chain: a Verlet chain pinned at node 0, free at the

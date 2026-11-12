@@ -56,6 +56,7 @@ const steps: Step[] = [
   { name: "vine braid", cmd: ["bun", "run", "scripts/test-vine-braid.ts"] },
   { name: "berry vines", cmd: ["bun", "run", "scripts/test-berry-vines.ts"] },
   { name: "grain", cmd: ["bun", "run", "scripts/test-grain.ts"] },
+  { name: "chain drape", cmd: ["bun", "run", "scripts/test-chain-drape.ts"] },
   { name: "chain sound", cmd: ["bun", "run", "scripts/test-chain-sound.ts"] },
   { name: "sound materials", cmd: ["bun", "run", "scripts/test-sound-materials.ts"] },
   { name: "landing sound", cmd: ["bun", "run", "scripts/test-landing-sound.ts"] },
