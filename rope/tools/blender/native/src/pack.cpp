@@ -14,10 +14,12 @@
 // disc of centres let two islands' corners come 2.8 texels apart for a gap of
 // 4). Islands go in largest first, each at its lowest, then leftmost, place
 // over the turns where its dilated copy meets nothing placed (bottom-left
-// first fit). A collision skips the island past the run of taken texels it
-// hit, and a row whose longest free run is shorter than one of the island's
-// rows is passed over, so no fit is ever missed. The scale is the largest
-// that fits, by bisection.
+// first fit). Two exact tests keep the search short without missing a fit:
+// a row whose longest free run is shorter than one of the island's rows is
+// passed over, and within a row only the columns where the atlas has a free
+// square as big as the largest the dilated copy holds are tried (a map of
+// each texel's free square, kept up to date near each placement). The scale
+// is the largest that fits, by bisection.
 //
 // One call runs on one thread: the export packs its maps side by side, and
 // within one map the searches were too small to share (the threads spent
@@ -91,7 +93,16 @@ struct Island {
     Mask solid[4], wide[4];
     double ox[4], oy[4];
     std::vector<std::pair<int32_t, int32_t>> runs[4];
+    // The largest square the dilated copy holds (side, capped at SQUARE_CAP),
+    // and where its lower left corner is in it: wherever the island fits,
+    // the atlas is free over that square (`Atlas::square`).
+    int32_t sq_k[4], sq_x[4], sq_y[4];
 };
+
+// The free-square map's cap: an island needing a bigger free square looks
+// for one this big, a weaker test but still a true one, and a placement
+// changes the map only within this many texels of it.
+constexpr int32_t SQUARE_CAP = 64;
 
 V2 turn(V2 p, int q) {
     switch (q) {
@@ -197,6 +208,25 @@ void rasterise(Island& is, double scale, int32_t gap, int q) {
     }
     if (w % 64)
         for (int32_t y = 0; y < h; ++y) d.row(y)[d.words - 1] &= (1ull << (w % 64)) - 1;
+    // The largest square of set texels in the dilated copy: each texel's
+    // square reaching up and right, from the top right corner down.
+    {
+        std::vector<uint8_t> m((size_t)w * h, 0);
+        int32_t best = 0, bx = 0, by = 0;
+        for (int32_t y = h - 1; y >= 0; --y) {
+            const uint64_t* row = d.row(y);
+            for (int32_t x = w - 1; x >= 0; --x) {
+                if (!((row[x / 64] >> (x % 64)) & 1)) continue;
+                int32_t up = y + 1 < h ? m[(size_t)(y + 1) * w + x] : 0;
+                int32_t right = x + 1 < w ? m[(size_t)y * w + x + 1] : 0;
+                int32_t diag = (y + 1 < h && x + 1 < w) ? m[(size_t)(y + 1) * w + x + 1] : 0;
+                int32_t k = std::min(SQUARE_CAP, 1 + std::min({up, right, diag}));
+                m[(size_t)y * w + x] = (uint8_t)k;
+                if (k > best) best = k, bx = x, by = y;
+            }
+        }
+        is.sq_k[q] = best, is.sq_x[q] = bx, is.sq_y[q] = by;
+    }
     auto& runs = is.runs[q];
     runs.clear();
     for (int32_t y = 0; y < h; ++y) {
@@ -212,10 +242,44 @@ void rasterise(Island& is, double scale, int32_t gap, int q) {
 
 // The square's texels taken so far.
 struct Atlas {
-    int32_t side, words;
+    int32_t side, words, blocks;
     std::vector<uint64_t> bits;
     std::vector<int32_t> free_run;  // each row's longest run of free texels
-    explicit Atlas(int32_t s) : side(s), words((s + 63) / 64), bits((size_t)words * s, 0), free_run(s, s) {}
+    // Each texel's largest free square reaching up and right from it, capped
+    // at SQUARE_CAP, and each row's largest in every 64 columns.
+    std::vector<uint8_t> square, block_max;
+    explicit Atlas(int32_t s)
+        : side(s), words((s + 63) / 64), blocks((s + 63) / 64), bits((size_t)words * s, 0), free_run(s, s),
+          square((size_t)s * s), block_max((size_t)s * blocks) {
+        for (int32_t y = 0; y < s; ++y)
+            for (int32_t x = 0; x < s; ++x)
+                square[(size_t)y * s + x] = (uint8_t)std::min({SQUARE_CAP, s - x, s - y});
+        for (int32_t y = 0; y < s; ++y) refresh_blocks(y, 0, s);
+    }
+    bool taken(int32_t y, int32_t x) const { return (row(y)[x / 64] >> (x % 64)) & 1; }
+    void refresh_blocks(int32_t y, int32_t x0, int32_t x1) {
+        for (int32_t b = x0 / 64; b <= (x1 - 1) / 64; ++b) {
+            uint8_t best = 0;
+            for (int32_t x = 64 * b; x < std::min(side, 64 * b + 64); ++x) best = std::max(best, square[(size_t)y * side + x]);
+            block_max[(size_t)y * blocks + b] = best;
+        }
+    }
+    // The squares a placement over [x0, x1) x [y0, y1) can have cut: those
+    // starting up to SQUARE_CAP - 1 texels left of or below it.
+    void resquare(int32_t x0, int32_t x1, int32_t y0, int32_t y1) {
+        int32_t lx = std::max(0, x0 - (SQUARE_CAP - 1)), ly = std::max(0, y0 - (SQUARE_CAP - 1));
+        x1 = std::min(side, x1), y1 = std::min(side, y1);
+        auto at = [&](int32_t y, int32_t x) -> int32_t {
+            return x < side && y < side ? square[(size_t)y * side + x] : 0;
+        };
+        for (int32_t y = y1 - 1; y >= ly; --y) {
+            for (int32_t x = x1 - 1; x >= lx; --x) {
+                int32_t k = taken(y, x) ? 0 : std::min(SQUARE_CAP, 1 + std::min({at(y + 1, x), at(y, x + 1), at(y + 1, x + 1)}));
+                square[(size_t)y * side + x] = (uint8_t)k;
+            }
+            refresh_blocks(y, lx, x1);
+        }
+    }
     const uint64_t* row(int32_t y) const { return &bits[(size_t)y * words]; }
     uint64_t* row(int32_t y) { return &bits[(size_t)y * words]; }
     // Whether a mask whose rows need these runs could sit at row y at all.
@@ -233,17 +297,6 @@ struct Atlas {
         uint64_t hi = j + 1 < words ? r[j + 1] : ~0ull;
         return (lo >> b) | (hi << (64 - b));
     }
-    // The first free texel of row y at or after x (side if none).
-    int64_t next_free(int32_t y, int64_t x) const {
-        const uint64_t* r = row(y);
-        while (x < side) {
-            int64_t j = x / 64, b = x % 64;
-            uint64_t free = ~r[j] >> b;
-            if (free) return std::min<int64_t>(side, x + __builtin_ctzll(free));
-            x = (j + 1) * 64;
-        }
-        return side;
-    }
     void take(const Mask& s, int32_t y0, int64_t x0) {
         for (int32_t r = 0; r < s.h; ++r) {
             const uint64_t* sr = s.row(r);
@@ -257,28 +310,39 @@ struct Atlas {
             }
             free_run[y0 + r] = longest_run(ar, side, false);
         }
+        resquare((int32_t)x0, (int32_t)x0 + s.w, y0, y0 + s.h);
     }
 };
 
-// Where `m` first fits in row y: its column, or -1. A collision moves it past
-// the taken run it met.
-int64_t fit_in_row(const Atlas& at, const Mask& m, int32_t y) {
-    int64_t x = 0, last = at.side - m.w;
-    while (x <= last) {
-        int64_t skip = -1;
-        for (int32_t r = 0; r < m.h && skip < 0; ++r) {
-            const uint64_t* mr = m.row(r);
-            for (int32_t j = 0; j < m.words; ++j) {
-                if (!mr[j]) continue;
-                uint64_t hit = mr[j] & at.window(y + r, x + 64 * j);
-                if (!hit) continue;
-                int64_t c = 64 * j + __builtin_ctzll(hit);  // the mask's column that hit
-                skip = at.next_free(y + r, x + c) - c;
-                break;
-            }
+// Whether `m` fits with its lower left corner at (x, y).
+bool fits_at(const Atlas& at, const Mask& m, int32_t y, int64_t x) {
+    for (int32_t r = 0; r < m.h; ++r) {
+        const uint64_t* mr = m.row(r);
+        for (int32_t j = 0; j < m.words; ++j)
+            if (mr[j] && (mr[j] & at.window(y + r, x + 64 * j))) return false;
+    }
+    return true;
+}
+
+// Where the island's turn q first fits in row y: its column, or -1. Only
+// where the atlas has a free square as big as the one the dilated copy
+// holds, at that square's place in it, can it fit; each of those columns is
+// tested from the left. Before, every row was walked run by run: Cube.004's
+// 9,061 islands made 4.6 G steps and 35 s a trial (2026-11-13).
+int64_t fit_in_row(const Atlas& at, const Island& is, int q, int32_t y) {
+    const Mask& m = is.wide[q];
+    int32_t k = std::min(SQUARE_CAP, is.sq_k[q]), yy = y + is.sq_y[q], cx = is.sq_x[q];
+    int64_t last = at.side - m.w;
+    const uint8_t* sq = &at.square[(size_t)yy * at.side];
+    const uint8_t* bm = &at.block_max[(size_t)yy * at.blocks];
+    for (int32_t b = std::max(0, cx / 64); b < at.blocks; ++b) {
+        if (bm[b] < k) continue;
+        for (int32_t xx = std::max(64 * b, cx); xx < std::min(at.side, 64 * b + 64); ++xx) {
+            if (sq[xx] < k) continue;
+            int64_t x = xx - cx;
+            if (x > last) return -1;
+            if (fits_at(at, m, y, x)) return x;
         }
-        if (skip < 0) return x;
-        x = skip;
     }
     return -1;
 }
@@ -311,7 +375,7 @@ bool pack_at(std::vector<Island>& islands, double scale, int32_t side, int32_t g
             // Lowest row first; a later turn only wins lower down or further left.
             for (int32_t y = 0; y <= side - m.h && y <= best.y; ++y) {
                 if (!at.room(y, is.runs[q])) continue;
-                int64_t x = fit_in_row(at, m, y);
+                int64_t x = fit_in_row(at, is, q, y);
                 if (x < 0) continue;
                 if (y < best.y || (y == best.y && x < best.x)) best = {y, x, q};
                 break;
