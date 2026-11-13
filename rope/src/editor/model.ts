@@ -3943,6 +3943,178 @@ export function rotateItemsAbout(
   }
 }
 
+// --- flip ---------------------------------------------------------------------
+
+// Mirror a set of items left-for-right about the vertical line through the
+// middle of what they cover (`flipCentreX`), so a route built to go right can be
+// turned round to go left without being redrawn.
+//
+// A placement is a position and an ANGLE, and an angle cannot hold a mirror: a
+// mirrored frame is a turned frame with one of its own axes turned over. Either
+// axis will do, and which one decides only how the result is spelled:
+//
+// - "x": the angle goes to -rot and the shape's own x is negated. A box at 0°
+//   stays at 0°, a text note stays readable, and an outline comes out mirrored
+//   about its own origin. What everything uses unless it has a reason not to.
+// - "y": the angle goes to π - rot and the shape's own y is negated. For the
+//   things whose angle IS a direction - a force area's push, a current's flow,
+//   an arrow note - since a push to the right has to become a push to the left,
+//   and under "x" it would come out pointing right again, tipped the other way.
+//
+// Each item picks its own: what is written to disk is world placements and the
+// frame-local offsets measured from them, so two members of one body may turn
+// over different axes and still come out as one mirrored body.
+//
+// What a body holds in its OWN frame (the bearing, the route) is mirrored with
+// the frame, and only where the whole body is in the set - the rule
+// `carryBodyFrames` states: an edit to some of a body's objects is not a move of
+// the body. Its motions are what a mirror image of them does: a route keyed to
+// turn one way turns the other, a pendulum starts out to the other side (half a
+// cycle on, since its swing is a sine), a rotor spins the other way round, and a
+// belt runs the other way.
+//
+// Two things cannot be mirrored, only turned: a library MODEL is a mesh with no
+// mirror switch, so it keeps its own handedness and takes the mirrored placement
+// and tilt (its vertical-axis turn negated); and a vine's crooked line is drawn
+// from a seed. A berry's stalk, which is an offset, is mirrored.
+export type FlipAxis = "x" | "y";
+
+export function flipAxisOf(i: EdItem): FlipAxis {
+  if (isArrowNote(i)) return "y";
+  if (i.layer === "scene" && i.object === "collision" && (i.kind === "force" || i.kind === "water")) return "y";
+  return "x";
+}
+
+const flipAngle = (rot: number, axis: FlipAxis): number => {
+  const r = wrapAngle(axis === "x" ? -rot : Math.PI - rot);
+  // Never -0 (a panel shows "-0"), and never the 1e-16 that π - π leaves,
+  // which would be written to the file as a rotation nobody authored.
+  return Math.abs(r) < 1e-12 ? 0 : r;
+};
+const flipLocal = (v: Vec2, axis: FlipAxis): Vec2 =>
+  axis === "x" ? new Vec2(-v.x || 0, v.y) : new Vec2(v.x, -v.y || 0);
+const fracCycle = (v: number): number => {
+  const f = ((v % 1) + 1) % 1;
+  return f === 0 ? 0 : f;
+};
+
+// The x of the line a flip mirrors about: the middle of the box the items
+// cover. A LIGHT counts as its point and not its reach, which is a circle that
+// can be far wider than the fitting it hangs in and would pull the line off the
+// geometry the author is looking at.
+export function flipCentreX(items: readonly EdItem[]): number {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const i of items) {
+    const b = i.object === "light" ? { min: i.pos, max: i.pos } : itemBounds(i);
+    minX = Math.min(minX, b.min.x);
+    maxX = Math.max(maxX, b.max.x);
+  }
+  return Number.isFinite(minX) ? (minX + maxX) / 2 : 0;
+}
+
+export function flipItemsH(model: EdModel, items: readonly EdItem[], cx = flipCentreX(items)): void {
+  if (!items.length) return;
+  const mirror = (p: Vec2): Vec2 => new Vec2(2 * cx - p.x, p.y);
+  const ids = new Set(items.map((i) => i.id));
+
+  // The bodies wholly in the set, and the axis each one's FRAME turns over -
+  // read before anything moves. A stored frame is turned over "x"; a frame
+  // still read off the body's first object (`bodyFrameOf`) is wherever that
+  // object goes, so it turns over that object's axis.
+  const held = new Map<number, number>();
+  for (const i of items) held.set(i.bodyId, (held.get(i.bodyId) ?? 0) + 1);
+  const whole: { bodyId: number; axis: FlipAxis }[] = [];
+  for (const [bodyId, count] of held) {
+    const members = bodyMembers(model.items, bodyId);
+    if (count < members.length) continue;
+    const stored = model.bodyFrames.get(bodyId);
+    if (stored) {
+      model.bodyFrames.set(bodyId, { pos: mirror(stored.pos), rot: flipAngle(stored.rot, "x") });
+      whole.push({ bodyId, axis: "x" });
+    } else {
+      whole.push({ bodyId, axis: flipAxisOf(members[0]!) });
+    }
+  }
+
+  for (const i of items) {
+    const axis = flipAxisOf(i);
+    const f = (v: Vec2) => flipLocal(v, axis);
+    i.pos = mirror(i.pos);
+    i.rot = flipAngle(i.rot, axis);
+    const s = i.shape;
+    // A mirror of a simple (or convex) loop is one, so neither writer refuses.
+    if (s.kind === "poly") setPolyVerts(i, s.verts.map(f));
+    else if (s.kind === "path") {
+      setPathVerts(
+        i,
+        s.verts.map(f),
+        s.handles.map((h) => ({ in: f(h.in), out: f(h.out) })),
+      );
+    } else if (s.kind === "belt") {
+      setBelt(i, { wheels: s.wheels.map((w) => ({ c: f(w.c), r: w.r })), speed: -s.speed || 0 });
+    }
+    if (i.object === "light") i.light = { ...i.light, dir: f(i.light.dir) };
+    if (i.object === "model") i.modelRef = { ...i.modelRef, rotY: -i.modelRef.rotY || 0 };
+    if (i.layer === "camera") {
+      const c = i.cam;
+      i.cam = {
+        ...c,
+        // `offset` is a world offset from the avatar and `lockX` a world x; the
+        // per-side buffers are in the region's own frame, whose x turned over.
+        offset: new Vec2(-c.offset.x || 0, c.offset.y),
+        lockX: c.lockX === null ? null : 2 * cx - c.lockX,
+        ...(axis === "x"
+          ? { bufferLeft: c.bufferRight, bufferRight: c.bufferLeft }
+          : { bufferTop: c.bufferBottom, bufferBottom: c.bufferTop }),
+      };
+    }
+  }
+
+  for (const { bodyId, axis } of whole) {
+    const members = bodyMembers(model.items, bodyId);
+    const lead = bodyLead(members) ?? members[0]!;
+    const f = (v: Vec2) => flipLocal(v, axis);
+    // Computed once and handed to every member: these are body properties held
+    // on each of them, and `syncBodyProps` reads them as one.
+    const pivotAt = lead.pivotAt ? f(lead.pivotAt) : null;
+    const route = lead.route.map((n) => ({
+      ...n,
+      p: f(n.p),
+      in: f(n.in),
+      out: f(n.out),
+      rot: n.rot === null ? null : -n.rot || 0,
+    }));
+    for (const m of members) {
+      m.pivotAt = pivotAt;
+      m.route = route;
+      if (m.swingAmp !== 0) m.swingPhase = fracCycle(m.swingPhase + 0.5);
+      if (m.spinPeriod !== 0) {
+        m.spinPeriod = -m.spinPeriod;
+        m.spinPhase = fracCycle(-m.spinPhase);
+      }
+    }
+  }
+
+  // A berry vine hanging in the set: its stalks reach the other way. A berry
+  // with no offset of its own grows to its `sides` entry (alternating from the
+  // left when there is none), so those are written out and turned over too.
+  for (const v of model.vines) {
+    const sb = v.starberry;
+    if (!sb || !ids.has(v.anchor)) continue;
+    const n = sb.along.length;
+    const offsets = sb.offsets?.map((o) => ({ x: -o.x || 0, y: o.y }));
+    const needSides = (sb.offsets?.length ?? 0) < n || sb.sides !== undefined;
+    v.starberry = {
+      ...structuredClone(sb),
+      ...(offsets ? { offsets } : {}),
+      ...(needSides
+        ? { sides: Array.from({ length: n }, (_, k) => -(sb.sides?.[k] ?? (k % 2 === 0 ? -1 : 1))) }
+        : {}),
+    };
+  }
+}
+
 // The member whose body-level properties the group is built from: the first
 // COLLIDING item in model order, which is the first of the group's colliding
 // entries in the body list `toLevelData` writes, which is the entry

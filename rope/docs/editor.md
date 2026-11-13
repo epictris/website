@@ -210,6 +210,17 @@ nudge is a pure translation (never snapped), so a body keeps any sub-cell offset
 fine step still works with snap on. A run of nudges collapses into one undo step, ending when the
 key is released.
 
+### Flip H: turning a route round
+
+**Flip H** (in the selection's action row, beside Duplicate and Delete) mirrors the selection left-for-right about the vertical line through the middle of what it covers, so a stretch of level built to go right can be turned round to go left without being redrawn (`flipItemsH` in `editor/model.ts`).
+The line is the middle of the selection's bounding box, a light counted as its point rather than its reach; flipping twice gives back what was there.
+Everything is mirrored as its mirror image would behave: outlines, curves and their tangents, belt wheels (and the belt runs the other way), a spot's aim, a force area's push and a current's flow, a camera region's lock and its left/right buffers, a body's bearing and route (route turn keys negated), a pendulum (half a cycle on, so it starts out to the other side), a rotor (spins the other way), and berry stalks on a vine hanging from the selection.
+A placement is a position and an angle, and an angle cannot hold a mirror, so each item turns one of its own axes over: most take `-rot` with their own x negated (a box at 0° stays at 0°, a text note stays readable); a force area, a water area and an arrow note take `π - rot` with their own y negated, because their angle IS a direction.
+A body's frame and what is measured in it (bearing, route) are mirrored only when the whole body is selected, the rule every move and turn follows.
+Two things are turned rather than mirrored: a library **model** has no mirror switch, so it keeps its handedness and takes the mirrored placement with its vertical-axis turn negated; and a vine's crooked line comes from its seed.
+**The level's Blender scene does not move.** The flip changes the collision, which is the editor's; the meshes that dress it are the `.blend`'s, bound to bodies by `name`, so they have to be mirrored in Blender to match.
+One undo step.
+
 Panels are split the way the format is, and **each is reached by selecting the thing it edits**.
 An object panel carries what an object has - its form, its placement in its body, its material,
 thickness and hook-proof flag - and nothing else; kind, friction, force and fill are the

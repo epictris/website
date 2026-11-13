@@ -140,6 +140,7 @@ import {
   pointInBody,
   rotateItemsAbout,
   translateItems,
+  flipItemsH,
   bodyFrameOf,
   captureGroupPose,
   type GroupPose,
@@ -5414,8 +5415,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "How deep the debug geometry is drawn through z, in pixels. Blank draws it as deep as the shape's own thickness (the Material section), and follows that as it changes; a number here changes the drawing only, never the mass.");
   }
 
-  // Every layer's panel ends the same way: the two actions that apply to any
-  // selection, whatever it is made of. Duplicate and Delete act on the *whole*
+  // Every layer's panel ends the same way: the actions that apply to any
+  // selection, whatever it is made of. Duplicate, Flip H and Delete act on the *whole*
   // selection, so a cross-layer one carries a single shared row above the
   // per-layer panels instead of one per panel that would each claim to be about
   // its own layer while reaching outside it.
@@ -5426,8 +5427,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   function appendActions(g: HTMLElement): void {
     const row = el("div", "ed-row");
+    const flip = button("Flip H", () => flipSelectedH());
+    flip.title =
+      "Mirror the selection left-for-right about its own middle: shapes, curves, routes, lights, pushes and currents all turn round, so a route built to go right goes left. Library models keep their own handedness and are turned instead.";
     row.append(
       button("Duplicate", () => duplicateSelected()),
+      flip,
       button("Delete", () => deleteSelected()),
     );
     g.appendChild(row);
@@ -9307,6 +9312,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     translateItems(model, sel, d);
     markDirty();
     refreshFields();
+  }
+
+  // Mirror the selection left-for-right about its own middle (`flipItemsH`), so
+  // a route can be turned round to run the other way without redrawing it.
+  function flipSelectedH(): void {
+    const sel = operandItems();
+    if (!sel.length) return;
+    beginAction();
+    flipItemsH(model, sel);
+    markDirty();
+    rebuildInspector();
   }
 
   function duplicateSelected(): void {
