@@ -122,10 +122,12 @@ def tone_facets(ob, seed):
     return len(tone)
 
 
-def mark_strips(mesh):
+def mark_strips(mesh, smallest=0.0):
     """Write each face's chamfer-strip weight into the FACE float attribute
     `strip` (0 = not a strip, 1 = a strip painted as fully as the edge
-    line). Returns how many strips were found."""
+    line). Returns how many strips were found. A strip narrower than
+    `smallest` (metres: the depth of field's blur there, formations/render.py
+    `detail_blur`) is not painted."""
     import bmesh
 
     bm = bmesh.new()
@@ -174,7 +176,7 @@ def mark_strips(mesh):
         length, width = np.ptp(along), np.ptp(across)
         # A sliver chain the dissolve left can run a long way at no width:
         # it fills a few percent of its extent, a wedge about half.
-        if width < STRIP_MIN or length < STRIP_LENGTH or area < STRIP_FILL * length * width:
+        if width < max(STRIP_MIN, smallest) or length < STRIP_LENGTH or area < STRIP_FILL * length * width:
             continue
         if REPORT is not None:
             REPORT.append((round(width * 100, 1), round(length, 2), round(area / (length * width), 2)))

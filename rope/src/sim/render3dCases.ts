@@ -101,6 +101,7 @@ import {
   spawnAtCheckpoint,
   type LightObjectData,
   type LevelBodyData,
+  type ModelObjectData,
   type SceneObjectData,
   type RawLevelData,
   type CollisionObjectData,
@@ -201,7 +202,8 @@ import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { levelStoredFiles } from "../render3d/levelAssets";
 import { nodeNameOf, SCENE_ASSETS, sceneFile, type SceneAsset } from "../render3d/scenes";
-import { castsShadow, dressScene, SCENERY_TAG, sceneryWater, type DressTarget } from "../render3d/sceneDressing";
+import { castsShadow, dressScene, SCENERY_TAG, sceneryWater, seedDecodedFile, type DressTarget } from "../render3d/sceneDressing";
+import { modelFile } from "../render3d/models";
 import { RE_DIRECT, skipUnreachedLights } from "../render3d/lightReach";
 import {
   INVARIANT_POSITION,
@@ -2675,6 +2677,139 @@ function lightRidesBody(): CaseResult[] {
       name: "lights: a disposed rig hands its budget back",
       pass: freed,
       detail: freed ? "slot reusable" : "budget leaked",
+    },
+  ];
+}
+
+// A MODEL ON A BODY (`ModelObjectData`, `BodyVisual.mountModels`): the
+// library's file cloned onto the body at the object's placement, so the body
+// carries it. The world pose is checked against the FORMAT's definition, built
+// here independently - the object's world placement on the plane, its depth
+// toward the camera, its tilts applied before its turn in the plane, its
+// scale - rather than against the engine frame the visual is built in (the
+// rigid body's centre of mass, which a placement measured from the authored
+// origin gets wrong). And: the model answers a pick with its object, a body
+// that collides keeps its shadow, the body carries it when it moves, a model
+// not yet loaded mounts nothing until it lands, the scale is a ratio across
+// `scaleLevelData` while the depth is a length, the editor writes back what it
+// read, and the preload list names the model's file once.
+function modelOnBody(): CaseResult[] {
+  const name = "__model-case";
+  const raw: RawLevelData = {
+    format: LEVEL_FORMAT,
+    player: { x: 0, y: -300, radius: 8 },
+    bodies: [
+      {
+        kind: "rigid",
+        x: 200,
+        y: 100,
+        rot: 0.3,
+        objects: [
+          // Off-centre collision, so the centre of mass is not the origin.
+          { type: "collision", x: 30, shape: { kind: "rect", w: 40, h: 20 } },
+          { type: "model", model: name, x: 40, y: -10, rot: 0.2, z: 20, rotX: 0.5, rotY: -0.4, scale: 2 },
+        ],
+      },
+    ],
+  };
+  // The file: one box whose centre is off the model's origin, so a tilt, a
+  // scale or a turn applied in the wrong order moves it somewhere else.
+  const file = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.02).translate(0.1, 0.05, 0.02), new THREE.MeshStandardMaterial());
+  box.castShadow = true;
+  file.add(box);
+  seedDecodedFile(modelFile(name), file);
+
+  const data = scaleLevelData(raw, PX);
+  const built = buildLevelBodies(new World(), data, () => {}).bodies[0]!;
+  const visual = new BodyVisual(built.body, built);
+  visual.sync(1);
+  const meshes: THREE.Mesh[] = [];
+  visual.root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
+  });
+  const centreOf = (m: THREE.Mesh): THREE.Vector3 => {
+    m.updateWorldMatrix(true, false);
+    m.geometry.computeBoundingBox();
+    return m.geometry.boundingBox!.getCenter(new THREE.Vector3()).applyMatrix4(m.matrixWorld);
+  };
+  const object = data.bodies[0]!.objects[1] as ModelObjectData;
+  const world = worldPlacement(data.bodies[0]!, object);
+  const want = new THREE.Vector3(0.1, 0.05, 0.02)
+    .multiplyScalar(2)
+    .applyEuler(new THREE.Euler(0.5, -0.4, -world.rot, "ZYX"))
+    .add(new THREE.Vector3(world.pos.x, -world.pos.y, object.z!));
+  const got = meshes[0] ? centreOf(meshes[0]) : new THREE.Vector3(NaN, NaN, NaN);
+  // To a micron: the box's vertices are float32.
+  const placed = meshes.length === 1 && got.distanceTo(want) < 1e-6;
+  const tagged = meshes.length === 1 && pickTagOf(meshes[0]!) === built.data.objects[1];
+  const casts = meshes[0]?.castShadow === true;
+
+  // Carried: the body moves, and so does the model, with nothing re-placed.
+  built.body!.globalPosition = built.body!.globalPosition.add(new Vec2(1, 0));
+  visual.sync(1);
+  const moved = meshes[0] ? centreOf(meshes[0]) : new THREE.Vector3(NaN, NaN, NaN);
+  const carried = Math.abs(moved.x - got.x - 1) < 1e-6 && Math.abs(moved.y - got.y) < 1e-6;
+  visual.dispose();
+
+  // Not loaded yet: nothing mounted, nothing thrown.
+  const pending = scaleLevelData({ ...raw, bodies: [{ ...(raw.bodies[0] as LevelBodyData), objects: [{ type: "model", model: "__model-case-unloaded" }] }] }, PX);
+  const pendingBuilt = buildLevelBodies(new World(), pending, () => {}).bodies[0]!;
+  const pendingVisual = new BodyVisual(pendingBuilt.body, pendingBuilt);
+  let pendingMeshes = 0;
+  pendingVisual.root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) pendingMeshes++;
+  });
+  pendingVisual.dispose();
+
+  const scaled = scaleLevelData(raw, 0.5).bodies[0]!.objects[1] as ModelObjectData;
+  const units = scaled.z === 10 && scaled.scale === 2 && scaled.rotX === 0.5 && scaled.rotY === -0.4 && scaled.x === 20;
+
+  const back = modelToDisk(modelFromDisk(raw)).bodies[0]!.objects.find((o) => o.type === "model");
+  const want0 = (raw.bodies[0] as LevelBodyData).objects[1]!;
+  const near = (a: number | undefined, b: number | undefined): boolean => Math.abs((a ?? 0) - (b ?? 0)) < 1e-6;
+  const roundTrip =
+    back?.type === "model" && want0.type === "model" && back.model === name &&
+    near(back.x, want0.x) && near(back.y, want0.y) && near(back.rot, want0.rot) &&
+    near(back.z, want0.z) && back.rotX === 0.5 && back.rotY === -0.4 && back.scale === 2;
+
+  const preload = levelStoredFiles({ ...raw, bodies: [raw.bodies[0]!, raw.bodies[0]!] }).filter((f) => f.file === modelFile(name));
+
+  return [
+    {
+      name: "models: a model is drawn at its object's placement on the body - depth toward the camera, tilts before the turn in the plane, its scale - whatever the body's centre of mass",
+      pass: placed,
+      detail: `want (${want.toArray().map((v) => v.toFixed(4)).join(", ")}) got (${got.toArray().map((v) => v.toFixed(4)).join(", ")}), ${meshes.length} mesh(es)`,
+    },
+    {
+      name: "models: a model answers a pick with its object, and on a body that collides it casts",
+      pass: tagged && casts,
+      detail: `tagged ${tagged}, casts ${casts}`,
+    },
+    {
+      name: "models: the body carries its model",
+      pass: carried,
+      detail: `moved by (${(moved.x - got.x).toFixed(4)}, ${(moved.y - got.y).toFixed(4)}) for a 1 m move along x`,
+    },
+    {
+      name: "models: a model still on its way mounts nothing",
+      pass: pendingMeshes === 0,
+      detail: `${pendingMeshes} mesh(es)`,
+    },
+    {
+      name: "models: across scaleLevelData the depth and placement are lengths, the tilts and the scale are not",
+      pass: units,
+      detail: JSON.stringify(scaled),
+    },
+    {
+      name: "models: the editor writes back the model object it read",
+      pass: roundTrip,
+      detail: JSON.stringify(back),
+    },
+    {
+      name: "models: the preload list names a model's file once, however many bodies carry it",
+      pass: preload.length === 1,
+      detail: `${preload.length} entr(ies)`,
     },
   ];
 }
@@ -5957,6 +6092,7 @@ export function runRender3dCases(): CaseResult[] {
     ...pickIndex(),
     ...lightRoundTrip(),
     ...lightRidesBody(),
+    ...modelOnBody(),
     ...lightAim(),
     ...lightShadowNear(),
     ...lightShadowRadius(),

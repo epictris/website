@@ -320,6 +320,15 @@ The body panel's **`name`** (`LevelBodyData.name`, held on every member of the b
 Both read the export's `meta.json`, fetched once per scene per page; a re-export is seen on the next load.
 The whole loop is in [blender-scenes](blender-scenes.md).
 
+## Models: `+ Model`
+
+**`+ Model`** places a 3D model of the library ([blender-models](blender-models.md)) with one click: into the selected body when one is selected (a lantern on the chained body it hangs as), otherwise as a body of its own.
+It places the model last picked or selected, else the first the editor offers.
+Its panel names the model (typed, held to a model's spelling, offered the models exported here or published from `GET /api/models`) with a line saying the export's triangles, size and age and whether it is published, then `z`, `tilt x°`, `tilt y°` and `scale`.
+A model is picked by clicking it in the 3D view (body, then object, as everywhere); on the plane it is a dashed cube mark with its name, which is what a click lands on where no scene is drawn.
+It has a depth handle and the gizmo's blue arrow (`hasDepth`, `setDepth` in `editor/render.ts` are the one statement of what has a z), the gizmo's three rings (the plane ring is its `rot`, the other two its tilts) and its boxes, any of which scales it uniformly.
+An anchor's and a model's boxes are marks, not sizes, so neither panel offers `w`/`h`.
+
 ## Debug geometry
 
 A collision shape's panel has a **Debug** section (`addDebugFields`), and its **draw** box is the one switch: ticked, the shape is drawn in 3D - here, in ▶ Test and in the game - as its outline extruded in a flat colour (`CollisionObjectData.debug`, see [render3d](render3d.md#what-the-scene-draws)).

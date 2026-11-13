@@ -1,8 +1,9 @@
-// The SOURCES of the Blender scenes: the `.blend` files under `assets-src/`
-// and the pictures their tools paint with. The game never loads one - it loads
-// the exported `scene.glb` (`scripts/publish-scenes.ts`) - but a scene's
-// `.blend` is the only copy of how its dressing was made, and before these
-// were pinned it was lost with the machine that made it.
+// The SOURCES of the Blender scenes and models: the `.blend` files under
+// `assets-src/` and the pictures their tools paint with. The game never loads
+// one - it loads the exported `scene.glb` and `model.glb`
+// (`scripts/publish-scenes.ts`, `scripts/publish-models.ts`) - but a `.blend`
+// is the only copy of how its look was made, and before these were pinned it
+// was lost with the machine that made it.
 //
 // They live in the same release store as every other binary, and for the same
 // reason (docs/asset-store.md: deletable, never in git history), under a name
@@ -20,7 +21,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { ASSET_REPO, ASSET_TAG, levelsSceneNames } from "./assetStore";
+import { ASSET_REPO, ASSET_TAG, levelsModelNames, levelsSceneNames } from "./assetStore";
 
 export const ROOT = resolve(import.meta.dirname, "..");
 export const SOURCES_DIR = join(ROOT, "assets-src");
@@ -51,7 +52,11 @@ export function sourceKey(path: string): string {
   return rel;
 }
 
-// The `.blend` of every scene a registered level names: always a source.
+// The `.blend` of every scene a registered level names, and of every model
+// its bodies carry: always a source.
 export function levelSceneSources(): string[] {
-  return [...levelsSceneNames().keys()].map((scene) => `scenes/${scene}.blend`);
+  return [
+    ...[...levelsSceneNames().keys()].map((scene) => `scenes/${scene}.blend`),
+    ...[...levelsModelNames().keys()].map((model) => `models/${model}.blend`),
+  ];
 }

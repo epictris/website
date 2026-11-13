@@ -11,7 +11,7 @@ keeps an edited one).
 
 A SOLID formation (generator `solid`, a backdrop rock: docs/blender-backdrop.md)
 has a GUIDE instead of an outline: a closed mesh, parented to the rock, that
-recipe F stones are cut from (solidfit.py). It takes the outline's place
+its stones are cut from (solidfit.py). It takes the outline's place
 (`formation_outline` names it), so backups, copies and removal carry it the
 same way; its recipe holds the guide's geometry, the game's start camera
 (`scene[CAMERA]`, written by tools/blender/backdrop.py from the level) and the
@@ -71,9 +71,17 @@ RECIPES = "Formation recipes"
 BACKUPS = "Formation backups"
 # Free guides: copies of collision outlines no rock has been built from yet.
 GUIDES = "Formation guides"
-# The scene properties a running Rebuild Changed sets: that it runs, and on what.
-BUSY = "formations_busy"
-PROGRESS = "formations_progress"
+# What a running Rebuild Changed is on ("2/3: Rock.004"), or None while none
+# runs. Held here, never on the scene: a scene property is saved with the file
+# and restored by undo, so a file saved mid-rebuild, or an undo back to a step
+# taken during one, reopened with the panels greyed out and nothing to clear it.
+rebuild_progress = None
+# The scene properties that state was once kept in, removed on load.
+STALE_BUSY_KEYS = ("formations_busy", "formations_progress")
+
+
+def busy():
+    return rebuild_progress is not None
 # The scene property holding the game's start camera and water for solid
 # formations: {"eye", "distance", "tanHalf", "waterZ"}.
 CAMERA = "backdrop_camera"

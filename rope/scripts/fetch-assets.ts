@@ -14,7 +14,8 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCENE_ASSETS } from "../src/render3d/scenes";
-import { assetName, assetUrl, levelsSceneNames, sha256, storedAssets } from "./assetStore";
+import { MODEL_ASSETS } from "../src/render3d/models";
+import { assetName, assetUrl, levelsModelNames, levelsSceneNames, sha256, storedAssets } from "./assetStore";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -23,9 +24,14 @@ const PUBLIC_DIR = join(ROOT, "public");
 // with no look at all - the build succeeds and the level draws nothing but its
 // water and the ball - so it stops the fetch, and with it the Docker build,
 // before the empty-manifest early exit below can wave it through.
-const unpublished = [...levelsSceneNames()].filter(([scene]) => !SCENE_ASSETS[scene]);
+// A model a body carries is the same failure on a smaller scale: the body
+// draws nothing at all.
+const unpublished = [
+  ...[...levelsSceneNames()].filter(([scene]) => !SCENE_ASSETS[scene]).map(([scene, levels]) => `scene "${scene}" (${levels.join(", ")})`),
+  ...[...levelsModelNames()].filter(([model]) => !MODEL_ASSETS[model]).map(([model, levels]) => `model "${model}" (${levels.join(", ")})`),
+];
 if (unpublished.length) {
-  for (const [scene, levels] of unpublished) console.error(`  FAIL  scene "${scene}" (${levels.join(", ")}) is not in the store`);
+  for (const what of unpublished) console.error(`  FAIL  ${what} is not in the store`);
   console.error(`\n[assets] publish them from the machine that exported them: \`just publish\`.`);
   process.exit(1);
 }

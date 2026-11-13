@@ -21,6 +21,7 @@ import { wearIvyLeaves } from "./ivyLeaves";
 import { isDepthStandIn, isPicture, joinDepthPrepass, joinPictureDepth } from "./depthPrepass";
 import { isPrintedMoss, wearMossMound } from "./mossMound";
 import { threeRotation, threeY } from "./space";
+import { MODEL_ASSETS, modelFile } from "./models";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
 
 // A body a scene node may be bound to: its name, the group its visual rides,
@@ -191,7 +192,7 @@ export function castsShadow(node: THREE.Object3D): boolean {
 // painted distance and casts nothing - one throwing a shadow across the level in
 // front of it reads as geometry the player ought to be able to touch - and on
 // or in front of it, it is in the scene and casts like anything else.
-function noShadowBehindPlane(node: THREE.Object3D): void {
+export function noShadowBehindPlane(node: THREE.Object3D): void {
   if (!castsShadow(node)) castNoShadow(node);
 }
 
@@ -209,19 +210,45 @@ function castNoShadow(node: THREE.Object3D): void {
 // placed on its body, nor for scenery a bound node was taken out of.
 const sceneryCasts = new WeakMap<THREE.Object3D, boolean>();
 
-// One decoded file per scene, shared by every mount of it on the page. A
-// failure stays cached too: a scene that is not there is asked for once, not
+// One decoded file per scene or model, shared by every mount of it on the page.
+// A failure stays cached too: a file that is not there is asked for once, not
 // on every rebuild.
 const files = new Map<string, Promise<THREE.Object3D | null>>();
 
 export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
-  const file = sceneFile(scene);
-  const cached = files.get(file);
-  if (cached) return cached;
   // Weighted by the published pin when there is one; an export not yet
   // published is fetched unweighted, which only means the bar does not count
   // it (the preload list says the same, see `levelStoredFiles`).
-  const bytes = SCENE_ASSETS[scene]?.bytes ?? 0;
+  return loadExportFile(sceneFile(scene), SCENE_ASSETS[scene]?.bytes ?? 0, `scene "${scene}"`);
+}
+
+// A model of the library (render3d/models.ts), loaded exactly as a scene is:
+// it comes out of the same exporter, so it may hold the same ivy, moss, plants
+// and pictures, and each needs the same preparation.
+export function loadModelFile(model: string): Promise<THREE.Object3D | null> {
+  return loadExportFile(modelFile(model), MODEL_ASSETS[model]?.bytes ?? 0, `model "${model}"`);
+}
+
+// The decoded file, if it has landed: undefined while it has not (or was never
+// asked for), null for one that failed. What lets a mount of a file already
+// decoded be made on the spot rather than a task later (see `SceneDressing`).
+export function decodedFile(file: string): THREE.Object3D | null | undefined {
+  return decoded.get(file);
+}
+
+// Hand the cache a decoded file as though it had landed: `cli render3d`, which
+// has no fetch and no GLB, mounts a model it built itself through the same path
+// a page takes.
+export function seedDecodedFile(file: string, loaded: THREE.Object3D | null): void {
+  decoded.set(file, loaded);
+  files.set(file, Promise.resolve(loaded));
+}
+
+// Load one export of `scene_export.py` (a scene or a model) and prepare its
+// meshes for the game. `label` names it in the log.
+function loadExportFile(file: string, bytes: number, label: string): Promise<THREE.Object3D | null> {
+  const cached = files.get(file);
+  if (cached) return cached;
   const loading = gltfLoader();
   const p = trackPending(
     withDownload(file, bytes, (href) => loading.then((loader) => loader.loadAsync(href)))
@@ -288,22 +315,22 @@ export function loadSceneFile(scene: string): Promise<THREE.Object3D | null> {
         });
         const pictures = prepass.filter(joinPictureDepth).length;
         const depthFirst = prepass.filter((m) => !isPicture(m) && joinDepthPrepass(m)).length;
-        if (depthFirst > 0) console.log(`[render3d] scene "${scene}": ${depthFirst} meshes lay their depth first`);
-        if (pictures > 0) console.log(`[render3d] scene "${scene}": ${pictures} pictures lay their depth after them`);
-        if (ivyMeshes > 0) console.log(`[render3d] scene "${scene}": ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
-        if (foliageMeshes > 0) console.log(`[render3d] scene "${scene}": ${foliageMeshes} plant meshes cast and receive leaf shadows`);
-        if (mossMeshes > 0) console.log(`[render3d] scene "${scene}": ${mossMeshes} moss mounds cut and lipped by their print`);
+        if (depthFirst > 0) console.log(`[render3d] ${label}: ${depthFirst} meshes lay their depth first`);
+        if (pictures > 0) console.log(`[render3d] ${label}: ${pictures} pictures lay their depth after them`);
+        if (ivyMeshes > 0) console.log(`[render3d] ${label}: ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
+        if (foliageMeshes > 0) console.log(`[render3d] ${label}: ${foliageMeshes} plant meshes cast and receive leaf shadows`);
+        if (mossMeshes > 0) console.log(`[render3d] ${label}: ${mossMeshes} moss mounds cut and lipped by their print`);
         return gltf.scene as THREE.Object3D;
       })
       .catch((err: unknown) => {
-        console.warn(`[render3d] scene "${scene}" failed to load from ${file}:`, err);
+        console.warn(`[render3d] ${label} failed to load from ${file}:`, err);
         return null;
       })
       .then((loaded) => {
         decoded.set(file, loaded);
         return loaded;
       }),
-    `scene "${scene}"`,
+    label,
   );
   files.set(file, p);
   return p;

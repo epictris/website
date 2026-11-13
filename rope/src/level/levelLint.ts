@@ -31,11 +31,12 @@
 // its line as thin as the gate it stands in, and the lint has nothing to say
 // about the size of one.
 
-import { collides, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
+import { collides, isModelObject, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
 import { rootProblems } from "./roots";
 import { PX } from "../engine/units";
 import { LEVELS, listedLevels } from "./registry";
 import { nodeNameOf } from "../render3d/scenes";
+import { isModelName } from "../render3d/models";
 
 export interface LevelCheck {
   name: string;
@@ -152,6 +153,27 @@ export function runLevelChecks(): LevelCheck[] {
       else sameName.push(`${id}: bodies ${first} and ${i} are both "${node}"`);
     });
   }
+  // A MODEL object (`ModelObjectData`) names a model of the library, which is a
+  // directory, a `.blend` and a release asset, so its name is held to that
+  // spelling; and its size is a positive factor, since a scale of 0 or below
+  // draws nothing (or the model turned inside out) with nothing to say why.
+  // Whether the model is exported and published is `cli assets`' question.
+  const models: string[] = [];
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    normalizeLevelData(spec.data).bodies.forEach((b, i) => {
+      for (const o of b.objects) {
+        if (!isModelObject(o)) continue;
+        if (!isModelName(o.model)) models.push(`${id}: body ${i}: "${o.model}" is not a model name (lower-case letters, digits and dashes)`);
+        if (o.scale !== undefined && !(o.scale > 0 && Number.isFinite(o.scale))) models.push(`${id}: body ${i}: model "${o.model}" has scale ${o.scale}`);
+      }
+    });
+  }
+  checks.push({
+    name: "levels: every model object names a model and a positive scale",
+    pass: models.length === 0,
+    detail: models.length === 0 ? "every model is spelt as a model and drawn at a positive size" : models.join("; "),
+  });
+
   // ROOTS hold together (docs/roots.md): every branch grows out of another
   // root in its own body, from the point it names along it. A branch whose base
   // has drifted off its parent still builds and still bites - it is only seen

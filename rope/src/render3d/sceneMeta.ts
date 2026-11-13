@@ -1,9 +1,10 @@
-// A scene's recorded facts, read off disk. Node only (the dev server, the
+// A scene's or a model's recorded facts, read off disk. Node only (the dev server, the
 // preload list in `vite.config.ts`, bun tools): it imports `fs`, which is why it
 // is not in `scenes.ts`, which the browser loads.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { modelMetaFile, type ModelMeta } from "./models";
 import { sceneMetaFile, type SceneMeta } from "./scenes";
 
 // `public/`, found from this file rather than from the working directory, so a
@@ -16,6 +17,15 @@ const PUBLIC_DIR = fileURLToPath(new URL("../../public", import.meta.url));
 export function sceneMeta(scene: string, publicDir: string = PUBLIC_DIR): SceneMeta | null {
   try {
     return JSON.parse(readFileSync(`${publicDir}${sceneMetaFile(scene)}`, "utf8")) as SceneMeta;
+  } catch {
+    return null;
+  }
+}
+
+// A model's `meta.json` (render3d/models.ts), by the same rule.
+export function modelMeta(model: string, publicDir: string = PUBLIC_DIR): ModelMeta | null {
+  try {
+    return JSON.parse(readFileSync(`${publicDir}${modelMetaFile(model)}`, "utf8")) as ModelMeta;
   } catch {
     return null;
   }

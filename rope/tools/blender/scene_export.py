@@ -46,12 +46,12 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import bmesh
 import bpy
 import numpy as np
 from mathutils import Vector, kdtree
-from mathutils.bvhtree import BVHTree
 
 # Object types with geometry the glTF exporter carries.
 EXPORTABLE = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
@@ -203,8 +203,12 @@ BAKE_UV = "SceneBake"
 # The painted slate's edge line (a Bevel node) and crevices (Ambient
 # Occlusion) are ray traced, so the bake is a render: at 4 samples the edge line
 # came out as speckle that drew hairy and blurred once magnified. 32 is clean;
-# 64 differed from it by 0.3 levels rms (the Terrace, 2026-10-02).
-BAKE_SAMPLES = 32
+# 64 differed from it by 0.3 levels rms (the Terrace, 2026-10-02). 8 since
+# 2026-11-13: against 32 on Terrace.002 the colour map moved 0.75 levels rms
+# and the normal map 1.1, the bake calls took 7.0 s against 12.4, and Tris saw
+# no difference (https://claude.ai/artifact/2j4E9oa9N15KQ5RC3h7SQL). At 1 the
+# speckle came back (2.5 and 4 levels rms, single texels off by 229).
+BAKE_SAMPLES = 8
 # Cycles GPU backends, best first. The bake runs on the first one with a
 # device and on the CPU without: the Terrace's 2k map took 3.4 s on an
 # RTX 4070 SUPER (OptiX) and 24.5 s on the CPU, with the same result to
@@ -241,6 +245,10 @@ def bake_device():
 # smallest map (the normal map, render.NORMAL_SCALE), where islands 1 px apart
 # would filter into each other.
 PACK_GAP_PX = 2
+# The grid islands are packed on, texels a side (the gap scaled to it, at
+# least one): 4 to 5 times faster than packing a 4k map at 4k, for coverage
+# 0.80 against 0.81 (Terrace.002, 2026-11-13).
+PACK_GRID = 1024
 # How far apart two vertices may be and still be one for the unwrap.
 WELD_DISTANCE = 1e-5
 # Faces smaller than this (square metres) get one UV for all their corners.
@@ -254,6 +262,13 @@ def detail_scale(ob):
     if it stood (formations/render.py)."""
     from formations import render
     return render.detail_scale(ob)
+
+
+def smallest_detail(ob, name):
+    """The narrowest feature pass `name` adds to `ob`: what the depth of field
+    leaves distinguishable where it stands (formations/render.py)."""
+    from formations import render
+    return render.smallest_detail(ob, name)
 
 
 def render_setting(ob, name):
@@ -321,6 +336,11 @@ def view_directions():
     return d / np.linalg.norm(d, axis=1)[:, None]
 
 
+# `--all-seen`: every face counts as seen (`seen_faces`), for a model the game
+# may turn to show any side of. Part of every object's bake key.
+ALL_SEEN = False
+
+
 def seen_faces(mesh, matrix):
     """Which faces of `mesh` (at `matrix` in the world) the game camera can
     see, as a bool per polygon: facing one of `view_directions` with one of
@@ -330,8 +350,13 @@ def seen_faces(mesh, matrix):
 
     Measured 2026-10-16 on the river (Terrace.001, 250 k triangles, 3 s):
     of its 470 m2 of pile, 231 face the camera with nothing of the rock in
-    the way."""
+    the way. The rays are cast by the native kernels (native/src/bvh.cpp) on
+    every thread: one at a time through mathutils they were 617 M calls and
+    1,216 s of a 3 h river export (2026-11-13)."""
+    import native
     n = len(mesh.polygons)
+    if ALL_SEEN:
+        return np.ones(n, bool)
     m = np.array(matrix, dtype=np.float64)
     co = np.empty(len(mesh.vertices) * 3)
     mesh.vertices.foreach_get("co", co)
@@ -342,8 +367,11 @@ def seen_faces(mesh, matrix):
     mesh.polygons.foreach_get("loop_total", total)
     corner = np.empty(len(mesh.loops), np.int32)
     mesh.loops.foreach_get("vertex_index", corner)
-    tris = [corner[a:a + b].tolist() for a, b in zip(start.tolist(), total.tolist())]
-    bvh = BVHTree.FromPolygons(co.tolist(), tris)
+    # Blender's own triangles of each face.
+    mesh.calc_loop_triangles()
+    tris = np.empty(3 * len(mesh.loop_triangles), np.int32)
+    mesh.loop_triangles.foreach_get("vertices", tris)
+    bvh = native.Bvh(co, tris)
     centre = np.add.reduceat(co[corner], start) / total[:, None]
     normal = np.empty(n * 3)
     mesh.polygons.foreach_get("normal", normal)
@@ -352,16 +380,8 @@ def seen_faces(mesh, matrix):
     normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-30)[:, None]
     toward = view_directions()
     facing = normal @ toward.T > 1e-3
-    seen = np.zeros(n, bool)
-    ray = bvh.ray_cast
-    dirs = [tuple(d) for d in toward.tolist()]
-    for f in np.flatnonzero(facing.any(axis=1)).tolist():
-        lift = normal[f] * RAY_LIFT
-        c = centre[f]
-        ways = [dirs[j] for j in np.flatnonzero(facing[f]).tolist()]
-        samples = [c] + [c + SAMPLE_REACH * (co[v] - c) for v in tris[f]]
-        if any(ray(tuple(p + lift), d)[0] is None for p in samples for d in ways):
-            seen[f] = True
+    seen = native.seen_faces(bvh, centre, normal, np.append(start, len(corner)), corner, toward, facing,
+                             SAMPLE_REACH, RAY_LIFT)
     # One ring more, by welded position: a mesh split at its seams (flat
     # shaded, or come in through glTF) has no shared vertices to walk.
     weld = np.unique(np.round(co / SEEN_WELD).astype(np.int64), axis=0, return_inverse=True)[1].ravel()
@@ -487,30 +507,47 @@ def unwrap(ob, seen, sides, gap_sides):
     else:
         image = deal_islands(welded, uv, uv_islands(w_vert, uv, w_start, w_total, corner_face),
                              w_start, w_total, corner_face, sides)
-    for k, (side, gap) in enumerate(zip(sides, gap_sides)):
+    # Each map's islands packed (native/src/pack.cpp), the maps side by side.
+    # Turning islands by right angles took Blender's packer from 0.47 to 0.59
+    # coverage on Terrace.001's five maps (2026-10); any angle packed no
+    # better. Blender's packer, single-threaded, was 97 % of the unwrap; ours
+    # packs on a grid of PACK_GRID texels with the gap kept between texels'
+    # squares, and covered 0.75 to 0.81 of Terrace.002's and Terrace.010's
+    # maps where Blender's covered 0.55 to 0.62, in 1 to 6 s a map against 9
+    # to 20 (2026-11-13).
+    import native
+    uv = uvs()
+    welded.calc_loop_triangles()
+    lt = np.empty(3 * len(welded.loop_triangles), np.int32)
+    welded.loop_triangles.foreach_get("loops", lt)
+    lt = lt.reshape(-1, 3)
+    lt_face = np.empty(len(welded.loop_triangles), np.int32)
+    welded.loop_triangles.foreach_get("polygon_index", lt_face)
+
+    def pack(k):
         faces = image == k
-        if not faces.any():
+        mine = np.flatnonzero(faces[corner_face])
+        if not len(mine):
+            return mine, None, 0.0
+        local = np.full(n, -1, np.int64)
+        local[mine] = np.arange(len(mine))
+        grid = min(PACK_GRID, gap_sides[k])
+        gap = max(1, math.ceil(PACK_GAP_PX * grid / gap_sides[k]))
+        out, share = native.pack_islands(uv[mine], w_vert[mine], local[lt[faces[lt_face]]], grid, gap)
+        return mine, out, share
+
+    with ThreadPoolExecutor(max_workers=len(sides)) as pool:
+        packed = list(pool.map(pack, range(len(sides))))
+    shares = []
+    for k, (mine, out, share) in enumerate(packed):
+        if out is None:
             continue
-        # Into the unit square first: the packer packs into the UDIM tile
-        # nearest the islands.
-        uv = uvs()
-        mine = faces[corner_face]
-        lo = uv[mine].min(axis=0)
-        uv[mine] = (uv[mine] - lo) / max(float((uv[mine] - lo).max()), 1e-30) * 0.999
-        put(uv)
-        select(faces)
-        # Turning islands by right angles took the coverage from 0.47 to
-        # 0.59 on Terrace.001's five maps (385 -> 430 texels a metre seen;
-        # without, it would take a sixth map) for 85 s of packing against
-        # 39 s; on Terrace.003, 0.63 -> 0.69 for 10 s against 7. Any angle
-        # packed no better than right angles, slower.
-        bpy.ops.uv.pack_islands(udim_source="CLOSEST_UDIM", rotate=True, rotate_method="CARDINAL", scale=True,
-                                margin_method="FRACTION", margin=PACK_GAP_PX / gap, shape_method="CONCAVE")
-        uv = uvs()
-        lo = np.floor(uv[mine].min(axis=0) + 1e-6)
-        if lo.any():
-            uv[mine] -= lo
-            put(uv)
+        if share < 0:
+            raise SystemExit(f"{ob.name}: map {k}'s islands fit its {sides[k]} square at no scale")
+        uv[mine] = out
+        shares.append(share)
+    put(uv)
+    log(f"unwrap {ob.name}: islands cover {', '.join(f'{s:.2f}' for s in shares)} of the maps")
     bpy.ops.object.mode_set(mode="OBJECT")
     tool.use_uv_select_sync, tool.mesh_select_mode = sync, select_mode
     uv_welded = uvs().astype(np.float32).ravel()
@@ -712,31 +749,32 @@ def is_slate(mat):
 
 
 def bake_detail_normals(targets, images, straight):
-    """Bake each painted slate rock's chips and sub-facets (formations/
-    detail.py, built here from the rock's own mesh and removed after) into
-    its normal image, one selected-to-active bake per rock, and return the
-    image nodes keyed by material. The high poly is built from the rock's
-    `straight` mesh (the rock is split for its bows but not yet bent, so the
-    two line up exactly). It stands at the rock's world transform; the bake casts from detail.CAGE outside the rock inward to
-    detail.RAY_DISTANCE. `images` holds each rock's images, one a map."""
+    """Each painted slate rock's chips and sub-facets (formations/detail.py)
+    as its detail normal images, and the image nodes reading them, keyed by
+    material. The detail is made from the rock's `straight` mesh (split for
+    its bows but not yet bent, so it lines up with the rock exactly), and
+    each texel's normal found straight from it (detail.normal_maps: the
+    native kernels cast the selected-to-active bake's rays at the crumpled
+    rock less the chip cutters), with no high poly built and no Cycles bake:
+    the boolean and the 31 detail bakes were most of 571 s of a cold river
+    export (2026-11-13). `images` holds each rock's images, one a map. They
+    are a step toward the normal bake, which reads them from memory, so they
+    are neither filled (every texel is written, the flat normal where no ray
+    met the detail, as Blender's bake writes it) nor packed."""
     from formations import detail
-    scene = bpy.context.scene
     nodes = image_nodes(targets, images)
     for ob in targets:
-        high, report = detail.build(straight.get(ob, ob.data), seed_for(ob), scene.collection, f"{ob.name} detail")
-        high.matrix_world = ob.matrix_world.copy()
-        select_only([high, ob], ob)
-        t0 = time.time()
-        bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_selected_to_active=True,
-                            cage_extrusion=detail.CAGE, max_ray_distance=detail.RAY_DISTANCE,
-                            target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0)
-        log(f"detail {ob.name}: {report}; baked in {time.time() - t0:.1f}s")
-        me = high.data
-        bpy.data.objects.remove(high)
-        bpy.data.meshes.remove(me)
-        for im in images[ob]:
-            fill_baked(ob, im, "detail normal")
-            im.pack()
+        count = len(images[ob])
+        per = len(ob.data.materials) // count
+        maps, texels, report = detail.normal_maps(
+            ob.data, straight.get(ob, ob.data), ob.matrix_world, seed_for(ob), BAKE_UV,
+            [im.size[0] for im in images[ob]], lambda slot: slot // per, smallest_detail(ob, "export_chips"))
+        if not texels:
+            raise SystemExit(f"{ob.name}: no ray of the detail normal bake met its detail; nothing is cached or "
+                             "shipped")
+        for im, px in zip(images[ob], maps):
+            im.pixels.foreach_set(px.ravel())
+        log(f"detail {ob.name}: {report}")
     return nodes
 
 
@@ -751,11 +789,13 @@ def seed_for(ob):
 
 def preparation(ob):
     """Everything besides its mesh and materials that decides how `ob` is
-    prepared and baked: its detail seed and every render setting
+    prepared and baked: its detail seed, every render setting
     (formations/render.py: the depth, the strips, creases and chips, the map
-    size), as the bake cache keys it."""
+    size) and the narrowest detail each pass keeps there (the depth of
+    field's blur), as the bake cache keys it."""
     from formations import render
-    return seed_for(ob), [(name, render.setting(ob, name)) for name in render.SETTINGS]
+    return seed_for(ob), [(name, render.setting(ob, name)) for name in render.SETTINGS], \
+        [(name, round(render.smallest_detail(ob, name), 5)) for name in render.PASSES], ALL_SEEN
 
 
 def export_materials(ob, materials):
@@ -994,13 +1034,14 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         slate_rock = any(is_slate(m) for m in mesh.materials)
         if slate_rock and render_setting(ob, "export_strips"):
             from formations import slate
-            log(f"strips {ob.name}: {slate.mark_strips(mesh)} chamfer strips painted as edge line")
+            log(f"strips {ob.name}: {slate.mark_strips(mesh, smallest_detail(ob, 'export_strips'))} chamfer strips "
+                "painted as edge line")
         if slate_rock and render_setting(ob, "export_creases"):
             # Long straight creases (formations/curve.py): split now, before
             # the unwrap; every map is baked on the straight rock, which the
             # detail high poly matches exactly, and the rock is bent after.
             from formations import curve
-            bows[ob] = curve.find_bows(mesh, seed_for(ob))
+            bows[ob] = curve.find_bows(mesh, seed_for(ob), smallest_detail(ob, "export_creases"))
             log(f"curve {ob.name}: {curve.rebuild_mesh(mesh, bows[ob], seed_for(ob), smooth=True)}")
         if slate_rock and render_setting(ob, "export_chips"):
             straight[ob] = mesh.copy()
@@ -1596,7 +1637,11 @@ def repaint_slate():
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
-    usage = "usage: scene_export.py -- out.glb meta.json [--cache DIR [--stale-occlusion]]"
+    usage = "usage: scene_export.py -- out.glb meta.json [--all-seen] [--cache DIR [--stale-occlusion]]"
+    global ALL_SEEN
+    ALL_SEEN = "--all-seen" in argv
+    if ALL_SEEN:
+        argv.remove("--all-seen")
     stale_occlusion = "--stale-occlusion" in argv
     if stale_occlusion:
         argv.remove("--stale-occlusion")
@@ -1606,6 +1651,11 @@ def main():
     cache_dir = argv[3] if len(argv) == 4 else None
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     t0 = time.time()
+    # The game's depth of field, from scripts/scene-export.ts (it reads them
+    # from src/render3d/depthOfField.ts); the finer passes are budgeted by it.
+    if "SCENE_EXPORT_DOF" in os.environ:
+        from formations import render
+        render.check_dof(json.loads(os.environ["SCENE_EXPORT_DOF"]))
 
     scene = bpy.context.scene
     view_layer = bpy.context.view_layer

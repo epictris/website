@@ -157,6 +157,9 @@ const GROUP_MARK = "#7fd6a8";
 // says the opposite: these are what the selected body is made of, shown so the
 // body's extent is visible without the pieces being picked.
 export const BODY_MEMBER = "#4f9dff";
+// A model's mark (`drawModelMark`) and its label: the overlay's neutral
+// foreground, since a model has no colour of its own to show.
+const MODEL_MARK_COLOR = "#cbccc6";
 
 // Scripted motion - a pendulum's arc, a platform's route. A colour of its own
 // because it is neither geometry nor a handle: it is what the level DOES with a
@@ -174,16 +177,23 @@ export const HANDLE_HIT_PX = 9; // pointer pick radius
 const ROT_OFFSET_PX = 26; // rotate handle distance beyond the top edge
 const DEPTH_OFFSET_PX = 26; // depth handle distance beyond the right edge
 
-// Which objects have a z at all: lights. A collision shape has none - it is
-// the gameplay plane, which is what makes it collision - so it gets no depth
-// handle rather than one that writes nothing.
+// Which objects have a z at all: lights and models. A collision shape has none
+// - it is the gameplay plane, which is what makes it collision - so it gets no
+// depth handle rather than one that writes nothing.
 export function hasDepth(item: EdItem): boolean {
-  return item.object === "light";
+  return item.object === "light" || item.object === "model";
 }
 
 // What that handle is dragging, in metres off the plane.
 export function depthOf(item: EdItem): number {
-  return item.object === "light" ? item.light.z : 0;
+  return item.object === "light" ? item.light.z : item.object === "model" ? item.modelRef.z : 0;
+}
+
+// ...and the one writer of it: a drag of the depth handle, the gizmo's blue
+// arrow, or an arrangement's. Nothing for an object with no depth.
+export function setDepth(item: EdItem, z: number): void {
+  if (item.object === "light") item.light.z = z;
+  else if (item.object === "model") item.modelRef.z = z;
 }
 
 export interface Handles {
@@ -1015,6 +1025,38 @@ const LIGHT_MARK_RAYS = 8;
 // strength precisely because there has to be something to aim at. It grows with
 // the zoom exactly as the drawn burst does (`worldLine * 4`), so what you can
 // hit is always what you can see.
+// A MODEL's mark on the plane: a cube in outline on its marker box, turned
+// with the item, dashed because it is not geometry. The model itself is drawn
+// by the 3D scene; this is where the 2D view has it, and what a click lands on.
+function drawModelMark(ctx: CanvasRenderingContext2D, m: EdItem, worldLine: number, selected: boolean): void {
+  const half = m.shape.kind === "rect" ? m.shape.w / 2 : 0.15;
+  const back = half * 0.45;
+  ctx.save();
+  ctx.translate(m.pos.x, m.pos.y);
+  ctx.rotate(m.rot);
+  ctx.beginPath();
+  ctx.rect(-half, -half + back, 2 * half - back, 2 * half - back);
+  ctx.moveTo(-half, -half + back);
+  ctx.lineTo(-half + back, -half);
+  ctx.lineTo(half, -half);
+  ctx.lineTo(half, half - back);
+  ctx.lineTo(half - back, half);
+  ctx.moveTo(half - back, -half + back);
+  ctx.lineTo(half, -half);
+  if (selected) {
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 5;
+    ctx.setLineDash([]);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = MODEL_MARK_COLOR;
+  ctx.lineWidth = worldLine * 1.5;
+  ctx.setLineDash([worldLine * 4, worldLine * 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 export function lightPickRadius(worldLine: number): number {
   return Math.max(LIGHT_MARK_SIZE, worldLine * 4);
 }
@@ -2578,6 +2620,14 @@ export function drawEditor(
   for (const l of lights) {
     drawLightGizmo(ctx, l, worldLine, selectedIds.has(l.id), paint);
   }
+  // ...and the models, by the same argument: the scene draws the model itself,
+  // but a model hidden behind (or inside) its body's collision could not be
+  // found, and with no scene drawn there is nothing else on the plane to say
+  // one is there.
+  const models = visibleLayers.has("scene")
+    ? model.items.filter((i) => i.object === "model")
+    : [];
+  for (const m of models) drawModelMark(ctx, m, worldLine, selectedIds.has(m.id));
 
   // Over every object it marks - a body's pieces are drawn in several passes and
   // an outline under one of them would be half hidden - and under the handles,
@@ -2840,6 +2890,17 @@ export function drawEditor(
     ctx.textBaseline = "bottom";
     ctx.fillStyle = l.color;
     ctx.fillText(lightLabel(l), anchor.x + clear + 4, anchor.y - 2);
+  }
+  // ...and the models' names, off their marks' lower right corner: the right
+  // edge's middle is the depth handle's, and above the top edge is the rotate
+  // knob's, both drawn while it is selected.
+  for (const m of models) {
+    const at = worldToScreen(cam, m.pos);
+    const half = (m.shape.kind === "rect" ? m.shape.w / 2 : 0) * scale;
+    ctx.font = "11px monospace";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = MODEL_MARK_COLOR;
+    ctx.fillText(m.modelRef.name || "(no model)", at.x + half + 8, at.y + half - 4);
   }
   for (const n of notes) {
     if (n.note.kind === "text") drawNoteText(ctx, cam, n);

@@ -92,6 +92,7 @@ import {
   hasBearing,
   isCollisionObject,
   isAnchorObject,
+  isModelObject,
   type CheckpointData,
   type LevelCameraData,
   type NoteData,
@@ -162,7 +163,27 @@ export const ED_LAYERS: EdLayer[] = ["scene", "camera", "fireflies", "notes"];
 // numbers on the chain for the same reason - a chain end is a thing on a body,
 // so it rides that body, shows up in the outliner, and is dragged like anything
 // else instead of only being reachable by grabbing the rope.
-export type EdObject = "collision" | "light" | "anchor";
+//
+// `model` is a 3D model of the library placed on the body (`ModelObjectData`):
+// appearance only, carried by the body like its lights. Its fields are
+// `modelRef`; its shape is the marker box a click lands on, as an anchor's is.
+export type EdObject = "collision" | "light" | "anchor" | "model";
+
+// A MODEL object's own fields (`ModelObjectData`), metres and radians. On every
+// item, read only on one whose `object` is "model", as `light` is read only on
+// a light. `name` is the library's model; the placement (`pos`, `rot`) is the
+// item's own, as every object's is.
+export interface EdModelRef {
+  name: string;
+  z: number;
+  rotX: number;
+  rotY: number;
+  scale: number;
+}
+export const defaultModelRef = (): EdModelRef => ({ name: "", z: 0, rotX: 0, rotY: 0, scale: 1 });
+// The smallest size a model may be given, so no drag or typed value draws it
+// at nothing (or inside out); `cli levels` holds the file to a positive one.
+export const MODEL_MIN_SCALE = 0.01;
 
 // `poly` vertices are metres in the item's own local frame, kept a **simple**
 // outline (one that never crosses itself) - `setPolyVerts` is the one writer, so
@@ -703,6 +724,8 @@ export interface EdItem {
   // through a load and a save rather than minted fresh each time, so a level
   // that goes through the editor untouched comes back with the same ids it went
   // in with - the id is content, not a handle. 0 on everything else.
+  // A model object's fields (see `EdModelRef`).
+  modelRef: EdModelRef;
   anchorId: number;
   // Firefly paths only (the fireflies layer): the id a swarm names this path
   // by (`FireflyPathData.id`, `LightObjectData.path`), preserved through a
@@ -1170,6 +1193,8 @@ export const LIGHT_FILL_OPACITY = 0.06;
 // outline, so this is only what the editor draws and picks it by - the save
 // writes no `shape` at all.
 export const ANCHOR_GIZMO = 0.3;
+// ...and a model's marker on the plane (`EdObject` "model"), the same size.
+export const MODEL_MARK = ANCHOR_GIZMO;
 
 // Keyed by what is being DRAWN rather than by the layer alone, since the scene
 // layer draws two different things: a shape starts at the body defaults and a
@@ -1405,6 +1430,7 @@ function fromLevelData(data: LevelData): EdModel {
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
+      modelRef: defaultModelRef(),
       anchorId: 0,
       pathId: 0,
     };
@@ -1457,6 +1483,36 @@ function fromLevelData(data: LevelData): EdModel {
           root: null,
           anchorId: o.id,
           pathId: 0,
+        });
+        continue;
+      }
+      if (isModelObject(o)) {
+        bodies.push({
+          ...base,
+          id: newBodyId(),
+          object: "model",
+          pos: w.pos,
+          rot: w.rot,
+          // The model is drawn by the 3D scene, where a click on it picks it;
+          // on the plane it is this marker, as an anchor is its gizmo.
+          shape: { kind: "rect", w: MODEL_MARK, h: MODEL_MARK },
+          impermeable: false,
+          mask: MASK_ALL,
+          rail: false,
+          viscosity: 0,
+          slipFloor: 0,
+          material: DEFAULT_MATERIAL,
+          density: DEFAULT_DENSITY,
+          thickness: DEFAULT_THICKNESS,
+          debug: NO_DEBUG(),
+          root: null,
+          modelRef: {
+            name: o.model,
+            z: o.z ?? 0,
+            rotX: o.rotX ?? 0,
+            rotY: o.rotY ?? 0,
+            scale: o.scale ?? 1,
+          },
         });
         continue;
       }
@@ -1561,6 +1617,7 @@ function fromLevelData(data: LevelData): EdModel {
     },
     light: defaultLight(),
     note: defaultNote(),
+    modelRef: defaultModelRef(),
     anchorId: 0,
     pathId: 0,
   }));
@@ -1665,6 +1722,7 @@ function fromLevelData(data: LevelData): EdModel {
     },
     light: defaultLight(),
     note: defaultNote(),
+    modelRef: defaultModelRef(),
     anchorId: 0,
     pathId: 0,
   });
@@ -1770,6 +1828,7 @@ function lightItem(
       path: l.path ?? null,
     },
     note: defaultNote(),
+    modelRef: defaultModelRef(),
     anchorId: 0,
     pathId: 0,
   };
@@ -1833,6 +1892,7 @@ function lightItem(
     moveAlign: false,
     cam: defaultCamera(),
     light: defaultLight(),
+    modelRef: defaultModelRef(),
     anchorId: 0,
     pathId: 0,
     note,
@@ -2196,6 +2256,21 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         // A placement and the id chains name it by, and nothing else - which is
         // all an anchor is.
         emit(i, { type: "anchor", id: i.anchorId, ...localOf(i) });
+        continue;
+      }
+      if (i.object === "model") {
+        // The placement, the model and what of it was authored: a field left at
+        // its default is not written, the rule every list here is written under.
+        const m = i.modelRef;
+        emit(i, {
+          type: "model",
+          model: m.name,
+          ...localOf(i),
+          ...(m.z !== 0 ? { z: m.z } : {}),
+          ...(m.rotX !== 0 ? { rotX: m.rotX } : {}),
+          ...(m.rotY !== 0 ? { rotY: m.rotY } : {}),
+          ...(m.scale !== 1 ? { scale: m.scale } : {}),
+        });
         continue;
       }
       if (i.object === "light") {
@@ -3455,6 +3530,7 @@ function bodyKindLabel(members: readonly EdItem[]): string {
   const first = members[0];
   if (!first) return "empty";
   if (first.object === "light") return "light";
+  if (first.object === "model") return "model";
   if (first.layer === "camera") return "camera";
   if (first.layer === "fireflies") return "fireflies";
   if (first.layer === "notes") return first.note.kind === "checkpoint" ? "checkpoint" : "note";
@@ -3472,6 +3548,7 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   // A chain's tie point. Hook-only scenery used to share the word as a
   // `BodyKind`; it is the `passable` flag now, so nothing else answers to it.
   if (item.object === "anchor") return `anchor ${item.anchorId}`;
+  if (item.object === "model") return `model ${item.modelRef.name || "(none)"}`;
   // A checkpoint is named by the name it is REACHED by (`?checkpoint=vines`),
   // since that is what tells two of them apart; an unnamed one says so, being a
   // marker nothing can ask for yet.
@@ -4419,6 +4496,7 @@ export function emptyModel(): EdModel {
         cam: defaultCamera(),
         light: defaultLight(),
         note: defaultNote(),
+        modelRef: defaultModelRef(),
         anchorId: 0,
         pathId: 0,
       },

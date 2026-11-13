@@ -275,7 +275,7 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            if context.scene.get(core.BUSY):
+            if core.busy():
                 raise ValueError("A rebuild is already running")
             self._targets = [ob for ob in core.formations() if core.pending(ob)]
             for ob in self._targets:
@@ -287,7 +287,6 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
                 return {"FINISHED"}
             self._done, self._index, self._cancelled = [], 0, False
             self._launch(context)
-            context.scene[core.BUSY] = True
             self._timer = context.window_manager.event_timer_add(.5, window=context.window)
             context.window_manager.modal_handler_add(self)
             self.report({"INFO"}, f"Rebuilding {len(self._targets)} formations; Esc discards the results")
@@ -300,14 +299,21 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
         ob = self._targets[self._index]
         self._request = core.recipe_for(ob)
         self._proc, self._out, self._log = core.launch_worker(self._request)
-        context.scene[core.PROGRESS] = f"{self._index + 1}/{len(self._targets)}: {ob.name}"
+        core.rebuild_progress = f"{self._index + 1}/{len(self._targets)}: {ob.name}"
         redraw(context)
 
     def _cleanup(self, context):
         context.window_manager.event_timer_remove(self._timer)
-        context.scene[core.BUSY] = False
-        context.scene[core.PROGRESS] = ""
+        core.rebuild_progress = None
         redraw(context)
+
+    def cancel(self, context):
+        # Blender drops the modal handler without a last event when a file
+        # loads or the window closes: the worker goes with it.
+        self._proc.kill()
+        self._proc.wait()
+        self._log.close()
+        self._cleanup(context)
 
     def modal(self, context, event):
         if event.type == "ESC":
@@ -350,6 +356,11 @@ class FORMATIONS_OT_rebuild_changed(bpy.types.Operator):
             self._cleanup(context)
             build_failed(self, e, self._out)
             return {"CANCELLED"}
+        except Exception:
+            # A bug, not a failed build: its traceback goes to the console,
+            # but the panels must not stay greyed out behind it.
+            self._cleanup(context)
+            raise
 
 
 class FORMATIONS_OT_action(bpy.types.Operator):

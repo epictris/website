@@ -15,7 +15,7 @@ class GAME_PT_main(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        busy = bool(scene.get(core.BUSY))
+        busy = core.busy()
         cam = camera.game_camera(scene)
         box = layout.box()
         if cam is None:
@@ -39,7 +39,7 @@ class GAME_PT_main(bpy.types.Panel):
             elif look.enabled(scene):
                 box.label(text="Shows in Rendered shading")
         if busy:
-            layout.label(text=scene.get("formations_progress", "Working..."), icon="TIME")
+            layout.label(text=core.rebuild_progress, icon="TIME")
 
         box = layout.box()
         box.enabled = not busy

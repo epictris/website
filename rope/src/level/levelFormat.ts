@@ -915,7 +915,49 @@ export interface AnchorObjectData extends ObjectPlacement {
   id: number;
 }
 
-export type SceneObjectData = CollisionObjectData | LightObjectData | AnchorObjectData;
+// A 3D MODEL carried by a body: one of the game's model library
+// (`assets-src/models/<model>.blend`, exported by `just model <model>`, see
+// docs/blender-models.md), drawn at this placement in the body's own frame and
+// carried by the body from there - a lantern on its chain, a crate, a lever arm.
+//
+// It exists because a level's Blender scene places things where they STAND:
+// a node named like a body rides it, but it is placed by hand at that body's
+// rest pose in that one file, so six lanterns are six objects to model and
+// line up, a seventh is a scene re-export, and nothing about a lantern can be
+// reused by another level. A model is authored once, in a file of its own, and
+// placed by the level like any other object; the scene keeps what stands still.
+//
+// Appearance only, as the scene is. It has no collision, nothing wraps it, the
+// sim never sees it, and a body made of nothing but models builds no engine
+// body: its collision is the body's own collision objects, authored by hand,
+// and never derived from the mesh (2026-11-13, Tris).
+//
+// FRAMES. The model is modelled in Blender's front view, the game's own frame:
+// metres, its origin the point placed here, Blender -y toward the camera (so
+// glTF +z, as a scene's). `x`/`y`/`rot` are the placement every object has,
+// `rot` turning it in the plane as it turns a light. `z` is how far off the
+// body's plane its origin sits, positive toward the camera. `rotX`/`rotY` tilt
+// it about the screen's horizontal and vertical axes (radians, right-handed
+// in three's frame: y up, z toward the camera), applied before `rot`, so the
+// in-plane turn a rigid body makes is the outermost and a model tilted to show
+// its side keeps that tilt as its body swings. `scale` is a uniform factor
+// against the modelled size.
+export interface ModelObjectData extends ObjectPlacement {
+  type: "model";
+  // Which model: a name in `MODEL_NAME`'s spelling (render3d/models.ts), the
+  // file `assets-src/models/<model>.blend` and the release asset it ships as.
+  model: string;
+  // Off the body's plane, +z toward the camera. A length. Absent = 0, the
+  // plane itself, which is where the collision it dresses is.
+  z?: number;
+  // Radians, not lengths. Absent = 0.
+  rotX?: number;
+  rotY?: number;
+  // A ratio, not a length. Absent = 1.
+  scale?: number;
+}
+
+export type SceneObjectData = CollisionObjectData | LightObjectData | AnchorObjectData | ModelObjectData;
 
 export interface LevelBodyData {
   // What this body IS, physically. Consulted only when the body has at least one
@@ -1325,6 +1367,10 @@ export function isLightObject(o: SceneObjectData): o is LightObjectData {
 
 export function isAnchorObject(o: SceneObjectData): o is AnchorObjectData {
   return o.type === "anchor";
+}
+
+export function isModelObject(o: SceneObjectData): o is ModelObjectData {
+  return o.type === "model";
 }
 
 // Does this body take part in the simulation at all? One predicate, so "is this
@@ -3235,6 +3281,21 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
   }
   // An anchor is a placement and an id, and an id is not a length.
   if (o.type === "anchor") return { type: "anchor", id: o.id, ...placed };
+  // A model's depth is a length like a light's `z`; its tilts are radians and
+  // its scale a ratio. The modelled mesh is in metres already, so a level
+  // scaled by `factor` does not rescale the model: a lantern is the size it
+  // was modelled at, whatever the file's units.
+  if (o.type === "model") {
+    return {
+      type: "model",
+      model: o.model,
+      ...placed,
+      ...(o.z !== undefined ? { z: o.z * factor } : {}),
+      ...(o.rotX !== undefined ? { rotX: o.rotX } : {}),
+      ...(o.rotY !== undefined ? { rotY: o.rotY } : {}),
+      ...(o.scale !== undefined ? { scale: o.scale } : {}),
+    };
+  }
   if (o.type === "light") {
     return {
       type: "light",

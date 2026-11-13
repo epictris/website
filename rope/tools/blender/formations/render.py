@@ -20,13 +20,18 @@ export decides as it always has:
 - export_maps: the most colour maps the object may be split over (0: MAX_MAPS
   for a painted slate rock on the gameplay plane, else 1).
 
-The three passes run unless the object is `far_back` (a detail scale over 1:
-30 to 45 m back they are a pixel or two, and on the river's 155k backdrop
-faces they held the export for over half an hour). A solid formation (a
-backdrop piece, generator `solid`) skips the curved creases and the chips
-whatever its depth (Tris, 2026-10-08): the river's Cube stands at a detail
-scale of 0.9, and its 2714 creases and 1630 chips were 747 s of a 1330 s
-export for a rock only an eighth of which the camera can ever see.
+The three passes add no detail the game's depth of field would blur away
+(Tris, 2026-11-13: "if the depth of field blur would make a particular detail
+indistinguishable, don't bother adding the detail at that distance"; the
+High setting). The blur behind the focus is a disc whose diameter in the
+world grows straight with the depth past it (`detail_blur`), the depth a
+rock stands at is its LOD scale (its detail scale less one, times the start
+camera's distance from the plane), and a detail narrower than the disc there
+is left out: each pass skips the features under it (a chip, a sub-facet
+plane, a bow, a strip) and is off altogether once its LARGEST is. Until then
+they ran only on the plane (a detail scale of 1) and a solid formation never
+had the creases and chips, a cost of the recipe F meshes (the river's Cube:
+2714 creases and 1630 chips, 747 s of a 1330 s export).
 
 Plain Python on the object's ID properties: the export runs without the
 add-on registered.
@@ -52,17 +57,19 @@ def far_back(ob):
     return detail_scale(ob) > 1.0
 
 
-# The passes a solid formation skips unless it sets them itself.
-SOLID_SKIPS = ("export_creases", "export_chips")
-
-
-def solid(ob):
-    """Whether `ob` is a solid formation (formations/core.py `is_solid`, read
-    here without the add-on)."""
-    try:
-        return json.loads(ob["formation_recipe"]).get("generator") == "solid"
-    except (KeyError, TypeError, ValueError, AttributeError):
-        return False
+# The game's High depth of field (src/render3d/depthOfField.ts): the blur's
+# radius at infinity as a share of the frame's height, and the metres behind
+# the gameplay plane it focuses at. scripts/scene-export.ts reads them from
+# there and the export refuses to run if these differ (`check_dof`).
+DOF_MAX_BLUR, DOF_FOCUS_BAND = 0.016, 1.5
+# Each pass's largest feature, metres: a strip's widest (slate.STRIP_WIDTH),
+# a crease's largest bow (curve.MAX_BOW), and the coarsest of the chips (the
+# longest's widest side, detail.SIZE_MAX x WIDE) and the sub-facets (their
+# grid, detail.SPACING). Past the depth where the blur outgrows it, the pass
+# is off.
+LARGEST = {"export_strips": 0.08, "export_creases": 0.2, "export_chips": 0.2}
+# Where the scene keeps the start camera (formations/core.py CAMERA).
+CAMERA = "backdrop_camera"
 
 
 def setting(ob, name):
@@ -73,10 +80,50 @@ def setting(ob, name):
     if name == DETAIL_SCALE:
         return detail_scale(ob)
     if name in PASSES:
-        return not far_back(ob) and not (name in SOLID_SKIPS and solid(ob))
+        return detail_blur(ob) < LARGEST[name]
     if name == "export_maps":
         return default_maps(ob)
     return 0
+
+
+def scene_of(ob):
+    import bpy
+    scenes = getattr(ob, "users_scene", ())
+    return scenes[0] if scenes else bpy.context.scene
+
+
+def detail_blur(ob):
+    """The diameter (metres, on the rock) of the game's High depth of field
+    blur where `ob` stands by its LOD scale. A thin lens focused at s blurs a
+    point at depth d into a circle of DOF_MAX_BLUR x (1 - s / d) of the
+    frame's height as a radius; the frame is 2 d tanHalf tall there, so the
+    disc is 4 DOF_MAX_BLUR tanHalf (d - s) across: straight with the depth
+    past the focus. Without a start camera on the scene a rock on the plane
+    is sharp and any other wholly blurred."""
+    scene = scene_of(ob)
+    scale = detail_scale(ob)
+    try:
+        camera = json.loads(scene[CAMERA])
+        distance, tan_half = float(camera["distance"]), float(camera["tanHalf"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0 if scale <= 1.0 else math.inf
+    behind = (scale - 1.0) * distance - DOF_FOCUS_BAND
+    return 4 * DOF_MAX_BLUR * tan_half * max(0.0, behind)
+
+
+def smallest_detail(ob, name):
+    """The narrowest feature pass `name` keeps on `ob`: the blur there, or
+    nothing when the rock sets the pass itself."""
+    return 0.0 if name in ob else detail_blur(ob)
+
+
+def check_dof(given):
+    """Refuse an export whose depth of field (scene-export.ts: the game's
+    DOF_MAX_BLUR.high and FOCUS_BAND) is not the one written here."""
+    want = {"maxBlur": DOF_MAX_BLUR, "focusBand": DOF_FOCUS_BAND}
+    if any(not math.isclose(float(given[k]), v) for k, v in want.items()):
+        raise SystemExit(f"formations/render.py's depth of field {want} is not the game's {given}: "
+                         "update DOF_MAX_BLUR and DOF_FOCUS_BAND from src/render3d/depthOfField.ts")
 
 
 def default_maps(ob):
@@ -137,8 +184,14 @@ HIDDEN_DENSITY = 0.25
 # The detail high poly is still baked at the colour's size: the normal pass
 # averages it down rather than resampling a coarse one.
 NORMAL_SCALE = 0.5
-# The share of the image an unwrap's islands cover after packing.
-UV_COVERAGE = 0.6
+# The share of the image an unwrap's islands cover after packing. 0.6 was
+# Blender's packer (0.55 to 0.62); the export's own packer (native/src/pack.cpp)
+# covers 0.75 to 0.81 of a 4096 map and 0.65 of a smaller last map (Terrace.002
+# and Terrace.010, 2026-11-13), so the same density takes fewer texels: the
+# river's colour maps went from 627 M texels to 576 M (Terrace.002, .005, .006
+# and .010 each a map fewer). A rock that packs worse is a few % under its
+# density, not over it.
+UV_COVERAGE = 0.75
 # A last map holding under this share of a full one's surface is left out:
 # the others take it at that much under their density.
 LAST_MAP_FLOOR = 0.02

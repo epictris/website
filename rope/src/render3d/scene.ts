@@ -426,13 +426,13 @@ export class Scene3D {
   }
 
   // Off, nothing from the level's Blender scene is drawn - the scenery and the
-  // nodes dressing the bodies alike - so the collision and what the game draws
+  // nodes dressing the bodies alike, and the models the bodies carry - so the collision and what the game draws
   // itself (water, belts, chains, the ball, lights) stand alone: the editor's
   // "scene" toggle. Hidden is unpickable too (`hitsAt`), so a click goes
   // through to what is drawn behind.
   setSceneShown(on: boolean): void {
     this.sceneShown = on;
-    this.current?.dressing?.setShown(on);
+    if (this.current) this.applyShown(this.current);
   }
 
   // Hides every pool's water and the scene's water continuing it, for
@@ -480,6 +480,11 @@ export class Scene3D {
     const sceneName = level.visualSource.data.scene;
     level.visualSource.built.bodies.forEach((built) => {
       const visual = new BodyVisual(built.body, built, slot.lights, this.allDebugShown, this.rootsShown);
+      // A model landing late changes what the body draws, which the shards
+      // collide with (`ShardCollision.bodyMeshes`).
+      visual.modelLanded = () => {
+        if (slot === this.current) this.shardCollisionVersion++;
+      };
       slot.root.add(visual.root);
       if (built.body) slot.bodies.set(built.body, visual);
       else slot.standing.push(visual);
@@ -602,6 +607,7 @@ export class Scene3D {
         v.setDebugShown(this.debugShown);
         v.setWaterShown(this.waterShown);
         v.setRootsShown(this.rootsShown);
+        v.setModelsShown(this.sceneShown);
         const scenery = v.stillSurface?.scenery ?? [];
         for (const mesh of scenery) mesh.visible = this.waterShown;
       }

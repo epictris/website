@@ -145,6 +145,11 @@ The placement, the nodes and the handles are lengths and convert; `id` and `rot`
 A path with fewer than two distinct nodes, or repeating an earlier path's `id`, is dropped at load with a warning, and a `path` naming no path is warned about by the renderer and read as absent.
 The editor writes `path` only on a swarm, and `fireflyPaths` only when there is one, so a level that uses neither saves byte-identically.
 
+A **model object** (`ModelObjectData`, `type: "model"`) places a 3D model of the library on its body, which carries it - see [blender-models](blender-models.md).
+`model` names it (`assets-src/models/<model>.blend`), `z` is its origin's depth off the body's plane toward the camera, `rotX`/`rotY` tilt it about the screen's axes before its turn in the plane, and `scale` sizes it against how it was modelled.
+`z` and the placement are lengths and convert; the tilts are radians and `scale` a ratio, and neither does, so a model modelled in metres is its own size whatever the file's units.
+Appearance only: a body of nothing but models builds no engine body, and the editor writes every field only when it is not its default.
+
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays

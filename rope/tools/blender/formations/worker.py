@@ -74,11 +74,13 @@ def legacy_slab_size(outline):
 GENERATORS = {
     "boulders": DEFAULT_PARAMS,
     "fitted": {"seed": 31, "smallestRock": 0.25, "largestRock": 3.0},
-    # Recipe F stones cut from a closed guide mesh instead of an outline
-    # (solidfit.py; the backdrop, docs/blender-backdrop.md). Its defaults
-    # are solidfit.PARAMS, repeated here because this runs outside Blender.
-    "solid": {"seed": 0, "stoneSize": 1.0, "facets": 0.55, "chisel": 0.25, "knub": 0.3, "curveTurn": 60.0,
-              "floor": 0.0, "fixedScale": 0.0, "facetFalloff": 1.0},
+    # Stones cut from a closed guide mesh instead of an outline, each worked
+    # as the boulder generator works the top of its rock (solidfit.py;
+    # docs/blender-backdrop.md). Its defaults are solidfit.PARAMS, repeated
+    # here because this runs outside Blender. A recipe from before
+    # 2026-11-13 also carries recipe F's facets, chisel and facetFalloff,
+    # which `prepare` drops.
+    "solid": {"seed": 0, "stoneSize": 1.0, "knub": 0.3, "curveTurn": 60.0, "floor": 0.0, "fixedScale": 0.0},
 }
 
 

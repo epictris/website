@@ -57,9 +57,9 @@ class FORMATIONS_PT_main(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        layout.enabled = not scene.get(core.BUSY, False)
-        if scene.get(core.BUSY):
-            layout.label(text=scene.get(core.PROGRESS, "Working..."), icon="TIME")
+        layout.enabled = not core.busy()
+        if core.busy():
+            layout.label(text=core.rebuild_progress, icon="TIME")
         active = selected_active(context)
         ob = core.formation_of(active)
         if ob is not None:
@@ -120,7 +120,7 @@ class FORMATIONS_PT_generator(FormationSubpanel, bpy.types.Panel):
     def draw(self, context):
         ob = active_formation(context)
         layout = self.layout
-        layout.enabled = not context.scene.get(core.BUSY, False)
+        layout.enabled = not core.busy()
         settings = params.editable(ob)
         if settings is None:
             layout.operator("formations.action", text="Edit Parameters").action = "LOAD_PARAMS"
@@ -137,7 +137,7 @@ class FORMATIONS_PT_growth(FormationSubpanel, bpy.types.Panel):
     def draw(self, context):
         ob = active_formation(context)
         layout = self.layout
-        layout.enabled = not context.scene.get(core.BUSY, False)
+        layout.enabled = not core.busy()
         col = layout.column()
         col.use_property_split = True
         col.use_property_decorate = False
@@ -153,7 +153,7 @@ class FORMATIONS_PT_render(FormationSubpanel, bpy.types.Panel):
     def draw(self, context):
         ob = active_formation(context)
         layout = self.layout
-        layout.enabled = not context.scene.get(core.BUSY, False)
+        layout.enabled = not core.busy()
         col = layout.column()
         col.use_property_split = True
         col.use_property_decorate = False
@@ -175,7 +175,7 @@ class FORMATIONS_PT_mesh(FormationSubpanel, bpy.types.Panel):
     def draw(self, context):
         ob = active_formation(context)
         layout = self.layout
-        layout.enabled = not context.scene.get(core.BUSY, False)
+        layout.enabled = not core.busy()
         col = layout.column(align=True)
         if is_duplicate(ob):
             col.operator("formations.action", text="Make Unique").action = "UNIQUE"
@@ -194,7 +194,7 @@ class FORMATIONS_PT_scene(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.enabled = not context.scene.get(core.BUSY, False)
+        layout.enabled = not core.busy()
         scene = context.scene
         layout.prop(scene, "formations_show_guides")
         layout.prop(scene, "formations_rocks_wire")

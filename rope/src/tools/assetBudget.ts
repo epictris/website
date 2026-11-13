@@ -52,12 +52,13 @@ import {
   TEXTURE_ASSETS,
 } from "../render3d/assets";
 import { SCENE_ASSETS, isSceneName } from "../render3d/scenes";
+import { MODEL_ASSETS, isModelName } from "../render3d/models";
 import { normalizeLevelData, scaleLevelData, type RawLevelData } from "../level/levelFormat";
 import { LEVELS } from "../level/registry";
 import { PX } from "../engine/units";
 import { rootMeshKey } from "../render3d/rootKey";
 import ROOT_BAKES from "../render3d/rootBakes.json";
-import { assetName, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
+import { assetName, levelsModelNames, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 import { SOUND_ASSETS } from "../audio/library";
 import { SOUND_BANK, assignedSounds } from "../audio/slots";
@@ -244,6 +245,25 @@ export function runAssetChecks(): AssetCheck[] {
             ...unnamedScenes.map((scene) => `${scene} named by no level - run \`just publish\``),
           ].join(", ")
         : `${scenes.size} scene(s) published`,
+  });
+
+  // ...and exactly the models the levels' bodies carry, by the same argument:
+  // a model missing is a body that deploys drawing nothing.
+  const models = levelsModelNames();
+  const misnamedModels = [...models].filter(([model]) => !isModelName(model));
+  const unpublishedModels = [...models].filter(([model]) => !MODEL_ASSETS[model]);
+  const unnamedModels = Object.keys(MODEL_ASSETS).filter((model) => !models.has(model));
+  checks.push({
+    name: "assets: the store holds exactly the models the levels carry",
+    pass: misnamedModels.length === 0 && unpublishedModels.length === 0 && unnamedModels.length === 0,
+    detail:
+      misnamedModels.length || unpublishedModels.length || unnamedModels.length
+        ? [
+            ...misnamedModels.map(([model, levels]) => `"${model}" (${levels.join(", ")}) is not a model name (lower-case letters, digits and dashes)`),
+            ...unpublishedModels.map(([model, levels]) => `${model} (${levels.join(", ")}) not published - run \`just publish\``),
+            ...unnamedModels.map((model) => `${model} carried by no level - run \`just publish\``),
+          ].join(", ")
+        : `${models.size} model(s) published`,
   });
 
   // Every level's roots are baked as they now are: a level whose roots were

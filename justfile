@@ -39,7 +39,7 @@ asset IN OUT:
 texture IN OUT MAP:
     cd rope && bun run assets:optimize-texture {{IN}} {{OUT}} --map {{MAP}} && bun run assets:publish {{OUT}}
 
-# Pull the props, textures and Blender scenes this checkout's manifests name into rope/public/.
+# Pull the props, textures, Blender scenes and models this checkout's manifests name into rope/public/.
 assets:
     cd rope && bun run assets:fetch
 
@@ -49,15 +49,16 @@ assets:
 sources:
     cd rope && bun run assets:fetch-sources
 
-# Publish the Blender scenes the levels name to the asset release and pin them in
-# rope/src/render3d/sceneAssets.json, and those scenes' sources (their .blend
-# files, pinned in rope/scripts/sceneSources.json), bake every level's roots
-# (`just roots`), then upload every other pinned asset (props, texture maps,
-# skies, root bakes) the release does not hold yet. Run it after `just scene` or
-# a root edit, then commit the pins with the level; run it before pushing any
+# Publish the Blender scenes the levels name and the models their bodies carry
+# to the asset release and pin them in rope/src/render3d/sceneAssets.json and
+# modelAssets.json, and their sources (the .blend files, pinned in
+# rope/scripts/sceneSources.json), bake every level's roots (`just roots`),
+# then upload every other pinned asset (props, texture maps, skies, root bakes)
+# the release does not hold yet. Run it after `just scene`, `just model` or a
+# root edit, then commit the pins with the level; run it before pushing any
 # commit that re-pins an asset.
 publish:
-    cd rope && bun run assets:publish-scenes && bun run assets:publish-sources && bun run roots:bake && bun run assets:publish-stored
+    cd rope && bun run assets:publish-scenes && bun run assets:publish-models && bun run assets:publish-sources && bun run roots:bake && bun run assets:publish-stored
 
 # Grow every level's roots ahead of time into rope/public/roots/<level>.glb and
 # pin them in rope/src/render3d/rootBakes.json, so the game draws them rather
@@ -76,6 +77,13 @@ roots *LEVELS:
 # `just scene ball --no-cache` bakes every one afresh.
 scene LEVEL *FLAGS:
     cd rope && bun run scene:export {{LEVEL}} {{FLAGS}}
+
+# Export a model of the library (rope/assets-src/models/<model>.blend) into
+# rope/public/models/<model>/. Every body carrying a `model` object of that name
+# draws it; refresh the browser. See rope/docs/blender-models.md.
+#   just model lantern
+model NAME *FLAGS:
+    cd rope && bun run model:export {{NAME}} {{FLAGS}}
 
 # Install the moss add-on (rope/tools/blender/moss): paint painterly moss onto a
 # scene's rocks. Links it into the user extensions, enables it and saves the

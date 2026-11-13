@@ -87,7 +87,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -246,7 +246,11 @@ if (ownEncoding) {
       ...(bakedMaps ? ["--baked-maps"] : []),
       ...(textureCache ? ["--cache", resolve(textureCache)] : []),
     ],
-    { stdio: "inherit" },
+    // sharp encodes on libuv's thread pool, 4 threads unless told: the river's
+    // 115 maps took 255 s at 373% CPU, and 63 s at 2,056% with one thread a
+    // core (2026-11-13). Each map is encoded on its own, so the bytes do not
+    // depend on the pool's size and the encode cache stays valid.
+    { stdio: "inherit", env: { ...process.env, UV_THREADPOOL_SIZE: String(availableParallelism()) } },
   );
   if (w.status !== 0) process.exit(w.status ?? 1);
 }

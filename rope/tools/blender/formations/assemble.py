@@ -5,8 +5,8 @@
 Reads OUT_DIR/geometry.json and recipe.json (written by worker.py), assembles
 the rock with the boulder generator's own `assemble_rock` - or, for the
 `fitted` generator, builds recipe F's rocks fitted to the outline and fuses
-them (fitted.py), or for the `solid` generator cuts recipe F stones from the
-recipe's guide mesh (solidfit.py) -
+them (fitted.py), or for the `solid` generator cuts stones from the recipe's
+guide mesh and works each as the boulder generator works its top (solidfit.py) -
 gives it the painted slate (slate.py), removes the
 microscopic faces its bevel and remesh can leave, validates it exactly as the
 Formations panel will before swapping it in, and saves OUT_DIR/rock.blend

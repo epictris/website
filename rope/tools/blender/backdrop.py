@@ -1,5 +1,5 @@
 """A level's backdrop: SOLID formations (formations/core.py, generator `solid`),
-recipe F stones cut from closed guide meshes, sized by their depth from where
+stones cut from closed guide meshes, sized by their depth from where
 the level opens. This is their headless front end, for a script or an LLM; the
 Formations panel does the same in Blender (docs/blender-backdrop.md).
 
@@ -16,8 +16,7 @@ Every run writes the level's start camera and water onto the scene
                             (scripts/ortho-solids.ts) for the pieces the scene
                             does not have yet, or those --only names, and build
     --set NAME key=value,.. a formation's parameters (solidfit.PARAMS: seed,
-                            stoneSize, facets, chisel, knub, curveTurn, floor,
-                            fixedScale, facetFalloff)
+                            stoneSize, knub, curveTurn, floor, fixedScale)
     --render NAME key=value,..  its render settings (formations/render.py:
                             detail_scale, export_strips, export_creases,
                             export_chips, export_map_max, export_texels,

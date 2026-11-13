@@ -7,12 +7,14 @@
 // body per frame with no allocation at all (see "Allocation per frame" in
 // docs/3d-rendering-plan.md).
 //
-// WHAT A BODY LOOKS LIKE IS NOT THE LEVEL'S TO SAY. A level's look is its
-// Blender scene (docs/blender-scenes.md): a scene object named like a body is
-// that body's dressing, mounted under this group's root when the file lands
-// (`sceneDressing.ts`), and a level names the scene once. What is drawn HERE is
-// only what the sim moves in a way a mesh cannot follow, and the instrument a
-// piece is made visible by:
+// WHAT A BODY LOOKS LIKE IS BLENDER'S TO SAY. A level's look is its Blender
+// scene (docs/blender-scenes.md): a scene object named like a body is that
+// body's dressing, mounted under this group's root when the file lands
+// (`sceneDressing.ts`), and a level names the scene once. A body may also carry
+// MODELS from the model library (docs/blender-models.md), each a Blender file
+// of its own that the level only PLACES (`ModelObjectData`, `mountModels`).
+// What is drawn here besides is only what the sim moves in a way a mesh cannot
+// follow, and the instrument a piece is made visible by:
 //
 // - WATER, whose surface the current runs across every frame (`water.ts`);
 // - a CONVEYOR's band, whose texture or cleats run round its loop at the belt's
@@ -47,6 +49,7 @@ import {
   debugColorOf,
   isCollisionObject,
   isLightObject,
+  isModelObject,
   type BeltLook,
   type CollisionObjectData,
   type LevelBodyData,
@@ -64,6 +67,8 @@ import { acquireRootMeshes, releaseRootMeshes, type RootMeshSet } from "./rootBa
 import { rootMeshKey } from "./rootKey";
 import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
+import { decodedFile, loadModelFile, noShadowBehindPlane } from "./sceneDressing";
+import { modelFile } from "./models";
 
 // The floor an authored colour's brightness is lifted to before it tints a
 // generated surface. A belt's `color` was authored for a flat 2D renderer, where
@@ -301,6 +306,16 @@ export class BodyVisual {
   // this visual's own rather than the cache's (`rootSkin.ts`).
   private rootSkeleton: RootSkeleton | null = null;
   private readonly skinned: THREE.BufferGeometry[] = [];
+  // The holders of this body's MODELS (`mountModels`), one per model object,
+  // each filled with its model when the file lands. Hidden and shown as one
+  // with the level's Blender scene (`setModelsShown`): both are the look.
+  private readonly modelHolders: THREE.Group[] = [];
+  private modelsShown = true;
+  private disposed = false;
+  // Called when a model lands after this visual was built (one already
+  // decoded is mounted in the constructor): what the body draws has changed,
+  // which the glass shards' collision is built from (`Scene3D`).
+  modelLanded: (() => void) | null = null;
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
@@ -336,8 +351,10 @@ export class BodyVisual {
         this.releaseWater = water.release;
         this.waterObjects = water.objects;
       }
-      // A volume's pieces may still be made visible, as any piece may.
+      // A volume's pieces may still be made visible, as any piece may, and
+      // it may carry models as any body may.
       this.mountDebug(data, solidZ);
+      this.mountModels(data);
     } else if (data) {
       this.buildAuthored(data, solidZ);
     } else if (body) {
@@ -367,6 +384,7 @@ export class BodyVisual {
     }
     this.mountRoots(data, solidZ);
     this.mountDebug(data, solidZ);
+    this.mountModels(data);
 
     // Lights last, so the budgets are spent in authored order and a light is
     // never built for a body that failed above.
@@ -452,6 +470,61 @@ export class BodyVisual {
       };
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
     });
+  }
+
+  // Every MODEL this body carries (`ModelObjectData`, render3d/models.ts): the
+  // library's file, cloned onto a holder at the object's placement in the
+  // body's frame, so the body carries it as it carries a dressing node.
+  //
+  // The holder is a piece like any other (placed against the BUILT frame, its
+  // in-plane turn on the piece) with the model's own depth, tilts and scale on
+  // a child of it, so the tilts are applied before the turn: a model tilted to
+  // show its side keeps showing it as its body swings (see `ModelObjectData`).
+  // Tagged with the authored object, so a click on the model picks the model.
+  //
+  // The file arrives late the first time it is asked for, as a scene does;
+  // one already decoded on this page is mounted here and now, so an editor
+  // rebuild never draws a frame without it.
+  private mountModels(data: LevelBodyData): void {
+    const built = this.built!;
+    data.objects.forEach((o, i) => {
+      if (!isModelObject(o)) return;
+      const local = localPlacement(built, o);
+      const piece = this.piece(local.pos.x, local.pos.y, local.rot, built.data.objects[i] ?? o);
+      const holder = new THREE.Group();
+      holder.name = `model:${o.model}`;
+      holder.position.z = objectDepth(o.z, 0);
+      // Ry * Rx: about the screen's horizontal axis first, then its vertical.
+      holder.rotation.set(o.rotX ?? 0, o.rotY ?? 0, 0, "YXZ");
+      holder.scale.setScalar(o.scale ?? 1);
+      holder.visible = this.modelsShown;
+      piece.add(holder);
+      this.modelHolders.push(holder);
+      // What collides casts, wherever its look has been set back to; a body
+      // that collides with nothing is decoration and keeps the scenery's rule
+      // (see `dressScene`).
+      const solid = data.objects.some(isCollisionObject);
+      const land = (loaded: THREE.Object3D | null, late: boolean): void => {
+        if (!loaded || this.disposed) return;
+        const node = loaded.clone(true);
+        holder.add(node);
+        node.updateWorldMatrix(true, true);
+        if (!solid) noShadowBehindPlane(node);
+        this.adoptDressing(node);
+        if (late) this.modelLanded?.();
+      };
+      const file = modelFile(o.model);
+      const ready = decodedFile(file);
+      if (ready !== undefined) land(ready, false);
+      else void loadModelFile(o.model).then((loaded) => land(loaded, true));
+    });
+  }
+
+  // Show or hide this body's models (`Scene3D.setSceneShown`): they are the
+  // look, as the level's Blender scene is, and go with it.
+  setModelsShown(shown: boolean): void {
+    this.modelsShown = shown;
+    for (const h of this.modelHolders) h.visible = shown;
   }
 
   // One child group at a placement in the body's frame. Rigid, so written once.
@@ -738,6 +811,8 @@ export class BodyVisual {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.modelHolders.length = 0;
     this.disposeDebug();
     this.disposeRoots();
     for (const l of this.lights) this.rig?.drop(l);

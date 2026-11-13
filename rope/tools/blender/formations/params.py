@@ -31,9 +31,8 @@ FIELDS = {
                  "slabLength": "slab_length", "weathering": "weathering",
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
                  "edgeBevelWidth": "edge_bevel"},
-    "solid": {"seed": "seed", "stoneSize": "stone_size", "facets": "facets", "chisel": "chisel", "knub": "knub",
-              "curveTurn": "curve_turn", "floor": "floor", "fixedScale": "fixed_scale",
-              "facetFalloff": "facet_falloff"},
+    "solid": {"seed": "seed", "stoneSize": "stone_size", "knub": "knub", "curveTurn": "curve_turn",
+              "floor": "floor", "fixedScale": "fixed_scale"},
 }
 FITTED = GENERATORS["fitted"]
 SOLID = GENERATORS["solid"]
@@ -51,8 +50,9 @@ class FormationParams(bpy.types.PropertyGroup):
         ("fitted", "Fitted slate", "Recipe F rocks sized and turned to fit the outline, fused into one mass: "
                                    "the cave look (docs/cave-look.md)"),
         ("boulders", "Boulder generator", "The fork's slab generator, cut to the outline"),
-        ("solid", "Solid guide", "Recipe F stones cut from a closed guide mesh, sized by their depth from the "
-                                 "game's start camera: the backdrop (docs/blender-backdrop.md)"),
+        ("solid", "Solid guide", "Stones cut from a closed guide mesh, each worked as the boulder generator works "
+                                 "its top, sized by their depth from the game's start camera "
+                                 "(docs/blender-backdrop.md)"),
     ])
     seed: IntProperty(name="Seed", default=FITTED["seed"], min=0)
     depth: FloatProperty(name="Thickness", description="The rock's thickness through the gameplay plane, front to "
@@ -77,12 +77,8 @@ class FormationParams(bpy.types.PropertyGroup):
     detail: FloatProperty(name="Remesh detail", description="Remesh resolution: finer as it rises",
                           default=DEFAULT_PARAMS["detail"], min=.25, max=4)
     stone_size: FloatProperty(name="Stone size", description="Every stone's size times this (on screen, so the "
-                              "same at any depth); stones on a curve still split down to the small sizes",
-                              default=SOLID["stoneSize"], min=.25, max=4)
-    facets: FloatProperty(name="Facets", description="Facet density on flat stones, as a share of recipe F's "
-                          "(stones on a curve take its full density)", default=SOLID["facets"], min=.05, max=2)
-    chisel: FloatProperty(name="Chisel", description="Chisel cuts, as a share of recipe F's: the small steps "
-                          "on a stone's faces", default=SOLID["chisel"], min=0, max=2)
+                              "same at any depth), and its steps and bevels with it; stones on a curve still split "
+                              "down to the small sizes", default=SOLID["stoneSize"], min=.25, max=4)
     knub: FloatProperty(name="Merge small", description="A stone under this share of its kind's median volume "
                         "is joined to its neighbour instead of standing as a knub", default=SOLID["knub"], min=0, max=1)
     curve_turn: FloatProperty(name="Curve split", description="Degrees a cell's surface must turn in gentle bends "
@@ -91,13 +87,10 @@ class FormationParams(bpy.types.PropertyGroup):
     floor: FloatProperty(name="Depth floor", description="The least depth scale a stone is cut at: 0 sizes every "
                          "stone by its own depth; above it, a part near the gameplay plane is cut as if this far "
                          "back (the roof's ceiling, run forward to the level)", default=SOLID["floor"], min=0, max=20)
-    fixed_scale: FloatProperty(name="Fixed LOD", description="When over 0, every stone is cut, weathered and "
-                               "faceted as if it stood this many times the gameplay plane's distance from the eye, "
+    fixed_scale: FloatProperty(name="Fixed LOD", description="When over 0, every stone is cut and worked as if it "
+                               "stood this many times the gameplay plane's distance from the eye, "
                                "whatever its depth: the level of detail set by hand (0: from each stone's depth)",
                                default=SOLID["fixedScale"], min=0, max=20)
-    facet_falloff: FloatProperty(name="Facet falloff", description="How much coarser on screen the facets get per "
-                                 "unit of depth scale: 0 keeps them as fine on screen at any depth",
-                                 default=SOLID["facetFalloff"], min=0, max=3)
     voxel_cap: FloatProperty(name="Voxel cap", description="Largest remesh voxel, whatever the outline",
                              default=DEFAULT_PARAMS["voxelCap"], min=.002, max=.1, precision=3, subtype="DISTANCE")
     edge_bevel: FloatProperty(name="Edge bevel", description="Width of the bevel on every sharp edge: well under a "
@@ -240,6 +233,9 @@ def on_load(_):
     core.remove_source_slabs()
     core.stow_helpers()
     core.style_guides()
+    for scene in bpy.data.scenes:
+        for key in core.STALE_BUSY_KEYS:
+            scene.pop(key, None)
 
 
 CLASSES = (FormationParams,)

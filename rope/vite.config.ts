@@ -15,7 +15,8 @@ import { join, resolve } from "node:path";
 import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
-import { levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
+import { levelModelNames, levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
+import { MODEL_MESH_FILE, MODELS_DIR } from "./src/render3d/models";
 import { SCENE_MESH_FILE, SCENES_DIR } from "./src/render3d/scenes";
 import { sceneService } from "./src/server/scenes";
 import { soundService } from "./src/server/sounds";
@@ -462,41 +463,48 @@ function storeScript(): Plugin {
   };
 }
 
-// BLENDER SCENES SHIP ONLY WHERE A LEVEL NAMES THEM. Vite copies all of
-// `public/` into `dist` (before it writes the bundle; this runs after), and
-// `public/scenes/` holds every scene ever exported on this machine, each with
-// a `meta.json` the game never reads. A named scene keeps its `scene.glb`
-// alone; everything else goes.
-function scenesInBuild(): Plugin {
+// BLENDER SCENES AND MODELS SHIP ONLY WHERE A LEVEL NAMES THEM. Vite copies
+// all of `public/` into `dist` (before it writes the bundle; this runs after),
+// and `public/scenes/` and `public/models/` hold every export ever made on this
+// machine, each with a `meta.json` the game never reads. A named one keeps its
+// mesh alone; everything else goes.
+function exportsInBuild(): Plugin {
   let outDir = "";
   return {
-    name: "scenes-in-build",
+    name: "exports-in-build",
     apply: "build",
     configResolved(config) {
       outDir = resolve(config.root, config.build.outDir);
     },
     writeBundle() {
-      const root = join(outDir, SCENES_DIR.slice(1));
-      if (!existsSync(root)) return;
-      const named = new Set<string>();
+      const scenes = new Set<string>();
+      const models = new Set<string>();
       for (const spec of Object.values(LEVELS)) {
-        const scene = levelSceneName(levelData(spec));
-        if (scene) named.add(scene);
+        const data = levelData(spec);
+        const scene = levelSceneName(data);
+        if (scene) scenes.add(scene);
+        for (const model of levelModelNames(data)) models.add(model);
       }
-      let kept = 0;
-      let dropped = 0;
-      for (const scene of readdirSync(root)) {
-        const dir = join(root, scene);
-        if (!named.has(scene) || !existsSync(join(dir, SCENE_MESH_FILE))) {
-          rmSync(dir, { recursive: true, force: true });
-          dropped++;
-          continue;
+      const prune = (dir: string, named: Set<string>, mesh: string, what: string): void => {
+        const root = join(outDir, dir.slice(1));
+        if (!existsSync(root)) return;
+        let kept = 0;
+        let dropped = 0;
+        for (const entry of readdirSync(root)) {
+          const at = join(root, entry);
+          if (!named.has(entry) || !existsSync(join(at, mesh))) {
+            rmSync(at, { recursive: true, force: true });
+            dropped++;
+            continue;
+          }
+          for (const name of readdirSync(at)) if (name !== mesh) rmSync(join(at, name), { force: true });
+          kept++;
         }
-        for (const name of readdirSync(dir)) if (name !== SCENE_MESH_FILE) rmSync(join(dir, name), { force: true });
-        kept++;
-      }
-      if (!readdirSync(root).length) rmSync(root, { recursive: true, force: true });
-      this.info(`scenes: ${kept} named by a level kept, ${dropped} dropped from ${outDir}`);
+        if (!readdirSync(root).length) rmSync(root, { recursive: true, force: true });
+        this.info(`${what}: ${kept} named by a level kept, ${dropped} dropped from ${outDir}`);
+      };
+      prune(SCENES_DIR, scenes, SCENE_MESH_FILE, "scenes");
+      prune(MODELS_DIR, models, MODEL_MESH_FILE, "models");
     },
   };
 }
@@ -527,6 +535,9 @@ export default defineConfig({
         // `assets:publish-scenes` writes the manifest).
         "**/public/scenes/**",
         "**/src/render3d/sceneAssets.json",
+        // ...and `just model` here, and `assets:publish-models` the manifest.
+        "**/public/models/**",
+        "**/src/render3d/modelAssets.json",
         // The editor's Sounds menu writes these while it is open
         // (src/server/sounds.ts): a watched write would reload the editor (and
         // restart the server, the manifests being config dependencies through
@@ -578,6 +589,6 @@ export default defineConfig({
     sceneService(),
     soundService(),
     soundLayerService(),
-    scenesInBuild(),
+    exportsInBuild(),
   ],
 });

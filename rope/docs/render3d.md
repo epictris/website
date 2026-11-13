@@ -241,6 +241,9 @@ A bound node is handed to its body (`BodyVisual.adoptDressing`), which gives a b
 A node on a body that collides always casts a shadow; any other node casts only if it is not wholly behind the plane.
 The file is served from `/scenes/<scene>/scene.glb`, cached per page like a prop's, weighted in the preload list by the store's pin or the local `meta.json` (`levelStoredFiles`).
 
+A body may also carry **models** of the library ([blender-models](blender-models.md)): `BodyVisual.mountModels` puts a holder per `model` object on the body's group, placed against the built frame with the object's depth, tilts and scale, and clones the file into it when it lands (`loadModelFile`, the same loader and mesh preparation as a scene's; one already decoded is mounted on the spot).
+A model is tagged with its own object for a pick, casts by the same rule as a bound node, is adopted for a waking light's glow, and hides with the scene (`Scene3D.setSceneShown`); a late landing bumps the shards' collision version.
+
 Retired with the geometry objects on 2026-09-29, and recorded here so they are not rebuilt by accident: **per-object projection** (a geometry object drawn through an orthographic lens inside the perspective scene, by a vertex patch on a twin material), **image planes** (an unlit picture stretched over a shape, `imageAssets.json`), **generated meshes** (boulders and mushroom patches generated behind the dev server and keyed by a hash of their input, `generatedAssets.json`) and the 2D renderer's **decor** layer.
 A painted backdrop, a generated rock or a mushroom patch is now made in Blender (the formations add-on builds rocks with the same boulder generator, [blender-formations](blender-formations.md)).
 

@@ -19,6 +19,9 @@ public/images/
 # Blender scenes (`just scene <level>`), published like generated meshes; see
 # docs/blender-scenes.md.
 public/scenes/
+# Models of the library (`just model <model>`), published the same way; see
+# docs/blender-models.md.
+public/models/
 # The sound library, uploaded through the editor's Sounds menu and published
 # like every other stored file; see docs/sound.md.
 public/sounds/

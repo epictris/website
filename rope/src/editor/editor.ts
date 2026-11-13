@@ -133,6 +133,9 @@ import {
   NOTE_DEFAULT_SIZE,
   nearestSurfaceLocal,
   ANCHOR_GIZMO,
+  MODEL_MARK,
+  MODEL_MIN_SCALE,
+  defaultModelRef,
   pickBodyOf,
   pointInBody,
   rotateItemsAbout,
@@ -248,6 +251,8 @@ import {
   HANDLE_HIT_PX,
   lightPickRadius,
   depthOf,
+  hasDepth,
+  setDepth,
   curvePieceCount,
   routeHandlePoints,
   routeMidpoints,
@@ -275,6 +280,7 @@ import { Scene3D, type Scene3DLevel } from "../render3d/scene";
 import type { LevelScene } from "../render3d/levelScene";
 import { SCENERY_TAG } from "../render3d/sceneDressing";
 import { nodeNameOf, sceneMetaFile, type SceneMeta } from "../render3d/scenes";
+import { MODEL_ASSETS, MODELS_API, modelMetaFile, isModelName, type ModelMeta } from "../render3d/models";
 import { setGameFogCamera } from "../render3d/editorFog";
 import {
   cameraDistance,
@@ -374,6 +380,7 @@ type Tool =
   | "vine"
   | "root"
   | "light"
+  | "model"
   | "glow"
   | "fireflies";
 
@@ -395,6 +402,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "poly",
     "path",
     "light",
+    "model",
     "glow",
     "fireflies",
     "chain",
@@ -431,6 +439,7 @@ const TOOL_WORKSPACES: Record<Tool, ToolWorkspace> = {
   // the 2D overlay's gesture.
   root: "level",
   light: "both",
+  model: "both",
   glow: "both",
   fireflies: "both",
 };
@@ -1064,9 +1073,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // share.
   const HISTORY_MAX = 50; // undo steps retained
   const history: EdModel[] = [];
-  // The Blender scenes' `meta.json`s, by scene name (see `sceneMetaFor`).
+  // The Blender scenes' `meta.json`s, by scene name (see `sceneMetaFor`), and
+  // the models' (`modelMetaFor`).
   const sceneMetas = new Map<string, SceneMeta | null | undefined>();
   const sceneMetaWaiters = new Map<string, Array<() => void>>();
+  const modelMetas = new Map<string, ModelMeta | null | undefined>();
+  const modelMetaWaiters = new Map<string, Array<() => void>>();
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
     player: {
@@ -1082,6 +1094,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cam: { ...b.cam },
       light: { ...b.light },
       note: { ...b.note },
+      modelRef: { ...b.modelRef },
     })),
     chains: m.chains.map(cloneChain),
     vines: m.vines.map(cloneVine),
@@ -1474,6 +1487,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // The item's orientation as three sees it: a turn in the plane, about z.
   function itemQuat(i: EdItem): THREE.Quaternion {
+    // A model is tilted about the screen's axes before it is turned in the
+    // plane (`ModelObjectData`): Rz * Ry * Rx, which is three's "ZYX".
+    if (i.object === "model") {
+      return new THREE.Quaternion().setFromEuler(new THREE.Euler(i.modelRef.rotX, i.modelRef.rotY, threeRotation(i.rot), "ZYX"));
+    }
     return new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, threeRotation(i.rot), "ZXY"));
   }
 
@@ -1488,7 +1506,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // is at - a light's own `z`, and the gameplay plane for everything else. A
   // translate drag writes the proxy's z straight onto a light's field, so the
   // handles have to start exactly there.
-  const handleZ = (it: EdItem): number => (it.object === "light" ? it.light.z : 0);
+  const handleZ = (it: EdItem): number => depthOf(it);
 
   // The item the handles are on, resolved by id every time rather than held:
   // undo and redo replace the model wholesale, so a captured object is a stale
@@ -1496,7 +1514,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function itemHandlers(id: number): GizmoHandlers {
     const find = (): EdItem | null => model.items.find((b) => b.id === id) ?? null;
     // The sizes a scale drag is measured against (see `GizmoHandlers.apply`).
-    let base: { shape: EdShape; pos: Vec2; snapAt: Vec2 } | null = null;
+    let base: { shape: EdShape; pos: Vec2; snapAt: Vec2; scale: number } | null = null;
     return {
       pose() {
         const it = find();
@@ -1508,9 +1526,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (!it) return null;
         // A light is placed through z - a lamp pulled toward the camera lights
         // a smaller circle of the plane (see `lightPlaneReach`).
-        if (mode === "translate") return { x: true, y: true, z: it.object === "light" };
-        // A shape's rotation in the plane is the only one the level records.
-        if (mode === "rotate") return { x: false, y: false, z: true };
+        if (mode === "translate") return { x: true, y: true, z: hasDepth(it) };
+        // A shape's rotation in the plane is the only one the level records;
+        // a model also records its tilts out of it.
+        if (mode === "rotate") return { x: it.object === "model", y: it.object === "model", z: true };
+        // A model has one size, a uniform factor, which any box drags.
+        if (it.object === "model") return { x: true, y: true, z: true };
         // Scale. An anchor is a point and a light is a reach authored by its own
         // radius handle, so neither has a size this could write; a collision
         // shape has no depth - `thickness` is what its mass is computed from.
@@ -1521,7 +1542,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const it = find();
         gizmoBegin();
         if (!it) return;
-        base = { shape: cloneShape(it.shape), pos: it.pos, snapAt: moveSnapPoint([it]) };
+        base = { shape: cloneShape(it.shape), pos: it.pos, snapAt: moveSnapPoint([it]), scale: it.modelRef.scale };
       },
       apply(mode, pos, quat, scale) {
         const it = find();
@@ -1533,10 +1554,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           const d = snapMove(base.snapAt, new Vec2(pos.x, threeY(pos.y)).sub(base.pos));
           it.pos = base.pos.add(d);
           gizmoSnapPoint = base.snapAt.add(d);
-          if (it.object === "light") it.light.z = snap(pos.z);
+          if (hasDepth(it)) setDepth(it, snap(pos.z));
+        } else if (mode === "rotate" && it.object === "model") {
+          // Read back in the order it was built in (`itemQuat`).
+          const e = new THREE.Euler().setFromQuaternion(quat, "ZYX");
+          it.rot = threeRotation(e.z);
+          it.modelRef.rotX = e.x;
+          it.modelRef.rotY = e.y;
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
           it.rot = threeRotation(e.z);
+        } else if (base && it.object === "model") {
+          // One factor, whichever box is dragged: the axis furthest from 1.
+          const f = [scale.x, scale.y, scale.z].reduce((a, b) => (Math.abs(b - 1) > Math.abs(a - 1) ? b : a), 1);
+          it.modelRef.scale = Math.max(MODEL_MIN_SCALE, Math.round(base.scale * f * 100) / 100);
         } else if (base) {
           scaleShape(it, base.shape, scale.x, scale.y, snapOn ? snapLen : undefined);
         }
@@ -1578,7 +1609,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // collision is the gameplay PLANE and is never anywhere else, so a selection
     // holding one piece of collision would otherwise be one that could never
     // move its lamps through z.
-    const anyZ = (list: readonly EdItem[]): boolean => list.some((i) => i.object === "light");
+    const anyZ = (list: readonly EdItem[]): boolean => list.some(hasDepth);
     let base: {
       pose: GroupPose;
       // Where the handles stood in depth, which is the mean of the members':
@@ -1635,7 +1666,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           const dz = snap(pos.z) - base.z;
           for (const i of list) {
             const was = base.own.get(i.id);
-            if (was !== undefined && i.object === "light") i.light.z = was + dz;
+            if (was !== undefined && hasDepth(i)) setDepth(i, was + dz);
           }
         } else if (mode === "rotate") {
           // The ring returns to zero when the drag ends (`pose` answers the
@@ -2571,6 +2602,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     vine: button("Vine", () => setTool("vine")),
     root: button("Root", () => setTool("root")),
     light: button("Light", () => setTool("light")),
+    model: button("Model", () => setTool("model")),
     glow: button("Glow", () => setTool("glow")),
     fireflies: button("Fireflies", () => setTool("fireflies")),
   };
@@ -2594,6 +2626,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Drag from one body to another to string a chain between them. Shift-release on a body ties the chain there and keeps going (a rope bridge: post, each slat's two ends, ..., post); a plain click on a body ends it, Esc drops it";
   toolBtns.belt.title =
     "Press where the first wheel goes and drag to the second to lay a conveyor belt; a click drops one 1.5 m long. Click a run's midpoint to add a wheel, Alt+click a wheel's square to remove it. The band wraps the outside of every wheel and its surface runs round the loop at the panel's speed (positive = clockwise on screen), carrying whatever rests on it. It builds only on a static body that does not move.";
+  toolBtns.model.title =
+    "Click to place a 3D model of the library (assets-src/models/<model>.blend, `just model <model>`). With a body selected it goes INTO that body and is carried by it - a lantern on a chained body, a crate - otherwise it is a body of its own. Pick which model in its panel; the last one picked is placed next.";
   toolBtns.vine.title =
     "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.root.title =
@@ -2708,6 +2742,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.vine,
     toolBtns.root,
     toolBtns.light,
+    toolBtns.model,
     toolBtns.glow,
     toolBtns.fireflies,
     kindWrap,
@@ -3184,7 +3219,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const objRow = el(
           "div",
           `ed-out-row obj ${
-            m.object === "light" ? "light" : m.object === "anchor" ? "anchor" : "solid"
+            m.object === "light" ? "light" : m.object === "anchor" ? "anchor" : m.object === "model" ? "model" : "solid"
           }`,
         );
         const objLabel = el("span", "ed-out-label");
@@ -3704,7 +3739,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // width is its length — the notes panel exposes that instead.
     if (items.some(isArrowNote)) return;
     // Size is per-shape, so it only appears when the group is all one shape.
-    if (items.every((b) => b.shape.kind === "rect")) {
+    // An anchor's box and a model's are the marks a click lands on, not sizes
+    // the file records: a model is sized by its own `scale` (its panel).
+    if (items.every((b) => b.shape.kind === "rect" && b.object !== "anchor" && b.object !== "model")) {
       num("w", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
         if (b.shape.kind === "rect") b.shape.w = Math.max(1, v) * PX;
       });
@@ -5740,19 +5777,62 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // before it can redraw its line. A re-export while the editor is open is
   // picked up on the next page load, like the scene's mesh itself.
   function sceneMetaFor(scene: string, onChange: () => void): SceneMeta | null | undefined {
-    if (!scene) return null;
-    if (sceneMetas.has(scene)) return sceneMetas.get(scene);
-    sceneMetas.set(scene, undefined);
-    sceneMetaWaiters.set(scene, [onChange]);
-    void fetch(sceneMetaFile(scene), { cache: "no-store" })
-      .then((res) => (res.ok ? (res.json() as Promise<SceneMeta>) : null))
+    return scene ? exportMetaFor(sceneMetas, sceneMetaWaiters, scene, sceneMetaFile(scene), onChange) : null;
+  }
+
+  // ...and a model's (`ModelMeta`), by the same rule.
+  function modelMetaFor(name: string, onChange: () => void): ModelMeta | null | undefined {
+    return name ? exportMetaFor(modelMetas, modelMetaWaiters, name, modelMetaFile(name), onChange) : null;
+  }
+
+  // One export's `meta.json`, fetched once and kept: undefined while it is on
+  // its way (and `onChange` is called when it lands - every caller asking
+  // meanwhile, not only the first), null when there is none (a 404).
+  function exportMetaFor<T>(
+    metas: Map<string, T | null | undefined>,
+    waiters: Map<string, Array<() => void>>,
+    key: string,
+    file: string,
+    onChange: () => void,
+  ): T | null | undefined {
+    if (metas.has(key)) {
+      const known = metas.get(key);
+      if (known === undefined) waiters.get(key)?.push(onChange);
+      return known;
+    }
+    metas.set(key, undefined);
+    waiters.set(key, [onChange]);
+    void fetch(file, { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<T>) : null))
       .catch(() => null)
       .then((meta) => {
-        sceneMetas.set(scene, meta);
-        for (const w of sceneMetaWaiters.get(scene) ?? []) w();
-        sceneMetaWaiters.delete(scene);
+        metas.set(key, meta);
+        for (const w of waiters.get(key) ?? []) w();
+        waiters.delete(key);
       });
     return undefined;
+  }
+
+  // The model `+ Model` places: the last one picked or selected, else the
+  // first the editor offers.
+  let lastModelName = "";
+
+  // The models the editor offers (`/api/models`: exported here or pinned),
+  // fetched once a page. Off the dev server there is no such endpoint, and the
+  // pinned ones are all there is.
+  let modelNames: string[] | null = null;
+  function modelNamesFor(onChange: () => void): string[] {
+    if (modelNames) return modelNames;
+    modelNames = Object.keys(MODEL_ASSETS).sort();
+    void fetch(MODELS_API, { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<string[]>) : null))
+      .catch(() => null)
+      .then((names) => {
+        if (!names) return;
+        modelNames = names;
+        onChange();
+      });
+    return modelNames;
   }
 
   // THE BODY panel: a container with a transform and the properties a body has
@@ -7379,6 +7459,96 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
+  // MODELS (`ModelObjectData`): a model of the library placed on the body, which
+  // carries it. Its own fields are which model, its depth, its tilts out of the
+  // plane and its size; where it is and its turn in the plane are the
+  // transform every object has.
+  function buildModelsGroup(items: EdItem[]): void {
+    const g = el("div", "ed-group");
+    const first = items[0]!;
+    const title = heading(
+      items.length === 1 ? `Model ${first.modelRef.name || "(none)"} #${first.id}` : `${items.length} models selected`,
+      "A 3D model of the library (assets-src/models/<model>.blend, exported by `just model <model>`), drawn on this body and carried by it - a lantern on its chain, a crate, a mover's platform. Appearance only: what the body collides as is its collision objects, drawn by hand. The model's origin is the point placed here, modelled in Blender's front view (-y toward the camera).",
+    );
+    g.appendChild(title);
+    const transform = section(g, "model/Transform", "Transform");
+    addTransformFields(transform, groupNum(transform, items), items);
+    const look = section(g, "model/Model", "Model");
+
+    // Which model: typed, and offered the models exported here or published.
+    const names = new Set(items.map((b) => b.modelRef.name));
+    // The model picked is the one `+ Model` places next.
+    if (names.size === 1 && first.modelRef.name) lastModelName = first.modelRef.name;
+    const input = document.createElement("input");
+    input.className = "ed-text";
+    input.value = names.size === 1 ? first.modelRef.name : "";
+    input.placeholder = names.size === 1 ? "none" : "mixed";
+    const list = document.createElement("datalist");
+    list.id = `ed-models-${first.id}`;
+    input.setAttribute("list", list.id);
+    const fillList = (): void => {
+      list.replaceChildren();
+      for (const n of modelNamesFor(fillList)) {
+        const o = document.createElement("option");
+        o.value = n;
+        list.appendChild(o);
+      }
+    };
+    fillList();
+    let edited = false;
+    input.addEventListener("blur", () => (edited = false));
+    input.addEventListener("input", () => {
+      if (!edited) {
+        beginAction();
+        edited = true;
+      }
+      // Held to what a model may be called as it is typed, as the scene field is.
+      const text = input.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "");
+      if (text !== input.value) input.value = text;
+      const name = text.replace(/-+$/, "");
+      for (const b of items) b.modelRef.name = name;
+      if (name) lastModelName = name;
+      markDirty();
+      hint.textContent = hintText();
+    });
+    const nw = fieldRow("model");
+    nw.append(input, list);
+    describe(nw, "The model's name: assets-src/models/<model>.blend. The list offers every model exported here (`just model <model>`) or published.");
+    look.appendChild(nw);
+    const hint = el("div", "ed-hint");
+    const hintText = (): string => {
+      if (items.length > 1 && new Set(items.map((b) => b.modelRef.name)).size > 1) return "Several models.";
+      const name = first.modelRef.name;
+      if (!name) return "No model: nothing is drawn. Type or pick one.";
+      if (!isModelName(name)) return `"${name}" is not a model name.`;
+      const meta = modelMetaFor(name, () => (hint.textContent = hintText()));
+      if (meta === undefined) return `Looking for /models/${name}/meta.json…`;
+      if (meta === null) return `Not exported here: run \`just model ${name}\` (assets-src/models/${name}.blend).`;
+      const size = meta.bounds ? meta.bounds.max.map((v, k) => (v - meta.bounds!.min[k]!).toFixed(2)).join(" × ") : "empty";
+      return `${meta.triangles.toLocaleString()} triangles, ${size} m, exported ${meta.exportedAt.slice(0, 16).replace("T", " ")}` +
+        (MODEL_ASSETS[name]?.sha256 === meta.sha256 ? "" : ", not published (`just publish`)") +
+        (meta.warnings.length ? `. ${meta.warnings.length} exporter warning(s), see meta.json` : "");
+    };
+    hint.textContent = hintText();
+    look.appendChild(hint);
+
+    const num = groupNum(look, items);
+    const deg = (r: number): number => Math.round(((r * 180) / Math.PI) * 1e6) / 1e6;
+    // Off the body's plane, toward the camera, in the inspector's own units.
+    const z = num("z", (b) => b.modelRef.z * M2PX, (b, v) => (b.modelRef.z = v * PX), 10);
+    describe(z.parentElement!, "How far the model's origin sits off the body's plane, toward the camera (the depth handle and the gizmo's blue arrow drag it).");
+    const tx = num("tilt x°", (b) => deg(b.modelRef.rotX), (b, v) => (b.modelRef.rotX = (v * Math.PI) / 180), 15);
+    describe(tx.parentElement!, "Turned about the screen's horizontal axis before its turn in the plane: positive tips its top toward the camera.");
+    const ty = num("tilt y°", (b) => deg(b.modelRef.rotY), (b, v) => (b.modelRef.rotY = (v * Math.PI) / 180), 15);
+    describe(ty.parentElement!, "Turned about the screen's vertical axis before its turn in the plane: positive brings its right side toward the camera.");
+    const sc = num("scale", (b) => b.modelRef.scale, (b, v) => (b.modelRef.scale = Math.max(MODEL_MIN_SCALE, v)), 0.1);
+    describe(sc.parentElement!, "Its size against the size it was modelled at.");
+
+    addGroupSection(g, title);
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
   function buildNotesGroup(notes: EdItem[]): void {
     const g = el("div", "ed-group");
     const allCheckpoints = notes.every((n) => n.note.kind === "checkpoint");
@@ -7962,6 +8132,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "geometry",
       "light",
       "anchor",
+      "model",
       "camera",
       "campath",
       "ffpath",
@@ -8001,6 +8172,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       else if (k === "ffpath") buildFireflyPathGroup(items);
       else if (k === "light") buildLightsGroup(items);
       else if (k === "anchor") buildAnchorsGroup(items);
+      else if (k === "model") buildModelsGroup(items);
       else if (k === "notes") buildNotesGroup(items);
       else buildBodyGroup(items);
     }
@@ -8065,6 +8237,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         cam: { ...b.cam },
         light: { ...b.light },
         note: { ...b.note },
+        modelRef: { ...b.modelRef },
       };
     });
     // A copied anchor is a NEW anchor and needs an on-disk id of its own:
@@ -8345,6 +8518,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cam: { ...host.cam },
       light: { ...host.light },
       note: { ...host.note },
+      modelRef: defaultModelRef(),
       anchorId: newAnchorId(),
       pathId: 0,
     };
@@ -8564,7 +8738,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow" | "fireflies">, start: Vec2): EdItem {
     // Which scene object the tool draws: `+ Light` a light, every shape tool a
     // collision object.
-    const object: EdObject = t === "light" ? "light" : "collision";
+    const object: EdObject = t === "light" ? "light" : t === "model" ? "model" : "collision";
     const style = newItemStyle(activeLayer, object);
     // Drawn INTO the selected body, when one is selected. With a body selected
     // the thing being authored is a part of it - a second shape for a compound
@@ -8666,9 +8840,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
+      modelRef: defaultModelRef(),
       anchorId: 0,
       pathId: 0,
     };
+    if (t === "model") {
+      // Dropped ON the click: a model's size is its own, and its placement is
+      // the whole of the gesture, as a checkpoint's is. It is the last model
+      // picked, so a run of lanterns is a run of clicks.
+      return {
+        ...base,
+        shape: { kind: "rect", w: MODEL_MARK, h: MODEL_MARK },
+        modelRef: { ...defaultModelRef(), name: lastModelName || (modelNamesFor(() => {})[0] ?? "") },
+      };
+    }
     if (t === "light") {
       // Placed with a click at a reach worth having, and a drag overrides it -
       // the same rule a note is placed under, and for the same reason: dropping
@@ -10158,7 +10343,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // IS the whole gesture: entering a draw drag would offer a resize that
       // does nothing and leave the marker's box disagreeing with the avatar it
       // is drawn at.
-      drag = drawTool === "checkpoint" ? null : { mode: "draw", body, start };
+      drag = drawTool === "checkpoint" || drawTool === "model" ? null : { mode: "draw", body, start };
       markDirty();
       rebuildInspector();
       // A text note is placed to be written in, so the caret goes there rather
@@ -10492,6 +10677,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // outright (`raycastItems`); an outline is picked a few pixels either side
     // of its line, so a thin wall is hit by its edge as well as its inside.
     if (inVisuals() && ray?.has(b.id)) return true;
+    // A model is its mesh wherever the scene is drawn (its pick tag names it,
+    // `BodyVisual.mountModels`), and its marker on the plane where the overlay
+    // draws one - not in Visuals, where nothing marks the plane under it.
+    if (b.object === "model") return ray?.has(b.id) === true || (!inVisuals() && pointInBody(b, world));
     // A light there is its icon and only its icon: it hangs at its own `z`,
     // and a disc on the plane under it is somewhere the light is not drawn.
     if (b.object === "light") {
@@ -10998,7 +11187,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // depth is a metre of the level on screen.
         const dz = (drag.press.y - scr.y) / (camera.zoom * PIXELS_PER_METER);
         const z = snap(drag.base + dz);
-        if (drag.body.object === "light") drag.body.light.z = z;
+        if (hasDepth(drag.body)) setDepth(drag.body, z);
         markDirty();
         refreshFields();
         break;
@@ -11321,7 +11510,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             // object in that body.
             b.object === "anchor"
               ? false
-              : b.object === "light"
+              : b.object === "light" || b.object === "model"
                 ? b.pos.x >= box.min.x &&
                   b.pos.x <= box.max.x &&
                   b.pos.y >= box.min.y &&

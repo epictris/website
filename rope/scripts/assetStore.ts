@@ -27,8 +27,9 @@ import {
   TEXTURE_ASSETS,
   textureMaps,
 } from "../src/render3d/assets";
-import { levelSceneName } from "../src/render3d/levelAssets";
+import { levelModelNames, levelSceneName } from "../src/render3d/levelAssets";
 import { SCENE_ASSETS, sceneFile, sceneReleaseName } from "../src/render3d/scenes";
+import { MODEL_ASSETS, modelFile, modelReleaseName } from "../src/render3d/models";
 import ROOT_BAKES from "../src/render3d/rootBakes.json";
 import { SOUND_ASSETS } from "../src/audio/library";
 import { LEVELS } from "../src/level/registry";
@@ -117,6 +118,17 @@ export function storedAssets(): StoredAsset[] {
       name: sceneReleaseName(scene),
     });
   }
+  // The models the levels' bodies carry, published by `assets:publish-models`,
+  // named in the release as a scene is (see `modelReleaseName`).
+  for (const [model, asset] of Object.entries(MODEL_ASSETS)) {
+    out.push({
+      key: `model:${model}`,
+      file: modelFile(model),
+      sha256: asset.sha256,
+      bytes: asset.bytes,
+      name: modelReleaseName(model),
+    });
+  }
   // Each level's baked roots, written by `roots:bake` (see `rootBake.ts`).
   // Every bake is `<level>.glb` on disk, so its release name carries what it
   // is, as a scene's does.
@@ -140,6 +152,17 @@ export function levelsSceneNames(): Map<string, string[]> {
   for (const [id, spec] of Object.entries(LEVELS)) {
     const scene = levelSceneName(spec.data);
     if (scene) out.set(scene, [...(out.get(scene) ?? []), id]);
+  }
+  return out;
+}
+
+// Every model a registered level's bodies carry (`ModelObjectData`) - what the
+// build ships and so what the store must hold (`MODEL_ASSETS`) - with the
+// levels carrying it, as `levelsSceneNames` counts scenes.
+export function levelsModelNames(): Map<string, string[]> {
+  const out = new Map<string, string[]>(); // model -> the levels carrying it
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    for (const model of levelModelNames(spec.data)) out.set(model, [...(out.get(model) ?? []), id]);
   }
   return out;
 }

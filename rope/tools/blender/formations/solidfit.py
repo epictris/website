@@ -1,86 +1,105 @@
-"""Recipe F on a SOLID: a backdrop piece cut into stones, each weathered as
-recipe F weathers its boxes, at a scale that grows with depth.
+"""A SOLID formation: a closed guide mesh cut into stones that fit it, each
+finished as the boulder generator finishes the top of an outline rock.
 
-Recipe F (docs/cave-look.md) builds a piece from stacked boxes, one stone
-each, with the seams between them reading as fissures. A backdrop piece
-(docs/blender-backdrop.md) is a solid from the Orthographic Studio, the
-intersection of its front, top and side outlines, so here the boxes are cut
-FROM the solid: it is sliced along the view into slabs, each slab into
-columns, each column into strata, every joint a plane leaning a few degrees,
-and every cell of that grid that holds any of the solid's surface is a stone
-(cell and solid intersected, so its outer faces are the solid's). Each stone
-gets recipe F's corner cuts, bevel, chisel and relief (fitted.weather), and
-is faceted on its own, so its planes stay crisp; behind them the solid
-itself, shrunk inside, backs every fissure.
+Two halves, each the better of two generators (Tris, 2026-11-13: "this is the
+best so far ... I'm happy to switch to this new approach"; the study, with
+every render it judged, is in docs/blender-backdrop.md):
+
+- THE STONES are cut from the guide itself, as recipe F's backdrop did
+  (before 2026-11-13 this file was that): every cell of a partition that
+  holds any of the guide's surface is a stone, the cell and the guide
+  intersected, so the stones fit the guide wherever it bends, alcoves and
+  lobes included; a cell whose surface curves is split smaller, a sliver or
+  a knub is merged into its neighbour, and a core, the guide shrunk inside,
+  backs every fissure. The partition is the boulder generator's 3D Voronoi
+  cells (its anisotropy, boulders/chunk_geometry.py), not a grid of boxes:
+  boxes read as rectangular blocks in rows.
+- THE SURFACE is the boulder generator's top (boulders/blender_build.py
+  assemble_rock, measured stage by stage on Terrace.002): each stone sawn
+  flat along the plane of its patch of the guide, given the boulder's chunk
+  bevel, and sheared by hybrid_geometry.taper_chunk - every point in along
+  the guide's inward normal by its distance from a ridge times the stone's
+  own slope - so neighbouring stones step against each other like the
+  Terrace's plates. Then the boulder's own cleanup (solid_chunks.
+  reinforce_chunks, the thin-edge bevel) and finish (one union, the voxel
+  remesh, smoothing, the decimation, the edge bevel). Recipe F's weathering
+  (corner cuts, pillow, chisel, relief, facets) is gone.
+
+Two departures from the boulder, both because a guide is not an outline
+swept through a plane:
+
+- The boulder's taper also sinks every piece by its slope, so its top falls
+  away from the gameplay plane as a roof. On a guide that roof would repeat
+  every ridge and leave a groove at each valley, so only the step between
+  stones is kept: each stone's slope less the mean slope (`sink`).
+- The boulder's ridge is its gameplay plane; here a ridge line runs across
+  every face, RIDGE_SPACING apart, along the depth axis the boulder would use
+  there (the camera's axis in the surface, screen up on a face turned to the
+  camera). Its plates reach about 1.1 m from a ridge, so ridges 2 m apart
+  (at the plane's scale) leave no bare core between them.
 
 Everything is sized in SCREEN metres - lengths on the gameplay plane
 `distance` in front of the eye - and multiplied by a stone's depth over that
 distance, so a far stone is as big and as finely worked on screen as a near
-one (and the far wall is not a million faces). The solid comes in world
-space, already where it stands.
+one. The guide comes in world space, already where it stands.
 """
 
 import math
-import random
 
 import numpy as np
 
 from . import fitted
 
-# A stone's size in screen metres: a column's width, a stratum's height, a
-# slab's depth along the view (the frame is about 6.2 x 3.5).
-# 1.5 times the first sizes: the backdrop should be "predominantly
-# composed of large bodies, not many overlapping small bodies" (Tris,
-# 2026-10-04; the roof was 154 stones). Twice them overdid it: the roof's
-# arch, 6.5 m across, was two stones and came to a point.
-WIDTH = (0.8, 1.6)
-HEIGHT = (0.5, 1.1)
-DEPTH = (0.9, 1.8)
+# The partition: CELLS_PER_M3 cells in a cubic screen metre (times 1 /
+# stoneSize^3), seeded by the boulder generator's farthest-point pick with
+# its metric, each a Voronoi cell in its anisotropic space (chunk_geometry:
+# the broad side chunks). Three a cubic metre is about a metre across; 1.5
+# left Cube.001 sixteen stones with big plain faces (2026-11-13).
+CELLS_PER_M3 = 3.0
+CELL_METRIC = (1.0, 0.65, 0.80)  # world x, y (along the view), z (up)
+# chunk_geometry's anisotropy in the boulder's local frame (screen x, screen
+# y, depth toward the camera), taken to the world (x, y along the view, z up).
+TO_LOCAL = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)
+CELL_T = np.array([[1, .11, .10], [0, .80, -.08], [0, 0, .65]]) @ TO_LOCAL
+CELL_NEIGHBOURS = 24
+# A cell's taper follows the solid's normal averaged this far (screen
+# metres) about the point nearest its seed.
+NORMAL_REACH = 0.5
+# At each joint the cell that lies higher once tapered reaches CELL_OVERLAP
+# (screen metres) over its neighbour, and the lower stands CELL_GAP back.
+# Both ways (solidfit's old OVERLAP), two neighbours tilted differently cut
+# through each other at a grazing angle into thin blades (Tris, 2026-11-13:
+# "jagged edges ... need to be fixed"); gaps every way read as cobblestones
+# set in grout. Only where the step is MIN_STEP tall: a lower one is no
+# shingle and may still cross.
+CELL_OVERLAP, CELL_GAP, MIN_STEP = 0.12, 0.01, 0.02
 # A cell whose share of the solid's surface bends is split in two across
 # the screen (its longer of width and height), again and again, down to
 # SMALL's sizes: big stones on a curve came out as straight runs meeting in
 # a point (Tris, 2026-10-04: the arches "should be a gradual curve"; at
 # SMALL's sizes they were). Bending: its gentle bends turn it over
-# CURVE_TURN (`_curved`). Such a stone is faceted at recipe F's density.
+# CURVE_TURN (`_curved`).
 SMALL_WIDTH, SMALL_HEIGHT = 0.55, 0.35
 CURVE_BEND = (math.radians(2), math.radians(35))
-# The arch's cells turn 100 to 450 degrees, the far wall's flat ones 10 to 50.
 CURVE_TURN = math.radians(60)  # PARAMS["curveTurn"] is this in degrees
-# The corner cuts and the bevel go as a stone's smallest half, up to this
-# (screen metres; the first sizes' typical half): on bigger stones they
-# carved the arch's curve into planes instead of taking the corners off.
-CUT_HALF = 0.4
-# Joints lean up to this off square, so the stones are not a brick wall.
-LEAN = math.radians(7)
-# Cells are grown this much (screen metres) every way before they cut the
-# solid, so neighbouring stones overlap by about what their weathering takes
-# off and the fissures stay narrow.
-OVERLAP = 0.12
-# A weathered stone grows back out until this percentile of its cell's solid
-# surface is inside it, by at most REGROW_MAX screen metres (`regrow`).
-REGROW_SHARE, REGROW_MAX = 75, 0.08
-# "offset" grows along the normals (rounds every corner); "scale" scales
-# each axis of the stone's box.
-REGROW_MODE = "offset"
-# The core: the solid shrunk this far inside (screen metres), unweathered,
-# so a fissure shows recessed stone and never the sky through the piece.
-# The weathering takes a stone's face back by up to about a tenth of its
-# size (the bevel and four smoothing passes), so a core 0.06 in stood in
-# front of the stones and its flat planes were most of what showed.
+# The boulder construction's depth (its `depth` parameter): D = DEPTH / 2.6
+# screen metres, the length every taper is measured in.
+DEPTH = 4.0
+# Ridge lines this many D apart (above).
+RIDGE_SPACING = 1.3
+# The saw: a stone's faces on the guide grouped by direction (a face further
+# than CORNER_ANGLE from a group's starts another), each group with at least
+# PLANE_SHARE of the patch one plane, at most MAX_PLANES.
+CORNER_ANGLE = math.radians(35)
+PLANE_SHARE, MAX_PLANES = 0.12, 3
+# The core: the solid shrunk this far inside (screen metres), unworked, so a
+# fissure shows recessed stone and never the sky through the piece.
 CORE_INSET, CORE_STEPS = 0.2, 5
 # The core's facets: a remesh this coarse (screen metres, coarsened with
-# depth like the stones' facets), then dissolved.
-CORE_FACET = 0.15
-# How fast the facets coarsen ON SCREEN with depth (`facets_per_m2`): the
-# on-screen density falls as 1 / scale ** FACET_FALLOFF.
-FACET_FALLOFF = 1.0
-# The stones' facets and chisel cuts as shares of recipe F's densities:
-# at recipe F's, the roof's underside was a mesh of small faces and the
-# chisel's steps stood out of the stones as little plates (Tris,
-# 2026-10-04: simplify, remove the small bits that jut out).
-FACETS, CHISEL = 0.55, 0.25
-# Parts of a shrunk core or opened stone smaller than this share of its area
-# are dropped (`drop_scraps`).
+# depth by CORE_FALLOFF), then dissolved.
+CORE_FACET, CORE_FALLOFF = 0.15, 1.0
+# Parts of a shrunk core smaller than this share of its area or SCRAP_SIZE
+# (screen metres) across are dropped (`drop_scraps`).
 SCRAP, SCRAP_SIZE = 0.02, 0.1
 # The solid is thickened away from the eye by this (screen metres), along
 # the camera's rays (`thicken`).
@@ -89,53 +108,33 @@ THICKEN = 0.4
 CORE_ATTRIBUTE = "backdrop_core"
 # A stone keeps itself only if some of the solid's surface is in it, it is
 # no thinner than SLIVER (screen metres) every way, and it fills at least
-# FILL of its box: a corner of the solid in a cell weathers into a spike,
-# and a stone a few voxels thin facets into a flat sheet (0.05 left the
-# central rock a two-face plane). Weathered, it must still have STONE_FACES.
+# FILL of its box; otherwise it is merged into its neighbour.
 ON_SURFACE = 1e-4
 SLIVER = 0.1
 FILL = 0.3
-# The weathering's smoothing passes, after the bevel and after the chisel,
-# and the planar dissolve's angle: recipe F's (fitted.ROUND 4, CUT_SOFT 2,
-# ANGLE 9 degrees) left the backdrop "too blobby compared to the
-# foreground rocks" (Tris, 2026-10-04) - gentle 5-20 degree folds were 60 %
-# of its edge length against the Terraces' 25 %. Halved smoothing and a 15
-# degree dissolve keep the packing; 20 degrees folded a large face into a
-# plate standing out of a stone, no smoothing opened 27 % holes in rock-c.
-ROUND, CUT_SOFT = 2, 1
-FACET_ANGLE = 15.0
 # A piece under this share of the piece's median cell volume is joined to
 # its neighbour too (a knub otherwise).
 KNUB = 0.3
-STONE_FACES = 8
-# No convex edge sharper than this inside, radians (Tris, 2026-10-04).
+# No convex edge sharper than this inside, radians (Tris, 2026-10-04): the
+# core is unfolded to it; backdrop_check.py reports the rock against it.
 MIN_ANGLE = math.radians(80)
-# The opening (`open_thin`): radius in screen metres, steps each way. Twice
-# the radius is the thinnest feature a stone keeps. It rounds every convex
-# edge by as much: 0.04 (10 cm at the backdrop's depth) was too round.
+# The core's opening (`open_thin`): radius in screen metres, steps each way.
 OPEN_RADIUS, OPEN_STEPS = 0.02, 3
-# `unfold`: at most this many edge collapses, and a stone that would keep
-# less than UNFOLD_KEEP of its surface is dropped rather than unfolded.
+# `unfold`: at most this many edge collapses, and a mesh that would keep
+# less than UNFOLD_KEEP of its surface is left as it was.
 UNFOLD_MAX, UNFOLD_KEEP = 60, 0.95
-# The facet densities a stone is tried at, as multiples of recipe F's.
-REFACET = (1.0, 1.4, 2.0, 2.8, 4.0)
 
 # What a solid formation's recipe may set (its `params`; the Formations
 # panel's fields, formations/params.py), and the defaults it takes:
-# - seed: the cell grid's jitter and every stone's weathering;
-# - stoneSize: WIDTH, HEIGHT and DEPTH times this;
-# - facets, chisel: FACETS and CHISEL;
+# - seed: the cells and every stone's taper and bevel;
+# - stoneSize: every stone's size times this (CELLS_PER_M3 / stoneSize^3);
 # - knub: KNUB;
 # - curveTurn: CURVE_TURN, degrees;
-# - floor: the least depth scale a stone is cut at (`cells`);
-# - fixedScale: when over 0, the depth scale EVERY stone is cut, weathered
-#   and faceted at, instead of its own depth over the plane's: the level of
-#   detail set by hand rather than by distance from the camera;
-# - facetFalloff: FACET_FALLOFF, how much coarser on screen the facets get
-#   per unit of depth scale (0: as fine on screen at any depth).
-PARAMS = {"seed": 0, "stoneSize": 1.0, "facets": FACETS, "chisel": CHISEL, "knub": KNUB,
-          "curveTurn": 60.0, "floor": 0.0, "fixedScale": 0.0,
-          "facetFalloff": FACET_FALLOFF}
+# - floor: the least depth scale a stone is cut at (`Cells`);
+# - fixedScale: when over 0, the depth scale EVERY stone is cut and worked
+#   at, instead of its own depth over the plane's: the level of detail set by
+#   hand rather than by distance from the camera.
+PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0, "floor": 0.0, "fixedScale": 0.0}
 
 
 def resolved(params):
@@ -152,6 +151,15 @@ def _bpy():
     from mathutils import Matrix, Vector
     from mathutils.bvhtree import BVHTree
     return bmesh, bpy, Matrix, Vector, BVHTree
+
+
+def _boulders():
+    """The boulder generator's parameters and the two steps reused as they
+    are (tools/blender/boulders, on sys.path in the worker's Blender)."""
+    from blender_build import limit_edge_bevel
+    from params import defaults
+    from solid_chunks import reinforce_chunks
+    return defaults(), reinforce_chunks, limit_edge_bevel
 
 
 def world_matrix(ob):
@@ -178,49 +186,334 @@ class Camera:
         return (y - self.eye[1]) / self.distance
 
 
-def _intervals(lo, hi, size, rng):
-    """Cut [lo, hi] into pieces of `size(centre)` (a random draw each)."""
-    cuts = [lo]
-    while cuts[-1] < hi:
-        cuts.append(cuts[-1] + size(cuts[-1]))
-    # The last piece takes up the slack rather than leaving a sliver.
-    if len(cuts) > 2 and hi - cuts[-2] < 0.5 * (cuts[-1] - cuts[-2]):
-        cuts.pop(-2)
-    cuts[-1] = hi
-    return list(zip(cuts[:-1], cuts[1:]))
+# -- geometry ------------------------------------------------------------
+
+def halfspaces(planes, lo, hi):
+    """The vertices of {x : n.x <= b for every (n, b)} inside the box lo..hi:
+    every feasible intersection of three of the planes."""
+    planes = list(planes)
+    for ax in range(3):
+        e = np.zeros(3)
+        e[ax] = 1
+        planes += [(e, hi[ax]), (-e, -lo[ax])]
+    N = np.array([q[0] for q in planes], float)
+    b = np.array([q[1] for q in planes], float)
+    m = len(planes)
+    i, j, k = np.array([(i, j, k) for i in range(m) for j in range(i + 1, m) for k in range(j + 1, m)]).T
+    A = np.stack([N[i], N[j], N[k]], axis=1)
+    B = np.stack([b[i], b[j], b[k]], axis=1)
+    ok = np.abs(np.linalg.det(A)) > 1e-12
+    x = np.linalg.solve(A[ok], B[ok][..., None])[..., 0]
+    return x[np.all(x @ N.T <= b + 1e-7, axis=1)]
 
 
-def _cell(bm_solid, box, seed):
-    """`bm_solid` within the box (centre, half, rotation), as a new mesh, or
-    None when nothing is left: the Manifold boolean of the two."""
-    bmesh, bpy, Matrix, Vector, _ = _bpy()
-    centre, half, rot = box
-    me = bpy.data.meshes.new("cell")
-    bm_solid.to_mesh(me)
-    ob = bpy.data.objects.new("cell", me)
-    bpy.context.scene.collection.objects.link(ob)
-    cb = bmesh.new()
-    bmesh.ops.create_cube(cb, size=2.0)
-    m = Matrix.Translation(Vector(centre)) @ rot.to_4x4() @ Matrix.Diagonal((*half, 1))
-    bmesh.ops.transform(cb, verts=cb.verts, matrix=m)
-    cme = bpy.data.meshes.new("cutter")
-    cb.to_mesh(cme)
-    cb.free()
-    cutter = bpy.data.objects.new("cutter", cme)
-    mod = ob.modifiers.new("cell", "BOOLEAN")
-    mod.operation = "INTERSECT"
-    mod.object = cutter
-    mod.solver = "MANIFOLD"
-    fitted._apply_modifiers(ob)
-    bpy.data.objects.remove(cutter)
-    bpy.data.meshes.remove(cme)
-    bpy.context.scene.collection.objects.unlink(ob)
-    if len(ob.data.polygons) < 4:
-        me = ob.data
-        bpy.data.objects.remove(ob)
-        bpy.data.meshes.remove(me)
+def hull_mesh(points, name):
+    """The convex hull of `points` as a new mesh, or None when it is flat."""
+    bmesh, bpy, *_ = _bpy()
+    bm = bmesh.new()
+    for p in points:
+        bm.verts.new(p)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-5)
+    if len(bm.verts) < 4:
+        bm.free()
         return None
-    return ob
+    res = bmesh.ops.convex_hull(bm, input=bm.verts[:], use_existing_faces=False)
+    loose = {g for g in res["geom_interior"] + res["geom_unused"] if isinstance(g, bmesh.types.BMVert)}
+    loose |= {v for v in bm.verts if not v.link_faces}
+    if loose:
+        bmesh.ops.delete(bm, geom=list(loose), context="VERTS")
+    if len(bm.faces) < 4:
+        bm.free()
+        return None
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    return me
+
+
+def _boolean(ob, operand, operation, collection=False):
+    """`ob` combined with `operand` (an object, or a collection's objects),
+    the Manifold solver, applied."""
+    mod = ob.modifiers.new("boolean", "BOOLEAN")
+    mod.operation = operation
+    mod.solver = "MANIFOLD"
+    if collection:
+        mod.operand_type = "COLLECTION"
+        mod.collection = operand
+    else:
+        mod.object = operand
+    fitted._apply_modifiers(ob)
+
+
+def _modifier(ob, kind, **settings):
+    mod = ob.modifiers.new(kind.lower(), kind)
+    for k, v in settings.items():
+        setattr(mod, k, v)
+    fitted._apply_modifiers(ob)
+
+
+def _tree(ob):
+    _, _, _, _, BVHTree = _bpy()
+    return BVHTree.FromPolygons([v.co for v in ob.data.vertices], [p.vertices for p in ob.data.polygons])
+
+
+RAYS = ((0.5773, 0.5774, 0.5775), (-0.6131, 0.4402, -0.6561), (0.3021, -0.8460, 0.4395))
+
+
+def _inside(tree, points):
+    """Which `points` lie inside the closed surface `tree`: the majority of
+    three rays' crossing parities, along skewed directions. One ray alone
+    flipped a point now and then: through an edge it crosses one triangle or
+    both, whichever the BVH finds, and its order is not the same from one run
+    to the next, so a rock rebuilt from the same seed came out different."""
+    _, _, _, Vector, _ = _bpy()
+    rays = [Vector(d).normalized() for d in RAYS]
+    out = np.zeros(len(points), bool)
+    for i, p in enumerate(points):
+        votes = 0
+        for d in rays:
+            o, n = Vector(p), 0
+            for _ in range(64):
+                hit = tree.ray_cast(o, d)[0]
+                if hit is None:
+                    break
+                n += 1
+                o = hit + d * 1e-5
+            votes += n % 2
+        out[i] = votes >= 2
+    return out
+
+
+def farthest(points, count, metric, rng, scales=None):
+    """The boulder generator's farthest-point pick, with its jitter: indices
+    of `count` of `points`, spread evenly under `metric`, each distance
+    divided by the candidate's `scale` (so spread evenly in screen metres)."""
+    weight = 1.0 / np.asarray(scales, float) if scales is not None else np.ones(len(points))
+    chosen = [int(rng.integers(len(points)))]
+    nearest = np.full(len(points), np.inf)
+    for _ in range(count - 1):
+        nearest = np.minimum(nearest, np.linalg.norm((points - points[chosen[-1]]) * metric, axis=1) * weight)
+        nearest[chosen[-1]] = -1
+        chosen.append(int(np.argmax(nearest * rng.uniform(.85, 1.15, len(points)))))
+    return np.array(chosen)
+
+
+def keep_main_body(ob):
+    """Delete every loose part of `ob` but the largest by area."""
+    bmesh, *_ = _bpy()
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    left, groups = set(bm.verts), []
+    while left:
+        part = {left.pop()}
+        todo = list(part)
+        while todo:
+            v = todo.pop()
+            for e in v.link_edges:
+                o = e.other_vert(v)
+                if o in left:
+                    left.remove(o)
+                    part.add(o)
+                    todo.append(o)
+        groups.append(part)
+    if len(groups) > 1:
+        groups.sort(key=lambda g: sum(f.calc_area() for f in {f for v in g for f in v.link_faces}), reverse=True)
+        bmesh.ops.delete(bm, geom=[v for g in groups[1:] for v in g], context="VERTS")
+    bm.to_mesh(ob.data)
+    bm.free()
+
+
+def grown(ob, distance, voxel, collection, name):
+    """A copy of `ob` grown `distance` along its normals in steps of at most
+    four voxels, remeshed before and after each, so it stays one closed
+    manifold."""
+    bmesh, bpy, *_ = _bpy()
+    out = bpy.data.objects.new(name, ob.data.copy())
+    collection.objects.link(out)
+    _modifier(out, "REMESH", mode="VOXEL", voxel_size=voxel, adaptivity=0.0)
+    steps = max(1, math.ceil(abs(distance) / (4 * voxel))) if distance else 0
+    for _ in range(steps):
+        bm = bmesh.new()
+        bm.from_mesh(out.data)
+        bm.normal_update()
+        for v in bm.verts:
+            v.co += v.normal * (distance / steps)
+        bm.to_mesh(out.data)
+        bm.free()
+        _modifier(out, "REMESH", mode="VOXEL", voxel_size=voxel, adaptivity=0.0)
+    return out
+
+
+# -- the cells ------------------------------------------------------------
+
+def along(n):
+    """The depth axis the boulder measures its taper in, lying in a surface
+    of normal `n`: the camera's axis (world y) where it lies in the surface
+    (a boulder's top, bottom and ends), screen up on a face turned to the
+    camera, which no boulder saws."""
+    view, up = np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0])
+    t = view - np.dot(view, n) * n
+    if np.linalg.norm(t) < 0.5:
+        t = up - np.dot(up, n) * n
+    return t / np.linalg.norm(t)
+
+
+def sink(taper, points):
+    """How far `taper` takes `points` in along its inward normal (out where
+    negative): hybrid_geometry.taper_chunk, |z| (the distance from the
+    ridge along the depth axis) times the slope on that side times the
+    influence, less the mean slope's share (the roof, module docstring)."""
+    pts = np.atleast_2d(points)
+    z = pts @ taper["t"] - taper["r"]
+    slope = np.where(z < 0, taper["slopes"][0], taper["slopes"][1])
+    return np.abs(z) * (slope - taper["mean"]) * taper["influence"]
+
+
+class Cells:
+    """The partition of a solid: the boulder's anisotropic Voronoi cells over
+    it, each grown over or held back from each neighbour, with its taper
+    decided before the cut (which neighbour lies higher decides the joint).
+    A cell is an id; `cut` intersects it with the solid, `split` halves it."""
+
+    def __init__(self, solid, surface, camera, p, boulder, rng, report):
+        from mathutils.kdtree import KDTree
+        self.camera, self.p, self.boulder, self.rng = camera, p, boulder, rng
+        self.surface = surface
+        # The solid's faces by centre, for the smoothed normal (`_normal`).
+        polys = solid.data.polygons
+        self.face_n = np.array([q.normal for q in polys]) * np.array([q.area for q in polys])[:, None]
+        self.faces = KDTree(len(polys))
+        for i, q in enumerate(polys):
+            self.faces.insert(q.center, i)
+        self.faces.balance()
+        co = np.array([v.co for v in solid.data.vertices])
+        lo, hi = co.min(0), co.max(0)
+        self.lo, self.hi = lo - 1.0, hi + 1.0
+        tree = _tree(solid)
+        box = rng.uniform(lo, hi, (40000, 3))
+        inside = box[_inside(tree, box)]
+        scales = np.array([self.scale(y) for y in inside[:, 1]])
+        volume = float(np.prod(hi - lo))
+        # The count: CELLS_PER_M3 a cubic screen metre, a cell's world volume
+        # growing as its scale cubed.
+        count = int(round(volume / len(box) * float(np.sum(CELLS_PER_M3 / (scales * p["stoneSize"]) ** 3))))
+        count = max(4, min(count, len(inside) // 20))
+        # Spread evenly in screen metres: farther back, farther apart.
+        pick = farthest(inside, count, np.array(CELL_METRIC), rng, scales)
+        seeds = inside[pick]
+        self.planes, self.tapers, self.f = [], [], []
+        tapers = [self._taper(s) for s in seeds]
+        st = seeds @ CELL_T.T
+        overlapped = 0
+        for i, s in enumerate(st):
+            f = self.scale(seeds[i][1])
+            near = np.argsort(np.linalg.norm(st - s, axis=1))[1:CELL_NEIGHBOURS + 1]
+            planes = []
+            for j in near:
+                nt = st[j] - s
+                bt = float(nt @ (st[j] + s) / 2)
+                nw = CELL_T.T @ nt
+                length = np.linalg.norm(nw)
+                mid = (seeds[i] + seeds[j]) / 2
+                # How far i lies above j at the joint (sink is inward).
+                above = float(sink(tapers[j], mid)[0] - sink(tapers[i], mid)[0])
+                over = bool(above > MIN_STEP * f)
+                overlapped += over
+                planes.append((nw / length, bt / length + (CELL_OVERLAP if over else -CELL_GAP) * f))
+            self.planes.append(planes)
+            self.tapers.append(tapers[i])
+            self.f.append(f)
+        report["cells"] = len(seeds)
+        report["joints overlapped"] = overlapped
+
+    def scale(self, y):
+        p = self.p
+        return p["fixedScale"] if p["fixedScale"] > 0 else max(self.camera.scale(y), p["floor"])
+
+    def _taper(self, point):
+        """A cell's taper: the guide's normal nearest its seed (the shear's
+        outward axis), the depth axis in the surface, the nearest ridge, a
+        slope each side of it and the influence of how deep the seed lies."""
+        _, _, _, Vector, _ = _bpy()
+        b = self.boulder
+        hit = self.surface.find_nearest(Vector(point))
+        k = self.scale(point[1]) * self.p["stoneSize"]
+        d = DEPTH / 2.6 * k
+        n = self._normal(hit[0], NORMAL_REACH * k)
+        t = along(n)
+        spacing = RIDGE_SPACING * d
+        return {"n": n, "t": t, "r": spacing * round(float(np.dot(point, t)) / spacing),
+                "slopes": self.rng.uniform(b["taperSlopeMin"], b["taperSlopeMax"], 2),
+                "mean": (b["taperSlopeMin"] + b["taperSlopeMax"]) / 2,
+                "influence": math.exp(-hit[3] / (d * b["taperReach"])), "k": k}
+
+    def _normal(self, at, reach):
+        """The solid's area-weighted normal over its faces within `reach` of
+        `at`: the nearest face's alone is whichever of two the BVH happens to
+        find at an edge, and the solid's face order (a boolean's output) is
+        not the same from one run to the next."""
+        near = [i for _, i, _ in self.faces.find_range(at, reach)]
+        if not near:
+            near = [self.faces.find(at)[1]]
+        n = self.face_n[near].sum(0)
+        return n / np.linalg.norm(n)
+
+    def ids(self):
+        return list(range(len(self.planes)))
+
+    def box(self, cid):
+        """The cell's bounding box: centre and half extents, or None when it
+        is empty."""
+        v = halfspaces(self.planes[cid], self.lo, self.hi)
+        if len(v) < 4:
+            return None
+        return (v.min(0) + v.max(0)) / 2, (v.max(0) - v.min(0)) / 2
+
+    def cut(self, bm_solid, cid):
+        """The solid within cell `cid`, as a new object (unlinked), or None
+        when nothing is left."""
+        _, bpy, *_ = _bpy()
+        v = halfspaces(self.planes[cid], self.lo, self.hi)
+        me = hull_mesh(v, "cutter") if len(v) >= 4 else None
+        if me is None:
+            return None
+        piece = bpy.data.meshes.new("cell")
+        bm_solid.to_mesh(piece)
+        ob = bpy.data.objects.new("cell", piece)
+        bpy.context.scene.collection.objects.link(ob)
+        cutter = bpy.data.objects.new("cutter", me)
+        _boolean(ob, cutter, "INTERSECT")
+        bpy.data.objects.remove(cutter)
+        bpy.data.meshes.remove(me)
+        bpy.context.scene.collection.objects.unlink(ob)
+        if len(ob.data.polygons) < 4:
+            me = ob.data
+            bpy.data.objects.remove(ob)
+            bpy.data.meshes.remove(me)
+            return None
+        return ob
+
+    def split(self, cid):
+        """Cell `cid` halved across the screen (its longer of width over
+        SMALL_WIDTH and height over SMALL_HEIGHT), the halves new cells with
+        its taper; None at SMALL's sizes."""
+        box = self.box(cid)
+        if box is None:
+            return None
+        centre, half = box
+        f = self.f[cid]
+        wide, tall = half[0] / (SMALL_WIDTH * f), half[2] / (SMALL_HEIGHT * f)
+        if max(wide, tall) < 1:
+            return None
+        e = np.array([1.0, 0, 0]) if wide >= tall else np.array([0, 0, 1.0])
+        out = []
+        for sign in (1, -1):
+            self.planes.append(self.planes[cid] + [(sign * e, float(sign * e @ centre) - CELL_GAP * f)])
+            self.tapers.append(self.tapers[cid])
+            self.f.append(f)
+            out.append(len(self.planes) - 1)
+        return out
 
 
 def _curved(ob, surface, half):
@@ -243,145 +536,100 @@ def _curved(ob, surface, half):
     return turn / (2 * max(half))
 
 
-def _split(centre, half, rot, f):
-    """The cell in two across the screen (its longer of width over
-    SMALL_WIDTH and height over SMALL_HEIGHT), or None at SMALL's sizes."""
-    from mathutils import Vector
-    grow = OVERLAP * f
-    inner = [h - grow for h in half]
-    wide, tall = inner[0] / (SMALL_WIDTH * f), inner[2] / (SMALL_HEIGHT * f)
-    if max(wide, tall) < 1:
-        return None  # halves would be under SMALL's least sizes
-    axis = 0 if wide >= tall else 2
-    step = [0.0, 0.0, 0.0]
-    step[axis] = inner[axis] / 2
-    child = tuple(inner[i] / 2 + grow if i == axis else half[i] for i in range(3))
-    off = rot @ Vector(step)
-    return [(tuple(Vector(centre) + sign * off), child, rot, f) for sign in (-1, 1)]
+# -- a stone ----------------------------------------------------------------
 
-
-def corner_cuts(ob, half, seed, smallest):
-    """Recipe F's corner cuts (fitted._corner_cuts) on a stone of any shape.
-    The study's stones were boxes, every vertex a corner, so it cut at a
-    random vertex; a stone cut from a curved solid has hundreds, bunched
-    along the curve, and their average sits off centre, so a cut aimed at a
-    vertex near it took the stone in half (most of a stone gone in 10 cuts,
-    measured on the central rock). Here a cut aims at a corner of the
-    stone's box and stands its depth inside the stone's furthest point that
-    way, which on a box is exactly the study's cut.
-
-    Each cut is a box standing outside its plane, and all of a stone's go
-    in one Manifold boolean, as the chisel's do. The study's bisect and
-    hole fill could not cap the cut loops of a cell cut from a thickened
-    solid (1275 open edges on rock-b's front stone), the remesh after read
-    the open stone as a thin shell, and the stone vanished (3.2 m3 to
-    0.02). `smallest` sizes the cuts, as the box's smallest half does in
-    the study."""
-    bmesh, bpy, Matrix, Vector, _ = _bpy()
-    rng = random.Random(seed)
-    co = [v.co.copy() for v in ob.data.vertices]
-    size = 4 * max(half)
-    cutters = bpy.data.collections.new("Corner cuts")
-    bpy.context.scene.collection.children.link(cutters)
-    done = tries = 0
-    while done < fitted.CORNERS and tries < fitted.CORNERS * 6:
-        tries += 1
-        corner = Vector((rng.choice((-1, 1)) * half[0], rng.choice((-1, 1)) * half[1], rng.choice((-1, 1)) * half[2]))
-        if corner.z < 0 and rng.random() < 0.8:
-            continue  # the underside stays mostly flat, as the study's
-        n = (corner.normalized() + fitted._unit_vector(rng, Vector) * rng.uniform(0.3, 1.0)
-             * fitted.CORNER_TILT).normalized()
-        reach = max(c.dot(n) for c in co)
-        d = rng.uniform(fitted.CORNER_DEPTH * 0.4, fitted.CORNER_DEPTH) * smallest
-        frame = n.to_track_quat("Z", "Y").to_matrix().to_4x4()
-        frame.translation = n * (reach - d)
-        box = bmesh.new()
-        bmesh.ops.create_cube(box, size=1.0)
-        bmesh.ops.transform(box, verts=box.verts,
-                            matrix=frame @ Matrix.Translation((0, 0, size / 2)) @ Matrix.Diagonal((size, size, size, 1)))
-        me = bpy.data.meshes.new("corner cut")
-        box.to_mesh(me)
-        box.free()
-        cutters.objects.link(bpy.data.objects.new("corner cut", me))
-        done += 1
-    if done:
-        mod = ob.modifiers.new("corners", "BOOLEAN")
-        mod.operation = "DIFFERENCE"
-        mod.operand_type = "COLLECTION"
-        mod.collection = cutters
-        mod.solver = "MANIFOLD"
-        fitted._apply_modifiers(ob)
-    for c in list(cutters.objects):
-        me = c.data
-        bpy.data.objects.remove(c)
-        bpy.data.meshes.remove(me)
-    bpy.data.collections.remove(cutters)
-
-
-def closed(ob):
-    """Whether `ob` is a closed surface (no edge with a face on one side only)."""
+def surface_planes(ob, surface):
+    """A stone's faces on the solid's surface grouped by direction, largest
+    first, each group's plane (normal, offset) through its area-weighted
+    centre: what saws the stone flat."""
     bmesh, *_ = _bpy()
     bm = bmesh.new()
     bm.from_mesh(ob.data)
-    # An edge four faces share is two lobes touching, still a closed solid
-    # (the boolean leaves one now and then; the remesh after resolves it).
-    bad = [e for e in bm.edges if e.is_boundary or e.is_wire]
+    bm.normal_update()
+    faces = [(np.array(f.normal), np.array(f.calc_center_median()), f.calc_area())
+             for f in bm.faces if surface.find_nearest(f.calc_center_median())[3] < 1e-3]
     bm.free()
-    return not bad
+    if not faces:
+        return []
+    faces.sort(key=lambda f: -f[2])
+    total = sum(f[2] for f in faces)
+    groups = []
+    for n, c, a in faces:
+        for g in groups:
+            if np.dot(g["n"] / np.linalg.norm(g["n"]), n) > math.cos(CORNER_ANGLE):
+                g["n"], g["c"], g["a"] = g["n"] + n * a, g["c"] + c * a, g["a"] + a
+                break
+        else:
+            groups.append({"n": n * a, "c": c * a, "a": a})
+    planes = []
+    for g in sorted(groups, key=lambda g: -g["a"])[:MAX_PLANES]:
+        if g["a"] >= PLANE_SHARE * total:
+            n = g["n"] / np.linalg.norm(g["n"])
+            planes.append((n, float(n @ (g["c"] / g["a"]))))
+    return planes
 
 
-def weather(ob, half, seed, scale, chisel=CHISEL):
-    """fitted.weather with corner_cuts for the study's. The cuts must leave
-    a closed stone: a remesh reads an open one as a thin shell, and the
-    stone is lost without a word."""
-    if not closed(ob):
-        raise RuntimeError(f"{ob.name}: open before weathering")
-    # The cuts' and the bevel's size: recipe F's, on a stone no bigger than
-    # the first sizes'.
-    size = min(min(half), CUT_HALF * scale)
-    corner_cuts(ob, half, seed + 70, size)
-    if not closed(ob):
-        raise RuntimeError(f"{ob.name}: the corner cuts left it open")
-    fitted._pillow(ob, voxel=0.025 * scale, iters=ROUND, bevel=fitted.BEVEL * size)
-    fitted._chisel(ob, seed + 50, scale, fitted.CUT_DENSITY * chisel)
-    if not closed(ob):
-        raise RuntimeError(f"{ob.name}: the chisel left it open")
-    fitted._pillow(ob, voxel=0.02 * scale, iters=CUT_SOFT)
-    fitted._relief(ob, seed + 60, scale)
+def work(ob, taper, surface, boulder, rng):
+    """One stone as the boulder works a piece on its top: sawn flat by its
+    planes, the chunk bevel, split at its ridge and tapered (`sink`)."""
+    bmesh, bpy, _, Vector, _ = _bpy()
+    co = np.array([v.co for v in ob.data.vertices])
+    planes = surface_planes(ob, surface)
+    if planes:
+        v = halfspaces(planes, co.min(0) - 0.5, co.max(0) + 0.5)
+        me = hull_mesh(v, "saw") if len(v) >= 4 else None
+        if me is not None:
+            saw = bpy.data.objects.new("saw", me)
+            _boolean(ob, saw, "INTERSECT")
+            bpy.data.objects.remove(saw)
+            bpy.data.meshes.remove(me)
+    if len(ob.data.polygons) < 4:
+        return False
+    k = taper["k"]
+    _modifier(ob, "BEVEL", width=rng.uniform(boulder["chunkBevelMin"], boulder["chunkBevelMax"]) * k,
+              segments=int(boulder["chunkBevelSegments"]), limit_method="ANGLE",
+              angle_limit=math.radians(boulder["chunkBevelAngle"]))
+    # taper_chunk splits a piece at its ridge so each side takes its slope.
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
+                           plane_co=Vector(taper["t"] * taper["r"]), plane_no=Vector(taper["t"]))
+    bm.to_mesh(ob.data)
+    bm.free()
+    co = np.array([v.co for v in ob.data.vertices])
+    co -= taper["n"] * sink(taper, co)[:, None]
+    ob.data.vertices.foreach_set("co", co.ravel())
+    ob.data.update()
+    return True
 
 
-def _lean(rng, axis):
-    from mathutils import Matrix
-    return Matrix.Rotation(rng.uniform(-LEAN, LEAN), 3, axis)
+def clean(stones, d, k, boulder, reinforce):
+    """The boulder's own cleanup (assemble_rock): slivers dropped and shallow
+    wedges backed (reinforce_chunks), then every acute projecting edge
+    bevelled (soften_thin_edges)."""
+    bmesh, *_ = _bpy()
+    for ob in stones:
+        ob.name = "fracture_chunk_" + ob.name  # what reinforce_chunks backs
+    parts = [{"name": ob.name, "material": 0} for ob in stones]
+    stones = reinforce(stones, parts, {"depth": d})
+    for ob in stones:
+        bm = bmesh.new()
+        bm.from_mesh(ob.data)
+        bm.normal_update()
+        sharp = [e for e in bm.edges if e.is_manifold and e.is_convex
+                 and e.calc_face_angle(0) > math.radians(boulder["thinEdgeAngle"])]
+        if sharp:
+            bmesh.ops.bevel(bm, geom=sharp, offset=boulder["thinEdgeOffset"] * k, segments=1,
+                            affect="EDGES", clamp_overlap=True, loop_slide=True)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+        bm.to_mesh(ob.data)
+        bm.free()
+    return stones
 
 
-def cells(solid, camera, seed, floor=0.0, size=1.0, fixed=0.0):
-    """The grid of boxes over the solid: (centre, half, rotation, scale).
-    `floor` is the least scale a cell takes: a part of a piece no camera
-    sees at the plane's distance (the roof's ceiling run forward to the
-    level, backdrop.extend) is cut and worked as the rest of the piece,
-    not into stones a third the size (196 of them on the roof). `fixed`,
-    over 0, is every cell's scale, whatever its depth."""
-    rng = random.Random(seed)
-    def scale(y):
-        return fixed if fixed > 0 else max(camera.scale(y), floor)
-    co = np.array([solid.matrix_world @ v.co for v in solid.data.vertices])
-    lo, hi = co.min(0), co.max(0)
-    out = []
-    for y0, y1 in _intervals(lo[1], hi[1], lambda y: rng.uniform(*DEPTH) * size * scale(y), rng):
-        f = scale((y0 + y1) / 2)
-        for x0, x1 in _intervals(lo[0], hi[0], lambda x: rng.uniform(*WIDTH) * size * f, rng):
-            # A column's strata are its own, so the joints do not line up
-            # across the face.
-            for z0, z1 in _intervals(lo[2], hi[2], lambda z: rng.uniform(*HEIGHT) * size * f, rng):
-                grow = OVERLAP * f
-                half = ((x1 - x0) / 2 + grow, (y1 - y0) / 2 + grow, (z1 - z0) / 2 + grow)
-                rot = _lean(rng, "Y") @ _lean(rng, "X")
-                out.append((((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), half, rot, f))
-    return out
+# -- the core -----------------------------------------------------------------
 
-
-def build_core(bm_solid, scale, collection, report, falloff=FACET_FALLOFF):
+def build_core(bm_solid, scale, collection, report):
     """The solid shrunk CORE_INSET (screen metres) inside: the recessed stone
     a fissure shows. It shrinks in CORE_STEPS steps along its normals with a
     voxel remesh after each, which resolves what a step folds over: in one
@@ -400,12 +648,10 @@ def build_core(bm_solid, scale, collection, report, falloff=FACET_FALLOFF):
     if len(ob.data.polygons) < 4:
         return ob
     open_thin(ob, scale)
-    # Not recipe F's collapse: on a mass this size it folds in places no
-    # unfolding saves (the roof's, 116 edges). A coarse remesh and the planar
-    # dissolve cannot fold; their faces band along the voxel grid, which on
-    # stone seen only down the fissures does not show.
-    # Faces go as 1 / voxel ** 2: coarsened as the stones' facets are.
-    fitted._pillow(ob, voxel=CORE_FACET * scale ** (1 + falloff / 2), iters=1)
+    # A coarse remesh and the planar dissolve cannot fold; their faces band
+    # along the voxel grid, which on stone seen only down the fissures does
+    # not show. Faces go as 1 / voxel ** 2, coarsened with depth.
+    fitted._pillow(ob, voxel=CORE_FACET * scale ** (1 + CORE_FALLOFF / 2), iters=1)
     d = ob.modifiers.new("planar", "DECIMATE")
     d.decimate_type = "DISSOLVE"
     d.angle_limit = math.radians(fitted.ANGLE)
@@ -426,10 +672,9 @@ def build_core(bm_solid, scale, collection, report, falloff=FACET_FALLOFF):
 
 def drop_scraps(ob, scale):
     """Delete the parts of `ob` under SCRAP of its area or under SCRAP_SIZE
-    (screen metres) across. Shrinking (the core's inset, a stone's opening)
-    leaves scraps where the shape narrows; one, a ball 6 cm across, floated
-    in front of the waterfall cliff, too small a share of nothing to go by
-    area alone."""
+    (screen metres) across. Shrinking (the core's inset) leaves scraps where
+    the shape narrows; one, a ball 6 cm across, floated in front of the
+    waterfall cliff, too small a share of nothing to go by area alone."""
     bmesh, *_ = _bpy()
     bm = bmesh.new()
     bm.from_mesh(ob.data)
@@ -478,12 +723,9 @@ def _offset(ob, distance, voxel, steps=OPEN_STEPS):
 
 
 def open_thin(ob, scale):
-    """A morphological opening: shrink the stone by OPEN_RADIUS (screen
-    metres) and grow it back, so anything thinner than twice that - a lip a
-    chisel box left along an edge, a fin the relief folded up, a sliver of
-    a cell - is gone, and the mass keeps its size (Tris, 2026-10-04: the
-    flat planes jutting out and the pointy curves; chamfering their tips
-    left them jutting out, blunt)."""
+    """A morphological opening: shrink by OPEN_RADIUS (screen metres) and grow
+    back, so anything thinner than twice that is gone and the mass keeps its
+    size."""
     voxel = 0.02 * scale
     _offset(ob, -OPEN_RADIUS * scale, voxel)
     if len(ob.data.polygons) >= 4:
@@ -497,17 +739,12 @@ def sharp_edges(bm):
 
 
 def unfold(ob):
-    """Take out the folds recipe F's facets leave, and say whether the stone
-    survived it. The Decimate Collapse to ~120 triangles a square metre
-    turns a sliver of triangles back over itself here and there (measured:
-    20 convex edges under 80 degrees over 35 stones, at any target), and a
-    fold is a thin fin that juts out of the face (Tris, 2026-10-04). Each
-    fold's sharpest edge is collapsed to a point, which deletes the sliver
-    rather than blunting it (a chamfer left the fin standing; a voxel remesh
-    before the dissolve folds nothing but bands every face along the grid).
-    33 of those 35 stones lost under 2 % of their surface; a stone that would
-    lose more than 1 - UNFOLD_KEEP (one collapsed to 4 %) is reported lost,
-    and its place is the core's."""
+    """Collapse the sharpest convex edges (under MIN_ANGLE inside) to points
+    until none is left, and say whether that worked: a fold is a thin fin
+    jutting out (Tris, 2026-10-04), and collapsing deletes the sliver rather
+    than blunting it. Each try is made on a copy and the first that stays a
+    closed surface is kept; a mesh that would lose more than 1 - UNFOLD_KEEP
+    of its surface is left as it was."""
     bmesh, *_ = _bpy()
     bm = bmesh.new()
     bm.from_mesh(ob.data)
@@ -519,11 +756,6 @@ def unfold(ob):
         found = sharp_edges(bm)
         if not found:
             break
-        # The sharpest edge first; an edge whose ends share more neighbours
-        # than its two triangles' far corners pinches the surface when
-        # collapsed (non-manifold: it cost 17 stones, rock-b's only one), so
-        # each try is made on a copy and the first that stays a closed
-        # surface is kept.
         found.sort(key=lambda e: -e.calc_face_angle_signed(0))
         bm.edges.index_update()
         for index in [e.index for e in found]:
@@ -549,58 +781,7 @@ def unfold(ob):
     return ok
 
 
-def facets_per_m2(scale, facets=FACETS, falloff=FACET_FALLOFF):
-    """Triangles a WORLD square metre for a stone `scale` times further back
-    than the gameplay plane: recipe F's FACETS_PER_M2 a screen square metre
-    (which is 1 / scale ** 2 of it a world one), thinned once more by
-    scale ** FACET_FALLOFF, so the further back a rock stands the coarser it
-    is on screen too (Tris, 2026-10-04: lower the backdrop's face counts by
-    how far they are from the gameplay plane). Screen-constant, the roof
-    alone was 59k faces."""
-    return facets * fitted.FACETS_PER_M2 / scale ** (2 + falloff)
-
-
-def regrow(ob, targets, scale):
-    """Grow a weathered stone back out to the solid's surface it was cut
-    with. `targets` are points of that surface (the cell's own, before the
-    weathering); the stone grows along its normals by how far they now lie
-    outside it (REGROW_SHARE of them reached, at most REGROW_MAX screen
-    metres), with a voxel remesh per step so nothing folds.
-
-    The corner cuts, the bevel, the smoothing and the opening take a stone
-    in from its cell all round, so stones cut edge to edge stood apart with
-    the core and the sky between them and the outline the studio scene was
-    traced for shrank (measured from the start camera: 10.8 % of the solids'
-    silhouettes not covered, a boulder 25 %; Tris, 2026-10-04: "the rocks
-    should pack tightly together - overlapping if necessary to avoid
-    gaps"). Scaling a stone back to its cell's box was tried first and
-    helped the walls but not the boulders, whose cuts eat a rounded outline
-    (rock-a 38 %). Grown back, the stone keeps its chamfers in proportion and
-    meets its neighbours, overlapping them by the cells' OVERLAP."""
-    _, _, Matrix, Vector, BVHTree = _bpy()
-    if not len(targets):
-        return 0.0
-    if REGROW_MODE == "scale":
-        # Scaled about the box's centre until the cell's surface points fit
-        # it again, each axis on its own: no corner is rounded by it.
-        co = np.array([v.co for v in ob.data.vertices])
-        lo, hi = co.min(0), co.max(0)
-        centre, now = (lo + hi) / 2, np.maximum((hi - lo) / 2, 1e-9)
-        want = np.percentile(np.abs(targets - centre), REGROW_SHARE, axis=0)
-        factor = np.clip(want / now, 1.0, 1.0 + REGROW_MAX * scale / now)
-        ob.data.transform(Matrix.Translation(Vector(centre)) @ Matrix.Diagonal((*factor, 1.0))
-                          @ Matrix.Translation(Vector(-centre)))
-        return float(np.max(factor))
-    tree = BVHTree.FromPolygons([v.co for v in ob.data.vertices], [p.vertices for p in ob.data.polygons])
-    outside = []
-    for p in targets:
-        q, n, _, d = tree.find_nearest(Vector(p))
-        outside.append(d if q is not None and (Vector(p) - q).dot(n) > 0 else 0.0)
-    grow = min(float(np.percentile(outside, REGROW_SHARE)), REGROW_MAX * scale)
-    if grow > 0:
-        _offset(ob, grow, 0.02 * scale)
-    return grow
-
+# -- merging ------------------------------------------------------------------
 
 def _small(ob, f):
     """Whether a cell's piece is a sliver (under SLIVER across some way) or
@@ -638,34 +819,23 @@ def _neighbour(ob, others, reach):
     return best
 
 
-def _union(host, ob):
-    """`host` with `ob` added (a Manifold boolean union)."""
-    mod = host.modifiers.new("merge", "BOOLEAN")
-    mod.operation = "UNION"
-    mod.object = ob
-    mod.solver = "MANIFOLD"
-    fitted._apply_modifiers(host)
-
-
 def thicken(solid, camera, collection):
     """A copy of `solid` (world coordinates) grown away from the eye: the
     union of it and its camera-facing faces extruded THICKEN (screen metres,
     times their depth) further along their own camera rays. A point moved
     along its ray stays on its pixel, so from the start camera the
-    silhouette is exactly the studio's; only the hidden back grows (copies
-    pushed back and unioned would not do: a few centimetres of skin and a
-    copy 13 cm behind it do not meet). Where the studio's solid is a thin slanted skin seen edge on (the
-    central rock's top left: 2.6 m along the ray, a few centimetres across
-    it) no stone and no core survived the opening and the 80 degree rule,
-    and the outline had a hole the rock behind showed through (Tris,
-    2026-10-04: no gaps); thickened, the skin is a stone like any other."""
+    silhouette is exactly the guide's; only the hidden back grows. Where the
+    guide is a thin slanted skin seen edge on (the central rock's top left:
+    2.6 m along the ray, a few centimetres across it) no stone and no core
+    survived, and the outline had a hole the rock behind showed through
+    (Tris, 2026-10-04: no gaps); thickened, the skin is a stone like any
+    other."""
     bmesh, bpy, _, Vector, _ = _bpy()
     eye = Vector(camera.eye)
     me = solid.data.copy()
     me.transform(solid.matrix_world)
     ob = bpy.data.objects.new("Thickened", me)
     collection.objects.link(ob)
-    # The slab behind the camera-facing faces.
     bm = bmesh.new()
     bm.from_mesh(me)
     if bm.calc_volume(signed=True) < 0:
@@ -676,24 +846,16 @@ def thicken(solid, camera, collection):
     ext = bmesh.ops.extrude_face_region(bm, geom=bm.faces[:])
     for v in (g for g in ext["geom"] if isinstance(g, bmesh.types.BMVert)):
         v.co = v.co + (v.co - eye).normalized() * THICKEN * camera.scale(v.co.y)
+
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     sme = bpy.data.meshes.new("Thickening")
     bm.to_mesh(sme)
     bm.free()
     slab = bpy.data.objects.new("Thickening", sme)
-    mod = ob.modifiers.new("thicken", "BOOLEAN")
-    mod.operation = "UNION"
-    mod.object = slab
-    mod.solver = "MANIFOLD"
-    fitted._apply_modifiers(ob)
+    _boolean(ob, slab, "UNION")
     bpy.data.objects.remove(slab)
     bpy.data.meshes.remove(sme)
     return ob
-
-
-def _tree(ob):
-    _, _, _, _, BVHTree = _bpy()
-    return BVHTree.FromPolygons([v.co for v in ob.data.vertices], [p.vertices for p in ob.data.polygons])
 
 
 def floating(stones, core, water_z=None):
@@ -712,22 +874,21 @@ def floating(stones, core, water_z=None):
     return out
 
 
+# -- the build ------------------------------------------------------------------
+
 def build(solid, camera, params, collection, water_z=None):
-    """The piece as one mesh (unlinked, world coordinates), its stones and
-    core (each its own object in `collection`) and its typical scale (the
-    stones' median depth over the plane's). `params`: PARAMS (`resolved`),
-    and `core` (default True) to leave the core out when inspecting the
-    stones."""
+    """The piece as one mesh (unlinked, world coordinates), the objects it
+    was made from that are still in `collection`, and its typical scale (the
+    stones' median depth over the plane's). `params`: PARAMS (`resolved`)."""
     bmesh, bpy, Matrix, Vector, BVHTree = _bpy()
     p = resolved(params)
-    seed = p["seed"]
+    boulder, reinforce, limit_edge_bevel = _boulders()
+    rng = np.random.default_rng(int(p["seed"]))
     solid = thicken(solid, camera, collection)
     bm_solid = bmesh.new()
     bm_solid.from_mesh(solid.data)
     surface = BVHTree.FromBMesh(bm_solid)
-    stones, scales = [], []
-    report = {"lost to folds": 0, "merged": 0, "split": 0,
-              "thickened open": sum(1 for e in bm_solid.edges if not e.is_manifold)}
+    report = {"merged": 0, "split": 0, "thickened open": sum(1 for e in bm_solid.edges if not e.is_manifold)}
 
     def drop(ob):
         me = ob.data
@@ -737,124 +898,142 @@ def build(solid, camera, params, collection, water_z=None):
         bpy.data.meshes.remove(me)
 
     # The cells' pieces of the solid, those with any of its surface.
-    pieces = []
-    curved = set()  # the pieces split for a curve, by name
-    todo = list(cells(solid, camera, seed, p["floor"], p["stoneSize"], p["fixedScale"]))
-    n = -1
+    cells = Cells(solid, surface, camera, p, boulder, rng, report)
+    pieces, curved = [], set()
+    todo = cells.ids()
     while todo:
-        centre, half, rot, f = todo.pop(0)
-        n += 1
+        cid = todo.pop(0)
+        box = cells.box(cid)
+        if box is None:
+            continue
+        centre, half = box
         if water_z is not None and centre[2] + max(half) < water_z:
             continue  # under the pool
-        ob = _cell(bm_solid, (centre, half, rot), seed)
+        ob = cells.cut(bm_solid, cid)
         if ob is None:
             continue
         if not any(surface.find_nearest(v.co)[3] < ON_SURFACE for v in ob.data.vertices):
             drop(ob)
             continue  # wholly inside: the core stands for it
         bends = _curved(ob, surface, half) > math.radians(p["curveTurn"])
-        halves = _split(centre, half, rot, f) if bends else None
+        halves = cells.split(cid) if bends else None
         if halves:
             drop(ob)
             todo[:0] = halves
             report["split"] += 1
             continue
         collection.objects.link(ob)
-        ob.name = f"Stone {n}"
+        ob.name = f"Stone {cid}"
         if bends:
             curved.add(ob.name)
-        pieces.append((n, ob, f))
-    # A sliver or a wedge of the solid in a cell weathers into a spike or a
-    # sheet, so it is joined to the neighbour it touches most instead: left
-    # out, its corner of the solid had no stone and the deep core showed
-    # (Tris, 2026-10-04: no gaps).
-    # So is a piece much smaller than the rest: a chunk of the solid's edge
-    # in a cell's corner weathers into a little stone of its own and stuck
-    # out of the big one beside it as a knub (Tris, 2026-10-04).
-    # Measured against their own kind: a curve's stones are a quarter of
-    # the rest, and would all be knubs by the big ones' median.
-    volumes = [_volume(p[1]) for p in pieces]
+        pieces.append((cid, ob, cells.f[cid]))
+    # A sliver or a wedge of the solid in a cell would be a spike or a sheet,
+    # so it is joined to the neighbour it touches most instead: left out, its
+    # corner of the solid had no stone and the deep core showed (Tris,
+    # 2026-10-04: no gaps). So is a piece much smaller than the rest of its
+    # kind (a curve's stones are a quarter of the rest): a knub.
+    volumes = [_volume(q[1]) for q in pieces]
     tiny = set()
     for kind in (True, False):
-        own = [(p, v) for p, v in zip(pieces, volumes) if (p[1].name in curved) == kind]
+        own = [(q, v) for q, v in zip(pieces, volumes) if (q[1].name in curved) == kind]
         if own:
             least = p["knub"] * float(np.median([v for _, v in own]))
-            tiny |= {id(p) for p, v in own if v < least}
-    small = [p for p in pieces if id(p) in tiny or _small(p[1], p[2])]
-    kept = [p for p in pieces if id(p) not in tiny and not _small(p[1], p[2])]
-    for n, ob, f in small:
-        host = _neighbour(ob, [k[1] for k in kept], OVERLAP * f)
+            tiny |= {id(q) for q, v in own if v < least}
+    small = [q for q in pieces if id(q) in tiny or _small(q[1], q[2])]
+    kept = [q for q in pieces if id(q) not in tiny and not _small(q[1], q[2])]
+    for cid, ob, f in small:
+        host = _neighbour(ob, [k[1] for k in kept], CELL_OVERLAP * f)
         if host is not None:
-            _union(host, ob)
+            _boolean(host, ob, "UNION")
             report["merged"] += 1
         drop(ob)
-    for n, ob, f in kept:
-        dims = np.ptp(np.array([v.co for v in ob.data.vertices]), axis=0) / 2
-        # recipe F works on a stone about its own centre
-        mid = Vector(np.array([v.co for v in ob.data.vertices]).mean(0))
-        # The solid's surface in this cell: where `regrow` brings it back to.
-        points = [p.center for p in ob.data.polygons] + [v.co for v in ob.data.vertices]
-        targets = np.array([p - mid for p in points if surface.find_nearest(p)[3] < ON_SURFACE]).reshape(-1, 3)
-        ob.data.transform(Matrix.Translation(-mid))
-        weather(ob, tuple(dims), seed + 7919 * n, f, p["chisel"])
-        open_thin(ob, f)
-        if len(ob.data.polygons) < 4:
-            drop(ob)
-            continue
-        regrow(ob, targets, f)
-        # Where the folds cannot be taken out, a finer collapse folds
-        # elsewhere or not at all: try a little finer before giving up.
-        smooth = ob.data.copy()
-        area = sum(p.area for p in smooth.polygons)
-        for finer in REFACET:
-            density = facets_per_m2(f, 1.0 if ob.name in curved else p["facets"], p["facetFalloff"])
-            fitted._facets(ob, finer * density * area, FACET_ANGLE)
-            if unfold(ob):
-                break
-            old, ob.data = ob.data, smooth.copy()
-            bpy.data.meshes.remove(old)
+
+    # Each stone worked as the boulder works a piece on its top.
+    stones, scales = [], []
+    for cid, ob, f in kept:
+        if work(ob, cells.tapers[cid], surface, boulder, rng):
+            stones.append(ob)
+            scales.append(f)
         else:
-            bpy.data.meshes.remove(smooth)
-            report["lost to folds"] += 1
             drop(ob)
-            continue
-        bpy.data.meshes.remove(smooth)
-        drop_scraps(ob, f)
-        if len(ob.data.polygons) < STONE_FACES:
-            drop(ob)
-            continue
-        ob.data.transform(Matrix.Translation(mid))
-        stones.append(ob)
-        scales.append(f)
     scale = float(np.median(scales)) if scales else camera.scale(float(np.mean([v.co.y for v in bm_solid.verts])))
-    core = build_core(bm_solid, scale, collection, report, p["facetFalloff"])
+    k = scale * p["stoneSize"]
+    stones = clean(stones, DEPTH / 2.6 * k, k, boulder, reinforce)
+    report["stones"] = len(stones)
+
+    core = build_core(bm_solid, scale, collection, report)
+    report["floating"] = len(floating(stones, core, water_z))
+    core_tree = _tree(core) if len(core.data.polygons) else None
+
+    # The guard: the solid grown by the most a step can rise above it, the
+    # half of a ridge spacing at the steepest share of the mean slope.
+    rise = (RIDGE_SPACING * DEPTH / 2.6 * k / 2 * (cells.tapers[0]["mean"] - boulder["taperSlopeMin"])
+            + CELL_OVERLAP * scale) if cells.tapers else 0.0
+    guard = grown(solid, rise, 0.05 * scale, collection, "Guard")
+
+    # One rock: the core and the stones, then the boulder's finish
+    # (blender_build.assemble_rock): remesh, smooth, decimate to its face
+    # budget, back inside the guard, the edge bevel.
+    # Where the solid is thinner than twice the core's inset there is no
+    # core: the stones are the whole piece.
+    base = core if len(core.data.polygons) else stones[0]
+    rock = bpy.data.objects.new("BackdropRock", base.data.copy())
+    collection.objects.link(rock)
+    union = bpy.data.collections.new("Stones")
+    bpy.context.scene.collection.children.link(union)
+    for ob in stones:
+        for c in list(ob.users_collection):
+            c.objects.unlink(ob)
+        union.objects.link(ob)
+    _boolean(rock, union, "UNION", collection=True)
+    keep_main_body(rock)
+    voxel = min(0.04 * 0.30, boulder["voxelCap"]) * scale
+    _modifier(rock, "REMESH", mode="VOXEL", voxel_size=voxel, adaptivity=boulder["remeshAdaptivity"])
+    keep_main_body(rock)
+    _modifier(rock, "SMOOTH", factor=boulder["smoothFactor"], iterations=int(boulder["smoothIterations"]))
+    area = sum(q.area for q in rock.data.polygons)
+    budget = boulder["faceBudget"] * area / 30.0 / scale ** 2
+    _modifier(rock, "DECIMATE", ratio=min(1.0, budget / max(1, len(rock.data.polygons))))
+    _boolean(rock, guard, "INTERSECT")
+    keep_main_body(rock)
+    bpy.context.view_layer.objects.active = rock
+    bevel = rock.modifiers.new("edge", "BEVEL")
+    bevel.width, bevel.segments = boulder["edgeBevelWidth"] * scale, int(boulder["edgeBevelSegments"])
+    rock.data.materials.append(bpy.data.materials.new("rock"))
+    rock.data.materials.append(bpy.data.materials.new("worn"))
+    bevel.material = 1
+    limit_edge_bevel(rock, bevel, math.radians(boulder["edgeBevelAngle"]))
+    fitted._apply_modifiers(rock)
+    _modifier(rock, "TRIANGULATE")
+    for q in rock.data.polygons:
+        q.use_smooth = False
+
+    # The core's faces are marked, so a check can tell a fissure (core seen)
+    # from stone (docs/blender-backdrop.md, measuring the packing).
+    marks = [0] * len(rock.data.polygons)
+    if core_tree is not None:
+        marks = [int(core_tree.find_nearest(q.center)[3] < 2 * voxel) for q in rock.data.polygons]
+    attr = rock.data.attributes.new(CORE_ATTRIBUTE, "INT", "FACE")
+    attr.data.foreach_set("value", marks)
+
+    for ob in list(union.objects):
+        drop(ob)
+    bpy.data.collections.remove(union)
+    for ob in (guard, core):
+        drop(ob)
     tme = solid.data
     bpy.data.objects.remove(solid)
     bpy.data.meshes.remove(tme)
     bm_solid.free()
-    report["floating"] = len(floating(stones, core, water_z))
-    # The core's faces are marked, so a check can tell a gap (core seen) from
-    # stone (docs/blender-backdrop.md, measuring the packing).
-    marks = core.data.attributes.new(CORE_ATTRIBUTE, "INT", "FACE")
-    marks.data.foreach_set("value", [1] * len(core.data.polygons))
-    bm = bmesh.new()
-    for s in stones + ([core] if params.get("core", True) else []):
-        bm.from_mesh(s.data)
-    me = bpy.data.meshes.new("BackdropRock")
-    bm.to_mesh(me)
-    bm.free()
-    piece = bpy.data.objects.new("BackdropRock", me)
-    for p in piece.data.polygons:
-        p.use_smooth = False
-    return piece, stones + [core], scale, report
+    collection.objects.unlink(rock)
+    return rock, [], scale, report
 
 
 def build_from_recipe(recipe, collection):
     """A solid formation's rock from its recipe (formations/worker.py): the
     guide (rock-local `verts` and `faces`) taken to the world by `frame`,
-    cut and weathered there, and brought back into the rock's frame, with
-    its stones and core in `collection`. Returns the rock and its depth
-    scale."""
+    cut and worked there, and brought back into the rock's frame. Returns
+    the rock and its depth scale."""
     bmesh, bpy, Matrix, Vector, _ = _bpy()
     from . import worker
     given = worker.GENERATORS["solid"]

@@ -34,6 +34,7 @@ import math
 import random
 
 import bmesh
+import native
 import numpy as np
 from mathutils import Vector
 
@@ -127,9 +128,11 @@ def segment_distance(p, a, b):
     return (p - (a + ab * t)).length, t
 
 
-def find_bows(mesh, seed):
+def find_bows(mesh, seed, smallest=0.0):
     """The bows for `mesh`'s long straight creases, drawn from `seed`: a list
-    of (start, end, offset at the middle, reach)."""
+    of (start, end, offset at the middle, reach). A bow under `smallest`
+    (metres: the depth of field's blur there, formations/render.py
+    `detail_blur`) is left out."""
     rng = random.Random(seed)
     bm = bmesh.new()
     bm.from_mesh(mesh)
@@ -150,424 +153,203 @@ def find_bows(mesh, seed):
         u = (b - a) / chord
         out = (out - u * out.dot(u)).normalized()
         amount = min(MAX_BOW, rng.uniform(*BOW) * chord) * rng.choice((-1.0, 1.0))
+        if abs(amount) < smallest:
+            continue
         bows.append((a, b, out * amount, max(MIN_REACH, REACH * chord)))
     bm.free()
     return bows
 
 
 class Bows:
-    """`find_bows`'s list as arrays, one row a bow, packed once: the rebuild
-    asks for the field thousands of times, and a loop over the bows with
-    their Vectors converted on every call was nine tenths of the export's
-    curve time (Terrace.003: 110 bows, 57 k calls, 32 of 35 s; 2026-10-04)."""
+    """`find_bows`'s list as a native field (tools/blender/native, bows.cpp),
+    built once per rock: a uniform grid over the bows' reach boxes, so a
+    point measures only the bows that can reach it, on every thread. The
+    numpy field before it scanned every bow near a block of points on each
+    call, and the rebuild calls it once a patch: 754 k calls and 5,833 s of
+    a 3 h river export (2026-11-13). Same field to 1e-16."""
 
     def __init__(self, bows):
-        self.a = np.array([a for a, _, _, _ in bows], dtype=float).reshape(-1, 3)
+        a = np.array([a for a, _, _, _ in bows], dtype=float).reshape(-1, 3)
         b = np.array([b for _, b, _, _ in bows], dtype=float).reshape(-1, 3)
-        self.bow = np.array([bow for _, _, bow, _ in bows], dtype=float).reshape(-1, 3)
-        self.reach = np.array([r for _, _, _, r in bows], dtype=float)
-        self.ab = b - self.a
-        self.ab2 = np.maximum(np.einsum("ij,ij->i", self.ab, self.ab), 1e-12)
-        # Each bow's reach as a box: one that misses a block of points moves
-        # none of them.
-        self.lo = np.minimum(self.a, b) - self.reach[:, None]
-        self.hi = np.maximum(self.a, b) + self.reach[:, None]
+        bow = np.array([bow for _, _, bow, _ in bows], dtype=float).reshape(-1, 3)
+        reach = np.array([r for _, _, _, r in bows], dtype=float)
+        self.native = native.BowField(a, b, bow, reach, WAYS, SIZING_STEP, TOLERANCE, SIZE)
 
     def __len__(self):
-        return len(self.reach)
-
-
-# Points x bows evaluated at once; more are done in blocks of this many.
-FIELD_BLOCK = 1 << 18
+        return self.native.count
 
 
 def field(points, bows):
     """The bow field at `points` (an N x 3 array): how far the bows move each.
-    `bows` is `find_bows`'s list or a `Bows`."""
+    `bows` is `find_bows`'s list or a `Bows`. A point moves by
+
+        sum over bows of  bow x sin(pi t) x smoothstep(1 - d / reach)
+
+    with t its place along the bow's chord (clamped to its ends) and d its
+    distance from it."""
     if not isinstance(bows, Bows):
         bows = Bows(bows)
-    off = np.zeros_like(points)
-    if not len(points) or not len(bows):
-        return off
-    # Blocks are sized by the bows that can reach the points at all, not by
-    # every bow: by every one, Cube's 2714 bows cut each call into blocks of 96
-    # points, 700 k of them, and the blocks' own overhead was most of its 208 s
-    # rebuild (2026-10-08).
-    reachable = np.flatnonzero(((bows.lo <= points.max(axis=0)) & (bows.hi >= points.min(axis=0))).all(axis=1))
-    if not len(reachable):
-        return off
-    step = max(1, FIELD_BLOCK // len(reachable))
-    for at in range(0, len(points), step):
-        p = points[at:at + step]
-        near = reachable[((bows.lo[reachable] <= p.max(axis=0)) & (bows.hi[reachable] >= p.min(axis=0))).all(axis=1)]
-        if not len(near):
-            continue
-        # Only the pairs whose point is in the bow's box are measured: out of
-        # it the point is further than the reach, so its weight is exactly 0
-        # (Cube.004: most pairs, and the field two thirds of the rebuild,
-        # 2026-10-08). The weights go into the same product as before.
-        lo, hi = bows.lo[near], bows.hi[near]
-        inbox = (p[:, 0:1] >= lo[:, 0]) & (p[:, 0:1] <= hi[:, 0])
-        for k in (1, 2):
-            inbox &= (p[:, k:k + 1] >= lo[:, k]) & (p[:, k:k + 1] <= hi[:, k])
-        i, j = np.nonzero(inbox)
-        b = near[j]
-        rel = p[i] - bows.a[b]
-        t = np.clip(np.einsum("mk,mk->m", rel, bows.ab[b]) / bows.ab2[b], 0.0, 1.0)
-        d = np.linalg.norm(rel - t[:, None] * bows.ab[b], axis=1)
-        x = np.clip(1 - d / bows.reach[b], 0.0, 1.0)
-        weight = np.zeros(inbox.shape)
-        weight[i, j] = np.sin(np.pi * t) * x * x * (3 - 2 * x)
-        off[at:at + step] = weight @ bows.bow[near]
-    return off
+    return bows.native.eval(points)
+
+
+# The 13 ways an edge can run (the axes and the face and body diagonals), and
+# the step the field's second difference is taken over.
+WAYS = np.array([w for w in itertools.product((-1, 0, 1), repeat=3) if w > (0, 0, 0)], dtype=float)
+WAYS /= np.linalg.norm(WAYS, axis=1)[:, None]
+SIZING_STEP = 0.02
 
 
 def sizing(points, bows):
     """The triangle size at `points` (N x 3): the longest edge the bow field
     bends by under TOLERANCE in its middle, from the field's second
-    difference along the axes and the face and body diagonals (13 ways an
-    edge can run; the axes alone missed the bend across them by up to 4x),
-    clamped to SIZE; SIZE's top where the field is flat."""
-    step = 0.02
-    ways = np.array([w for w in itertools.product((-1, 0, 1), repeat=3) if w > (0, 0, 0)], dtype=float)
-    ways /= np.linalg.norm(ways, axis=1)[:, None]
-    # One field call for the points and both sides of every way.
-    probes = np.concatenate([points[None], points[None] + ways[:, None] * step, points[None] - ways[:, None] * step])
-    f = field(probes.reshape(-1, 3), bows).reshape(probes.shape)
-    mid, plus, minus = f[0], f[1:1 + len(ways)], f[1 + len(ways):]
-    d2 = plus - 2 * mid[None] + minus
-    bend = (np.linalg.norm(d2, axis=2) / step ** 2).max(axis=0)
-    # An edge of length L bends by about bend x L^2 / 8 in its middle.
-    return np.clip(np.sqrt(8 * TOLERANCE / np.maximum(bend, 1e-9)), *SIZE)
+    difference along the WAYS (the axes alone missed the bend across them by
+    up to 4x), clamped to SIZE; SIZE's top where the field is flat. An edge
+    of length L bends by about bend x L^2 / 8 in its middle."""
+    if not isinstance(bows, Bows):
+        bows = Bows(bows)
+    return bows.native.sizing(points)
 
 
-def patches(bm, reached):
-    """The faces in `reached` grouped into patches: grown from the largest
-    face across folds under SMOOTH_ANGLE to faces within PATCH degrees of it.
-    The formation's planar dissolve joins faces within 9 degrees
-    (formations/fitted.py), so its fans are not flat: grouped within a
-    degree, most "planes" were a single sliver, and a sliver alone cannot be
-    triangulated into anything but itself."""
-    fold = math.cos(math.radians(SMOOTH_ANGLE))
-    limit = math.cos(math.radians(PATCH))
-    planes, owner = [], set()
-    for seed in sorted(reached, key=lambda f: (-f.calc_area(), f.index)):
-        if seed in owner:
-            continue
-        plane, stack = [seed], [seed]
-        owner.add(seed)
-        while stack:
-            f = stack.pop()
-            for e in f.edges:
-                for g in e.link_faces:
-                    if (g in owner or g not in reached or g.normal.dot(f.normal) < fold
-                            or g.normal.dot(seed.normal) < limit):
-                        continue
-                    owner.add(g)
-                    plane.append(g)
-                    stack.append(g)
-        planes.append(plane)
-    return planes
+# The rebuild's own settings (tools/blender/native/src/crease.cpp reads them in
+# this order): sliver folding passes, and the jittered grid's JITTER, MARGIN
+# and DEEPEST, which are formations/detail.py's sub-facet grid's.
+FOLD_PASSES = 8
 
 
-def collapsible(e):
-    """Whether welding `e`'s two ends keeps the surface closed (the link
-    condition): the ends share no neighbour but the far corners of the two
-    triangles on `e`. Welded with a third shared neighbour, the two edges to
-    it become one with four faces, and the river's Terrace opened 14 holes
-    that the detail high poly then failed on (2026-10-04)."""
-    if e is None or len(e.link_faces) != 2 or any(len(f.verts) != 3 for f in e.link_faces):
-        return False
-    v, w = e.verts
-    shared = {x.other_vert(v) for x in v.link_edges} & {x.other_vert(w) for x in w.link_edges}
-    return len(shared) == 2
-
-
-def fold_slivers(bm, passes=8):
-    """Fold away every triangle under SLIVER high over its longest edge: its
-    far corner moves onto that edge (by at most SLIVER) and the edge turns
-    to run from that corner to the neighbour's (`edge_rotate`). With the
-    corner on the edge the two faces either side are coplanar pieces of the
-    neighbour, so the surface and the creases stay where they were; the
-    sliver, which no triangulation of its patch can help (it IS the patch:
-    the dissolve leaves them lying along creases, a fraction of a millimetre
-    off), is gone. A needle, its far corner within SLIVER of an end of the
-    edge, is welded into that end instead. Returns how many were folded."""
-    folded = 0
-    for _ in range(passes):
-        done, touched, weld = 0, set(), {}
-        for f in list(bm.faces):
-            if not f.is_valid or len(f.verts) != 3 or touched & set(f.verts):
-                continue
-            e = max(f.edges, key=lambda e: e.calc_length())
-            if len(e.link_faces) != 2:
-                continue
-            a, b = e.verts
-            apex = next(v for v in f.verts if v is not a and v is not b)
-            ab = b.co - a.co
-            t = (apex.co - a.co).dot(ab) / ab.length_squared
-            foot = a.co + ab * t
-            if (apex.co - foot).length >= SLIVER:
-                continue
-            # A needle, its corner beside one end: merged into that end.
-            end = a if t * ab.length < SLIVER else b if (1 - t) * ab.length < SLIVER else None
-            if end is not None:
-                if not collapsible(bm.edges.get((apex, end))):
-                    continue
-                weld[apex] = end
-                # The rings too: a weld beside this one could break its
-                # link condition before the pass applies both.
-                touched |= {a, b, apex} | {x.other_vert(v) for v in (apex, end) for x in v.link_edges}
-                done += 1
-                continue
-            other = next(g for g in e.link_faces if g is not f)
-            if len(other.verts) != 3:
-                continue
-            x = next(v for v in other.verts if v is not a and v is not b)
-            # The turned edge would be a second edge between the two.
-            if bm.edges.get((apex, x)) is not None:
-                continue
-            was, apex.co = apex.co.copy(), foot
-            if bmesh.utils.edge_rotate(e, True) is None:
-                apex.co = was
-                continue
-            touched |= {a, b, apex, x}
-            done += 1
-        bmesh.ops.weld_verts(bm, targetmap=weld)
-        folded += done
-        if not done:
-            break
-    bm.normal_update()
-    return folded
-
-
-def rebuild(bm, bows, seed):
-    """Triangulate every plane the bows reach afresh, in place. The shipped
-    mesh is a planar dissolve's fans: long slivers from one corner to the far
-    side, each meeting its neighbour at a fraction of a degree, and a few
-    zero-area faces. Bent, the field moves a sliver's three corners by
-    different amounts and the thin ones turn over (the Terrace: about 280
-    visible faces turned by more than 30 degrees), each a dark or pale slit
-    across the face. Splitting the fans' edges finer only cuts them into
-    shorter slivers; patching them (beautify, collapsing the needles) re-cut
-    edges across the creases and broke the silhouette.
-
-    So each plane's boundary is cut into pieces no longer than `sizing`, its
-    inside filled with points on a jittered grid at that size (as
-    formations/detail.py's sub-facets are), and the whole constrained-
-    Delaunay triangulated: no boundary point moves, so the creases and the
-    silhouette are exactly what they were. A plane whose boundary touches
-    itself, or whose triangulation does not come back clean, keeps its fans.
-    Returns (patches rebuilt, patches kept, slivers folded)."""
+def rebuild_params():
     from formations import detail  # noqa: E402 (bpy-only module)
-    from mathutils.bvhtree import BVHTree
-    from mathutils.kdtree import KDTree
-    from mathutils.geometry import delaunay_2d_cdt
+    return [MERGE, SLIVER, SMOOTH_ANGLE, PATCH, detail.MARGIN, detail.JITTER, detail.DEEPEST, FOLD_PASSES]
 
-    rng = random.Random(seed)
-    bows = Bows(bows)
-    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=MERGE)
-    bm.normal_update()
-    folded = fold_slivers(bm)
 
-    def size_at(points):
-        return sizing(np.array(points, dtype=float).reshape(-1, 3), bows)
+# How each attribute type is read and written through foreach_get/set: its
+# property and how many numbers an element holds.
+ATTRIBUTE_FIELDS = {"FLOAT": ("value", 1, float), "INT": ("value", 1, np.int32), "BOOLEAN": ("value", 1, bool),
+                    "INT8": ("value", 1, np.int8), "FLOAT2": ("vector", 2, float), "FLOAT_VECTOR": ("vector", 3, float),
+                    "FLOAT_COLOR": ("color", 4, float), "BYTE_COLOR": ("color", 4, float),
+                    "INT32_2D": ("value", 2, np.int32), "QUATERNION": ("value", 4, float)}
 
-    def reaches(points):
-        return np.linalg.norm(field(np.array(points, dtype=float).reshape(-1, 3), bows), axis=1) > 1e-6
 
-    # Cut the edges the field reaches into pieces no longer than the size at
-    # them, in both faces either side, so the mesh stays closed.
-    edges = [e for e in bm.edges if len(e.link_faces) == 2]
-    ends = np.array([[e.verts[0].co, e.verts[1].co] for e in edges], dtype=float)
-    samples = ends[:, :1] + (ends[:, 1:] - ends[:, :1]) * np.linspace(0, 1, 5)[None, :, None]
-    flat = samples.reshape(-1, 3)
-    hit = reaches(flat).reshape(len(edges), 5).any(axis=1)
-    size = size_at(flat).reshape(len(edges), 5).min(axis=1)
-    by_cuts = {}
-    for e, h, s in zip(edges, hit, size):
-        n = math.ceil(e.calc_length() / s) - 1
-        if h and n >= 1:
-            by_cuts.setdefault(n, []).append(e)
-    # Only the edges: the faces either side become n-gons until their patch
-    # is made again. Splitting the faces too fans each cut edge from the far
-    # corner, and a quad cut along its straight side is a zero-area triangle.
-    for n, cut in sorted(by_cuts.items()):
-        bmesh.ops.bisect_edges(bm, edges=cut, cuts=n)
-    bm.normal_update()
-
-    faces = list(bm.faces)
-    corners = [[*(v.co for v in f.verts), f.calc_center_median()] for f in faces]
-    hit = reaches([p for c in corners for p in c])
-    starts = np.cumsum([0] + [len(c) for c in corners[:-1]])
-    # A face with a cut edge is rebuilt even where only the edge is reached:
-    # left an n-gon, the triangulation below may join both ends of its cut
-    # edge, a zero-area triangle and a second face on that edge.
-    reached = {f for f, h in zip(faces, np.logical_or.reduceat(hit, starts)) if h or len(f.verts) > 3}
-    jobs, claimed, kept = [], set(), 0
-    for plane in patches(bm, reached):
-        loops = detail.boundary_loops(plane)
-        if loops is None:
-            kept += 1
-            continue
-        normal = sum((f.normal * f.calc_area() for f in plane), Vector()).normalized()
-        origin = sum((v.co for lp in loops for v in lp), Vector()) / sum(len(lp) for lp in loops)
-        u = normal.orthogonal().normalized()
-        w = normal.cross(u).normalized()
-
-        def project(lp):
-            return [((v.co - origin).dot(u), (v.co - origin).dot(w)) for v in lp]
-
-        def signed_area(poly):
-            return sum(poly[i - 1][0] * poly[i][1] - poly[i][0] * poly[i - 1][1] for i in range(len(poly)))
-
-        # The outer loop encloses the most area; CCW in (u, w) so the new
-        # faces face out.
-        polys = [project(lp) for lp in loops]
-        order = sorted(range(len(loops)), key=lambda i: -abs(signed_area(polys[i])))
-        loops, polys = [loops[i] for i in order], [polys[i] for i in order]
-        if signed_area(polys[0]) < 0:
-            loops, polys = [lp[::-1] for lp in loops], [pl[::-1] for pl in polys]
-        # A hole wound the same way as the outside is a boundary that folds
-        # over itself once projected.
-        if any(signed_area(pl) > 0 for pl in polys[1:]):
-            kept += 1
-            continue
-        loop = [v for lp in loops for v in lp]
-        h = float(size_at([v.co for v in loop] + [f.calc_center_median() for f in plane]).min())
-        inside = detail.grid_points(polys[0], polys[1:], h, rng)
-        # grid_points falls back to the deepest point of a plane its grid
-        # misses; a plane under one size across needs no point inside.
-        if inside and min(detail.edge_distance(inside[0], pl) for pl in polys) < detail.MARGIN * h:
-            inside = []
-        # The grid is at the patch's smallest size; where the field bends
-        # less, points are thinned out to the size there (smallest first),
-        # and kept MARGIN of that size clear of the boundary, whose pieces
-        # are cut to the same size.
-        if inside:
-            local = size_at([origin + u * p[0] + w * p[1] for p in inside])
-            clear = detail.ring_distances(inside, polys)
-            kept_pts, tree2d = [], KDTree(len(inside))
-            for i in np.argsort(local, kind="stable"):
-                p, s = inside[i], float(local[i])
-                if s > h and clear[i] < detail.MARGIN * s:
-                    continue
-                near = tree2d.find((p[0], p[1], 0.0)) if kept_pts else None
-                if near is not None and near[2] < 0.85 * s:
-                    continue
-                tree2d.insert((p[0], p[1], 0.0), len(kept_pts))
-                tree2d.balance()
-                kept_pts.append(p)
-            inside = kept_pts
-        coords = [Vector(p) for pl in polys for p in pl] + [Vector(p) for p in inside]
-        rings, at = [], 0
-        for pl in polys:
-            rings.append(list(range(at, at + len(pl))))
-            at += len(pl)
-        verts2d, _, faces2d, orig_verts, _, _ = delaunay_2d_cdt(coords, [], rings, 1, 1e-7)
-        if len(polys) > 1:
-            def centroid(face):
-                return (sum(verts2d[i].x for i in face) / len(face), sum(verts2d[i].y for i in face) / len(face))
-            centres = [centroid(f) for f in faces2d]
-            holed = np.logical_or.reduce([detail.points_in_polygon(centres, pl) for pl in polys[1:]])
-            faces2d = [f for f, out in zip(faces2d, holed) if not out]
-        # The inside points go onto the patch's own faces, not the fitted
-        # plane, so the surface stays where it was.
-        starts = np.cumsum([0] + [len(f.verts) for f in plane[:-1]])
-        tree = BVHTree.FromPolygons([v.co for f in plane for v in f.verts],
-                                    [range(at, at + len(f.verts)) for at, f in zip(starts, plane)])
-        verts, ok = [], len(orig_verts) == len(coords)
-        for srcs in orig_verts if ok else ():
-            if len(srcs) != 1:
-                ok = False
-                break
-            s = srcs[0]
-            if s < len(loop):
-                verts.append(loop[s])
-            else:
-                p = inside[s - len(loop)]
-                verts.append(tree.find_nearest(origin + u * p[0] + w * p[1])[0])
-        in_plane = set(plane)
-        new_faces, keys = [], set()
-        for face in faces2d if ok else ():
-            vs = [verts[i] for i in face]
-            existing = [v for v in vs if isinstance(v, bmesh.types.BMVert)]
-            if len(existing) == 3:
-                # A triangle a neighbour already has, or will have once
-                # rebuilt, would be a second face on the same three points.
-                key = frozenset(existing)
-                if ((old := bm.faces.get(existing)) is not None and old not in in_plane) or key in claimed:
-                    ok = False
-                    break
-                keys.add(key)
-            new_faces.append(vs)
-        area = sum(abs(signed_area(project(f.verts))) / 2 for f in plane)
-        made = sum(abs(signed_area([(verts2d[i].x, verts2d[i].y) for i in face])) / 2 for face in faces2d)
-        if not ok or not new_faces or abs(made - area) > 1e-3 * area + 1e-6:
-            kept += 1
-            continue
-        claimed |= keys
-        # Each new face takes the attributes (the facet tone, the chamfer
-        # strip), material and shading of the old face under its middle.
-        under = [plane[tree.find_nearest(sum((v.co if isinstance(v, bmesh.types.BMVert) else v for v in vs),
-                                             Vector()) / 3)[2]] for vs in new_faces]
-        jobs.append((plane, new_faces, under))
-
-    # Every patch goes in one delete: each delete walks the whole mesh.
-    # Templates keep the old faces' attributes, which the delete frees.
-    templates = {}
-    for _, _, under in jobs:
-        for old in under:
-            if old not in templates:
-                t = bm.faces.new([bm.verts.new(c) for c in ((0, 0, 0), (1, 0, 0), (0, 1, 0))], old)
-                templates[old] = (t, old.smooth, old.material_index)
-    template_of = {id(old): look for old, look in templates.items()}
-    unders = [[id(old) for old in under] for _, _, under in jobs]
-    # FACES_ONLY: a corner where only rebuilt patches meet is loose until
-    # they are made again; what is still loose after is dropped below.
-    bmesh.ops.delete(bm, geom=[f for plane, _, _ in jobs for f in plane], context="FACES_ONLY")
-    for (_, new_faces, _), under in zip(jobs, unders):
-        created = {}
-        for vs, old in zip(new_faces, under):
-            for v in vs:
-                if not isinstance(v, bmesh.types.BMVert) and id(v) not in created:
-                    created[id(v)] = bm.verts.new(v)
-            template, smooth, material = template_of[old]
-            f = bm.faces.new([v if isinstance(v, bmesh.types.BMVert) else created[id(v)] for v in vs], template)
-            f.smooth, f.material_index = smooth, material
-    bmesh.ops.delete(bm, geom=[v for t, _, _ in template_of.values() for v in t.verts], context="VERTS")
-    # A kept patch's n-gons (or one the field only grazes).
-    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
-    bmesh.ops.delete(bm, geom=[e for e in bm.edges if not e.link_faces], context="EDGES")
-    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
-    bm.normal_update()
-    return len(jobs), kept, folded
+def _read_attribute(a, count):
+    prop, width, dtype = ATTRIBUTE_FIELDS[a.data_type]
+    values = np.empty(count * width, dtype=dtype)
+    a.data.foreach_get(prop, values)
+    return values.reshape(count, width)
 
 
 def rebuild_mesh(mesh, bows, seed, smooth=False):
-    """`rebuild` on `mesh` itself, its grid drawn from `seed`. The new points
-    lie on the old surface, so this moves nothing: it is done on the
-    straight rock, before the unwrap, every bake and the straight copy the
-    detail high poly is built from (so the high poly and the rock share every
-    crease: a folded sliver moves one by up to SLIVER, and a bake whose high
-    poly is that far off draws the crease as dark dashes), and `bend` moves
-    the vertices afterwards. With `smooth` (the shipped rock) the mesh is
-    shaded smooth across edges under SMOOTH_ANGLE and sharp across the rest.
-    Returns a one-line report."""
+    """Triangulate every plane the bows reach afresh, in place, its grid drawn
+    from `seed`; the native kernel (tools/blender/native/src/crease.cpp) does
+    the work on every thread.
+
+    The shipped mesh is a planar dissolve's fans: long slivers from one
+    corner to the far side, each meeting its neighbour at a fraction of a
+    degree, and a few zero-area faces. Bent, the field moves a sliver's three
+    corners by different amounts and the thin ones turn over (the Terrace:
+    about 280 visible faces turned by more than 30 degrees), each a dark or
+    pale slit across the face. Splitting the fans' edges finer only cuts them
+    into shorter slivers; patching them (beautify, collapsing the needles)
+    re-cut edges across the creases and broke the silhouette. So:
+
+    - points closer than MERGE are merged (the dissolve's zero-area faces);
+    - every triangle under SLIVER high over its longest edge is folded away:
+      its far corner moves onto that edge and the edge turns to run from it
+      to the neighbour's corner, so the faces either side are coplanar pieces
+      of the neighbour; a needle (its corner within SLIVER of an end) is
+      welded into that end where the weld keeps the surface closed (the link
+      condition: the ends share no neighbour but the two far corners; the
+      river's Terrace once opened 14 holes the detail high poly failed on);
+    - every edge the field reaches is cut into pieces no longer than `sizing`
+      there, in both faces either side, so the mesh stays closed;
+    - the faces the field reaches are grouped into patches, grown from the
+      largest face across folds under SMOOTH_ANGLE to faces within PATCH
+      degrees of it (the planar dissolve joins faces within 9 degrees, so its
+      fans are not flat, and grouped within a degree most "planes" were a
+      single sliver, which cannot be triangulated into anything but itself);
+    - each patch's inside is filled with points on a jittered grid at its
+      smallest size (formations/detail.py's sub-facet grid), thinned to the
+      size where the field bends less, and the whole is constrained-Delaunay
+      triangulated: no boundary point moves, so the creases and the
+      silhouette are exactly what they were, and the inside points go onto
+      the patch's own faces, not its fitted plane. A patch whose boundary
+      touches itself or folds over once projected, whose triangulation does
+      not come back clean or covers another area, or that would make a
+      triangle a neighbour already has, keeps its faces.
+
+    Each new face takes the attributes, material and shading of the old face
+    under its middle. The new points lie on the old surface, so this moves
+    nothing: it is done on the straight rock, before the unwrap, every bake
+    and the straight copy the detail high poly is built from (so the high
+    poly and the rock share every crease: a folded sliver moves one by up to
+    SLIVER, and a bake whose high poly is that far off draws the crease as
+    dark dashes), and `bend` moves the vertices afterwards. With `smooth`
+    (the shipped rock) the mesh is shaded smooth across edges under
+    SMOOTH_ANGLE and sharp across the rest. Returns a one-line report."""
     if not bows:
         return "no long straight creases"
-    bm = bmesh.new()
-    bm.from_mesh(mesh)
-    faces_before = len(mesh.polygons)
-    rebuilt, kept, folded = rebuild(bm, bows, seed)
-    bm.to_mesh(mesh)
-    bm.free()
+    bows = Bows(bows)
+    nv, nf, nl = len(mesh.vertices), len(mesh.polygons), len(mesh.loops)
+    co = np.empty(3 * nv)
+    mesh.vertices.foreach_get("co", co)
+    face_start = np.empty(nf + 1, dtype=np.int64)
+    starts = np.empty(nf, dtype=np.int32)
+    mesh.polygons.foreach_get("loop_start", starts)
+    face_start[:-1], face_start[-1] = starts, nl
+    if nf and np.any(np.diff(face_start) < 3):
+        raise ValueError(f"{mesh.name}: faces out of corner order")
+    corner_verts = np.empty(nl, dtype=np.int32)
+    mesh.loops.foreach_get("vertex_index", corner_verts)
+    # What the new faces, vertices and edges carry over.
+    sizes = {"POINT": nv, "EDGE": len(mesh.edges), "FACE": nf}
+    carried = []
+    for a in mesh.attributes:
+        if a.name.startswith(".") or a.name == "position":
+            continue
+        if a.domain not in sizes or a.data_type not in ATTRIBUTE_FIELDS:
+            raise ValueError(f"{mesh.name}: the crease rebuild cannot carry {a.domain} attribute {a.name!r} "
+                             f"({a.data_type})")
+        carried.append((a.name, a.domain, a.data_type, _read_attribute(a, sizes[a.domain])))
+    old_edges = np.empty(2 * len(mesh.edges), dtype=np.int64)
+    mesh.edges.foreach_get("vertices", old_edges)
+    old_edges = np.sort(old_edges.reshape(-1, 2), axis=1)
+
+    out_co, tris, face_src, vert_src, (rebuilt, kept, folded) = native.crease_rebuild(
+        bows.native, co, face_start, corner_verts, seed, rebuild_params())
+
+    mesh.clear_geometry()
+    mesh.vertices.add(len(out_co))
+    mesh.vertices.foreach_set("co", out_co.ravel())
+    mesh.loops.add(3 * len(tris))
+    mesh.loops.foreach_set("vertex_index", tris.ravel())
+    mesh.polygons.add(len(tris))
+    mesh.polygons.foreach_set("loop_start", np.arange(0, 3 * len(tris), 3, dtype=np.int32))
+    mesh.update(calc_edges=True)
+    new_edges = np.empty(2 * len(mesh.edges), dtype=np.int64)
+    mesh.edges.foreach_get("vertices", new_edges)
+    # An edge between two old vertices that were joined before keeps its values.
+    ends = vert_src[new_edges.reshape(-1, 2)]
+    ends.sort(axis=1)
+    edge_src = np.full(len(ends), -1, dtype=np.int64)
+    if len(old_edges):
+        old_keys = old_edges[:, 0] * (nv + 1) + old_edges[:, 1]
+        new_keys = ends[:, 0] * (nv + 1) + ends[:, 1]
+        order = np.argsort(old_keys)
+        at = np.minimum(np.searchsorted(old_keys[order], new_keys), len(order) - 1)
+        match = (ends[:, 0] >= 0) & (old_keys[order][at] == new_keys)
+        edge_src[match] = order[at[match]]
+    picks = {"POINT": vert_src, "EDGE": edge_src, "FACE": face_src}
+    for name, domain, data_type, values in carried:
+        a = mesh.attributes.get(name) or mesh.attributes.new(name, data_type, domain)
+        pick = picks[domain]
+        out = np.zeros((len(pick), values.shape[1]), dtype=values.dtype)
+        has = pick >= 0
+        out[has] = values[pick[has]]
+        a.data.foreach_set(ATTRIBUTE_FIELDS[data_type][0], out.ravel())
     if smooth:
         mesh.shade_smooth()
         mesh.set_sharp_from_angle(angle=math.radians(SMOOTH_ANGLE))
     mesh.update()
     return (f"{len(bows)} creases to bow, {folded} slivers folded, {rebuilt} patches rebuilt ({kept} kept their fans), "
-            f"{faces_before} -> {len(mesh.polygons)} faces")
+            f"{nf} -> {len(mesh.polygons)} faces")
 
 
 def bend(mesh, bows):

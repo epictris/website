@@ -1901,13 +1901,13 @@
         {
           "type": "anchor",
           "id": 100,
-          "x": 1929.1893438649226,
-          "y": -1619.3935089008633
+          "x": 1929.1893438649217,
+          "y": -1619.393508900863
         },
         {
           "type": "anchor",
           "id": 101,
-          "x": 1974.3941424168208,
+          "x": 1974.3941424168206,
           "y": -1712.380090943325
         },
         {
@@ -4575,7 +4575,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -4721,7 +4724,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -4791,7 +4797,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -4861,7 +4870,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -4991,7 +5003,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5061,7 +5076,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5131,7 +5149,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5201,7 +5222,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5271,7 +5295,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5288,7 +5315,7 @@
         {
           "type": "collision",
           "x": 403.7375022602177,
-          "y": 410.34817169459734,
+          "y": 410.3481716945974,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5409,7 +5436,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5479,7 +5509,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5549,7 +5582,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5619,7 +5655,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5882,7 +5921,7 @@
     {
       "kind": "static",
       "x": 4258.984219923028,
-      "y": -1287.2140015601099,
+      "y": -1272.2140015601096,
       "rot": -0.16781183210772688,
       "color": "#774fb9",
       "opacity": 0.5,
@@ -5933,7 +5972,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -5966,7 +6008,7 @@
                 "y": -19.91657842002223
               },
               {
-                "x": 24.086156973817708,
+                "x": 24.08615697381771,
                 "y": -28.830652114554017
               },
               {
@@ -5987,7 +6029,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -6562,7 +6607,7 @@
     },
     {
       "kind": "static",
-      "x": 3094.999999999997,
+      "x": 3094.9999999999977,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6576,13 +6621,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 3425,
+      "x": 3425.0000000000014,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6596,13 +6644,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 3535.000000000001,
+      "x": 3535.0000000000023,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6616,13 +6667,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 3645.0000000000005,
+      "x": 3645.000000000002,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6636,13 +6690,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 3750,
+      "x": 3750.0000000000014,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6656,13 +6713,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 3204.999999999997,
+      "x": 3204.999999999998,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6676,13 +6736,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 3314.9999999999977,
+      "x": 3314.999999999999,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6696,13 +6759,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2439.999999999997,
+      "x": 2439.999999999998,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6716,13 +6782,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2770.0000000000005,
+      "x": 2770.000000000002,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6736,13 +6805,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2880.000000000001,
+      "x": 2880.0000000000023,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6756,13 +6828,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2990.0000000000005,
+      "x": 2990.000000000002,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6776,13 +6851,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2549.9999999999973,
+      "x": 2549.999999999998,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6796,13 +6874,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2659.999999999998,
+      "x": 2659.9999999999995,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6816,13 +6897,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2219.999999999999,
+      "x": 2220.0000000000005,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6836,13 +6920,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "static",
-      "x": 2329.999999999999,
+      "x": 2330,
       "y": -1310,
       "rot": 0,
       "color": "#745326",
@@ -6856,7 +6943,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -6910,7 +7000,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -6930,7 +7023,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -6950,7 +7046,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -6972,7 +7071,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -6994,7 +7096,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7014,7 +7119,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7396,7 +7504,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7466,7 +7577,10 @@
               }
             ]
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7710,7 +7824,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7732,7 +7849,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7754,7 +7874,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7774,7 +7897,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7796,7 +7922,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7816,7 +7945,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7836,7 +7968,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7858,7 +7993,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7880,7 +8018,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7900,7 +8041,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -7920,13 +8064,16 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
       "kind": "rigid",
-      "x": 2730.2603078590378,
+      "x": 2730.260307859038,
       "y": -1713.3747178459796,
       "rot": 0,
       "color": "#555555",
@@ -8411,7 +8558,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -8431,7 +8581,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -8451,7 +8604,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -8473,7 +8629,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -8493,7 +8652,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -8513,7 +8675,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
@@ -8533,7 +8698,10 @@
             "w": 20,
             "h": 10
           },
-          "soundMaterial": "auto"
+          "soundMaterial": "auto",
+          "debug": {
+            "on": true
+          }
         }
       ]
     }

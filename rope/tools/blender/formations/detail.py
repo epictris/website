@@ -325,9 +325,10 @@ def split_long_edges(bm, spacing):
     return sum(len(v) for v in by_cuts.values())
 
 
-def crumple(src, rng):
+def crumple(src, rng, smallest=0.0):
     """A copy of `src` whose visible planes are retriangulated into tilted
-    sub-facets; returns (bmesh, stats dict)."""
+    sub-facets; returns (bmesh, stats dict). A plane whose sub-facets would
+    be finer than `smallest` keeps its face."""
     bm = src.copy()
     stats = {"planes": 0, "rebuilt": 0, "points": 0, "skipped": 0, "area": 0.0, "skipped_area": 0.0}
     stats["split"] = split_long_edges(bm, SPACING)
@@ -371,6 +372,10 @@ def crumple(src, rng):
         poly, holes = polys[0], polys[1:]
         loop = [v for lp in loops for v in lp]
         spacing = max(min(SPACING_MIN, SPACING), min(SPACING, 0.5 * math.sqrt(area)))
+        if spacing < smallest:
+            stats["skipped"] += 1
+            stats["skipped_area"] += area
+            continue
         points = grid_points(poly, holes, spacing, rng)
         if not points:
             stats["skipped"] += 1
@@ -393,11 +398,20 @@ def crumple(src, rng):
             stats["skipped"] += 1
             stats["skipped_area"] += area
             continue
+        # Each point onto the plane's own faces, then stepped in or out: a
+        # plane is faces within PLANE_ANGLE of each other, and the plane
+        # through its boundary stood up to 24 mm off a fold of them, outside
+        # the bake's cage, so the sub-facets there never reached the map
+        # (Terrace.007: 7 % of the rock, 2026-11-13).
+        starts = np.cumsum([0] + [len(f.verts) for f in region[:-1]])
+        surface = BVHTree.FromPolygons([v.co for f in region for v in f.verts],
+                                       [range(at, at + len(f.verts)) for at, f in zip(starts, region)])
         new_pts = {}
         for i, p in enumerate(points):
             tilt = math.radians(rng.uniform(*TILT))
             depth = rng.choice((-1.0, 1.0)) * 0.5 * spacing * math.tan(tilt)
-            new_pts[len(boundary) + i] = origin + u * p[0] + w * p[1] + normal * min(depth, PROUD_MAX)
+            on = surface.find_nearest(origin + u * p[0] + w * p[1])[0]
+            new_pts[len(boundary) + i] = on + normal * min(depth, PROUD_MAX)
         # A boundary that crosses itself once projected (a zigzag of
         # sub-millimetre dissolve slivers) makes the CDT invent crossing
         # vertices (no source) or triangles a neighbour already owns; such a
@@ -491,8 +505,12 @@ def cutter(bm, bvh, valleys, p, n, d, a1, a2, wide, h):
     chip's deepest point (p - n h), each tipped along the crease so it comes
     back out of the rock at one end (a1 toward +d, a2 toward -d), so the chip
     closes at both ends with no walls. The cutter is a box clipped by the two
-    planes, as a convex hull. Returns False, adding nothing, when it would
-    reach into another part of the rock or into a valley."""
+    planes, as a convex hull. Returns the cutter as half-spaces, rows
+    (nx, ny, nz, c) with n.x <= c inside it (the box's six faces and the two
+    planes), and its corners: what native.detail_bake cuts with, exact where
+    planes taken back off the hull's faces were not (a sliver face's normal
+    is noise). Returns None, adding nothing, when it would reach into another
+    part of the rock or into a valley."""
     b = n.cross(d).normalized()
     deep = p - n * h
     n1 = (n - d * (h / a1)).normalized()
@@ -513,14 +531,17 @@ def cutter(bm, bvh, valleys, p, n, d, a1, a2, wide, h):
     pts = [q for q in pts if all(nn.dot(q) >= c - 1e-6 for nn, c in planes)]
     probes = [q for q in pts if n.dot(q - p) > 0]
     if len(pts) < 4 or any(inside(bvh, q) for q in probes):
-        return False
+        return None
     for q, _, _ in valleys.find_range(deep, math.hypot(L, W, H)):
         r = q - deep
         if (all(nn.dot(q) > c + 1e-5 for nn, c in planes)
                 and abs(r.dot(d)) < L and abs(r.dot(b)) < W and -h * 0.5 < r.dot(n) < H):
-            return False
+            return None
     add_hull(bm, pts)
-    return True
+    half_spaces = [(*axis, axis.dot(deep) + reach) for axis, reach in
+                   ((d, L), (-d, L), (b, W), (-b, W), (n, H), (-n, h * 0.5))]
+    half_spaces += [(*(-nn), -c) for nn, c in planes]
+    return half_spaces, [q[:] for q in pts]
 
 
 def valley_points(bm, step=0.01):
@@ -539,17 +560,18 @@ def valley_points(bm, step=0.01):
     return tree
 
 
-def build_cutters(rock_bm, rng):
+def build_cutters(rock_bm, rng, smallest=0.0):
     """Chips on the convex creases, as one bmesh of closed cutters. Each chip
     keeps its ends on its crease, never reaches a concave crease, and never
     overlaps a chip from another crease (a deeper chip in a shallower one
-    digs a pocket). Returns (cutters, placed, rejected)."""
+    digs a pocket). Returns (cutters, placed, rejected, each placed cutter's
+    half-spaces and corners as `cutter` returns them)."""
     rock_bm.edges.index_update()
     bvh = BVHTree.FromBMesh(rock_bm)
     valleys = valley_points(rock_bm)
     cut = bmesh.new()
     count = rejected = 0
-    placed = []
+    placed, shapes = [], []
     for e in rock_bm.edges:
         if not e.is_manifold:
             continue
@@ -581,17 +603,21 @@ def build_cutters(rock_bm, rng):
             n = f1.normal.slerp(f2.normal, t).normalized()
             theta = min(t, 1 - t) * phi
             wide = s * rng.uniform(*WIDE)
+            if wide < smallest:
+                continue  # blurred away where the rock stands
             h = wide * math.sin(theta)
             reach = max(a1, a2, wide)
             if any(i != e.index and (p - q).length < reach + r for q, r, i in placed):
                 rejected += 1
                 continue
-            if cutter(cut, bvh, valleys, p, n, d, a1, a2, wide, h):
+            shape = cutter(cut, bvh, valleys, p, n, d, a1, a2, wide, h)
+            if shape is not None:
                 placed.append((p, reach, e.index))
+                shapes.append(shape)
                 count += 1
             else:
                 rejected += 1
-    return cut, count, rejected
+    return cut, count, rejected, shapes
 
 
 def loose_parts(bm):
@@ -662,9 +688,11 @@ def subtract(bm, cutter_bm, coll, name):
 
 
 # ===================================================================== build
-def build(mesh, seed, coll, name="detail"):
+def build(mesh, seed, coll, name="detail", smallest=0.0):
     """The detail high poly of `mesh` (a Mesh, in its own local space): the
-    sub-facets, then the chips cut into them along the ORIGINAL creases.
+    sub-facets, then the chips cut into them along the ORIGINAL creases,
+    none narrower than `smallest` (metres: the depth of field's blur there,
+    formations/render.py `detail_blur`).
     Returns (object linked in `coll`, a one-line report). The caller sets
     its transform and removes it after the bake."""
     t0 = time.time()
@@ -675,8 +703,8 @@ def build(mesh, seed, coll, name="detail"):
     bmesh.ops.remove_doubles(low, verts=low.verts, dist=1e-5)
     low.normal_update()
     rng = random.Random(seed)
-    cut, placed, rejected = build_cutters(low, random.Random(seed))
-    crumpled, stats = crumple(low, random.Random(seed + 3000))
+    cut, placed, rejected, _ = build_cutters(low, random.Random(seed), smallest)
+    crumpled, stats = crumple(low, random.Random(seed + 3000), smallest)
     high = subtract(crumpled, cut, coll, name)
     for poly in high.data.polygons:
         poly.use_smooth = False
@@ -688,3 +716,80 @@ def build(mesh, seed, coll, name="detail"):
               f"({flat:.0f}% of the surface left flat), {placed} chips ({rejected} rejected), "
               f"{len(high.data.polygons)} faces, {time.time() - t0:.1f}s")
     return high, report
+
+
+def normal_maps(target, straight, matrix, seed, uv_name, sides, map_of_slot, smallest=0.0):
+    """The detail normal maps of the rock `target` (the Mesh the export bakes
+    onto: its unwrap `uv_name` over len(`sides`) square maps, a face's map
+    `map_of_slot(material_index)`) without building the high poly: the same
+    crumpled rock and cutters `build` makes from `straight` (the rock before
+    the unwrap, in the same local space), and each texel's normal found by
+    native.detail_bake (tools/blender/native/src/detail_bake.cpp), which casts
+    Blender's selected-to-active rays from CAGE out at the crumpled rock less
+    the cutters, as solid geometry. `matrix` is the rock's world matrix.
+
+    Against the boolean and Cycles bake it replaces (2026-11-13): Terrace.007
+    99.86 % of texels within 2/255 and 0.06 % over 16/255, along chip edges
+    and where the boolean left a degenerate cutter out; 0.23 s against 6.1 s,
+    and no boolean (427 s of a cold river export). Returns (one RGBA float
+    array a map, side x side x 4, rows from the bottom; the texels a ray
+    found the high poly at; a one-line report)."""
+    import native
+    t0 = time.time()
+    low = bmesh.new()
+    low.from_mesh(straight)
+    bmesh.ops.remove_doubles(low, verts=low.verts, dist=1e-5)
+    low.normal_update()
+    _, placed, rejected, shapes = build_cutters(low, random.Random(seed), smallest)
+    crumpled, stats = crumple(low, random.Random(seed + 3000), smallest)
+    low.free()
+    m = np.array(matrix, dtype=np.float64)
+    a, t = m[:3, :3], m[:3, 3]
+    # The crumpled rock in the world, wound as its normals face.
+    tris = np.array([[l.vert.co[:] for l in tri] for tri in crumpled.calc_loop_triangles()], dtype=np.float64)
+    crumpled.free()
+    hco = tris.reshape(-1, 3) @ a.T + t
+    htri = np.arange(len(hco), dtype=np.int32).reshape(-1, 3)
+    if np.linalg.det(a) < 0:
+        htri = np.ascontiguousarray(htri[:, ::-1])
+    # Each cutter's half-spaces n.x <= c to the world: (A^-T n).y <= c + (A^-T n).t.
+    inv_t = np.linalg.inv(a).T
+    cutters = []
+    for half_spaces, corners in shapes:
+        hs = np.array(half_spaces, dtype=np.float64)
+        nw = hs[:, :3] @ inv_t.T
+        cw = hs[:, 3] + nw @ t
+        length = np.linalg.norm(nw, axis=1)
+        pts = np.array(corners, dtype=np.float64) @ a.T + t
+        cutters.append((np.column_stack([nw / length[:, None], cw / length]), (pts.min(axis=0), pts.max(axis=0))))
+    # The low poly as Blender's bake reads it.
+    me = target
+    me.calc_loop_triangles()
+    me.calc_tangents(uvmap=uv_name)
+    nl, nt = len(me.loops), len(me.loop_triangles)
+
+    def get(seq, attr, count, width, dtype=np.float64):
+        out = np.empty(count * width, dtype=dtype)
+        seq.foreach_get(attr, out)
+        return out.reshape(count, width) if width > 1 else out
+
+    tri_loops = get(me.loop_triangles, "loops", nt, 3, np.int32)
+    tri_face = get(me.loop_triangles, "polygon_index", nt, 1, np.int32)
+    slot = get(me.polygons, "material_index", len(me.polygons), 1, np.int32)
+    smooth = get(me.polygons, "use_smooth", len(me.polygons), 1, bool)
+    face_normal = get(me.polygons, "normal", len(me.polygons), 3)
+    low_data = dict(
+        tri_loops=tri_loops, loop_vert=get(me.loops, "vertex_index", nl, 1, np.int32),
+        co=get(me.vertices, "co", len(me.vertices), 3), vert_normal=get(me.vertex_normals, "vector", len(me.vertices), 3),
+        tri_smooth=smooth[tri_face], tri_normal=face_normal[tri_face],
+        loop_normal=get(me.corner_normals, "vector", nl, 3), loop_tangent=get(me.loops, "tangent", nl, 3),
+        loop_sign=get(me.loops, "bitangent_sign", nl, 1), loop_uv=get(me.uv_layers[uv_name].data, "uv", nl, 2),
+        tri_map=np.array([map_of_slot(s) for s in range(max(len(me.materials), 1))], dtype=np.int32)[slot[tri_face]],
+        matrix=m)
+    me.free_tangents()
+    maps, texels = native.detail_bake(low_data, (hco, htri), cutters, sides, CAGE, RAY_DISTANCE)
+    flat = 100 * stats["skipped_area"] / max(stats["area"], 1e-9)
+    report = (f"{stats['rebuilt']} of {stats['planes']} planes into {stats['points']} sub-facet points "
+              f"({flat:.0f}% of the surface left flat), {placed} chips ({rejected} rejected), "
+              f"{texels} texels met, {time.time() - t0:.1f}s")
+    return maps, texels, report

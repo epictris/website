@@ -26,7 +26,8 @@ import { PX } from "../engine/units";
 import { rootMeshKey } from "./rootKey";
 import rootBakes from "./rootBakes.json";
 import { SCENE_ASSETS, sceneFile } from "./scenes";
-import { sceneMeta } from "./sceneMeta";
+import { modelMeta, sceneMeta } from "./sceneMeta";
+import { MODEL_ASSETS, modelFile } from "./models";
 import {
   BALL_MESH,
   HDRI_ASSETS,
@@ -60,6 +61,24 @@ function sceneStoredFile(scene: string): StoredFile {
     console.warn(`[levelAssets] scene "${scene}" is not in the store and has no meta.json; preloading ${sceneFile(scene)} unweighted`);
   }
   return { file: sceneFile(scene), bytes: bytes ?? 0 };
+}
+
+// A model's file for the preloader, weighed as a scene's is (`sceneStoredFile`).
+function modelStoredFile(model: string): StoredFile {
+  const bytes = MODEL_ASSETS[model]?.bytes ?? modelMeta(model)?.bytes;
+  if (bytes === undefined) {
+    console.warn(`[levelAssets] model "${model}" is not in the store and has no meta.json; preloading ${modelFile(model)} unweighted`);
+  }
+  return { file: modelFile(model), bytes: bytes ?? 0 };
+}
+
+// Every model the level's bodies carry, by name, each once, in authored order.
+export function levelModelNames(raw: RawLevelData): string[] {
+  const names = new Set<string>();
+  for (const body of normalizeLevelData(raw).bodies) {
+    for (const object of body.objects) if (object.type === "model") names.add(object.model);
+  }
+  return [...names];
 }
 
 // The pinned root bake (`rootBakes.json`) holding any of this level's root
@@ -107,6 +126,8 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
   if (controller === "ball") add(MESH_ASSETS[BALL_MESH]);
   // The Blender scene is what a level looks like, and one file.
   if (data.scene) add(sceneStoredFile(data.scene));
+  // ...and the models its bodies carry are the rest of its look.
+  for (const model of levelModelNames(raw)) add(modelStoredFile(model));
 
   // The level's roots, grown ahead of time (`rootBake.ts`): the bake that
   // holds any of its bodies. A body it does not hold is grown at load.
