@@ -111,7 +111,22 @@ So the fallback is taken only when the shape reaches back out past the face it w
 The same face is reachable without the fallback: when the shape's own faces all lie deeper still - a stool tipped so that each of its faces sees the 40 m quad's far corners - the quad's bottom is the reference outright (`session-325f` f239, 5.09 m).
 So a reference face that was chosen only because the seams were set aside, and that the shape does not cross, is no contact at all: the piece says nothing, and the sibling across the seam makes the contact.
 `cli contacts` `seam-fallback-crosses` is the case, one placing for each path: on the old manifold the box is pushed 5.32 m and 5.41 m through the block.
-A circle needs none of this: its one contact is on the nearest feature of the piece, and at a reflex corner that is the bend itself, which a circle can genuinely rest in.
+At a reflex corner a circle needs none of this: its one contact is on the nearest feature of the piece, and there that is the bend itself, which a circle can genuinely rest in.
+
+**A circle never leaves a piece through a seam either** (2026-11-13).
+It was once thought to need nothing, and that holds only while its centre is outside the body.
+Once the centre is inside a piece, the nearest feature can be the seam, and the answer then pushes the circle across into the sibling, whose own nearest feature is the same seam from the other side.
+Two pieces each sending the circle into the other make the seam a trap: the depenetration sweep put it back on the seam on every pass and the contact solve held it there.
+`session-459f`: the ball's mounting loop stands 35 mm past the rim, and the swept step stops only the rim (`integrateContinuous`), so a loop struck into rock ends up with its centre inside it.
+A sliver of rock in `ball.json`, cut into two pieces along its length, is 5 cm thick where the ball struck it at 4.8 m/s, and the loop came to rest with its centre on the seam (to 0.1 mm, frame after frame).
+The ball hung on the rock with 875 N·s a frame pressing either way - a hundred times its weight - from f306 to the end of the run, and `contact-load-runaway` caught it at f455.
+So when the face a circle would leave a seamed piece by is a seam - the shallowest plane from inside, or the inside of the seam edge as the nearest point from outside - it is pushed out of the **body** instead: to the nearest point of the body's surface, every non-seam face of every piece (`CollisionShape2D.surfaceExit`).
+The nearest way out can be a sibling's face: 3 mm past that seam the loop reached neither half's own outer face, and a piece-only rule (the circle form of `crossesFace`) left the rock saying nothing at all.
+One piece answers for the body, the first-mounted one containing the centre, so a circle on a seam is one push and not two.
+Both paths ask it: the contact manifold (`loopVsCircle`) and the overlap query the depenetration sweep and the character sweep use (`circleOverlap`, rect pieces included).
+A circle that never meets a seam is answered exactly as before; the seam ends are corners, which a circle meets as it always did.
+`cli contacts` `seam-circle` is the case: the sliver as the level builds it, a loop-sized circle on the seam at the two frames the ball hung, and 3 mm either side, each required to be pushed out of the face it came in by and be clear of the rock after one depenetration call.
+On the old answer the manifold pushed it 176 degrees the wrong way and the recovery moved it 3 mm, back onto the seam.
 
 ## Trampolines: bounce and launch
 

@@ -77,20 +77,33 @@ function closestOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
   return a.add(ab.mul(t));
 }
 
-// Closest point on a convex loop's boundary to `p`, in the same frame.
-function closestOnLoop(p: Vec2, verts: readonly Vec2[]): { point: Vec2; distSq: number } {
+// Closest point on a convex loop's boundary to `p`, in the same frame, and the
+// edge it lies on - or -1 when it is one of the loop's vertices, which is a
+// corner rather than a face.
+function closestOnLoop(p: Vec2, verts: readonly Vec2[]): { point: Vec2; distSq: number; edge: number } {
   let best = verts[0]!;
   let bestSq = Infinity;
+  let edge = -1;
   for (let i = 0; i < verts.length; i++) {
     const c = closestOnSegment(p, verts[i]!, verts[(i + 1) % verts.length]!);
     const d = p.distanceSquaredTo(c);
     if (d < bestSq) {
       bestSq = d;
       best = c;
+      edge = i;
     }
   }
-  return { point: best, distSq: bestSq };
+  if (edge >= 0) {
+    const a = verts[edge]!;
+    const b = verts[(edge + 1) % verts.length]!;
+    if (best.distanceSquaredTo(a) < VERTEX_EPS_SQ || best.distanceSquaredTo(b) < VERTEX_EPS_SQ) edge = -1;
+  }
+  return { point: best, distSq: bestSq, edge };
 }
+
+// How close a closest point must stand to a vertex to be that vertex (the
+// manifold's own bar, `VERTEX_EPS_SQ` there).
+const VERTEX_EPS_SQ = 1e-12;
 
 // The edge whose supporting plane `p` is furthest outside (or least far inside),
 // with that signed distance. Negative everywhere means `p` is inside the loop,
@@ -564,7 +577,9 @@ export function circleOverlap(
     if (plane.dist > r) return null;
     if (plane.dist <= 0) {
       // Inside the polygon: push out through the shallowest face, as the rect
-      // path pushes out along the axis of least penetration.
+      // path pushes out along the axis of least penetration - unless that face
+      // is a seam (see `isSeam`).
+      if (isSeam(target, s.verts.length, plane.edge)) return surfaceExit(p, r, target);
       return {
         normal: toWorldDir(polyEdgeNormal(s.verts, plane.edge), rot),
         depth: r - plane.dist,
@@ -572,6 +587,9 @@ export function circleOverlap(
     }
     const near = closestOnLoop(local, s.verts);
     if (near.distSq > r * r) return null;
+    if (near.edge >= 0 && isSeam(target, s.verts.length, near.edge)) {
+      return surfaceExit(p, r, target);
+    }
     if (near.distSq > EPS * EPS) {
       const dist = Math.sqrt(near.distSq);
       return {
@@ -592,6 +610,14 @@ export function circleOverlap(
   const distSq = dx * dx + dy * dy;
   if (distSq > r * r) return null;
   if (distSq > EPS) {
+    // Off one side only, the nearest feature is that side's face (in
+    // `shapeVertices` order: left, top, right, bottom); off two, a corner.
+    const offX = dx !== 0;
+    const offY = dy !== 0;
+    const side = offX && !offY ? (dx < 0 ? 0 : 2) : offY && !offX ? (dy < 0 ? 1 : 3) : -1;
+    if (side >= 0 && isSeam(target, 4, side)) {
+      return surfaceExit(p, r, target);
+    }
     const dist = Math.sqrt(distSq);
     const n = new Vec2(dx / dist, dy / dist);
     return { normal: toWorldDir(n, target.globalRotation), depth: r - dist };
@@ -603,11 +629,56 @@ export function circleOverlap(
   const dBottom = hh - local.y;
   const minPen = Math.min(dRight, dLeft, dTop, dBottom);
   let n: Vec2;
-  if (minPen === dRight) n = new Vec2(1, 0);
-  else if (minPen === dLeft) n = new Vec2(-1, 0);
-  else if (minPen === dBottom) n = new Vec2(0, 1);
-  else n = new Vec2(0, -1);
+  let side: number;
+  if (minPen === dRight) {
+    n = new Vec2(1, 0);
+    side = 2;
+  } else if (minPen === dLeft) {
+    n = new Vec2(-1, 0);
+    side = 0;
+  } else if (minPen === dBottom) {
+    n = new Vec2(0, 1);
+    side = 3;
+  } else {
+    n = new Vec2(0, -1);
+    side = 1;
+  }
+  if (isSeam(target, 4, side)) return surfaceExit(p, r, target);
   return { normal: toWorldDir(n, target.globalRotation), depth: r + minPen };
+}
+
+// Is face `i` of `target` a SEAM - an edge its piece shares with a sibling in
+// a compound body (`CollisionShape2D.isFaceInternal`) - on a piece that has
+// surface faces to offer instead? A circle never leaves a piece through one,
+// for the reason the polygon manifold never takes one as its reference face
+// (`loopVsLoop`): a seam is inside the body, and its far side is the
+// sibling's. Taken as the way out it is a trap. A circle whose centre came to
+// rest on a seam - the ball's mounting loop, struck into a 5 cm sliver of rock
+// cut in two along its length - was pushed across it by each piece in turn,
+// into the other: the depenetration sweep put it back on the seam every pass
+// and the contact solve held it there at a hundred times the ball's weight
+// (`session-459f` f306-f459, `cli contacts` `seam-circle`).
+//
+// Asked only of the face an answer would otherwise leave by, so a circle that
+// never meets a seam is answered exactly as it always was.
+function isSeam(target: ShapeTransform, faces: number, i: number): boolean {
+  const internal = target.isFaceInternal;
+  if (!internal || !internal.call(target, i)) return false;
+  for (let k = 0; k < faces; k++) if (!internal.call(target, k)) return true;
+  return false;
+}
+
+// A circle centred at `p` whose way out of a seamed piece would be a seam,
+// pushed out of the piece's BODY instead: to the nearest point of the body's
+// surface, which may be a sibling's face (`CollisionShape2D.surfaceExit`).
+// One piece answers for the body - the first-mounted that contains the centre
+// - and every other says nothing, so a circle on a seam is one push and not
+// two. A centre outside every piece is met by the surface faces nearest it,
+// through their own pieces.
+function surfaceExit(p: Vec2, r: number, target: ShapeTransform): { normal: Vec2; depth: number } | null {
+  const exit = target.surfaceExit?.(p);
+  if (!exit) return null;
+  return { normal: exit.normal, depth: r + exit.dist };
 }
 
 // Direction from the shape's closest surface point toward p — which side of

@@ -4854,6 +4854,82 @@ function caseSeamFallbackCrosses(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// A CIRCLE meets a compound body's surface too, not its pieces' seams. The
+// ball's mounting loop is a 2 cm circle standing 35 mm past the rim, and the
+// swept step stops only the rim, so a loop struck into a rock can end up with
+// its centre inside it. In `ball.json` a sliver of rock leaning on a wall is
+// cut into two pieces along its length and is 5 cm thick where the ball meets
+// it: the ball struck it at 4.8 m/s and its loop came to rest with its centre
+// ON the seam. Each piece then pushed it out through its nearest face, which
+// was the seam - into the sibling - so the two pushed it back and forth across
+// the seam, the seam held it, and the ball hung on the rock at 100 times its
+// weight of contact load for the rest of the run (`session-459f` f306-f459).
+// Against the body's surface, a circle whose way out of a piece would be a seam
+// leaves by the nearest point of the BODY's surface, which may be a sibling's
+// face (`CollisionShape2D.surfaceExit`), pushed by one piece only. The last
+// placing is the one a piece-only rule misses: 3 mm past the seam, the circle
+// reaches neither half's own outer face, and the rock said nothing at all.
+function caseSeamCircle(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const sim = new Sim("seam-circle");
+  const rock = new StaticBody2D();
+  // `ball.json`'s sliver, as the level builds it, with its tip at the origin:
+  // a long piece and a short one sharing the seam (0,0)-(-0.2,-1.4).
+  const pieces = [
+    [new Vec2(0.05, -1.3), new Vec2(0, 0), new Vec2(-0.2, -1.4), new Vec2(-0.4, -3.65)],
+    [new Vec2(0, 0), new Vec2(-0.15, -0.7), new Vec2(-0.2, -1.4)],
+  ];
+  for (const piece of pieces) {
+    const made = polyShapeCentred(piece);
+    rock.addShape(made.shape, made.offset);
+  }
+  sim.world.add(rock);
+  const [long, short] = rock.getShapes() as [CollisionShape2D, CollisionShape2D];
+  const seamFaces = (s: CollisionShape2D): number =>
+    s.worldVertices().filter((_, k) => s.isFaceInternal(k)).length;
+  check(`each piece has one seam (${seamFaces(long)}, ${seamFaces(short)})`, seamFaces(long) === 1 && seamFaces(short) === 1);
+  // The short piece's outer face, which the loop came in through.
+  const faceOut = new Vec2(-0.7, 0.15).normalized();
+  const seamDir = new Vec2(-0.2, -1.4).normalized();
+  const seamNormal = new Vec2(-seamDir.y, seamDir.x);
+  const radius = BallPlayer.LOOP_RADIUS;
+  // Where the loop stood on the seam at f306 and f307, and 3 mm either side.
+  const onSeam = [0.2197, 0.2643].map((up) => new Vec2(-0.2, -1.4).mul(up / 1.4));
+  for (const at of onSeam) {
+    for (const side of [-0.003, 0, 0.003]) {
+      const centre = at.add(seamNormal.mul(side));
+      const tag = `at (${(centre.x * 1000).toFixed(1)}, ${(centre.y * 1000).toFixed(1)}) mm`;
+      const circle = sim.addRigid(circleShape(radius), centre);
+      // The manifold: every point either piece gives pushes the circle out
+      // of the face it came in by. A contact's normal points out of the
+      // circle toward the piece, so the push on the circle is its negative.
+      const pushes = [long, short].flatMap((p) => shapeContacts(p, circle.primaryShape(), CONTACT_SLOP));
+      const worst = pushes.length > 0 ? Math.min(...pushes.map((c) => c.normal.neg().dot(faceOut))) : -1;
+      check(
+        `${tag}: the rock pushes the circle out of the face it came in by (${pushes.length} points, worst ${(Math.acos(Math.max(-1, Math.min(1, worst))) / DEG).toFixed(1)} deg off it)`,
+        pushes.length > 0 && worst > Math.cos(5 * DEG),
+      );
+      // The recovery: out of the rock in one call, by about its overlap.
+      const before = circle.globalPosition;
+      sim.world.depenetrateRigid(circle, 2);
+      const moved = circle.globalPosition.sub(before);
+      const still = [long, short].some((p) => circleOverlap(circle.globalPosition, radius - 1e-6, p) !== null);
+      check(
+        `${tag}: pushed out of the rock it leaves by that face (moved ${(moved.length() * 1000).toFixed(1)} mm, ${(Math.acos(Math.max(-1, Math.min(1, moved.normalized().dot(faceOut)))) / DEG).toFixed(1)} deg off it; still inside: ${still})`,
+        !still && moved.length() < 0.05 && moved.normalized().dot(faceOut) > Math.cos(5 * DEG),
+      );
+      sim.world.remove(circle);
+    }
+  }
+  return ok("seam-circle - a circle inside a compound leaves by the body's surface, never across a seam", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // A rect `obstacle` for `swingPast`, metres, its centre relative to where the
 // ball hangs. A rigid one is a 50 cm steel block standing on a floor of its
 // own, built with the level so it has settled by the time the ball hangs.
@@ -7921,6 +7997,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseIslandThinPlank());
   results.push(caseSeamReflexCorner());
   results.push(caseSeamFallbackCrosses());
+  results.push(caseSeamCircle());
   results.push(caseHookSeam());
   results.push(caseCollisionMask());
   results.push(casePassableBody());

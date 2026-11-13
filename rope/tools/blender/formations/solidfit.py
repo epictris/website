@@ -62,6 +62,9 @@ CELL_METRIC = (1.0, 0.65, 0.80)  # world x, y (along the view), z (up)
 TO_LOCAL = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)
 CELL_T = np.array([[1, .11, .10], [0, .80, -.08], [0, 0, .65]]) @ TO_LOCAL
 CELL_NEIGHBOURS = 24
+# Completing a cell (`Cells`): the seeds added a pass, and the most planes a
+# cell may have (`halfspaces` tries every three of them).
+COMPLETE_STEP, COMPLETE_MAX = 4, 80
 # A cell's taper follows the solid's normal averaged this far (screen
 # metres) about the point nearest its seed.
 NORMAL_REACH = 0.5
@@ -253,6 +256,44 @@ def _modifier(ob, kind, **settings):
     fitted._apply_modifiers(ob)
 
 
+def triangulate(bm, faces, quad_method="SHORT_EDGE", ngon_method="BEAUTY"):
+    """Triangulate `faces` of `bm` as the Triangulate modifier does (its
+    defaults: the shorter diagonal of a quad, beauty for the rest), but never
+    make an edge the mesh already has. Blender's triangulate does not ask: a
+    diagonal between two corners of an n-gon that an edge outside it already
+    joins was that edge again, shared by four faces (three where the n-gon
+    was a sliver: a fin, `assemble.drop_fins`), and a solid rock failed
+    "must be watertight" at random (where the bevel leaves such n-gons
+    follows the Manifold boolean, which is not deterministic; Cube.002 and
+    Cube.005, 2026-11-13: 556 of 58,571 n-gons). Those n-gons, and any two
+    that share a pair of corners a diagonal could join, are poked instead,
+    fanned about a new vertex at their centre: none of whose edges can be
+    there already. Every other face comes out as the modifier makes it."""
+    bmesh, *_ = _bpy()
+    faces = [f for f in faces if len(f.verts) > 3]
+    if not faces:
+        return
+    bm.verts.index_update()
+    seen, risky = {}, set()
+    for f in faces:
+        vs = f.verts[:]
+        n = len(vs)
+        for i in range(n):
+            for j in range(i + 2, n - (i == 0)):
+                a, b = vs[i], vs[j]
+                if any(e.other_vert(a) is b for e in a.link_edges):
+                    risky.add(f)
+                other = seen.setdefault((min(a.index, b.index), max(a.index, b.index)), f)
+                if other is not f:
+                    risky.add(f)
+                    risky.add(other)
+    if risky:
+        bmesh.ops.poke(bm, faces=list(risky), center_mode="MEAN_WEIGHTED")
+    rest = [f for f in faces if f not in risky]
+    if rest:
+        bmesh.ops.triangulate(bm, faces=rest, quad_method=quad_method, ngon_method=ngon_method)
+
+
 def _tree(ob):
     _, _, _, _, BVHTree = _bpy()
     return BVHTree.FromPolygons([v.co for v in ob.data.vertices], [p.vertices for p in ob.data.polygons])
@@ -406,21 +447,69 @@ class Cells:
         tapers = [self._taper(s) for s in seeds]
         st = seeds @ CELL_T.T
         overlapped = 0
+
+        def joint(i, j, f):
+            """The plane cell i is cut by against cell j (n.x <= b, world),
+            and whether it is grown over j rather than held back."""
+            nt = st[j] - st[i]
+            bt = float(nt @ (st[j] + st[i]) / 2)
+            nw = CELL_T.T @ nt
+            length = np.linalg.norm(nw)
+            mid = (seeds[i] + seeds[j]) / 2
+            # How far i lies above j at the joint (sink is inward).
+            above = float(sink(tapers[j], mid)[0] - sink(tapers[i], mid)[0])
+            over = bool(above > MIN_STEP * f)
+            return (nw / length, bt / length + (CELL_OVERLAP if over else -CELL_GAP) * f), over
+
         for i, s in enumerate(st):
             f = self.scale(seeds[i][1])
             near = np.argsort(np.linalg.norm(st - s, axis=1))[1:CELL_NEIGHBOURS + 1]
-            planes = []
+            planes, have = [], set()
             for j in near:
-                nt = st[j] - s
-                bt = float(nt @ (st[j] + s) / 2)
-                nw = CELL_T.T @ nt
-                length = np.linalg.norm(nw)
-                mid = (seeds[i] + seeds[j]) / 2
-                # How far i lies above j at the joint (sink is inward).
-                above = float(sink(tapers[j], mid)[0] - sink(tapers[i], mid)[0])
-                over = bool(above > MIN_STEP * f)
+                plane, over = joint(i, int(j), f)
                 overlapped += over
-                planes.append((nw / length, bt / length + (CELL_OVERLAP if over else -CELL_GAP) * f))
+                planes.append(plane)
+                have.add(int(j))
+            # The cell completed: its nearest seeds bound it only when they
+            # surround it. On a seed at the edge of the cloud they all lie to
+            # one side, and the cell ran to the box across whatever the solid
+            # left open; on a hollow solid (Cube.005, a cave) it claimed the
+            # far wall, 16 m of it, and came out one smooth slab where that
+            # wall's own stones were (2026-11-13). The seeds whose planes cut
+            # the cell's corners deepest are added, COMPLETE_STEP a pass, until
+            # none cuts it: the cell is then exactly the seed's (offset)
+            # Voronoi cell. A few a pass, because the corners of a cell run to
+            # the box are cut by nearly every seed, and `halfspaces` grows as
+            # the cube of its planes (all at once took 36 GB).
+            nt_all = st - s
+            nw_all = nt_all @ CELL_T
+            len_all = np.linalg.norm(nw_all, axis=1)
+            len_all[i] = 1.0
+            b_all = (nt_all * (st + s) / 2).sum(1)
+            while len(planes) < COMPLETE_MAX:
+                v = halfspaces(planes, self.lo, self.hi)
+                if len(v) == 0:
+                    break
+                # How far past each seed's plane (held back, the tightest
+                # it can be) the cell's corners reach, deepest first.
+                reach = ((v @ nw_all.T - b_all) / len_all).max(0)
+                reach[i] = -np.inf
+                reach[list(have)] = -np.inf
+                added = 0
+                for j in np.argsort(-reach):
+                    j = int(j)
+                    if reach[j] <= -CELL_GAP * f + 1e-9 or added == COMPLETE_STEP:
+                        break
+                    plane, over = joint(i, j, f)
+                    have.add(j)
+                    if (v @ plane[0] - plane[1]).max() > 1e-9:
+                        overlapped += over
+                        planes.append(plane)
+                        added += 1
+                if not added:
+                    break
+            else:
+                report["cells left open"] = report.get("cells left open", 0) + 1
             self.planes.append(planes)
             self.tapers.append(tapers[i])
             self.f.append(f)
@@ -1004,7 +1093,11 @@ def build(solid, camera, params, collection, water_z=None):
     bevel.material = 1
     limit_edge_bevel(rock, bevel, math.radians(boulder["edgeBevelAngle"]))
     fitted._apply_modifiers(rock)
-    _modifier(rock, "TRIANGULATE")
+    bm = bmesh.new()
+    bm.from_mesh(rock.data)
+    triangulate(bm, bm.faces[:])
+    bm.to_mesh(rock.data)
+    bm.free()
     for q in rock.data.polygons:
         q.use_smooth = False
 

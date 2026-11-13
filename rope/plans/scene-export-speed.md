@@ -108,5 +108,5 @@ Measured and not changed: one Cycles bake call of Terrace.012's eight colour map
 - Most formations warn their growth is stale and every solid formation is listed as "edited but not rebuilt": the generator's fingerprint (`formations/worker.py`) changed with this morning's solid generator, so `--rebuild changed` would rebuild them all; rebuild by name.
 - The bake-cache key is unchanged by the workers; a warm export with workers was not run.
 - The worker snapshot saves in 0.1 s; it works (maps match), but nobody has checked why it is that fast.
-- A solid rock's build can fail its validation at random (Manifold's nondeterminism, above): retrying the rebuild worked; the zero-area case is not understood.
+- Solid rocks failing validation at random: root-caused and fixed after the second session's commit (Blender's triangulate re-making existing edges; `solidfit.triangulate`, docs/blender-formations.md), with Cube.005's runaway Voronoi cells (`solidfit.Cells` completion, docs/blender-backdrop.md); Cube.002 and Cube.005 rebuilt with both.
 - `foliage-atlas-v1.png`, `ivy-clump-atlas-v3.png` and `ivy-cutout-atlas-v7.png` have no credit (`tools/blender/image_credits.json`).

@@ -65,14 +65,15 @@ def remove_degenerate(bm, dist):
     """Collapse every edge shorter than `dist` that can be collapsed, shortest
     first, then flip the longest edge of any triangle left with no area (a
     needle: its third corner lies on that edge). The faces around them are
-    made triangles first (the fitted and solid rocks keep n-gons). Fins
-    (`drop_fins`) go first."""
+    made triangles first (the fitted and solid rocks keep n-gons), never
+    making an edge the mesh has (`solidfit.triangulate`). Fins (`drop_fins`)
+    go first."""
     drop_fins(bm)
     around = {f for e in bm.edges if e.calc_length() < dist for f in e.link_faces}
     around |= {f for f in bm.faces if f.calc_area() <= 1e-12}
     around = [f for f in around if len(f.verts) > 3]
     if around:
-        bmesh.ops.triangulate(bm, faces=around)
+        solidfit.triangulate(bm, around, quad_method="BEAUTY")
     # Collapsed in batches: a bmesh operator costs as much as the whole mesh
     # (210 one-edge collapses on Cube.005's 290k faces took 27 s), so every
     # edge whose ends' neighbours no earlier edge of the pass touches goes in
@@ -95,15 +96,29 @@ def remove_degenerate(bm, dist):
         if not batch:
             break
         bmesh.ops.collapse(bm, edges=batch, uvs=False)
+    # A needle whose longest edge cannot turn (Blender's rotate refuses where
+    # the new diagonal is an edge already, or where the edge is not shared by
+    # two faces) has its shortest edge collapsed instead, which moves its
+    # corners by no more than that edge's length: before, it was left, and
+    # the rock failed "must have nonzero volume and faces".
     for _ in range(20):
         needles = [f for f in bm.faces if len(f.verts) == 3 and f.calc_area() <= 1e-12]
         if not needles:
             break
+        changed = False
         for face in needles:
-            if face.is_valid:
-                edge = max(face.edges, key=lambda e: e.calc_length())
-                if edge.is_manifold:
-                    bmesh.ops.rotate_edges(bm, edges=[edge], use_ccw=False)
+            if not face.is_valid or face.calc_area() > 1e-12:
+                continue
+            edge = max(face.edges, key=lambda e: e.calc_length())
+            if edge.is_manifold and bmesh.ops.rotate_edges(bm, edges=[edge], use_ccw=False)["edges"]:
+                changed = True
+                continue
+            shortest = min(face.edges, key=lambda e: e.calc_length())
+            if collapsible(shortest):
+                bmesh.ops.collapse(bm, edges=[shortest], uvs=False)
+                changed = True
+        if not changed:
+            break
 
 
 out = Path(sys.argv[sys.argv.index("--") + 1])

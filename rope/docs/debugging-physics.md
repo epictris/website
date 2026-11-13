@@ -337,6 +337,12 @@ allowed to route through solid geometry, a contact test that has been answering
 "inside" since the moment the rope attached) rather than for the impulse that
 finally released it.
 
+`session-459f` is the compound-body ghost from the other side: **a piece answering for a body it is only part of**.
+The ball's loop came to rest with its centre on the seam of a rock cut in two along its length, and each half pushed it out through its nearest face, which was the seam, into the other half.
+`cli trace` showed it at once - three contacts from one static body, two of them along the same line in opposite directions at 875 N·s each - and the loop's centre sat on the seam to 0.1 mm on every frame, which is what an attractor looks like.
+`cli scan` named the body and the 20 mm embed; the seam itself took a scratch probe printing the pieces' world vertices, since `query` lists only how many vertices a piece has.
+The rule is the one `loopVsLoop` already followed for polygons: an overlap answer is about the body's surface, and a seam is never a way out (see [contact-solver](contact-solver.md#a-compound-bodys-surface-not-its-pieces)).
+
 ## Debugging discipline
 
 Rules distilled from the sessions this loop was built in.

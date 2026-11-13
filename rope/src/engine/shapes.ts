@@ -563,4 +563,8 @@ export interface ShapeTransform {
   // no siblings and answers neither: every corner and face is its own.
   isVertexExposed?(i: number): boolean;
   isFaceInternal?(i: number): boolean;
+  // How a point inside this piece leaves its whole body, answered by one piece
+  // per point (`CollisionShape2D.surfaceExit`). A plain placement is a body of
+  // its own, whose seams there are none of to ask about.
+  surfaceExit?(p: Vec2): { point: Vec2; normal: Vec2; dist: number } | null;
 }

@@ -299,13 +299,35 @@ function loopVsCircle(a: ShapeTransform, centre: Vec2, radius: number, slop: num
   if (va.length < 3) return [];
   let closest = va[0]!;
   let bestSq = Infinity;
+  let edge = 0;
   for (let i = 0; i < va.length; i++) {
     const c = closestOnSegment(centre, va[i]!, va[(i + 1) % va.length]!);
     const d = centre.distanceSquaredTo(c);
     if (d < bestSq) {
       bestSq = d;
       closest = c;
+      edge = i;
     }
+  }
+  // Against the body's surface, not the piece's (see `loopVsLoop`): a circle
+  // whose nearest feature is the inside of a SEAM is pushed out of the BODY,
+  // to the nearest point of its surface (`CollisionShape2D.surfaceExit`), and
+  // by one piece only - the first-mounted that contains its centre; every
+  // other piece says nothing. Answered from the seam, each piece of a compound
+  // pushes a circle centred on it across into the other, and the seam holds
+  // it: the ball's loop hung in a split sliver of rock at a hundred times the
+  // ball's weight (`session-459f`, `cli contacts` `seam-circle`). The seam's
+  // ends are corners, which a circle meets as before.
+  const faces = surfaceFaces(a, va);
+  if (
+    faces &&
+    !faces(edge) &&
+    closest.distanceSquaredTo(va[edge]!) >= VERTEX_EPS_SQ &&
+    closest.distanceSquaredTo(va[(edge + 1) % va.length]!) >= VERTEX_EPS_SQ
+  ) {
+    const exit = a.surfaceExit?.(centre);
+    if (!exit) return [];
+    return [{ normal: exit.normal.neg(), depth: radius + exit.dist, point: exit.point, featureId: CIRCLE_FEATURE }];
   }
   const dist = Math.sqrt(bestSq);
   // Is the centre inside the polygon? Then the boundary point is behind it and

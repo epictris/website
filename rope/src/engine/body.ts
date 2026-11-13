@@ -55,6 +55,21 @@ function sharesEdge(verts: readonly Vec2[], p: Vec2, q: Vec2): boolean {
   return false;
 }
 
+// Is `p` inside (or on) the convex vertex loop `verts`, wound as every vertex
+// shape is (outward normal `(e.y, -e.x)` along each edge `e`)? Within
+// `SEAM_EPSILON` of a face counts as on it, so a point on a seam is inside both
+// pieces that share it.
+function loopContains(verts: readonly Vec2[], p: Vec2): boolean {
+  for (let k = 0; k < verts.length; k++) {
+    const a = verts[k]!;
+    const e = verts[(k + 1) % verts.length]!.sub(a);
+    const len = e.length();
+    if (len < 1e-12) continue;
+    if ((e.y * (p.x - a.x) - e.x * (p.y - a.y)) / len > SEAM_EPSILON) return false;
+  }
+  return true;
+}
+
 // Live view of a body's collision shape (position/rotation track the body).
 // `localOffset` mounts the shape away from the body origin in the body's local
 // frame (rotates with the body); the default zero keeps single-shape bodies
@@ -360,6 +375,54 @@ export class CollisionShape2D implements ShapeTransform {
   }
 
   private internalFaces: boolean[] | null = null;
+
+  // How a point inside this piece leaves the BODY: the nearest point on the
+  // body's surface - every face of every piece that is not a seam - and the
+  // outward direction to it. A circle whose way out of a piece would be a seam
+  // is pushed out here instead (`isSeam` in collision.ts, `loopVsCircle`): the
+  // nearest exit of a compound can be a SIBLING's face, which this piece alone
+  // cannot see, and a circle in a 5 cm sliver cut in two along its length
+  // reached neither half's own face from 3 mm past the seam.
+  //
+  // One piece answers for the body, so a circle on a seam is one contact and
+  // not two: the first-mounted piece that contains the point. Every other
+  // piece, and this one when the point is not inside it, answers null.
+  surfaceExit(p: Vec2): { point: Vec2; normal: Vec2; dist: number } | null {
+    if (this.shape.kind === "circle") return null;
+    const siblings = this.owner.getShapes();
+    if (!loopContains(this.worldVertices(), p)) return null;
+    for (const s of siblings) {
+      if (s === this) break;
+      if (s.shape.kind !== "circle" && loopContains(s.worldVertices(), p)) return null;
+    }
+    let point: Vec2 | null = null;
+    let normal = Vec2.ZERO;
+    let bestSq = Infinity;
+    for (const s of siblings) {
+      if (s.shape.kind === "circle") continue;
+      const verts = s.worldVertices();
+      for (let k = 0; k < verts.length; k++) {
+        if (s.isFaceInternal(k)) continue;
+        const a = verts[k]!;
+        const ab = verts[(k + 1) % verts.length]!.sub(a);
+        const lenSq = ab.lengthSquared();
+        if (lenSq < 1e-24) continue;
+        const t = Math.max(0, Math.min(1, p.sub(a).dot(ab) / lenSq));
+        const c = a.add(ab.mul(t));
+        const d = p.distanceSquaredTo(c);
+        if (d < bestSq) {
+          bestSq = d;
+          point = c;
+          const len = Math.sqrt(lenSq);
+          normal = new Vec2(ab.y / len, -ab.x / len);
+        }
+      }
+    }
+    if (point === null) return null;
+    const dist = Math.sqrt(bestSq);
+    // From inside, the way out is toward the surface point; on it, the face's.
+    return { point, normal: dist > 1e-9 ? point.sub(p).div(dist) : normal, dist };
+  }
 
   // Drop the cached world pose (`globalPosition`, `worldVertices`). Both are
   // keyed on the mount offset's identity but not on `localRotation`, so a

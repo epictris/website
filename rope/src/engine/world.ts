@@ -1135,7 +1135,11 @@ export class World {
       // loop-cap). With the primary stopped a skin off the surface, a mounted
       // shape can reach past it only by its own small protrusion, which is the
       // shallow-overlap regime the discrete solve and depenetration already
-      // handle correctly.
+      // handle correctly. "Shallow" is 35 mm, which is past the middle of a
+      // thin piece of rock: there the loop's centre can come to rest inside a
+      // compound, on a seam, and the overlap answers have to push it out of
+      // the body rather than the piece (`CollisionShape2D.surfaceExit`,
+      // `session-459f`).
       //
       // A circle is swept as a circle, exactly as it always was (every recorded
       // replay of the ball went through `sweepCircle`); a vertex shape - the
