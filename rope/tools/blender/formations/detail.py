@@ -84,6 +84,9 @@ VALLEY = 3.0
 # Terrace has 3 at 180), with no width to chip, and the chip plane between
 # two opposite normals is undefined (2026-10-04: the export died on it).
 FIN = 170.0
+# The side of the grid the placed chips are kept in, metres: about the
+# largest chip's reach (SIZE_MAX), so a test spans a few cells.
+PLACED_CELL = 0.2
 
 # ------------------------------------------------------------------- bake
 # The bake casts from CAGE outside the low poly inward; every chip lies
@@ -571,7 +574,30 @@ def build_cutters(rock_bm, rng, smallest=0.0):
     valleys = valley_points(rock_bm)
     cut = bmesh.new()
     count = rejected = 0
-    placed, shapes = [], []
+    shapes = []
+    # The chips placed so far, (point, reach, crease), in a grid of PLACED_CELL
+    # cells: a new chip is tested only against those whose cells its reach
+    # and the largest reach placed can span, the same test as against all of
+    # them (169 M pairs and 40 s of a cold river export, 2026-11-13).
+    placed = {}
+    widest = [0.0]
+
+    def clashes(p, reach, crease):
+        span = reach + widest[0]
+        lo = [math.floor((p[k] - span) / PLACED_CELL) for k in range(3)]
+        hi = [math.floor((p[k] + span) / PLACED_CELL) for k in range(3)]
+        for cx in range(lo[0], hi[0] + 1):
+            for cy in range(lo[1], hi[1] + 1):
+                for cz in range(lo[2], hi[2] + 1):
+                    for q, r, i in placed.get((cx, cy, cz), ()):
+                        if i != crease and (p - q).length < reach + r:
+                            return True
+        return False
+
+    def place(p, reach, crease):
+        key = tuple(math.floor(p[k] / PLACED_CELL) for k in range(3))
+        placed.setdefault(key, []).append((p, reach, crease))
+        widest[0] = max(widest[0], reach)
     for e in rock_bm.edges:
         if not e.is_manifold:
             continue
@@ -607,12 +633,12 @@ def build_cutters(rock_bm, rng, smallest=0.0):
                 continue  # blurred away where the rock stands
             h = wide * math.sin(theta)
             reach = max(a1, a2, wide)
-            if any(i != e.index and (p - q).length < reach + r for q, r, i in placed):
+            if clashes(p, reach, e.index):
                 rejected += 1
                 continue
             shape = cutter(cut, bvh, valleys, p, n, d, a1, a2, wide, h)
             if shape is not None:
-                placed.append((p, reach, e.index))
+                place(p, reach, e.index)
                 shapes.append(shape)
                 count += 1
             else:
