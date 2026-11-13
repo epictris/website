@@ -216,8 +216,46 @@ BAKE_SAMPLES = 8
 # Blender handles a bake's every texel on one thread, so the bakes scale with
 # the workers until the GPU is busy.
 WORKERS = int(os.environ.get("SCENE_EXPORT_WORKERS", "0")) or 8
-# Set in a worker: the directory its results go to.
+# How many of them may hold a Cycles session at once (SCENE_EXPORT_GPU_SLOTS
+# overrides it): each holds the whole scene on the card, about 1.2 GB on the
+# river, and eight at once took the 4070 SUPER to 11.6 of its 12.3 GB beside
+# 1.9 GB of other programs (2026-11-13). The rest of a worker's work, its
+# preparation and the detail normals, runs on the CPU and is not held back.
+GPU_SLOTS = int(os.environ.get("SCENE_EXPORT_GPU_SLOTS", "0")) or 4
+# Set in a worker: the directory its results go to, and the lock files of the
+# GPU slots it takes a bake's turn by.
 WORKER_OUT = None
+
+
+class gpu_slot:
+    """In a worker, one of GPU_SLOTS lock files held for the length of a
+    Cycles bake, so no more than that many bakes share the card at once; a
+    no-op anywhere else."""
+
+    def __enter__(self):
+        self.held = None
+        if WORKER_OUT is None:
+            return self
+        import fcntl
+        while self.held is None:
+            for i in range(GPU_SLOTS):
+                f = open(os.path.join(WORKER_OUT, f"gpu-slot-{i}.lock"), "w")
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    f.close()
+                    continue
+                self.held = f
+                break
+            else:
+                time.sleep(0.05)
+        return self
+
+    def __exit__(self, *exc):
+        if self.held is not None:
+            import fcntl
+            fcntl.flock(self.held, fcntl.LOCK_UN)
+            self.held.close()
 # Cycles GPU backends, best first. The bake runs on the first one with a
 # device and on the CPU without: the Terrace's 2k map took 3.4 s on an
 # RTX 4070 SUPER (OptiX) and 24.5 s on the CPU, with the same result to
@@ -890,8 +928,9 @@ def bake_pass(targets, images, bake_type, before_fill=None, **bake_args):
     # alpha 1, so `fill_background` saw nothing to fill; a bake of several
     # drops the clear itself (object_bake_api.cc). A worker bakes one object
     # at a time, and its normal maps' gaps came out flat (2026-11-13).
-    bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, use_clear=False,
-                        **bake_args)
+    with gpu_slot():
+        bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, use_clear=False,
+                            **bake_args)
     if before_fill is not None:
         for ob in targets:
             for i, im in enumerate(images[ob]):
@@ -1047,7 +1086,10 @@ def worker_main(argv):
         ob = bpy.data.objects[name]
         moss.prepare_texture_paints(scene, {name})
         warnings = []
-        bake_procedural_textures([ob], None, moss.texture_paints(scene), warnings)
+        # This rock's mosses only: one prepared for a rock baked before is not
+        # this bake's, and would be warned of as on a rock not exported.
+        paints = [entry for entry in moss.texture_paints(scene) if entry[1] == ob]
+        bake_procedural_textures([ob], None, paints, warnings)
         with open(os.path.join(WORKER_OUT, entry_name(name)) + ".warnings.json", "w") as f:
             json.dump(warnings, f)
         print(f"[scene_worker] done {name}", flush=True)

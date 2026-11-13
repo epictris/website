@@ -716,6 +716,11 @@ def load(path, name, colorspace):
     im.colorspace_settings.name = colorspace
     im["generated_by"] = "tools/blender/scene_export.py"
     im.pack()
+    # Packed, it needs no path, and the glTF exporter names a PNG by its
+    # file, which escapes a slash (`map_file`): "Terrace.007 / new" shipped
+    # as "Terrace-007 %2F new baked colour" (2026-11-13). With none it takes
+    # the image's name, as for a map baked in this export.
+    im.filepath_raw = ""
     return im
 
 

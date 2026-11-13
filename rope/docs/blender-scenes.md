@@ -145,6 +145,9 @@ The export saves the scene as it stands at that moment, grown, its plants hidden
 The export takes each back as it takes a cached object (`adopt`), keeps it in the cache when there is one, bends it with the rest and writes the glTF as before; only its `[scene_export]` lines come through, and a worker that fails fails the export with its last lines.
 A worker computes its texture-only mosses for the rocks it bakes alone (`moss.prepare_texture_paints`).
 On three rocks the workers' maps matched the export's own to 1/255, 16.5 s against 31.6 s.
+At most `GPU_SLOTS` (4) of them bake at once (a lock file each, `gpu_slot`): each Cycles session holds the whole scene on the card, about 1.2 GB on the river, and eight at once took the 12 GB 4070 SUPER to 11.6 GB beside other programs; with four, 9.1 GB at the peak.
+The river's cold export went from 26 min 30 s of Blender to 6 min 55 s (2026-11-13): 172 s growing, 225 s for the workers to prepare and bake all 35 objects, 15 s loading their results, bending and writing; its maps matched the serial export's to a median of 0.001/255 rms, the most 0.5/255 where a rock's occlusion met its neighbours unprepared, but for Terrace.007, which shared its place with an exact copy ("Terrace.007 / new"), so its occlusion was whichever face a ray met first.
+A map taken back from a file (a worker's or the cache's) is named by its image, not its file (`bake_cache.load` clears the path once packed): the glTF exporter names a PNG by its file, whose slash is escaped.
 Baking one object at a time showed that a bake of one object, cleared (Blender's default), writes the flat normal at alpha 1 over every texel off its islands, so the background fill saw nothing to fill there, while a bake of several drops the clear; every bake now passes `use_clear=False`, which writes only the texels it bakes, whatever the count.
 
 ## Frames and units
