@@ -64,6 +64,8 @@ def _declare(L):
     L.rk_detail_bake.argtypes = [_i64, _i32p, _i32p, _f64, _f64, _u8p, _f64, _f64, _f64, _f64, _f64, _i32p, _i64,
                                  _i32p, _f64,
                                  _i64, _f64, _i64, _i32p, _i64, _i64p, _f64, _f64, _d, _d, _f32p, _i64p]
+    L.rk_fill_background.restype = _i64
+    L.rk_fill_background.argtypes = [_i64, _i64, _f32p]
     L.rk_pack_islands.restype = _d
     L.rk_pack_islands.argtypes = [_i64, _f64, _i32p, _i64, _i32p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32,
                                   _d, _d, ctypes.c_int32, _f64]
@@ -105,6 +107,15 @@ class BowField:
         out = np.empty(len(p))
         self._lib.rk_field_sizing(self._handle, len(p), p, out)
         return out
+
+
+def fill_background(px):
+    """scene_export.py `fill_background` on `px` (h x w x 4 float32, C
+    order), in place: every texel whose alpha is not over 0.5 filled by
+    pull-push, every alpha 1. Returns how many texels were baked."""
+    if px.dtype != np.float32 or not px.flags.c_contiguous or px.ndim != 3 or px.shape[2] != 4:
+        raise ValueError("fill_background wants an h x w x 4 C-contiguous float32 array")
+    return int(lib().rk_fill_background(px.shape[0], px.shape[1], px.reshape(-1)))
 
 
 def crease_rebuild(field, co, face_start, corner_verts, seed, params):

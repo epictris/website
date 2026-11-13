@@ -149,6 +149,27 @@ At most `GPU_SLOTS` (4) of them bake at once (a lock file each, `gpu_slot`): eac
 The river's cold export went from 26 min 30 s of Blender to 6 min 55 s (2026-11-13): 172 s growing, 225 s for the workers to prepare and bake all 35 objects, 15 s loading their results, bending and writing; its maps matched the serial export's to a median of 0.001/255 rms, the most 0.5/255 where a rock's occlusion met its neighbours unprepared, but for Terrace.007, which shared its place with an exact copy ("Terrace.007 / new"), so its occlusion was whichever face a ray met first.
 A map taken back from a file (a worker's or the cache's) is named by its image, not its file (`bake_cache.load` clears the path once packed): the glTF exporter names a PNG by its file, whose slash is escaped.
 Baking one object at a time showed that a bake of one object, cleared (Blender's default), writes the flat normal at alpha 1 over every texel off its islands, so the background fill saw nothing to fill there, while a bake of several drops the clear; every bake now passes `use_clear=False`, which writes only the texels it bakes, whatever the count.
+A worker runs with `--python-exit-code 1`: until 2026-11-13 one whose bake raised exited 0, and only the missing result said anything had gone wrong.
+
+### Split rocks
+
+A rock of `SPLIT_MAPS` (2) maps or more is shared among the workers map by map (since 2026-11-13; `SCENE_EXPORT_SPLIT_MAPS` overrides it, a large number splits nothing).
+Terrace.012's eight 4096 maps kept one worker busy for 108 s alone and 225 s among the others, the last to finish by 20 s.
+The worker that takes the rock prepares it (strips, creases, unwrap), writes it back as an entry with no maps and says `[scene_worker] split NAME COUNT`, then makes the geometry of its detail (`detail.detail_geometry`: the crumpled rock and the chip cutters, 22 s of Terrace.012) and saves it beside the entry (`detail.save_geometry`).
+Each map is then a task of its own at the front of the queue (`NAME<tab>MAP`): the worker that takes it loads the prepared rock as a cached one is loaded and bakes that map alone, every other map's images 1 x 1 stand-ins (`stand_in`, neither filled, packed nor handed back), so its rays meet the whole rock as one bake of every map would; it waits for the detail geometry only once its colour is baked, casts that map's detail rays (`detail.normal_maps` with the geometry given) and bakes its normals.
+`run_workers` moves each map's images into the rock's entry, which then holds them all as an unsplit rock's does; a worker with nothing to take waits while a rock it might be handed is still being prepared, and the first worker to fail stops the others.
+A worker keeps one Blender for all its tasks, so the materials each object had in the saved scene are taken before its first task there (`PRISTINE`, the originals, not the depsgraph's evaluated copies, which go at its next evaluation): a later map of a rock it already worked on starts from them, as its own copies are wired to their baked maps by then.
+On Terrace.012 one bake call for all eight colour maps took 35.5 s and eight calls of one map each 41.5 s in all, 5.2 s apiece; each map differed from the one-call bake by one 8-bit level at most.
+A bake session holds about 2 GB of the card whatever it bakes (2.25 GB at the peak for one map or eight), so splitting does not let more bakes share it.
+
+The background fill (`fill_background`, pull-push) is the native kernel's (`native/src/fill.cpp`, since 2026-11-13): the same float operations in the same order as the numpy it replaced, bit for bit on maps from 1 x 5 to 4096 x 4096, on every thread; 0.26 s a 4096 map against 0.66 s.
+
+## The growth workers
+
+The ivy and the moss the export grows (every ivy, and each moss whose `built_key` is stale) are grown side by side in factory-startup worker Blenders (`tools/blender/growth_pool.py`, since 2026-11-13; up to half the cores, `SCENE_EXPORT_GROWERS`, where 1 grows them in the export's own Blender).
+A growth needs nothing of the scene but its hosts' world triangles, its paint and its settings, so the export takes those (`ivy.ops.build_job`, `moss.ops._Inputs.job`) before writing any back, a worker unions the hosts and builds (`grow_job`), and the export writes each result into its object exactly as a rebuild in place would (`ivy.ops.apply`, `moss.ops.apply_grown`), logging them in the order it always did.
+Growths on the same hosts go to one worker one after another, so their union is made once (Terrace.002's two ivies on Terrace.002 + Cube.002 each made it in 31 s); one with no paint and no vine makes no union at all (Cube.004's ivy and moss each spent 45 s on the union of its 31 shells to grow nothing).
+On the river every grown mesh and print came out byte for byte as the serial growth's, in 85 s against 222 s, both while other work shared the machine; the longest growth is now the floor (Terrace.moss, 60 s alone).
 
 ## Frames and units
 

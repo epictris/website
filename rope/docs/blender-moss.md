@@ -90,7 +90,8 @@ The whole account, a headless repro and the numbers: [plans/moss-clear-blowup.md
 
 ### The export keeps what is current
 
-Every build stores `built_key` on its moss: a hash of the growth's inputs (the rock's evaluated world triangles, the stamps, every setting), the Quality settings, `build.py`, `mesh_io.py`, `stampbrush/geometry.py` and the Blender version. `scene_export.py` calls `prepare_export`, which keeps a mound whose key matches what its inputs make now and rebuilds only the rest; until 2026-10-05 it rebuilt every moss, 162 s of the river's 380 s export.
+Every build stores `built_key` on its moss: a hash of the growth's inputs (each of its rocks' evaluated world triangles, the stamps, every setting), the Quality settings, `build.py`, `mesh_io.py`, `stampbrush/geometry.py` and the Blender version. `scene_export.py` asks `export_plan`, which keeps a mound whose key matches what its inputs make now, and grows only the rest, side by side in its growth workers (blender-scenes.md, "The growth workers"); until 2026-10-05 it rebuilt every moss, 162 s of the river's 380 s export.
+Since 2026-11-13 the key holds the rocks' triangles before their union (`hosts.parts_key`), which the union is a function of, so whether a moss on several rocks is current is known without making the union; a moss built before then is rebuilt once.
 A texture-only moss grows nothing at that point: its key is part of its rock's bake-cache key, so a cached map already holds it, and its dabs are grown only when the rock is baked. A moss painted in a file from before `built_key` (or with code changed since) is rebuilt by the export until it is rebuilt in Blender and the file saved.
 A file load clears the cache, and the scene exporter, a fresh process, always grows.
 

@@ -663,20 +663,22 @@ def write_entry(path, images, mesh, label, data=None, own=None):
     slot; clearing them would not: the export copies them afresh from the
     file's, as for a bake), and meta.json with the export's `data`. The bake
     cache's entries, and what a worker hands the export back
-    (scene_export.py `run_workers`)."""
+    (scene_export.py `run_workers`); a worker baking one map of a split rock
+    hands back only its images (`mesh` None)."""
     tmp = path + ".partial"
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp)
     for im in images:
         with open(os.path.join(tmp, map_file(im.name)), "wb") as f:
             f.write(im.packed_file.data)
-    bare = mesh.copy()
-    try:
-        for i in range(len(bare.materials)):
-            bare.materials[i] = None
-        bpy.data.libraries.write(os.path.join(tmp, MESH_FILE), {bare}, compress=True)
-    finally:
-        bpy.data.meshes.remove(bare)
+    if mesh is not None:
+        bare = mesh.copy()
+        try:
+            for i in range(len(bare.materials)):
+                bare.materials[i] = None
+            bpy.data.libraries.write(os.path.join(tmp, MESH_FILE), {bare}, compress=True)
+        finally:
+            bpy.data.meshes.remove(bare)
     with open(os.path.join(tmp, "meta.json"), "w") as f:
         json.dump({"object": label, "own": own, "images": [im.name for im in images], "data": data}, f)
     shutil.rmtree(path, ignore_errors=True)

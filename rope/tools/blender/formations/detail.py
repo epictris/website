@@ -19,7 +19,9 @@ Everything here is the 2026-10-03 rock detail study's approved subset
 branches (chains, bends, cracks, edge wear). The build is deterministic in
 the seed: the same low poly and seed give the same high poly.
 """
+import json
 import math
+import os
 import random
 import time
 
@@ -728,7 +730,6 @@ def build(mesh, seed, coll, name="detail", smallest=0.0):
     # need creases, so weld the bake source (the shipped mesh is untouched).
     bmesh.ops.remove_doubles(low, verts=low.verts, dist=1e-5)
     low.normal_update()
-    rng = random.Random(seed)
     cut, placed, rejected, _ = build_cutters(low, random.Random(seed), smallest)
     crumpled, stats = crumple(low, random.Random(seed + 3000), smallest)
     high = subtract(crumpled, cut, coll, name)
@@ -744,7 +745,7 @@ def build(mesh, seed, coll, name="detail", smallest=0.0):
     return high, report
 
 
-def normal_maps(target, straight, matrix, seed, uv_name, sides, map_of_slot, smallest=0.0):
+def normal_maps(target, straight, matrix, seed, uv_name, sides, map_of_slot, smallest=0.0, geometry=None):
     """The detail normal maps of the rock `target` (the Mesh the export bakes
     onto: its unwrap `uv_name` over len(`sides`) square maps, a face's map
     `map_of_slot(material_index)`) without building the high poly: the same
@@ -759,35 +760,18 @@ def normal_maps(target, straight, matrix, seed, uv_name, sides, map_of_slot, sma
     and where the boolean left a degenerate cutter out; 0.23 s against 6.1 s,
     and no boolean (427 s of a cold river export). Returns (one RGBA float
     array a map, side x side x 4, rows from the bottom; the texels a ray
-    found the high poly at; a one-line report)."""
+    found the high poly at; a one-line report).
+
+    `geometry`, when given, is `detail_geometry`'s for the same `straight`,
+    `matrix`, `seed` and `smallest`, made elsewhere (a bake worker of the
+    scene export makes it once for all of a rock's maps)."""
     import native
     t0 = time.time()
-    low = bmesh.new()
-    low.from_mesh(straight)
-    bmesh.ops.remove_doubles(low, verts=low.verts, dist=1e-5)
-    low.normal_update()
-    _, placed, rejected, shapes = build_cutters(low, random.Random(seed), smallest)
-    crumpled, stats = crumple(low, random.Random(seed + 3000), smallest)
-    low.free()
+    if geometry is None:
+        geometry = detail_geometry(straight, matrix, seed, smallest)
+    hco, htri, cutters = geometry["hco"], geometry["htri"], geometry["cutters"]
+    stats, placed, rejected = geometry["stats"], geometry["placed"], geometry["rejected"]
     m = np.array(matrix, dtype=np.float64)
-    a, t = m[:3, :3], m[:3, 3]
-    # The crumpled rock in the world, wound as its normals face.
-    tris = np.array([[l.vert.co[:] for l in tri] for tri in crumpled.calc_loop_triangles()], dtype=np.float64)
-    crumpled.free()
-    hco = tris.reshape(-1, 3) @ a.T + t
-    htri = np.arange(len(hco), dtype=np.int32).reshape(-1, 3)
-    if np.linalg.det(a) < 0:
-        htri = np.ascontiguousarray(htri[:, ::-1])
-    # Each cutter's half-spaces n.x <= c to the world: (A^-T n).y <= c + (A^-T n).t.
-    inv_t = np.linalg.inv(a).T
-    cutters = []
-    for half_spaces, corners in shapes:
-        hs = np.array(half_spaces, dtype=np.float64)
-        nw = hs[:, :3] @ inv_t.T
-        cw = hs[:, 3] + nw @ t
-        length = np.linalg.norm(nw, axis=1)
-        pts = np.array(corners, dtype=np.float64) @ a.T + t
-        cutters.append((np.column_stack([nw / length[:, None], cw / length]), (pts.min(axis=0), pts.max(axis=0))))
     # The low poly as Blender's bake reads it.
     me = target
     me.calc_loop_triangles()
@@ -817,5 +801,65 @@ def normal_maps(target, straight, matrix, seed, uv_name, sides, map_of_slot, sma
     flat = 100 * stats["skipped_area"] / max(stats["area"], 1e-9)
     report = (f"{stats['rebuilt']} of {stats['planes']} planes into {stats['points']} sub-facet points "
               f"({flat:.0f}% of the surface left flat), {placed} chips ({rejected} rejected), "
-              f"{texels} texels met, {time.time() - t0:.1f}s")
+              f"{texels} texels met, {geometry['seconds'] + time.time() - t0:.1f}s")
     return maps, texels, report
+
+
+def detail_geometry(straight, matrix, seed, smallest=0.0):
+    """What `normal_maps` casts its rays at, made from the rock's `straight`
+    mesh: the crumpled rock in the world (`hco`, `htri`) and the chip
+    cutters' half-spaces (`cutters`), with what the report says of them.
+    Plain arrays and numbers, so it can be saved (`save_geometry`) and the
+    rays cast in another process."""
+    t0 = time.time()
+    low = bmesh.new()
+    low.from_mesh(straight)
+    bmesh.ops.remove_doubles(low, verts=low.verts, dist=1e-5)
+    low.normal_update()
+    _, placed, rejected, shapes = build_cutters(low, random.Random(seed), smallest)
+    crumpled, stats = crumple(low, random.Random(seed + 3000), smallest)
+    low.free()
+    m = np.array(matrix, dtype=np.float64)
+    a, t = m[:3, :3], m[:3, 3]
+    # The crumpled rock in the world, wound as its normals face.
+    tris = np.array([[l.vert.co[:] for l in tri] for tri in crumpled.calc_loop_triangles()], dtype=np.float64)
+    crumpled.free()
+    hco = tris.reshape(-1, 3) @ a.T + t
+    htri = np.arange(len(hco), dtype=np.int32).reshape(-1, 3)
+    if np.linalg.det(a) < 0:
+        htri = np.ascontiguousarray(htri[:, ::-1])
+    # Each cutter's half-spaces n.x <= c to the world: (A^-T n).y <= c + (A^-T n).t.
+    inv_t = np.linalg.inv(a).T
+    cutters = []
+    for half_spaces, corners in shapes:
+        hs = np.array(half_spaces, dtype=np.float64)
+        nw = hs[:, :3] @ inv_t.T
+        cw = hs[:, 3] + nw @ t
+        length = np.linalg.norm(nw, axis=1)
+        pts = np.array(corners, dtype=np.float64) @ a.T + t
+        cutters.append((np.column_stack([nw / length[:, None], cw / length]), (pts.min(axis=0), pts.max(axis=0))))
+    return {"hco": hco, "htri": htri, "cutters": cutters, "stats": stats, "placed": placed, "rejected": rejected,
+            "seconds": time.time() - t0}
+
+
+def save_geometry(path, geometry):
+    """`detail_geometry`'s result to `path` (an .npz), whole or not at all."""
+    cutters = geometry["cutters"]
+    arrays = {"hco": geometry["hco"], "htri": geometry["htri"],
+              "cut_count": np.array([len(hs) for hs, _box in cutters], dtype=np.int64),
+              "cut_planes": (np.concatenate([hs for hs, _box in cutters]) if cutters else np.zeros((0, 4))),
+              "cut_boxes": np.array([np.concatenate(box) for _hs, box in cutters], dtype=np.float64).reshape(-1, 6)}
+    meta = {k: geometry[k] for k in ("stats", "placed", "rejected", "seconds")}
+    tmp = path + ".partial.npz"
+    np.savez(tmp, meta=np.array(json.dumps(meta)), **arrays)
+    os.replace(tmp, path)
+
+
+def load_geometry(path):
+    """`save_geometry`'s file as `detail_geometry` returned it."""
+    with np.load(path) as f:
+        meta = json.loads(str(f["meta"]))
+        counts, planes, boxes = f["cut_count"], f["cut_planes"], f["cut_boxes"]
+        starts = np.concatenate([[0], np.cumsum(counts)])
+        cutters = [(planes[starts[i]:starts[i + 1]], (boxes[i, :3], boxes[i, 3:])) for i in range(len(counts))]
+        return {"hco": f["hco"], "htri": f["htri"], "cutters": cutters, **meta}

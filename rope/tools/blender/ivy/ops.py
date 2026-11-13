@@ -12,7 +12,7 @@ from mathutils import Euler, Matrix, Vector
 from . import build, mesh_io, migrate
 from .stampbrush import stamps as stamp_io
 from .stampbrush.brush import GROWN_PROP
-from .stampbrush.hosts import surface
+from .stampbrush.hosts import host_parts, surface_of
 
 COLLECTION = "Ivy"
 # On an Empty parented to its ivy: the ivy's name when it was placed (until
@@ -283,6 +283,17 @@ def read_origin(ivy, frame):
 def rebuild(ob, depsgraph=None):
     """Grow the ivy object's mesh again from its stamps and settings. Returns
     the build result, or None when its frame host is missing."""
+    t0 = time.perf_counter()
+    job = build_job(ob, depsgraph)
+    if job is None:
+        return None
+    return apply(ob, grow_job(job), (time.perf_counter() - t0) * 1000.0)
+
+
+def build_job(ob, depsgraph=None):
+    """What `grow_job` grows the ivy from, picklable: a growth worker of the
+    scene export (growth_pool.py) builds it in another Blender. None when its
+    frame host is missing (`status` says so)."""
     s = ob.ivy
     hosts = resolve_hosts(ob)
     if hosts is None:
@@ -296,18 +307,32 @@ def rebuild(ob, depsgraph=None):
         s.migrate()
     finally:
         s.live = live
-    t0 = time.perf_counter()
     depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
-    co, tri = surface(hosts, depsgraph)
-    stamps = mesh_io.read_stamps(s.stamps)
-    result = build.build(co, tri, host.matrix_world, stamps, read_vines(ob, host), read_origin(ob, host), s.params())
+    return {"parts": host_parts(hosts, depsgraph), "matrix": [list(r) for r in host.matrix_world],
+            "stamps": mesh_io.read_stamps(s.stamps), "vines": read_vines(ob, host),
+            "origin": read_origin(ob, host), "p": s.params()}
+
+
+def grow_job(job):
+    """The ivy's build from `build_job`, touching no scene."""
+    if not build.grows(job["stamps"], job["vines"]):
+        # Nothing painted: no surface to make (a union of many shells took 45 s).
+        return build._empty_result()
+    co, tri = surface_of(job["parts"])
+    return build.build(co, tri, Matrix(job["matrix"]), job["stamps"], job["vines"], job["origin"], job["p"])
+
+
+def apply(ob, result, build_ms):
+    """A build's `result` into the ivy object and its shadow decal, and what
+    the panel shows of it. Returns the result."""
+    s = ob.ivy
     mesh_io.write_result(ob.data, result)
     ob.visible_shadow = True  # an ivy made before 2026-09-30 was created not casting
     write_shadow(ob, bpy.context.scene, result.shadow)
     s.triangles = len(result.triangles)
     s.leaves = result.leaves
     s.vine_count = result.vines
-    s.build_ms = (time.perf_counter() - t0) * 1000.0
+    s.build_ms = build_ms
     missing = missing_hosts(ob)
     s.status = f"grown without {', '.join(missing)}: not found" if missing else ""
     return result

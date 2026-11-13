@@ -48,21 +48,39 @@ def world_triangles(host, depsgraph):
 def surface(hosts, depsgraph):
     """(co, tri): what a growth over `hosts` grows on, in world space, welded:
     one host's own triangles, or the union of several."""
+    return surface_of(host_parts(hosts, depsgraph))
+
+
+def host_parts(hosts, depsgraph):
+    """[(co, tri)]: each host's world triangles (`world_triangles`), those
+    with none left out: all `surface_of` needs, so a growth can be grown away
+    from the scene (the scene export's growth workers, growth_pool.py)."""
     parts = [world_triangles(h, depsgraph) for h in hosts]
-    parts = [(co, tri) for co, tri in parts if len(tri)]
-    if not parts:
-        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
-    if len(parts) == 1:
-        parts = shells(*parts[0])
-        if len(parts) == 1:
-            return parts[0]
+    return [(co, tri) for co, tri in parts if len(tri)]
+
+
+def parts_key(parts):
+    """A digest of `parts` and the Blender that would join them: what
+    `surface_of` makes of them is a function of exactly this."""
     h = hashlib.sha1(bpy.app.version_string.encode())
     for co, tri in parts:
         for a in (co, tri):
             a = np.ascontiguousarray(a)
             h.update(str((a.dtype, a.shape)).encode())
             h.update(a.tobytes())
-    key = h.hexdigest()
+    return h.hexdigest()
+
+
+def surface_of(parts):
+    """`surface` from `host_parts`: one host of one shell as it is, else the
+    exact union of the hosts' shells."""
+    if not parts:
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
+    if len(parts) == 1:
+        parts = shells(*parts[0])
+        if len(parts) == 1:
+            return parts[0]
+    key = parts_key(parts)
     hit = _unions.pop(key, None)
     if hit is None:
         hit = _union(parts)

@@ -42,25 +42,59 @@ def collapsible(edge):
     return shared == {v for f in edge.link_faces for v in f.verts if v not in edge.verts}
 
 
+def drop_fins(bm):
+    """Delete every fin: a face all of whose edges but one are its alone, the
+    one left shared by more than two faces. The triangulate that finishes a
+    rock makes them where a bevelled n-gon pinches to a sliver (Cube.005,
+    2026-11-13: two triangles of 2e-9 and 2.5e-7 m2, each hanging off an edge
+    of three faces); one gone, its edge has two faces again and its own lone
+    edges and corners go with it, so the surface is closed. Returns how many
+    were deleted."""
+    dropped = 0
+    while True:
+        fins = [f for f in bm.faces
+                if sum(len(e.link_faces) == 1 for e in f.edges) == len(f.edges) - 1
+                and any(len(e.link_faces) > 2 for e in f.edges)]
+        if not fins:
+            return dropped
+        bmesh.ops.delete(bm, geom=fins, context="FACES")
+        dropped += len(fins)
+
+
 def remove_degenerate(bm, dist):
     """Collapse every edge shorter than `dist` that can be collapsed, shortest
     first, then flip the longest edge of any triangle left with no area (a
     needle: its third corner lies on that edge). The faces around them are
-    made triangles first (the fitted and solid rocks keep n-gons)."""
+    made triangles first (the fitted and solid rocks keep n-gons). Fins
+    (`drop_fins`) go first."""
+    drop_fins(bm)
     around = {f for e in bm.edges if e.calc_length() < dist for f in e.link_faces}
     around |= {f for f in bm.faces if f.calc_area() <= 1e-12}
     around = [f for f in around if len(f.verts) > 3]
     if around:
         bmesh.ops.triangulate(bm, faces=around)
-    for _ in range(20):
+    # Collapsed in batches: a bmesh operator costs as much as the whole mesh
+    # (210 one-edge collapses on Cube.005's 290k faces took 27 s), so every
+    # edge whose ends' neighbours no earlier edge of the pass touches goes in
+    # one call. Whether an edge can collapse, and what its collapse does,
+    # depends only on its ends and their neighbours, so a batch is the same
+    # as collapsing its edges one by one; an edge that must wait for an
+    # earlier one holds back the edges near it too, so none is collapsed out
+    # of the shortest-first order. An edge that cannot collapse changes
+    # nothing and holds nothing back.
+    for _ in range(100):
         short = sorted((e for e in bm.edges if e.calc_length() < dist), key=lambda e: e.calc_length())
-        done = 0
+        batch, touched = [], set()
         for edge in short:
-            if edge.is_valid and edge.calc_length() < dist and collapsible(edge):
-                bmesh.ops.collapse(bm, edges=[edge], uvs=False)
-                done += 1
-        if not done:
+            ring = {w for v in edge.verts for e in v.link_edges for w in e.verts}
+            if ring & touched:
+                touched |= ring
+            elif collapsible(edge):
+                batch.append(edge)
+                touched |= ring
+        if not batch:
             break
+        bmesh.ops.collapse(bm, edges=batch, uvs=False)
     for _ in range(20):
         needles = [f for f in bm.faces if len(f.verts) == 3 and f.calc_area() <= 1e-12]
         if not needles:

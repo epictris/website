@@ -225,6 +225,21 @@ GPU_SLOTS = int(os.environ.get("SCENE_EXPORT_GPU_SLOTS", "0")) or 4
 # Set in a worker: the directory its results go to, and the lock files of the
 # GPU slots it takes a bake's turn by.
 WORKER_OUT = None
+# A rock with this many maps or more is split among the workers: the one
+# that prepares it hands it back prepared (its mesh, then its detail's
+# geometry) and each map is baked by whichever worker is free, in a Cycles
+# bake of its own (`run_workers`). Terrace.012's eight 4096 maps kept one
+# worker busy for 108 s alone, 225 s among the others (2026-11-13). Each
+# map's bake sees the whole rock, its other maps' images 1 x 1 stand-ins, so
+# its rays meet what one bake of every map would; against that bake the
+# colour maps differed by one 8-bit level at most. SCENE_EXPORT_SPLIT_MAPS
+# overrides it (a large number splits nothing).
+SPLIT_MAPS = int(os.environ.get("SCENE_EXPORT_SPLIT_MAPS", "0")) or 2
+# Set in a worker baking one map of a split rock: which.
+WORKER_MAP = None
+# In a worker: each object's materials as the saved scene gave them, taken
+# before its first task here replaced them with the export's copies.
+PRISTINE = {}
 
 
 class gpu_slot:
@@ -745,34 +760,16 @@ def fill_background(im):
     line along every seam. Pull-push: average the baked texels down a pyramid
     to one, then walk back up filling each unbaked texel from the level above.
     The bake leaves an unbaked texel's alpha at 0, which is the mask.
-    Returns how many texels that mask held."""
+    Returns how many texels that mask held. The pyramid is the native
+    kernel's (native/src/fill.cpp: the numpy it replaced to the bit, on every
+    thread); each texel reads its parent, an odd last row or column the one
+    before it, as the edge would be padded."""
+    import native
     w, h = im.size
     px = np.empty(w * h * 4, dtype=np.float32)
     im.pixels.foreach_get(px)
-    px = px.reshape(h, w, 4)
-    known = px[..., 3] > 0.5
-    count = int(known.sum())
-    levels = [(px[..., :3] * known[..., None], known.astype(np.float32))]
-    def down(a):
-        # Each 2 x 2 block summed as four slices: a strided reshape-and-sum
-        # was most of the fill's time, 18 s over the river's 4k maps.
-        hh, ww = a.shape[0] // 2 * 2, a.shape[1] // 2 * 2
-        return a[0:hh:2, 0:ww:2] + a[1:hh:2, 0:ww:2] + a[0:hh:2, 1:ww:2] + a[1:hh:2, 1:ww:2]
-
-    while levels[-1][1].shape[0] > 1 and levels[-1][1].shape[1] > 1:
-        c, k = levels[-1]
-        levels.append((down(c), down(k)))
-    color = levels[-1][0] / np.maximum(levels[-1][1], 1e-6)[..., None]
-    for c, k in reversed(levels[:-1]):
-        # Each texel reads its parent; an odd last row or column the one
-        # before it, as the edge would be padded.
-        rows = np.minimum(np.arange(k.shape[0]) // 2, color.shape[0] - 1)
-        cols = np.minimum(np.arange(k.shape[1]) // 2, color.shape[1] - 1)
-        up = color[rows[:, None], cols[None, :]]
-        color = np.where(k[..., None] > 0, c / np.maximum(k, 1e-6)[..., None], up)
-    px[..., :3] = color
-    px[..., 3] = 1.0
-    im.pixels.foreach_set(px.ravel())
+    count = native.fill_background(px.reshape(h, w, 4))
+    im.pixels.foreach_set(px)
     return count
 
 
@@ -795,7 +792,7 @@ def is_slate(mat):
     return mat is not None and (mat.name == slate.NAME or mat.name.startswith(slate.NAME + "."))
 
 
-def bake_detail_normals(targets, images, straight):
+def bake_detail_normals(targets, images, straight, geometry=None):
     """Each painted slate rock's chips and sub-facets (formations/detail.py)
     as its detail normal images, and the image nodes reading them, keyed by
     material. The detail is made from the rock's `straight` mesh (split for
@@ -807,7 +804,9 @@ def bake_detail_normals(targets, images, straight):
     export (2026-11-13). `images` holds each rock's images, one a map. They
     are a step toward the normal bake, which reads them from memory, so they
     are neither filled (every texel is written, the flat normal where no ray
-    met the detail, as Blender's bake writes it) nor packed."""
+    met the detail, as Blender's bake writes it) nor packed. `geometry`
+    holds a rock's detail geometry made elsewhere (detail.detail_geometry;
+    a split rock's, `run_workers`)."""
     from formations import detail
     nodes = image_nodes(targets, images)
     for ob in targets:
@@ -815,7 +814,8 @@ def bake_detail_normals(targets, images, straight):
         per = len(ob.data.materials) // count
         maps, texels, report = detail.normal_maps(
             ob.data, straight.get(ob, ob.data), ob.matrix_world, seed_for(ob), BAKE_UV,
-            [im.size[0] for im in images[ob]], lambda slot: slot // per, smallest_detail(ob, "export_chips"))
+            [im.size[0] for im in images[ob]], lambda slot: slot // per, smallest_detail(ob, "export_chips"),
+            (geometry or {}).get(ob))
         if not texels:
             raise SystemExit(f"{ob.name}: no ray of the detail normal bake met its detail; nothing is cached or "
                              "shipped")
@@ -934,11 +934,13 @@ def bake_pass(targets, images, bake_type, before_fill=None, **bake_args):
     if before_fill is not None:
         for ob in targets:
             for i, im in enumerate(images[ob]):
-                before_fill(ob, i, im)
+                if not im.get("stand_in"):
+                    before_fill(ob, i, im)
     for ob in targets:
         for im in images[ob]:
-            fill_baked(ob, im, bake_type)
-            im.pack()
+            if not im.get("stand_in"):
+                fill_baked(ob, im, bake_type)
+                im.pack()
     return nodes
 
 
@@ -1010,8 +1012,17 @@ def run_workers(todo):
     (`worker_main`) and write its prepared mesh and maps as the bake cache
     keeps an entry (bake_cache.write_entry). Their log lines come through as
     this export's. Returns ({object: its entry's path}, the warnings they
-    gave); a worker that fails fails the export, with its last lines."""
-    import queue
+    gave); a worker that fails fails the export, with its last lines, and
+    the others are stopped.
+
+    A rock of SPLIT_MAPS maps or more comes back from the worker that
+    prepares it as `[scene_worker] split NAME COUNT`: its maps join the
+    front of the queue, one task each (`NAME<tab>MAP`), and each writes its
+    maps to an entry of its own, gathered here into the rock's. A worker
+    with nothing to take waits while a rock it might be handed is still
+    being prepared."""
+    import glob
+    import heapq
     import subprocess
     import tempfile
     import threading
@@ -1020,35 +1031,82 @@ def run_workers(todo):
     snapshot = os.path.join(work, "scene.blend")
     bpy.ops.wm.save_as_mainfile(filepath=snapshot, copy=True, compress=False)
     log(f"workers: the scene saved for them in {time.time() - t0:.1f}s")
-    names = queue.Queue()
-    for ob in sorted(todo, key=lambda ob: -work_estimate(ob)):
-        names.put(ob.name)
     count = min(WORKERS, len(todo))
     env = dict(os.environ, OMP_NUM_THREADS=str(max(1, (os.cpu_count() or count) // count)))
-    cmd = [bpy.app.binary_path, "-b", snapshot, "--python", os.path.abspath(__file__), "--", "--worker", work]
+    # Exit status 1 on a Python error: without, a worker whose bake raised
+    # exited 0, and only a missing result said anything had gone wrong.
+    cmd = [bpy.app.binary_path, "-b", snapshot, "--python-exit-code", "1", "--python", os.path.abspath(__file__),
+           "--", "--worker", work]
     if ALL_SEEN:
         cmd.append("--all-seen")
-    failures, lock = [], threading.Lock()
+    lock = threading.Condition()
+    # The queue: (priority, order, task); a map comes before any rock still
+    # to prepare, the largest rock first. `preparing` counts the rocks taken
+    # and not yet done, any of which may still split.
+    queue = [(-work_estimate(ob), i, ob.name) for i, ob in enumerate(todo)]
+    heapq.heapify(queue)
+    state = {"preparing": 0, "order": len(queue), "failed": False}
+    split = {}  # rock name -> its map count
+    failures, procs = [], []
+
+    def take():
+        with lock:
+            while True:
+                if state["failed"]:
+                    return None
+                if queue:
+                    task = heapq.heappop(queue)[2]
+                    if "\t" not in task:
+                        state["preparing"] += 1
+                    return task
+                if not state["preparing"]:
+                    return None
+                lock.wait()
 
     def drive(i):
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1, env=env)
+        with lock:
+            procs.append(proc)
         tail = []
         for line in proc.stdout:
             line = line.rstrip("\n")
             tail = (tail + [line])[-40:]
             if line == "[scene_worker] ready":
+                task = take()
                 try:
-                    proc.stdin.write(names.get_nowait() + "\n")
-                    proc.stdin.flush()
-                except queue.Empty:
-                    proc.stdin.close()
+                    if task is None:
+                        proc.stdin.close()
+                    else:
+                        proc.stdin.write(task + "\n")
+                        proc.stdin.flush()
+                except (BrokenPipeError, ValueError):
+                    pass
+            elif line.startswith("[scene_worker] split "):
+                name, maps = line[len("[scene_worker] split "):].rsplit(" ", 1)
+                with lock:
+                    split[name] = int(maps)
+                    for k in range(int(maps)):
+                        heapq.heappush(queue, (float("-inf"), state["order"], f"{name}\t{k}"))
+                        state["order"] += 1
+                    lock.notify_all()
+            elif line.startswith("[scene_worker] done "):
+                if "\t" not in line:
+                    with lock:
+                        state["preparing"] -= 1
+                        lock.notify_all()
             elif line.startswith("[scene_export] ") and not line.startswith("[scene_export] ships "):
                 with lock:
                     print(line, flush=True)
         if proc.wait() != 0:
             with lock:
-                failures.append(f"worker {i} (exit {proc.returncode}):\n" + "\n".join(tail))
+                if not state["failed"]:
+                    failures.append(f"worker {i} (exit {proc.returncode}):\n" + "\n".join(tail))
+                    state["failed"] = True
+                    for other in procs:
+                        if other is not proc and other.poll() is None:
+                            other.terminate()
+                lock.notify_all()
 
     threads = [threading.Thread(target=drive, args=(i,)) for i in range(count)]
     for t in threads:
@@ -1057,21 +1115,33 @@ def run_workers(todo):
         t.join()
     if failures:
         raise SystemExit("a bake worker failed; nothing shipped:\n" + "\n".join(failures))
+    # A split rock's maps into its entry, which then holds them all as an
+    # unsplit rock's does.
+    for name, maps in split.items():
+        entry = os.path.join(work, entry_name(name))
+        for k in range(maps):
+            part = f"{entry}.map{k}"
+            for f in os.listdir(part):
+                if f.endswith(".png"):
+                    os.replace(os.path.join(part, f), os.path.join(entry, f))
+            shutil.rmtree(part)
+        if os.path.exists(f"{entry}.detail.npz"):
+            os.remove(f"{entry}.detail.npz")
     warnings = []
-    for ob in todo:
-        path = os.path.join(work, entry_name(ob.name)) + ".warnings.json"
-        if os.path.isfile(path):
-            with open(path) as f:
-                warnings.extend(json.load(f))
-    log(f"workers: {len(todo)} objects prepared and baked in {count} workers in {time.time() - t0:.1f}s")
+    for path in sorted(glob.glob(os.path.join(glob.escape(work), "*.warnings.json"))):
+        with open(path) as f:
+            warnings.extend(w for w in json.load(f) if w not in warnings)
+    log(f"workers: {len(todo)} objects prepared and baked in {count} workers"
+        f"{f' ({len(split)} split, {sum(split.values())} maps)' if split else ''} in {time.time() - t0:.1f}s")
     return {ob: os.path.join(work, entry_name(ob.name)) for ob in todo}, warnings
 
 
 def worker_main(argv):
     """A bake worker (`run_workers`): in the scene the export saved, prepare
     and bake each object named on stdin, one at a time, writing its result
-    under the directory after `--worker`, until stdin closes."""
-    global WORKER_OUT, ALL_SEEN
+    under the directory after `--worker`, until stdin closes. A line
+    `NAME<tab>MAP` is one map of a split rock (SPLIT_MAPS)."""
+    global WORKER_OUT, ALL_SEEN, WORKER_MAP
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     WORKER_OUT = argv[argv.index("--worker") + 1]
     ALL_SEEN = "--all-seen" in argv
@@ -1080,19 +1150,29 @@ def worker_main(argv):
     scene = bpy.context.scene
     while True:
         print("[scene_worker] ready", flush=True)
-        name = sys.stdin.readline().strip()
-        if not name:
+        task = sys.stdin.readline().rstrip("\n")
+        if not task:
             return
+        name, _, k = task.partition("\t")
+        WORKER_MAP = int(k) if k else None
         ob = bpy.data.objects[name]
+        if name not in PRISTINE:
+            # What the file gives it, before a task here makes it its own
+            # (a split rock's maps may come to the worker that prepared it).
+            # The originals: an evaluated object's are the depsgraph's
+            # copies, gone at its next evaluation.
+            PRISTINE[name] = [s.material.original if s.material is not None else None
+                              for s in ob.evaluated_get(bpy.context.evaluated_depsgraph_get()).material_slots]
         moss.prepare_texture_paints(scene, {name})
         warnings = []
         # This rock's mosses only: one prepared for a rock baked before is not
         # this bake's, and would be warned of as on a rock not exported.
         paints = [entry for entry in moss.texture_paints(scene) if entry[1] == ob]
         bake_procedural_textures([ob], None, paints, warnings)
-        with open(os.path.join(WORKER_OUT, entry_name(name)) + ".warnings.json", "w") as f:
+        suffix = f".map{WORKER_MAP}" if WORKER_MAP is not None else ""
+        with open(os.path.join(WORKER_OUT, entry_name(name)) + suffix + ".warnings.json", "w") as f:
             json.dump(warnings, f)
-        print(f"[scene_worker] done {name}", flush=True)
+        print(f"[scene_worker] done {task}", flush=True)
 
 
 def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, stale_occlusion=False):
@@ -1130,8 +1210,11 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             by_host.setdefault(host, []).append(entry)
         elif warnings is not None:
             warnings.append(f"{mo.name}: its rock {host.name} is not exported; the moss painted on it is not either")
+    # A worker asks of a rock it has worked on before what the file gave it
+    # (`PRISTINE`): its own copies are wired to their baked maps by then.
     targets = [ob for ob in kept if ob.type == "MESH"
-               and (ob in by_host or any(procedural_base_colors(m) or procedural_normals(m) for m in ob.data.materials))]
+               and (ob in by_host or any(m is not None and (procedural_base_colors(m) or procedural_normals(m))
+                                         for m in PRISTINE.get(ob.name, ob.data.materials)))]
     if not targets:
         step("bake", "nothing procedural")
         return 0
@@ -1145,7 +1228,8 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     scene.cycles.samples = BAKE_SAMPLES
     # Each object's own copies of its materials, so its point at its own
     # images; a far-back rock's slate repainted to its depth.
-    materials = {ob: export_materials(ob, [s.material for s in ob.evaluated_get(depsgraph).material_slots])
+    materials = {ob: export_materials(ob, PRISTINE.get(ob.name)
+                                      or [s.material for s in ob.evaluated_get(depsgraph).material_slots])
                  for ob in targets}
     for ob in targets:
         if any(m is None for m in materials[ob]) or not materials[ob]:
@@ -1219,8 +1303,23 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
                 cache.adopt(keys[ob], entries[ob])
         shutil.rmtree(os.path.dirname(next(iter(entries.values()))), ignore_errors=True)
 
+    prepared = set()
+    if WORKER_MAP is not None:
+        # One map of a split rock: the rock as the worker that prepared it
+        # handed it back (below), loaded as a cached rock is, then baked
+        # with every other map's images 1 x 1 stand-ins (`images`).
+        for ob in targets:
+            entry = os.path.join(WORKER_OUT, entry_name(ob.name))
+            with open(os.path.join(entry, "meta.json")) as f:
+                sizes[ob] = json.load(f)["data"]["maps"]
+            materials[ob] = split_materials(materials[ob], len(sizes[ob]))
+            ob.modifiers.clear()
+            ob.data = bake_cache.load_mesh(os.path.join(entry, bake_cache.MESH_FILE), materials[ob])
+            ob.data.name = export_mesh_name(ob)
+            prepared.add(ob)
+
     for ob in targets:
-        if ob in loaded:
+        if ob in loaded or ob in prepared:
             continue
         mesh = bpy.data.meshes.new_from_object(ob.evaluated_get(depsgraph), preserve_all_data_layers=True,
                                                depsgraph=depsgraph)
@@ -1263,20 +1362,41 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         log(f"unwrap {ob.name}: {area[seen].sum():.1f} of {area.sum():.1f} m2 seen, "
             f"maps {' + '.join(str(side) for side in sizes[ob])}")
 
+    if WORKER_OUT is not None and WORKER_MAP is None:
+        for ob in targets:
+            if ob in loaded or len(sizes[ob]) < SPLIT_MAPS:
+                continue
+            # Split (SPLIT_MAPS): the prepared rock handed back now, so its
+            # maps start baking in the other workers, then the geometry of its
+            # detail, which a map waits for once its colour is baked.
+            entry = os.path.join(WORKER_OUT, entry_name(ob.name))
+            rock_bows = [[list(a), list(b), list(bow), reach] for a, b, bow, reach in bows.get(ob, ())]
+            bake_cache.write_entry(entry, [], ob.data, ob.name, {"bows": rock_bows, "maps": sizes[ob]})
+            print(f"[scene_worker] split {ob.name} {len(sizes[ob])}", flush=True)
+            if ob in straight:
+                from formations import detail
+                geometry = detail.detail_geometry(straight[ob], ob.matrix_world, seed_for(ob),
+                                                  smallest_detail(ob, "export_chips"))
+                detail.save_geometry(f"{entry}.detail.npz", geometry)
+            return len(targets)
+
     def images(obs, kind, colorspace):
-        """Each of `obs`' `kind` images, one a map."""
+        """Each of `obs`' `kind` images, one a map; in a worker baking one map
+        of a split rock, the others' 1 x 1 stand-ins (`stand_in`)."""
         out = {}
         for ob in obs:
             out[ob] = []
             for i, size in enumerate(sizes[ob]):
                 # With alpha, cleared to 0: the bake writes 1 where it baked,
                 # which is the mask `fill_background` fills the rest by.
-                side = map_size(size, kind)
+                side = map_size(size, kind) if WORKER_MAP is None or i == WORKER_MAP else 1
                 im = bpy.data.images.new(image_name(ob, kind, i, len(sizes[ob])), side, side, alpha=True)
                 im.generated_color = (0, 0, 0, 0)
                 im.colorspace_settings.name = colorspace
                 # Drawn by this export for this object: an original, no credit owed.
                 im["generated_by"] = "tools/blender/scene_export.py"
+                if side != map_size(size, kind):
+                    im["stand_in"] = True  # neither filled, packed nor handed back
                 out[ob].append(im)
         return out
 
@@ -1327,7 +1447,17 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
                 if any(is_slate(m) for m in ob.data.materials) and render_setting(ob, "export_chips")]
     to_detail = [ob for ob in detailed if ob not in loaded]
     if to_detail:
-        nodes = bake_detail_normals(to_detail, images(to_detail, "detail normal", "Non-Color"), straight)
+        geometry = {}
+        if WORKER_MAP is not None:
+            # The split rock's detail geometry, which the worker that
+            # prepared it writes once it has handed the rock back.
+            from formations import detail
+            for ob in to_detail:
+                path = os.path.join(WORKER_OUT, entry_name(ob.name)) + ".detail.npz"
+                while not os.path.isfile(path):
+                    time.sleep(0.05)
+                geometry[ob] = detail.load_geometry(path)
+        nodes = bake_detail_normals(to_detail, images(to_detail, "detail normal", "Non-Color"), straight, geometry)
         for mat, node in nodes.items():
             slate.add_detail(mat, node.outputs["Color"], BAKE_UV)
     if bumped:
@@ -1339,7 +1469,13 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     if WORKER_OUT is not None:
         # A worker hands each object back straight, as the cache keeps it:
         # the export bends it with the rest.
+        # One map of a split rock hands back that map's images alone, which
+        # `run_workers` moves into the rock's entry.
         for ob, made in fresh.items():
+            if WORKER_MAP is not None:
+                bake_cache.write_entry(os.path.join(WORKER_OUT, entry_name(ob.name)) + f".map{WORKER_MAP}",
+                                       [im for im in made if not im.get("stand_in")], None, ob.name)
+                continue
             rock_bows = [[list(a), list(b), list(bow), reach] for a, b, bow, reach in bows.get(ob, ())]
             bake_cache.write_entry(os.path.join(WORKER_OUT, entry_name(ob.name)), made, ob.data, ob.name,
                                    {"bows": rock_bows, "maps": sizes[ob]})
@@ -1737,10 +1873,17 @@ def grow_painted(scene, warnings):
     source; the mesh saved in the .blend is only the last preview, and would be
     stale against a host edited or re-imported since. One whose host is gone
     (or a plant that cannot grow where it stands) is hidden from the export.
-    The ivy goes first: its rebuild carries a file from before
+    The ivy goes first: its migration carries a file from before
     2026-10-02 (when the ivy add-on was called moss) to the ivy names, which the
-    moss add-on must not mistake for its own."""
+    moss add-on must not mistake for its own.
+
+    The ivy and the moss that has to be rebuilt are grown side by side in
+    growth workers (growth_pool.py; SCENE_EXPORT_GROWERS=1 grows them here, one
+    after another), each from what it takes of the scene before any is
+    written back, so none sees another's result: none ever did, each grows on
+    its hosts alone."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import growth_pool
     import ivy
     import moss
 
@@ -1754,18 +1897,37 @@ def grow_painted(scene, warnings):
             o.hide_render = True
 
     ivy.register()
-    for ob, result in ivy.rebuild_all(scene):
-        if result is None:
+    ivy.migrate()
+    moss.register()
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    ivies = [(ob, ivy.ops.build_job(ob, depsgraph)) for ob in ivy.ops.ivy_objects(scene)]
+    plan = moss.ops.export_plan(scene)
+    jobs = [(ob.name, "ivy", job, ob.ivy.build_ms) for ob, job in ivies if job is not None]
+    jobs += [(ob.name, "moss", inputs.job(), ob.moss.build_ms) for ob, what, inputs in plan if what == "grow"]
+    if growth_pool.GROWERS > 1 and len(jobs) > 1:
+        grown = growth_pool.run(jobs, log)
+    else:
+        grown = {}
+        for key, kind, job, _est in jobs:
+            t0 = time.perf_counter()
+            result, why = growth_pool.grow(kind, job)
+            grown[key] = (result, why, (time.perf_counter() - t0) * 1000.0)
+
+    for ob, job in ivies:
+        if job is None:
             warnings.append(f"{ob.name}: {ob.ivy.status}; not exported (nor its shadow)")
             drop(ob)
             continue
+        result, _why, ms = grown[ob.name]
+        ivy.ops.apply(ob, result, ms)
         if ob.ivy.status:
             warnings.append(f"{ob.name}: {ob.ivy.status}")
         cards = f"{result.leaves} clumps" if result.detail == "CLUMPS" else f"{result.leaves} leaves"
         on = " + ".join(ivy.host_names(ob.ivy))
         log(f"ivy {ob.name} on {on}: {len(result.triangles)} triangles ({cards}, {result.vines} vines), {ob.ivy.build_ms:.0f} ms")
-    moss.register()
-    for ob, what in moss.prepare_export(scene):
+    for ob, what, inputs in plan:
+        if what == "grow":
+            what = moss.ops.apply_grown(ob, inputs, *grown[ob.name])
         s = ob.moss
         on = " + ".join(moss.host_names(s))
         if what is None:

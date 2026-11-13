@@ -13,7 +13,7 @@ from . import build, mesh_io
 from .stampbrush import stamps as stamp_io
 from .stampbrush.brush import GROWN_PROP
 from .stampbrush.geometry import host_world
-from .stampbrush.hosts import surface
+from .stampbrush.hosts import host_parts, parts_key, surface_of
 
 COLLECTION = "Moss"
 
@@ -152,9 +152,12 @@ def missing_hosts(ob):
 _grown = {}
 
 
-def _growth_key(co, tri, matrix, stamps, p):
-    h = hashlib.sha1()
-    for a in (co, tri, np.array(matrix, dtype=np.float64), stamps.position, stamps.normal, stamps.radius, stamps.strength):
+def _growth_key(surface_key, matrix, stamps, p):
+    """`surface_key` is the hosts' (hosts.parts_key), which fixes the
+    surface they make (since 2026-11-13: the surface's own triangles before,
+    which took the union of a moss's hosts to know whether it was current)."""
+    h = hashlib.sha1(surface_key.encode())
+    for a in (np.array(matrix, dtype=np.float64), stamps.position, stamps.normal, stamps.radius, stamps.strength):
         a = np.ascontiguousarray(a)
         h.update(str((a.dtype, a.shape)).encode())
         h.update(a.tobytes())
@@ -187,13 +190,15 @@ def _build_key(growth_key, p):
 
 
 class _Inputs:
-    """A moss's build inputs as they stand: the world triangles of what it grows
-    on (one host's own, or the union of its hosts: stampbrush/hosts.py), its
-    stamps and settings, and the growth key over them."""
+    """A moss's build inputs as they stand: the world triangles of its hosts
+    (`parts`; what it grows on, `co` and `tri`, is one host's own or the union
+    of them: stampbrush/hosts.py, taken when first asked for), its stamps and
+    settings, and the growth key over them."""
 
     def __init__(self, ob, hosts, depsgraph):
         self.hosts = hosts
-        self.co, self.tri = surface(hosts, depsgraph)  # copied out before the build re-evaluates
+        self.parts = host_parts(hosts, depsgraph)  # copied out before the build re-evaluates
+        self._surface = None
         self.matrix = hosts[0].matrix_world.copy()
         # The export registers this add-on after the file is loaded, so the
         # load handler's migration has not run there.
@@ -219,7 +224,41 @@ class _Inputs:
                 texels.append(render.colour_texel(h, area, world_area))
             self.p = dataclasses.replace(self.p, texel=min(texels), max_texture=render.BAKE_SIZE_MAX)
         self.stamps = stamp_io.read(ob.moss.stamps)
-        self.key = _growth_key(self.co, self.tri, self.matrix, self.stamps, self.p)
+        self.key = _growth_key(parts_key(self.parts), self.matrix, self.stamps, self.p)
+
+    @property
+    def co(self):
+        return self.surface[0]
+
+    @property
+    def tri(self):
+        return self.surface[1]
+
+    @property
+    def surface(self):
+        if self._surface is None:
+            self._surface = surface_of(self.parts)
+        return self._surface
+
+    def job(self):
+        """What `grow_job` needs, picklable: a growth worker of the scene
+        export (growth_pool.py) builds the moss from it in another Blender."""
+        return {"parts": self.parts, "matrix": [list(r) for r in self.matrix], "stamps": self.stamps, "p": self.p}
+
+
+def grow_job(job):
+    """A whole build from `_Inputs.job`, touching no scene: (result, None),
+    or (None, why) when it cannot be grown as painted (build.BuildError)."""
+    from mathutils import Matrix
+    try:
+        with build.time_limit():
+            if not build.has_paint(job["stamps"]):
+                return build.empty_result(), None  # no surface to make
+            co, tri = surface_of(job["parts"])
+            grown = build.grow(co, tri, Matrix(job["matrix"]), job["stamps"], job["p"])
+            return (build.finish(grown, job["p"], mesh_io.decimate) if grown is not None else build.empty_result()), None
+    except build.BuildError as e:
+        return None, str(e)
 
 
 def _grow(ob, inputs, regrow=False):
@@ -254,6 +293,14 @@ def rebuild(ob, depsgraph=None, regrow=False):
         # the last mesh stays; the panel says why this paint did not grow
         s.status = f"not grown: {e}"
         return None
+    return apply(ob, inputs, result, reused, (time.perf_counter() - t0) * 1000.0)
+
+
+def apply(ob, inputs, result, reused, build_ms):
+    """A build's `result` into the moss object, and what the panel shows of
+    it; `inputs` is what it was built from. Returns the result."""
+    s = ob.moss
+    p = inputs.p
     mesh_io.write_result(ob, result)
     s.triangles = len(result.triangles)
     s.dabs = result.dabs
@@ -266,7 +313,7 @@ def rebuild(ob, depsgraph=None, regrow=False):
     s.in_rock = result.in_rock
     s.reused = reused
     s.built_key = _build_key(inputs.key, p)
-    s.build_ms = (time.perf_counter() - t0) * 1000.0
+    s.build_ms = build_ms
     s.status = _missing_status(ob)
     return result
 
@@ -304,7 +351,24 @@ def prepare_export(scene):
     `s.status` saying which.
 
     Before 2026-10-05 the export rebuilt every moss: 162 s of the river's
-    380 s export, nearly all of it rebuilding mosses nobody had changed."""
+    380 s export, nearly all of it rebuilding mosses nobody had changed.
+
+    This rebuilds here, one after another; the export grows them side by
+    side in its growth workers instead (`export_plan`, `apply_grown`)."""
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    out = []
+    for ob, what, inputs in export_plan(scene):
+        if what == "grow":
+            what = "rebuilt" if rebuild(ob, depsgraph) is not None else None
+        out.append((ob, what))
+    return out
+
+
+def export_plan(scene):
+    """`prepare_export` short of growing: [(object, what, inputs)], `what`
+    one of its, or "grow" for a mound that must be rebuilt from `inputs`
+    (`_Inputs`; `grow_job` builds it from `inputs.job()` anywhere, and
+    `apply_grown` takes the result)."""
     depsgraph = bpy.context.evaluated_depsgraph_get()
     out = []
     _export.clear()
@@ -313,19 +377,30 @@ def prepare_export(scene):
         hosts = resolve_hosts(ob)
         if hosts is None:
             s.status = f'host "{s.host}" not found'
-            out.append((ob, None))
+            out.append((ob, None, None))
             continue
         inputs = _Inputs(ob, hosts, depsgraph)
         if s.kind == "TEXTURE":
             _export[ob.session_uid] = inputs
             s.status = _missing_status(ob)
-            out.append((ob, "texture"))
+            out.append((ob, "texture", inputs))
         elif s.built_key == _build_key(inputs.key, inputs.p) and len(ob.data.polygons) > 0:
             s.status = _missing_status(ob)
-            out.append((ob, "kept"))
+            out.append((ob, "kept", inputs))
         else:
-            out.append((ob, "rebuilt" if rebuild(ob, depsgraph) is not None else None))
+            out.append((ob, "grow", inputs))
     return out
+
+
+def apply_grown(ob, inputs, result, why, build_ms):
+    """A "grow" of `export_plan`, built elsewhere (`grow_job`'s result and
+    why not), into the moss: "rebuilt", or None when it did not grow (the
+    last mesh stays, `status` says why)."""
+    if result is None:
+        ob.moss.status = f"not grown: {why}"
+        return None
+    apply(ob, inputs, result, False, build_ms)
+    return "rebuilt"
 
 
 def prepare_texture_paints(scene, host_names):

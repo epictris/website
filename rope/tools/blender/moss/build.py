@@ -345,6 +345,37 @@ class Dab:
         return np.hypot(x, y) / np.maximum(rr, 1e-9), rr
 
 
+class _Shapes:
+    """Many dabs' outlines as arrays, to ask of many at once what `Dab.u`
+    asks of one (`outline_texels` asked it 886k times of Terrace.moss's 4k
+    dabs, one at a time: 28 of its 78 s, 2026-11-13)."""
+
+    def __init__(self, dabs):
+        self.c = np.array([tuple(d.c) for d in dabs], dtype=np.float64).reshape(-1, 3)
+        self.n = np.array([tuple(d.n) for d in dabs], dtype=np.float64).reshape(-1, 3)
+        self.ax = np.array([tuple(d.ax) for d in dabs], dtype=np.float64).reshape(-1, 3)
+        self.ay = np.array([tuple(d.ay) for d in dabs], dtype=np.float64).reshape(-1, 3)
+        self.r = np.array([d.r for d in dabs], dtype=np.float64)
+        self.harm = np.array([d.harm for d in dabs], dtype=np.float64).reshape(len(dabs), len(HARMONICS), 2)
+
+    def covers(self, which, pts):
+        """For each of `pts` (N, 3), whether it lies inside the outline of any
+        of the dabs `which` (indices), projected on that dab's plane: `Dab.u`
+        under 1 for any of them."""
+        if len(which) == 0:
+            return np.zeros(len(pts), bool)
+        d = pts[None, :, :] - self.c[which][:, None, :]
+        x = np.einsum("enk,ek->en", d, self.ax[which])
+        y = np.einsum("enk,ek->en", d, self.ay[which])
+        th = np.arctan2(y, x)
+        harm = self.harm[which]
+        s = 0
+        for j in range(harm.shape[1]):
+            s = s + harm[:, j, 0, None] * np.cos((j + 1) * th - harm[:, j, 1, None])
+        rr = self.r[which][:, None] * (1 + s)
+        return (np.hypot(x, y) / np.maximum(rr, 1e-9) < 1.0).any(0)
+
+
 class _Grid:
     """Dabs hashed by centre, for 'is any dab within d' tests."""
 
@@ -521,10 +552,16 @@ def build(co, tri, host_matrix, stamps, p, decimate):
     return finish(grown, p, decimate) if grown is not None else empty_result()
 
 
+def has_paint(stamps):
+    """Whether any stamp paints: without, `grow` has nothing to grow, whatever
+    it grows on, so the surface need not be made."""
+    return len(stamps) > 0 and bool((stamps.strength > 0).any())
+
+
 def grow(co, tri, host_matrix, stamps, p):
     """Steps 1-8 short of the decimate: the dabs and the full-resolution mound, or
     None when there is no moss to grow."""
-    if len(stamps) == 0 or not bool((stamps.strength > 0).any()):
+    if not has_paint(stamps):
         return None
     if len(tri) == 0:
         return None
@@ -1336,6 +1373,7 @@ def _relax(q, rest, nrm, pin, e, passes, eps, radius=None, tri=None, obstacle=No
     a, b = e[:, 0], e[:, 1]
     press = radius is not None
     on_rock = np.zeros(n, bool)
+    last = q  # the sheet at the last window's start (read from the second window on)
     for _ in range(passes):
         _tick()
         acc = np.stack([np.bincount(a, q[b, j], n) + np.bincount(b, q[a, j], n) for j in range(3)], 1)
@@ -2753,7 +2791,6 @@ def outline_texels(base, p, tp, tn, hash_=None, pinned=None, texel=None):
     if len(tp) == 0 or not base:
         return sd
     hash_ = hash_ or _TexelHash(tp, p)
-    room = MOUND_LIFT_ROOM
     rmax_all = max(d.rmax for d in base)
     grid = _Grid(2.0 * p.dab_max)
     for d in base:
@@ -2792,17 +2829,17 @@ def outline_texels(base, p, tp, tn, hash_=None, pinned=None, texel=None):
 
     # ---- the outline: each dab's, sampled, where no other dab covers it
     samples = []  # (dab, its kept samples (S, 3))
-    for d in base:
+    shapes = _Shapes(base)
+    index = {id(d): i for i, d in enumerate(base)}
+    for i, d in enumerate(base):
         n = max(8, int(math.ceil(2.0 * math.pi * d.rmax / OUTLINE_STEP)))
         th = (np.arange(n) + 0.5) * (2.0 * math.pi / n)
         rr = d.r * (1 + sum(a * np.cos((j + 1) * th - ph) for j, (a, ph) in enumerate(d.harm)))
         q = np.asarray(d.c) + np.outer(rr * np.cos(th), np.asarray(d.ax)) + np.outer(rr * np.sin(th), np.asarray(d.ay))
-        covered = np.zeros(n, bool)
-        for e in grid.near(d.c, d.rmax + rmax_all):
-            if e is d or np.asarray(e.n) @ np.asarray(d.n) <= 0.2:
-                continue
-            u, _rr = e.u(q)
-            covered |= u < 1.0
+        near = np.array([index[id(e)] for e in grid.near(d.c, d.rmax + rmax_all) if e is not d], dtype=np.int64)
+        if len(near):
+            near = near[shapes.n[near] @ shapes.n[i] > 0.2]
+        covered = shapes.covers(near, q)
         if not covered.all():
             samples.append((d, q[~covered]))
     if not samples:
@@ -2889,7 +2926,7 @@ def paint_texels(layers, p, tp, tn, hash_=None):
     if len(tp) == 0:
         return col, cov
     hash_ = hash_ or _TexelHash(tp, p)
-    uk, start, count, order = hash_.uk, hash_.start, hash_.count, hash_.order
+    start, order = hash_.start, hash_.order
     room = MOUND_LIFT_ROOM
     tp_sq = hash_.tp_sq
 

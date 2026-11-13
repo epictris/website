@@ -72,14 +72,13 @@ the card and tip at the top, and one faceted round the underlay and the stems
 point at, so the whole ivy is one material and one draw.
 """
 
-import heapq
 import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
-from mathutils import Vector, geometry, noise
+from mathutils import Vector, noise
 from mathutils.bvhtree import BVHTree
 
 from .stampbrush.geometry import clip as _clip
@@ -94,7 +93,7 @@ from .stampbrush.geometry import refine as _refine
 from .stampbrush.geometry import smooth_field as _smooth_field
 from .stampbrush.geometry import smoothstep as _smoothstep
 from .stampbrush.geometry import vertex_normals as _vertex_normals
-from .stampbrush.stamps import Stamps
+from .stampbrush.stamps import Stamps  # noqa: F401 - ops.py reaches it as build.Stamps
 
 # Toward the game's camera. The game looks along glTF -z, which is Blender -y.
 FACE = np.array((0.0, -1.0, 0.0))
@@ -443,6 +442,12 @@ def _crowd(P, r):
 # 8. The build
 
 
+def grows(stamps, vines):
+    """Whether there is anything to grow: paint, or a vine. Without, `build`
+    is empty whatever it grows on, so the surface need not be made."""
+    return (len(stamps) > 0 and bool((stamps.strength > 0).any())) or len(vines) > 0
+
+
 def build(co, tri, host_matrix, stamps, vines, origin, p):
     """The ivy over a surface: the carpet its paint covers, grown out from
     `origin` (a host-local point, or None for the top of the paint), and a
@@ -451,7 +456,7 @@ def build(co, tri, host_matrix, stamps, vines, origin, p):
     several (stampbrush/hosts.py); `host_matrix` is the frame host's, which
     the stamps, the vines and the origin are in and the result is returned in."""
     painted = len(stamps) > 0 and bool((stamps.strength > 0).any())
-    if not painted and len(vines) == 0:
+    if not grows(stamps, vines):
         return _empty_result()
     if len(tri) == 0:
         return _empty_result()
