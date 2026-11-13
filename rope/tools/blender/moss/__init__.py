@@ -37,6 +37,10 @@ def texture_paints(scene):
     return ops.texture_paints(scene)
 
 
+def prepare_texture_paints(scene, host_names):
+    return ops.prepare_texture_paints(scene, host_names)
+
+
 def paint_map(px, uv_px, tri_pos, layers, p):
     from . import build
 

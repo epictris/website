@@ -599,19 +599,7 @@ class Cache:
         return self._entries_by_own
 
     def _complete(self, entry, names):
-        """(the {image name: path} of `names(data)`, its mesh, its `data`)
-        for `entry` when it holds all of them, else None. `data` is what the
-        export kept with it (meta.json), which says how many maps it has."""
-        mesh = os.path.join(self.root, entry, MESH_FILE)
-        meta = os.path.join(self.root, entry, "meta.json")
-        if not (os.path.isfile(mesh) and os.path.isfile(meta)):
-            return None
-        with open(meta) as f:
-            data = json.load(f).get("data") or {}
-        files = {n: os.path.join(self.root, entry, map_file(n)) for n in names(data)}
-        if not all(os.path.isfile(p) for p in files.values()):
-            return None
-        return files, mesh, data
+        return read_entry(os.path.join(self.root, entry), names)
 
     def get(self, key, names):
         """(the {image name: PNG path} of `names(data)`, the prepared mesh's
@@ -638,22 +626,22 @@ class Cache:
         its materials (its slots emptied, which keeps every face's slot;
         clearing them would not): the export copies them afresh from the
         file's, as for a bake."""
+        write_entry(os.path.join(self.root, key), images, mesh, label, data, self.own[key])
+        self.used.add(key)
+
+    def adopt(self, key, entry):
+        """Keep the entry a worker wrote (`entry`, scene_export.py's
+        `run_workers`, in `write_entry`'s form) under `key`."""
         final = os.path.join(self.root, key)
         tmp = final + ".partial"
         shutil.rmtree(tmp, ignore_errors=True)
-        os.makedirs(tmp)
-        for im in images:
-            with open(os.path.join(tmp, map_file(im.name)), "wb") as f:
-                f.write(im.packed_file.data)
-        bare = mesh.copy()
-        try:
-            for i in range(len(bare.materials)):
-                bare.materials[i] = None
-            bpy.data.libraries.write(os.path.join(tmp, MESH_FILE), {bare}, compress=True)
-        finally:
-            bpy.data.meshes.remove(bare)
-        with open(os.path.join(tmp, "meta.json"), "w") as f:
-            json.dump({"object": label, "own": self.own[key], "images": [im.name for im in images], "data": data}, f)
+        shutil.copytree(entry, tmp)
+        meta = os.path.join(tmp, "meta.json")
+        with open(meta) as f:
+            m = json.load(f)
+        m["own"] = self.own[key]
+        with open(meta, "w") as f:
+            json.dump(m, f)
         shutil.rmtree(final, ignore_errors=True)
         os.replace(tmp, final)
         self.used.add(key)
@@ -666,6 +654,49 @@ class Cache:
                 shutil.rmtree(os.path.join(self.root, name), ignore_errors=True)
                 gone += 1
         return gone
+
+
+def write_entry(path, images, mesh, label, data=None, own=None):
+    """An object's prepared mesh and baked maps as one directory at `path`,
+    written whole or not at all: each of `images` (packed) as its PNG, the
+    mesh without its materials (its slots emptied, which keeps every face's
+    slot; clearing them would not: the export copies them afresh from the
+    file's, as for a bake), and meta.json with the export's `data`. The bake
+    cache's entries, and what a worker hands the export back
+    (scene_export.py `run_workers`)."""
+    tmp = path + ".partial"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    for im in images:
+        with open(os.path.join(tmp, map_file(im.name)), "wb") as f:
+            f.write(im.packed_file.data)
+    bare = mesh.copy()
+    try:
+        for i in range(len(bare.materials)):
+            bare.materials[i] = None
+        bpy.data.libraries.write(os.path.join(tmp, MESH_FILE), {bare}, compress=True)
+    finally:
+        bpy.data.meshes.remove(bare)
+    with open(os.path.join(tmp, "meta.json"), "w") as f:
+        json.dump({"object": label, "own": own, "images": [im.name for im in images], "data": data}, f)
+    shutil.rmtree(path, ignore_errors=True)
+    os.replace(tmp, path)
+
+
+def read_entry(path, names):
+    """(the {image name: path} of `names(data)`, its mesh, its `data`) for
+    the entry at `path` when it holds all of them, else None. `data` is what
+    the export kept with it (meta.json), which says how many maps it has."""
+    mesh = os.path.join(path, MESH_FILE)
+    meta = os.path.join(path, "meta.json")
+    if not (os.path.isfile(mesh) and os.path.isfile(meta)):
+        return None
+    with open(meta) as f:
+        data = json.load(f).get("data") or {}
+    files = {n: os.path.join(path, map_file(n)) for n in names(data)}
+    if not all(os.path.isfile(p) for p in files.values()):
+        return None
+    return files, mesh, data
 
 
 def map_file(name):

@@ -328,6 +328,23 @@ def prepare_export(scene):
     return out
 
 
+def prepare_texture_paints(scene, host_names):
+    """What `texture_paints` reads, for the texture-only mosses on any rock
+    named in `host_names`, where `prepare_export` has not run: a worker
+    Blender of the scene export (scene_export.py `run_workers`) opens the
+    file the export saved after it, and paints only the rocks it bakes. The
+    inputs are taken from the rocks as the file has them; a rock of a moss's
+    that the worker already baked is taken prepared (its surface unmoved)."""
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    for ob in moss_objects(scene):
+        if ob.moss.kind != "TEXTURE" or ob.session_uid in _export:
+            continue
+        hosts = resolve_hosts(ob)
+        if hosts is None or not any(h.name in host_names for h in hosts):
+            continue
+        _export[ob.session_uid] = _Inputs(ob, hosts, depsgraph)
+
+
 def texture_paints(scene):
     """[(moss, host, layers, params, key)] for every rock of every texture-only
     moss `prepare_export` saw: what scene_export.py paints into that rock's

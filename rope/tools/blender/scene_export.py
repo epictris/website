@@ -44,6 +44,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -209,6 +210,14 @@ BAKE_UV = "SceneBake"
 # no difference (https://claude.ai/artifact/2j4E9oa9N15KQ5RC3h7SQL). At 1 the
 # speckle came back (2.5 and 4 levels rms, single texels off by 229).
 BAKE_SAMPLES = 8
+# How many worker Blenders prepare and bake the objects side by side
+# (`run_workers`; SCENE_EXPORT_WORKERS overrides it, 1 bakes everything here).
+# Each holds the whole scene and its own Cycles session on the one GPU, and
+# Blender handles a bake's every texel on one thread, so the bakes scale with
+# the workers until the GPU is busy.
+WORKERS = int(os.environ.get("SCENE_EXPORT_WORKERS", "0")) or 8
+# Set in a worker: the directory its results go to.
+WORKER_OUT = None
 # Cycles GPU backends, best first. The bake runs on the first one with a
 # device and on the CPU without: the Terrace's 2k map took 3.4 s on an
 # RTX 4070 SUPER (OptiX) and 24.5 s on the CPU, with the same result to
@@ -774,6 +783,7 @@ def bake_detail_normals(targets, images, straight):
                              "shipped")
         for im, px in zip(images[ob], maps):
             im.pixels.foreach_set(px.ravel())
+            im.update()
         log(f"detail {ob.name}: {report}")
     return nodes
 
@@ -874,7 +884,14 @@ def bake_pass(targets, images, bake_type, before_fill=None, **bake_args):
     nodes, keyed by material."""
     nodes = image_nodes(targets, images)
     select_only(targets, targets[0])
-    bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, **bake_args)
+    # Without clearing, the bake writes only the texels it baked, whatever
+    # the number of objects. Cleared (the default), a bake of one object
+    # writes the whole image, every texel off its islands a flat normal at
+    # alpha 1, so `fill_background` saw nothing to fill; a bake of several
+    # drops the clear itself (object_bake_api.cc). A worker bakes one object
+    # at a time, and its normal maps' gaps came out flat (2026-11-13).
+    bpy.ops.object.bake(type=bake_type, target="IMAGE_TEXTURES", uv_layer=BAKE_UV, margin=0, use_clear=False,
+                        **bake_args)
     if before_fill is not None:
         for ob in targets:
             for i, im in enumerate(images[ob]):
@@ -923,6 +940,117 @@ def paint_moss(ob, im, paints, i=0, count=1):
         texels = moss.paint_map(px, uv_px, tri_pos, layers(), p)
         log(f"moss {mo.name}: grown in {mo.moss.build_ms / 1000:.1f}s and painted into {im.name}, {texels} texels, {time.time() - t0:.1f}s")
     im.pixels.foreach_set(px.ravel())
+
+
+def entry_name(name):
+    """The directory a worker writes object `name`'s result to (escaped as the
+    bake cache escapes a map's file: a name may hold a slash)."""
+    return name.replace("%", "%25").replace("/", "%2F")
+
+
+def work_estimate(ob):
+    """How much there is to prepare and bake for `ob`, roughly: its faces and
+    the texels of the colour maps its surface asks for."""
+    from formations import render
+    me = ob.data
+    if ob.type != "MESH" or not len(me.polygons):
+        return 0
+    area = np.empty(len(me.polygons))
+    me.polygons.foreach_get("area", area)
+    texels = sum(s * s for s in render.colour_maps(ob, float(area.sum())))
+    return len(me.polygons) * 50 + texels
+
+
+def run_workers(todo):
+    """Prepare and bake `todo` in worker Blenders side by side, largest first.
+
+    The scene goes to the workers as it stands now (`save_as_mainfile`, a
+    copy: grown, its plants hidden, its mosses cut for the bake, its cached
+    objects already their prepared meshes), so each one sees what a bake here
+    would. Up to WORKERS of them each take the next object off the queue
+    (`worker_main`) and write its prepared mesh and maps as the bake cache
+    keeps an entry (bake_cache.write_entry). Their log lines come through as
+    this export's. Returns ({object: its entry's path}, the warnings they
+    gave); a worker that fails fails the export, with its last lines."""
+    import queue
+    import subprocess
+    import tempfile
+    import threading
+    t0 = time.time()
+    work = tempfile.mkdtemp(prefix="scene-export-workers-")
+    snapshot = os.path.join(work, "scene.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=snapshot, copy=True, compress=False)
+    log(f"workers: the scene saved for them in {time.time() - t0:.1f}s")
+    names = queue.Queue()
+    for ob in sorted(todo, key=lambda ob: -work_estimate(ob)):
+        names.put(ob.name)
+    count = min(WORKERS, len(todo))
+    env = dict(os.environ, OMP_NUM_THREADS=str(max(1, (os.cpu_count() or count) // count)))
+    cmd = [bpy.app.binary_path, "-b", snapshot, "--python", os.path.abspath(__file__), "--", "--worker", work]
+    if ALL_SEEN:
+        cmd.append("--all-seen")
+    failures, lock = [], threading.Lock()
+
+    def drive(i):
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1, env=env)
+        tail = []
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            tail = (tail + [line])[-40:]
+            if line == "[scene_worker] ready":
+                try:
+                    proc.stdin.write(names.get_nowait() + "\n")
+                    proc.stdin.flush()
+                except queue.Empty:
+                    proc.stdin.close()
+            elif line.startswith("[scene_export] ") and not line.startswith("[scene_export] ships "):
+                with lock:
+                    print(line, flush=True)
+        if proc.wait() != 0:
+            with lock:
+                failures.append(f"worker {i} (exit {proc.returncode}):\n" + "\n".join(tail))
+
+    threads = [threading.Thread(target=drive, args=(i,)) for i in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if failures:
+        raise SystemExit("a bake worker failed; nothing shipped:\n" + "\n".join(failures))
+    warnings = []
+    for ob in todo:
+        path = os.path.join(work, entry_name(ob.name)) + ".warnings.json"
+        if os.path.isfile(path):
+            with open(path) as f:
+                warnings.extend(json.load(f))
+    log(f"workers: {len(todo)} objects prepared and baked in {count} workers in {time.time() - t0:.1f}s")
+    return {ob: os.path.join(work, entry_name(ob.name)) for ob in todo}, warnings
+
+
+def worker_main(argv):
+    """A bake worker (`run_workers`): in the scene the export saved, prepare
+    and bake each object named on stdin, one at a time, writing its result
+    under the directory after `--worker`, until stdin closes."""
+    global WORKER_OUT, ALL_SEEN
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    WORKER_OUT = argv[argv.index("--worker") + 1]
+    ALL_SEEN = "--all-seen" in argv
+    import moss
+    moss.register()
+    scene = bpy.context.scene
+    while True:
+        print("[scene_worker] ready", flush=True)
+        name = sys.stdin.readline().strip()
+        if not name:
+            return
+        ob = bpy.data.objects[name]
+        moss.prepare_texture_paints(scene, {name})
+        warnings = []
+        bake_procedural_textures([ob], None, moss.texture_paints(scene), warnings)
+        with open(os.path.join(WORKER_OUT, entry_name(name)) + ".warnings.json", "w") as f:
+            json.dump(warnings, f)
+        print(f"[scene_worker] done {name}", flush=True)
 
 
 def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, stale_occlusion=False):
@@ -993,10 +1121,25 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     # anything is prepared, on the scene as the file has it. A cached mesh
     # is the straight one, bent with the others after the bakes, so the
     # objects still to bake meet it as a cold export would.
+    import bake_cache
     sizes, straight, bows = {}, {}, {}
     cache, keys, hits, loaded, stale = None, {}, {}, {}, []
+
+    def adopt(ob, files, mesh_file, data):
+        """Take `ob`'s prepared mesh and maps from an entry (the cache's, or a
+        worker's) instead of preparing and baking it here."""
+        sizes[ob] = data["maps"]
+        count = len(sizes[ob])
+        loaded[ob] = {k: [bake_cache.load(files[image_name(ob, k, i, count)], image_name(ob, k, i, count), space[k])
+                          for i in range(count)] for k in ships[ob]}
+        materials[ob] = split_materials(materials[ob], count)
+        ob.modifiers.clear()
+        ob.data = bake_cache.load_mesh(mesh_file, materials[ob])
+        ob.data.name = export_mesh_name(ob)
+        if data and data.get("bows"):
+            bows[ob] = [(Vector(a), Vector(b), Vector(bow), reach) for a, b, bow, reach in data["bows"]]
+
     if cache_dir:
-        import bake_cache
         cache = bake_cache.Cache(cache_dir, depsgraph, {ob: preparation(ob) for ob in targets}, stale_occlusion)
         for ob in targets:
             keys[ob] = cache.key(ob, scene, materials[ob], [entry[4] for entry in by_host.get(ob, ())])
@@ -1009,19 +1152,30 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             warnings.append(f"--stale-occlusion: {len(stale)} objects keep the occlusion of their last bake, their "
                             f"neighbours since changed: {', '.join(sorted(ob.name for ob in stale))}")
         for ob, (files, mesh_file, data, _) in hits.items():
-            sizes[ob] = data["maps"]
-            count = len(sizes[ob])
-            loaded[ob] = {k: [bake_cache.load(files[image_name(ob, k, i, count)], image_name(ob, k, i, count), space[k])
-                              for i in range(count)] for k in ships[ob]}
-            materials[ob] = split_materials(materials[ob], count)
-            ob.modifiers.clear()
-            ob.data = bake_cache.load_mesh(mesh_file, materials[ob])
-            ob.data.name = export_mesh_name(ob)
-            if data and data.get("bows"):
-                bows[ob] = [(Vector(a), Vector(b), Vector(bow), reach) for a, b, bow, reach in data["bows"]]
-    step("bake", f"{len(targets) - len(loaded)} of {len(targets)} objects to bake"
+            adopt(ob, files, mesh_file, data)
+    todo = [ob for ob in targets if ob not in loaded]
+    step("bake", f"{len(todo)} of {len(targets)} objects to bake"
          + (f", {len(loaded)} cached" if cache else ", cache off")
-         + (f" ({len(stale)} with stale occlusion)" if stale else ""))
+         + (f" ({len(stale)} with stale occlusion)" if stale else "")
+         + (f", {min(WORKERS, len(todo))} workers" if WORKER_OUT is None and WORKERS > 1 and len(todo) > 1 else ""))
+
+    # The objects to bake, prepared and baked by worker Blenders side by side
+    # (`run_workers`), each handing back its mesh and maps as the cache keeps
+    # them; taken here as a cached object is, then kept in the cache too.
+    worked = set()
+    if WORKER_OUT is None and WORKERS > 1 and len(todo) > 1:
+        entries, worker_warnings = run_workers(todo)
+        if warnings is not None:
+            warnings.extend(worker_warnings)
+        for ob in todo:
+            found = bake_cache.read_entry(entries[ob], lambda data, ob=ob: image_names(ob, ships[ob], len(data.get("maps", [0]))))
+            if found is None:
+                raise SystemExit(f"{ob.name}: its worker handed back no whole result ({entries[ob]})")
+            adopt(ob, *found)
+            worked.add(ob)
+            if cache:
+                cache.adopt(keys[ob], entries[ob])
+        shutil.rmtree(os.path.dirname(next(iter(entries.values()))), ignore_errors=True)
 
     for ob in targets:
         if ob in loaded:
@@ -1140,6 +1294,14 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         for mat, node in nodes.items():
             for bsdf in procedural_normals(mat):
                 wire_normal(mat, node, bsdf)
+    if WORKER_OUT is not None:
+        # A worker hands each object back straight, as the cache keeps it:
+        # the export bends it with the rest.
+        for ob, made in fresh.items():
+            rock_bows = [[list(a), list(b), list(bow), reach] for a, b, bow, reach in bows.get(ob, ())]
+            bake_cache.write_entry(os.path.join(WORKER_OUT, entry_name(ob.name)), made, ob.data, ob.name,
+                                   {"bows": rock_bows, "maps": sizes[ob]})
+        return len(targets)
     if cache:
         for ob, made in fresh.items():
             # Still straight: bent below, and on every load.
@@ -1156,15 +1318,17 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         # property array can't nest vectors beside a float.
         ob["scene_bows"] = [[*a, *b, *bow, reach] for a, b, bow, reach in rock_bows]
     texels = ", ".join(f"{ob.name} {' + '.join(map(str, sizes[ob]))}" for ob in targets if ob in sizes)
-    cached = (f"{len(loaded)} of {len(targets)} objects from the cache"
+    cached = (f"{len(loaded) - len(worked)} of {len(targets)} objects from the cache"
               + (f", {len(stale)} with stale occlusion" if stale else "") + f" ({pruned} unused entries removed)"
               if cache else "cache off")
+    baked_here = lambda obs: sum(ob not in loaded or ob in worked for ob in obs)  # noqa: E731
     # scene-export.ts reads the "ships" counts: the optimiser must encode that
     # many baked maps.
     log(f"ships {sum(len(sizes[ob]) for ob in colored)} colour and {sum(len(sizes[ob]) for ob in bumped)} normal "
-        f"maps; baked {sum(ob not in loaded for ob in colored)} colour, {len(to_detail)} detail and "
-        f"{sum(ob not in loaded for ob in bumped)} normal ({texels or 'none'}) "
-        f"on {device}; {cached}; {time.time() - t0:.1f}s")
+        f"maps; baked {baked_here(colored)} colour, {len(to_detail) + sum(ob in worked for ob in detailed)} detail "
+        f"and {baked_here(bumped)} normal ({texels or 'none'}) "
+        f"on {device}{f', {len(worked)} objects in {min(WORKERS, len(worked))} workers' if worked else ''}; "
+        f"{cached}; {time.time() - t0:.1f}s")
     return len(targets)
 
 
@@ -1637,6 +1801,9 @@ def repaint_slate():
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
+    if "--worker" in argv:
+        worker_main(argv)
+        return
     usage = "usage: scene_export.py -- out.glb meta.json [--all-seen] [--cache DIR [--stale-occlusion]]"
     global ALL_SEEN
     ALL_SEEN = "--all-seen" in argv

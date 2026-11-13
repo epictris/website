@@ -137,6 +137,16 @@ An empty map fills to solid black, the glTF exporter ships a one-colour image as
 That is how Cube.003 went out a black rock on 2026-10-18: its colour map was empty while its normal map, from the same run, was whole, and baking it again from the same file (alone, and in one bake with the three rocks baked beside it, on the same OptiX device) wrote it whole, so the cause is not in the file; with Chrome holding 6 GB of the 12 GB card, device memory is the suspect, unconfirmed.
 Blender's whole output from the latest export, Cycles' lines included, is kept in `rope/.cache/scene-export/<scene>.blender.log`; the steps show only the export's own lines, and before 2026-10-18 the rest went nowhere.
 
+## The bake workers
+
+The objects the export prepares and bakes (those the bake cache does not hold) are shared among worker Blenders that run side by side (`run_workers` in `scene_export.py`, since 2026-11-13; `WORKERS`, 8, or `SCENE_EXPORT_WORKERS`, where 1 bakes them all in the export's own Blender).
+Blender handles a bake's every texel on one thread, and preparing a rock (the strips, the creases, the unwrap, the detail) is mostly one thread too, so one Blender left the other cores idle.
+The export saves the scene as it stands at that moment, grown, its plants hidden and its mosses cut for the bake, to a temporary file (`save_as_mainfile`, a copy), and each worker opens it, takes the next object off a queue (largest first, `work_estimate`), prepares and bakes it as the export would, and writes its prepared mesh and maps as the bake cache keeps an entry (`bake_cache.write_entry`).
+The export takes each back as it takes a cached object (`adopt`), keeps it in the cache when there is one, bends it with the rest and writes the glTF as before; only its `[scene_export]` lines come through, and a worker that fails fails the export with its last lines.
+A worker computes its texture-only mosses for the rocks it bakes alone (`moss.prepare_texture_paints`).
+On three rocks the workers' maps matched the export's own to 1/255, 16.5 s against 31.6 s.
+Baking one object at a time showed that a bake of one object, cleared (Blender's default), writes the flat normal at alpha 1 over every texel off its islands, so the background fill saw nothing to fill there, while a bake of several drops the clear; every bake now passes `use_clear=False`, which writes only the texels it bakes, whatever the count.
+
 ## Frames and units
 
 Blender metres are game metres.
