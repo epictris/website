@@ -182,7 +182,7 @@ A rock face nearer the camera than the plane is shaded nearer the outline, in pr
 The editor draws that edge, dotted, beside the wall's own dashed outline, so a wall is placed by where the sun stops.
 
 **Coverage.** Visible scenery behind the plane is included in the fitted sun shadow volume, as are shelter walls outside the view that can cast onto it. There is no fixed gameplay-distance cutoff; the single map's texel density falls as the required coverage grows.
-The root bark's painted key (`barkLight`, rootBark.ts) is emissive and takes no shadow, so a root inside a cave keeps it.
+Root bark (`rootBark.ts`) reflects the scene's lighting and receives shadows. Its former emissive painted key has been removed so roots darken with the surrounding rock inside caves.
 Neither the painted water nor the Blender guide's game look knows about shelters.
 
 **Authoring.** Shelters are their own editor layer (`shelter`, between `scene` and `camera`), drawn with +Rect, +Circle and +Poly and edited by the gestures every camera region is, concave outlines included; the panel carries `front` (blank = the default).

@@ -8,11 +8,6 @@ import { rootBarkVariant, type RootBarkVariant } from "../level/rootAppearance";
 
 const WIDTH = 512, HEIGHT = 1024;
 
-// The woody bark's own painted light (linear radiance per unit albedo) on the
-// lit side; the shade side keeps 12% of it. Chosen against the painted
-// backdrop's roots in BALL's rock shadow, where the cave's fill alone gives a
-// warm bark about a third of its albedo. See the shader below.
-const PAINTED_LIGHT = 0.75;
 const TAU = Math.PI * 2;
 const clamp = (x: number): number => Math.max(0, Math.min(1, x));
 function band(a: number, b: number, x: number): number {
@@ -56,36 +51,14 @@ export function rootBarkMaterial(color: string, bark?: RootBarkVariant): THREE.M
   });
   // Thin growing ends have finer, smoother skin than established woody roots.
   // This is surface shading only: all shadow passes use the same actual mesh.
-  material.customProgramCacheKey = () => `painted-root-bark-v6-${variant === "woody" ? "lit" : "scene"}`;
+  material.customProgramCacheKey = () => `painted-root-bark-v7-scene`;
   material.onBeforeCompile = shader => {
-    // The woody bark carries a painter's light of its own, as the backdrop's
-    // painted roots do: a warm key from the viewer's upper left and a cool
-    // shade below it, added to whatever the cave's own light gives, so a root
-    // in a rock's shadow still shows its plates and fissures in the painted
-    // range instead of going to mud under the blue fill. Scene light,
-    // shadows and fog still lie over it.
-    shader.uniforms.barkLight = { value: variant === "woody" ? PAINTED_LIGHT : 0 };
+    // Bark reflects scene lighting; it must not glow inside rock shadows.
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nattribute float rootAge;\nattribute float rootJoin;\nvarying float vRootAge;\nvarying float vRootJoin;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvRootAge = rootAge;\nvRootJoin = rootJoin;");
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nvarying float vRootAge;\nvarying float vRootJoin;\nuniform float barkLight;")
-      .replace("#include <emissivemap_fragment>", `
-        #include <emissivemap_fragment>
-        // The painter's key, in view space: lit from the upper left, with a
-        // soft wrap so the shade side keeps a little of the plate colour.
-        // Shaded by the relief (the perturbed normal), closed off by the
-        // baked occlusion of the gaps and by the other branch in a fork's
-        // crotch (rootJoin, rootFork.ts).
-        float barkKey = dot(normal, normalize(vec3(-0.5, 0.7, 0.55)));
-        float barkOpen = 1.0 - 0.6 * vRootJoin;
-        #ifdef USE_AOMAP
-        barkOpen *= texture2D(aoMap, vAoMapUv).r;
-        #endif
-        // Diffuse only: a sheen lobe on the vein crests was tried (2026-10-18)
-        // and read as gloss; bark is matte.
-        totalEmissiveRadiance += diffuseColor.rgb * barkLight * barkOpen * (0.1 + 0.9 * smoothstep(-0.25, 0.95, barkKey));
-      `)
+      .replace("#include <common>", "#include <common>\nvarying float vRootAge;\nvarying float vRootJoin;")
       .replace("#include <map_fragment>", `
         #include <map_fragment>
         // Low-contrast young skin; mature bark keeps the painted fissures.
