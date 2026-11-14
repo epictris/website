@@ -13,6 +13,10 @@ just game-install         # once per machine; links the add-on into Blender and 
 ```
 
 The add-on is the **Game** tab in the 3D viewport's sidebar (N).
+The `game.light-preview*` helper walls and fog volumes are locked against
+selection on load. The shared foliage, moss and ivy placement ray also skips
+them, so clicking through a preview volume plants or paints on the rock behind
+it without changing the preview's lighting or visibility.
 A file saved before the split keeps its toggles, its depth step and the look's saved scene state: the add-on renames them on load (`game/__init__.py`, `on_load`).
 
 ## The game camera

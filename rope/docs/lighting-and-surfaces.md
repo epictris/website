@@ -489,6 +489,14 @@ From 2026-09-24 to 2026-09-29 the river's moss props glowed: a mesh geometry obj
 It went with the geometry objects: the mask was a shader patch, which glTF cannot carry, so the moss came into `river.blend` with its plain materials and does not glow.
 A glow re-authored in Blender is an emissive material (an emission map where the moss should glow), and a light object in the moss's body is still what makes it light the rock around it.
 
+## Emission-only bloom (removed)
+
+Removed on 2026-11-14 after the player reported a drop from 144 Hz to about
+30 fps near the cave entrance and confirmed that disabling bloom restored
+performance. The pass rendered the visible scene again when an emissive object
+entered view, then blurred and composited its emission. Material emission and
+the glow flora's shader remain; there is no bloom extraction, blur or composite.
+
 ## Painted light (removed)
 
 From 2026-09-17 to 2026-09-24 every lit material wore `render3d/paint.ts`, a shader patch that cut the light into bands, gave roughness a floor of 0.42, sampled the reflected environment no sharper than 0.45 with its sun soft-clipped out, and took the sun's highlight away.

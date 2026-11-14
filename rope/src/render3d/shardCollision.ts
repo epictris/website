@@ -81,7 +81,7 @@ export function solidMesh(o: THREE.Object3D): o is THREE.Mesh {
     if (!m) return false;
     if (m.transparent || !m.depthWrite) return false;
     if (m.userData.ivyLeaves) return false;
-    if (/^Foliage(\.\d+)?$/.test(m.name)) return false;
+    if (/^Foliage(?:\.LOD[248])?(\.\d+)?$/.test(m.name)) return false;
     if (m.alphaTest > 0 && !m.userData.mossMound) return false;
   }
   for (const n of namesOf(mesh)) {

@@ -1,5 +1,44 @@
 # Foliage in Blender
 
+## Automatic High-DOF LOD for ferns and vines
+
+Fern and hanging-vine rebuilds/export use the same gameplay-plane blur budget
+as ivy. The nearest point in the plant's possible reach sphere determines the
+budget, including object scale; foreground and the first 1.5 m behind the plane
+stay at authored detail. The guide camera supplies the lens, falling back to
+the game's default 34-degree vertical field of view.
+
+Growth paths, collision checks, leaf positions and variety stay authored.
+The output drops card rows/columns whose positional error is below the blur
+budget, simplifies stem paths within that tolerance, and reduces tube sides
+and crown tessellation. Unused vertices are removed. Atlas variants average
+premultiplied linear colour at 1/2, 1/4 or 1/8 size, selected from the actual
+world-space size of the UV-mapped cards. Near plants retain the original atlas.
+The game recognizes every LOD material as foliage for lighting and collisions.
+Mushrooms and pendant orbs now use the same distance budget. Their cap, bulb,
+neck and stem subdivisions are chosen before generating geometry; tiny raised
+gills/flecks and rib relief disappear when unresolved. The luminous rim stays,
+and omitted gills contribute their mean emission to the underside. Orb paint
+and emission textures average in linear colour down to 32×16; the mushroom's
+64×4 emission ramp encodes weights rather than spatial detail and stays intact.
+
+Glow flora selects the coarser of authored detail and an automatic preset per
+item, using each solved/edited item's bounds plus sway, transformed into world
+space. Large, rotated or nonuniformly scaled patches can contain both sharp
+and distant items. Patch generation, edits, collision solving and item counts
+remain unchanged. Unresolved gill/rib lines encode their angular mean as a
+negative line count in `_EXTRA`; the game shader uses that value directly,
+preserving pulse, sway and rim lighting. All custom attributes still export.
+
+`tools/blender/glowing_foliage_lod_check.py` checks both mushroom forms, orbs,
+all five glow patch types, near/far transitions, texture emission averages and
+a GLB export with the glow attributes.
+
+Check: `blender -b --factory-startup --python-exit-code 1 --python
+tools/blender/foliage_lod_check.py` covers all three fern varieties, hanging vines,
+material separation and rebuild after moving a plant into the background.
+
+
 Since 2026-10-08 ferns, leaf-sprig bushes and hanging vines are **placed in a scene in Blender, one plant at a time, and grown procedurally** by the foliage add-on, `tools/blender/foliage/`.
 Each plant is an object of its own: placed and aimed by hand, with its own settings and seed, saved in the `.blend`, grown again by `just scene <level>` and drawn by the game from the exported scene like any other scenery.
 See [blender-scenes](blender-scenes.md) for the pipeline it rides on.
@@ -46,6 +85,86 @@ Each is a fern of its own, aimed at its spot's open side, with the active fern's
 
 ## Settings
 
+### Bioluminescent cave plants (2026-11-14)
+
+The Foliage panel also has **Add Mushrooms** and **Add Pendant Orbs**. These use the same click/drag placement, object transforms,
+host parenting, Live, Seed, Rebuild, Copy, Reset and Bake controls as ferns.
+They are solid procedural geometry, with no external painted sheets:
+
+- **Mushrooms / Stemmed Caps:** curved tapered stems, smooth domed caps,
+  luminous thin rims and radial gills on the underside.
+- **Mushrooms / Wall Shelves:** fleshy fans projecting from a wall, with rounded
+  continuous domed tops, shallow undersides and a closed luminous lip and rear
+  perimeter. The dome stays raised at the attachment instead of dipping into a
+  notch. Dome height varies by
+  seed and follows **Cap Dome**. Place on a vertical face; the caps remain horizontal.
+- **Pendant Orbs:** round lantern-like bulbs with six broad softly shaded lobes, each attached directly to an underside
+  by its own short bare stalk. There are no leaves, shared strands or long vine
+  silhouettes: gameplay vines remain visually distinct. Up-facing attachments
+  report a placement error rather than growing bulbs through their host.
+
+**Count**, **Cluster Radius**, **Size** and **Size Variation** control each patch.
+Size Variation varies width and height independently. **Shape Variation** varies
+cap dome profiles, tilt and stem bends, bulb proportions and short stalk lengths.
+**Surface Detail** controls interior cap folds, mottling and raised flecks, and soft
+orb lobe depth. Mushroom rims stay smooth. Mushrooms have concentric colour bands
+and radial gills; orbs have short thick curved necks and luminous centres, with no
+mottled patches or hard rib stripes. **Height** applies to stemmed mushrooms;
+**Cap Dome** and **Stalk Length** appear for the corresponding kind. A crowded patch may grow
+fewer parts; each candidate is checked against its host and earlier plants.
+Growth is deterministic for a seed. Surface attachments use face normals, rather
+than a nearest-point separating vector that can become tangential through rounding.
+
+**Body Colour**, **Glow Colour** and **Emission** independently control the matte
+surface and its luminous parts. Use green/lime near the entrance and teal/cyan
+near the pool. Each plant has one `Cave Foliage · <object>` material, vertex body
+colours, and a generated, packed emission map sampled by UV. Mushrooms
+use a tiny ramp; orbs use a 256×128 soft lobe shading map for colour and emission, with a
+dark atlas margin for stalks/collars and a repeating spherical seam. This exports
+as `COLOR_0`, `emissiveTexture` and `KHR_materials_emissive_strength`, without
+the painted-leaf atlas or the game's leaf-card shader. Rebuild reuses the plant's
+material and image datablocks. Existing ferns and vines keep their `Foliage` material.
+
+An orb's neck and body are one continuous surface: the neck's curved cubic profile
+meets the bulb shoulder with a matching tangent. Its colour/emission map brightens
+and slightly whitens the centre while leaving the rim and neck more saturated,
+suggesting a thin membrane around an inner glow. This is simulated translucency,
+not see-through glass or alpha blending; it does not transmit the cave behind it.
+The centre highlight is painted for the front/back game view, rather than a
+view-dependent Fresnel shader, so it remains a standard exportable glTF material.
+
+Moss remains in the existing **Moss** tool: see
+[Bioluminescence](blender-moss.md#bioluminescence).
+
+**Lighting:** emission makes the plant bright; it does not illuminate the game.
+Add a nearby point light per cluster in the level editor's Visuals workspace,
+or a wide spotlight for shelves on a wall. Match its colour and tune range and
+intensity independently of emission. Blender lights are not exported by the
+scene pipeline. See [lighting-and-surfaces](lighting-and-surfaces.md).
+
+The review scene is reproducible with:
+
+```sh
+blender -b --factory-startup --python-exit-code 1 --python tools/blender/foliage/preview_biolume.py
+```
+
+It writes `assets-src/studies/biolume/preview.blend`, `preview.png` and
+`preview.glb`, with green and blue specimens and demonstration lights. It checks
+seed repeatability, finite geometry, one material per cluster, emission-only
+moss edits preserving geometry, and glTF emission maps/strength/vertex colours.
+Add `-- --no-render` to run the checks without rendering. This never edits a level.
+Add `-- --closeups` to also render `orbs-close.png` from below the attachment
+and `shelves-close.png` showing the rounded shelf profiles.
+The review's green moss uses brighter Dark/Light colours and a lower glow
+threshold (0.38); the blue moss keeps its earlier palette and threshold (0.55).
+Those are sample settings in the review scene, not changes to existing moss
+instances or to the original non-emissive moss defaults.
+
+Validation: the current eight-specimen review checks geometry and glTF emission export.
+The emissive curled-frond experiment was removed; existing fern varieties are unchanged.
+
+### Existing fern and vine controls
+
 The panel shows the active plant: its kind and host, its triangles, fronds and leaves and build time, **Live**, **Rebuild**, its **Seed** with **New Seed** (for every selected plant), **Snap to Surface**, **Reset** (the defaults; a fern's are its variety's; the seed is kept), **Copy to Selected** (to the selected plants of the same kind; seeds are kept; a value the source follows the default for, the copy follows too, as the ivy's copy does) and **Bake to Plain Mesh** (a hand-editable copy, never regrown; the plant is hidden in render so only the copy exports).
 **Rebuild All** grows every plant in the scene again.
 
@@ -62,6 +181,78 @@ The defaults are the vines karin placed in the river (`ball.json` on her branch:
 
 Both kinds have **Colour**: `Paint Tint` (how far a painted piece's own colours move toward the chosen greens, keeping its painted light and dark) and the six **Greens** a plant is tinted from.
 Ages walk along the greens from dark to light: a vine's leaves darken toward its root and freshen toward its tip, a fern's outer, older fronds are darker.
+
+## Glow flora (2026-11-14)
+
+**Add Glow Flora** plants a patch of glowing mushrooms, lantern blooms, glow ferns and reed tufts: the Glowshroom Generator's (`claude.ai/artifact/QgRHgFc9G8JFkepeQ85wND`, Tris's three.js generator page), grown in Blender like any other plant and drawn by the game with that generator's own shader.
+
+### Where it comes from
+
+`tools/blender/foliage/glowflora.py` is a port of the generator's module, `glowshrooms.js`, kept beside it as `tools/blender/foliage/reference/glowshrooms.js`.
+It is step for step and in the module's own y-up patch frame (its camera on +z), with its seeded generator (mulberry32), three's colour maths (sRGB to linear and HSL jitter, to the same rounding), and its collision solver, so a seed grows here the patch it grows on the page.
+It needs no Blender: `bun tools/blender/foliage/reference/parity.ts` grows ten patches (every kind and palette) both ways on flat ground and compares every item field (to 1e-9) and every vertex position, colour, glow, gill and sway value (to float32 rounding, 3e-8 on 2026-11-14), and fails on any difference.
+Python takes about nine times the module's time: 0.4 to 0.9 s for a 14-mushroom patch or a grove on flat ground, about 2 s for a grove on a bumpy rock (the module's 30 to 85 ms).
+
+Two things are generalised, and both reduce to the original on flat ground, which is how the parity holds:
+
+- **The ground is the host.** The original stands everything on the plane y = 0; here the ground under any point of the patch is the host's surface (`glowgrow.HostGround`: a ray down the patch's up axis from 0.6 m above the root, reaching 1.5 m below it, memoised on a 1 cm grid and read bilinearly), and every place the original reads 0 for the ground reads the height under that point: a stem's foot, a cap's clearance, a frond's floor, a lantern leaf's rest, the mound.
+- **The host has an edge.** Where no ground faces up within reach (over a drop, into a wall) there is none.
+  Nor is there past a ledge: a ray beyond it finds the terrace below, which is another ground, so a grid node is ground only if it is reached from the root's node by steps toward it none of which drops or climbs more steeply than 70° (`MAX_RISE`).
+  Until 2026-11-14 (second fix) a patch on a ledge spilled ferns and reeds a metre down the cliff below it (`Terrace.015.glow-flora.001` in `river.blend`).
+  A plant standing off the ground walks back toward the root (an `edge` issue), and a solver move that would take a plant off the ground takes the separation alone or is refused.
+  The original's escape walks a crowded plant outward ("there is always room outside", true on an endless plane), which on a finite rock fought the edge for all 600 passes (18 s, intersections left).
+  A plant whose moves are refused 8 times (`STUCK`) is dropped, as a tight spot fits fewer fronds, and so is one still off the ground after the walk back should have reached the root (its distance over `EDGE_STEP`, plus `STUCK`): the mound or a neighbour keeps pushing it out again, so there is no room for it.
+  The panel says how many did not fit.
+  On flat ground nothing is refused, so nothing changes.
+- **A part over a drop keeps its plant's footing.** A frond, a lantern leaf or the mound's rim reaching out past an edge reads the height under its own plant's base where there is no ground under it, as on the original's plane; a plant whose base is off the ground stands at the root's height while the solver walks it back (`foot`, `Ground.under`).
+  Until 2026-11-14 a missing ground read as 1000 m down, and those parts were drawn there: stems a kilometre long under the scene.
+
+### Placing and settings
+
+A glow patch is planted **unturned**: its up is the world's, whatever the slope at its root, so mushrooms stand and bulbs hang, and its camera side is the game camera's (Blender -y), which the original's layout assumes (caps lean away from the camera rather than flattening toward it, lanterns face sideways).
+Its transform is still its anchor: G moves it, S sizes it, and R turns or tilts the whole patch (Snap to Surface keeps the turn).
+The mesh is grown in the plant's own frame, so a turned patch is the same patch turned.
+
+The **Glow Flora** panel has the original's controls:
+
+- **Patch**: Grove, Mushrooms, Lanterns, Ferns or Reeds, each with its own options, kept per kind as the page keeps them (`glow_<kind>_<option>`, ranged as the page's sliders): counts, spread, depth, size and variety, lean, bend, cap variety, dome, flare, fan out, cap tilt, spots, glow, mound; arch, bulb size and length, ribs, leaves; fronds, upright, droop, fiddleheads, leaflets; blades, blade width, seed pods.
+- **Palette** (Pastel, Moonlight, Toxic, Ember), the plant's **Seed**, and **Detail** (High, Mid about half the triangles, Low about an eighth, for distant patches; a grove is about 50 k triangles at High).
+- **Keep Apart**: the collision pass (nothing touches another plant, the mound, the ground or itself, with room for the sway).
+  Off, plants may intersect.
+- **Paste Patch JSON** takes a patch copied from the page (its Patch JSON): the kind, options, seed and palette, and every plant as edited there, kept in `glow_edits` and locked in the solver as the page locks an edited plant.
+  **Copy Patch JSON** puts the patch as grown here on the clipboard, to load on the page (its plants' x and z are the patch's; heights are relative to the ground under them).
+  **Clear Edits** forgets the pasted plants.
+  Per-plant editing itself is the page's; edit there and paste.
+
+The panel shows triangles, plants and build time, a count still intersecting (the solver gave up; a warning at export too), and how many did not fit on the host.
+The page's patch light and ground glow decal are not grown: light the patch with a light in the level editor's Visuals workspace, as any glow.
+
+### The mesh and the material
+
+One mesh per patch, one material shared by every glow plant, `Glow Flora`: the body colour (`Col`, exported as `COLOR_0`) on Base Color and the `_GLOW` attribute as the emission, which is Blender's view of the look only.
+Beside the colour the mesh carries the shader's inputs as generic point attributes, named with a leading underscore because those are the ones Blender's glTF exporter writes as custom attributes (`scene_export.py` sets `export_attributes`; Blender's own attributes never start with one):
+
+- `_GLOW`, vec3: emission, linear RGB.
+- `_GILL`, vec3: the radial direction round a cap or bulb (x, y) and the gill weight (z); z = -1 marks a stem's inner glow.
+- `_SWAY`, vec3: wind phase, amplitude (world metres: the patch's times the plant's scale) and height factor.
+- `_EXTRA`, vec2: gill line count, pulse phase.
+
+The original packed gill and sway into two vec4s; Blender's only four-float point attributes are a colour (which the exporter writes as another `COLOR_n`, and the optimiser prunes every `COLOR_n` but `COLOR_0`) or a quaternion, hence vec3 + vec3 + vec2.
+The optimiser keeps the `_` attributes as they are (its prune removes only unused `TEXCOORD`, `COLOR_n`, `NORMAL` and `TANGENT`, and its quantisation takes only the standard semantics), unquantised float32, about 44 bytes a vertex.
+Checked on 2026-11-14: a grove grown in Blender on flat ground, exported and optimised as the scene export does, and drawn by `render3d/glowFlora.ts` beside the page's own `buildPatch` of the same seed, same camera, lights and time: a mean difference of 0.15 (game framing) and 0.45 (close-up) levels of 255, the larger ones only on silhouettes and the hair-thin gill lines, from the optimiser's 16-bit positions and 8-bit normals.
+
+### In the game
+
+`render3d/glowFlora.ts` dresses a mesh found by its `_glow` attribute (not by its material's name: the optimiser may merge identical materials or swap untextured ones for a palette material) with the original's material: three's physical surface with its iridescent sheen and clear coat, emission per vertex with a slow pulse, glowing gill lines under a cap and rib lines on a bulb, a stem lit from inside, a fresnel rim, and the wind sway, coherent between neighbours and growing with height.
+The clock is the scene's (`waterTime`, pinnable for shots); `setGlowFloraLook({ glow, pulse, sway, rim })` sets the look for every glow plant at once.
+The sway is applied in the world and taken back into the mesh's frame, so a turned plant still sways across the screen; the plants cast through depth materials with the same sway, put back on every mount (three's clone drops `customDepthMaterial`; `sceneDressing.mountExport`).
+A glow plant keeps out of the depth prepass (its material is patched), and the bloom pass re-runs the patch on its emission-only copy, so the glow blooms; `emissive` is the emission's overall multiplier (white), which is also the bloom pass's sign that it emits.
+The game logs `[render3d] scene "<scene>": N glow flora meshes glow and sway`.
+
+### Beside the cave plants
+
+The **Mushrooms** and **Pendant Orbs** kinds above (`biolume.py`) are an earlier, separate attempt at cave plants, with a ramp texture for emission and no game shader.
+Glow flora does not use or change them.
 
 ## What is grown
 
@@ -104,7 +295,7 @@ The plant stays a child of its host through the optimiser (`--keep-hierarchy`), 
 
 ## Not ported
 
-- **Wind.** Karin's plants carried a `sway` weight per vertex (metres of free hang below a vine's release point; distance along a frond) and a vertex-shader patch swayed them. The weights are not computed here, and the game has no foliage wind.
+- **Wind.** Karin's plants carried a `sway` weight per vertex (metres of free hang below a vine's release point; distance along a frond) and a vertex-shader patch swayed them. The weights are not computed here, and ferns and vines do not sway; only glow flora does.
 - **Imported leaves.** Karin's editor could cut new leaves from an uploaded image into the vine's atlas.
 - **The legacy SVG-leaf vine** (`render3d/hangingVine.ts`), which karin kept only so old recipes stayed editable.
 - **Curved ivy cards** (`render3d/ivyGeometry.ts`, "Curve bush leaves"): karin bent the ivy add-on's flat leaf cards at load time in the game. That is a change to the ivy's look, not foliage, and the ivy's cards are flat by the owner's choice ([blender-ivy](blender-ivy.md)).

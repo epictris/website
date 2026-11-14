@@ -55,6 +55,7 @@ def paintable(ob):
     return (
         ob is not None
         and ob.type == "MESH"
+        and not ob.name.startswith("game.light-preview")
         and GROWN_PROP not in ob
         and not ob.hide_render
         and ob.library is None

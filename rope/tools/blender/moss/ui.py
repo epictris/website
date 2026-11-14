@@ -70,6 +70,8 @@ class MOSS_PT_main(bpy.types.Panel):
             col.prop(s, "detail", slider=True)
             if s.detail != 1.0:
                 col.label(text=f"Dabs {s.dab_min / s.detail * 100:.1f}-{s.dab_max / s.detail * 100:.1f} cm at this detail")
+            if s.kind == "MOUND" and ob.get("moss_built_kind") == "TEXTURE":
+                col.label(text="Automatic LOD: Texture Only", icon="TEXTURE")
             if not s.status:
                 took = f"{s.build_ms / 1000:.1f} s" + (", growth reused" if s.reused else "")
                 col = box.column(align=True)
@@ -169,6 +171,19 @@ class MOSS_PT_height(_Sub, bpy.types.Panel):
         _grid(self.layout, s, ("floor", "lift", "up_floor", "height_blur", "rim", "drape"))
 
 
+class MOSS_PT_emission(_Sub, bpy.types.Panel):
+    bl_label = "Bioluminescence"
+
+    def draw(self, context):
+        s = ops.active_moss(context).moss
+        if s.kind == "TEXTURE":
+            self.layout.label(text="Switch to Mound for emission", icon="INFO")
+            return
+        _grid(self.layout, s, ("emission_strength", "emission_color", "emission_threshold"))
+        self.layout.label(text="Uses the light patches of the current print")
+        self.layout.label(text="Add nearby lights in the level editor", icon="LIGHT")
+
+
 class MOSS_PT_edge(_Sub, bpy.types.Panel):
     bl_label = "Edge"
 
@@ -210,4 +225,4 @@ class MOSS_PT_mesh(_Sub, bpy.types.Panel):
         _grid(self.layout, s, ("min_patch", "print_edge"))
 
 
-CLASSES = (MOSS_PT_main, MOSS_PT_quality, MOSS_PT_dabs, MOSS_PT_tone, MOSS_PT_height, MOSS_PT_edge, MOSS_PT_grass, MOSS_PT_mesh)
+CLASSES = (MOSS_PT_main, MOSS_PT_quality, MOSS_PT_dabs, MOSS_PT_tone, MOSS_PT_height, MOSS_PT_emission, MOSS_PT_edge, MOSS_PT_grass, MOSS_PT_mesh)

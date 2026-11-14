@@ -14,6 +14,7 @@ changes grows again every later plant it could have touched, and the export,
 which grows them all in order, makes exactly what the panel shows."""
 
 import math
+from dataclasses import replace
 import random
 import time
 
@@ -21,13 +22,13 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
-from . import fern, mesh_io, vine
+from . import biolume, fern, glowgrow, mesh_io, vine
 from .stampbrush.brush import GROWN_PROP
 from .surface import FORWARD, Avoid, Surface, tangent_on
 
 COLLECTION = "Foliage"
 GROWN = "foliage"
-NAMES = {"FERN": "fern", "VINE": "hanging-vine"}
+NAMES = {"FERN": "fern", "VINE": "hanging-vine", "MUSHROOM": "mushrooms", "ORBS": "pendant-orbs", "GLOW": "glow-flora"}
 AVOID_SAMPLES = 600  # points sampled over an earlier plant's mesh
 
 
@@ -91,7 +92,12 @@ def create_plant(kind, host, scene, at, normal, direction, template=None):
     ob[GROWN_PROP] = GROWN  # the brushes look through it
     ob.parent = host
     ob.matrix_parent_inverse.identity()
-    ob.matrix_world = Matrix.Translation(at) @ frame(at, normal, direction).to_4x4()
+    if kind == "GLOW":
+        # A glow patch stands on the world's up and faces the game's camera,
+        # whatever the slope at its root (glowgrow.py): planted unturned.
+        ob.matrix_world = Matrix.Translation(at)
+    else:
+        ob.matrix_world = Matrix.Translation(at) @ frame(at, normal, direction).to_4x4()
     # Evaluated now: the matrix as set and the matrix the depsgraph makes of it
     # (parent x basis) differ in the last float bit, and a fern grown from the
     # one is not the fern the export grows from the other.
@@ -183,22 +189,57 @@ def rebuild(ob, depsgraph=None, surfaces=None, everyone=None):
     everyone = plants() if everyone is None else everyone
     root, normal, direction, scale = anchor(ob)
     avoid = avoid_for(ob, everyone)
+    if s.kind == "GLOW":
+        return _rebuild_glow(ob, surface, t0)
+    texel = 0.0
+    if s.kind in {"FERN", "VINE", "MUSHROOM", "ORBS"}:
+        from .stampbrush import lod
+        # A sphere covering every possible leaf/path, not yesterday's mesh.
+        depth = max(0.0, root.y - s.reach(scale) - lod.FOCUS_BAND)
+        texel = lod.HIGH_BLUR * lod.scene_slope(bpy.context.scene) * depth / 2
     try:
         if s.kind == "FERN":
-            out, stats = fern.grow(surface, root, normal, direction, s.fern_params(scale), avoid)
+            out, stats = fern.grow(surface, root, normal, direction, replace(s.fern_params(scale), lod_texel=texel), avoid)
             s.parts = stats["fronds"]
-        else:
-            out, stats = vine.grow(surface, root, normal, direction, s.vine_params(scale), avoid)
+        elif s.kind == "VINE":
+            out, stats = vine.grow(surface, root, normal, direction, replace(s.vine_params(scale), lod_texel=texel), avoid)
             s.parts = 1
-    except (fern.FernError, vine.VineError) as e:
+        else:
+            out, stats = biolume.grow(surface, root, normal, direction, s, scale, avoid, texel)
+            s.parts = stats["parts"]
+    except (fern.FernError, vine.VineError, biolume.GrowthError) as e:
         s.status = str(e)
         mesh_io.write_result(ob.data, _empty(), ob.matrix_world)
         return None
     arrays = out.arrays()
-    mesh_io.write_result(ob.data, arrays, ob.matrix_world)
+    mat = biolume.material(ob, texel, scale) if s.kind in biolume.KINDS else mesh_io.lod_material(arrays, texel)
+    mesh_io.write_result(ob.data, arrays, ob.matrix_world, mat)
     ob.visible_shadow = True
     s.triangles = len(arrays[4])
     s.leaves = stats["leaves"]
+    s.build_ms = (time.perf_counter() - t0) * 1000.0
+    s.status = ""
+    return stats
+
+
+def _rebuild_glow(ob, surface, t0):
+    """A glow flora patch (glowgrow.py): grown in the plant's own frame, so its
+    mesh is written as it comes, with the glow shader's attributes beside it."""
+    s = ob.foliage
+    try:
+        arrays, extra, stats = glowgrow.grow(ob, surface)
+    except glowgrow.GrowthError as e:
+        s.status = str(e)
+        mesh_io.write_result(ob.data, _empty(), ob.matrix_world)
+        return None
+    mesh_io.write_result(ob.data, arrays, glowgrow.IDENTITY, glowgrow.material())
+    glowgrow.write_extra(ob.data, extra)
+    ob.visible_shadow = True
+    s.parts = s.glow_items = stats["parts"]
+    s.glow_remaining = stats["remaining"]
+    s.glow_dropped = stats["dropped"]
+    s.triangles = len(arrays[4])
+    s.leaves = 0
     s.build_ms = (time.perf_counter() - t0) * 1000.0
     s.status = ""
     return stats
@@ -558,6 +599,9 @@ class FOLIAGE_OT_snap(bpy.types.Operator):
             hit = surface.nearest(root)
             if hit is None:
                 continue
+            if ob.foliage.kind == "GLOW":  # it keeps its turn: it stands on its own up, not the normal
+                ob.matrix_world = Matrix.Translation(hit.point) @ ob.matrix_world.to_3x3().normalized().to_4x4() @ Matrix.Scale(scale, 4)
+                continue
             ob.matrix_world = Matrix.Translation(hit.point) @ frame(hit.point, hit.normal, direction).to_4x4() @ Matrix.Scale(scale, 4)
         return {"FINISHED"}
 
@@ -616,5 +660,87 @@ class FOLIAGE_OT_scatter(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (FOLIAGE_OT_rebuild, FOLIAGE_OT_new_seed, FOLIAGE_OT_reset, FOLIAGE_OT_copy_settings, FOLIAGE_OT_leaf_set,
+def paste_glow_patch(ob, text):
+    """Give a glow plant a patch copied from the Glowshroom Generator (its
+    Patch JSON): options, seed, palette, and every plant as edited there.
+    Not live: the caller regrows it. Returns (patch kind, plants)."""
+    import json
+
+    params, overrides = glowgrow.glowflora.from_json(text)
+    s = ob.foliage
+    live, s.live = s.live, False
+    try:
+        s.set_glow_params(params)
+        s.glow_edits = json.dumps({str(i): o for i, o in overrides.items()}, separators=(",", ":"))
+    finally:
+        s.live = live
+    return params["kind"], len(overrides)
+
+
+def glow_patch_json(ob, depsgraph):
+    """The glow plant's patch as grown on its host, as Patch JSON: (text, plants)."""
+    host = resolve_host(ob)
+    if host is None:
+        raise glowgrow.GrowthError(f'host "{ob.foliage.host}" not found')
+    _arrays, _extra, stats = glowgrow.grow(ob, Surface.from_object(host, depsgraph))
+    return glowgrow.glowflora.to_json(stats["patch"]), stats["parts"]
+
+
+class FOLIAGE_OT_glow_paste(bpy.types.Operator):
+    bl_idname = "foliage.glow_paste"
+    bl_label = "Paste Patch JSON"
+    bl_description = (
+        "Take a patch copied from the Glowshroom Generator (its Patch JSON, on the clipboard): its options, seed, "
+        "palette and every plant as edited there. Edited plants stay put; the solver fits the patch to this ground"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        ob = active_plant(context)
+        if ob is None or ob.foliage.kind != "GLOW":
+            return {"CANCELLED"}
+        try:
+            kind, n = paste_glow_patch(ob, context.window_manager.clipboard)
+        except (ValueError, KeyError, TypeError) as e:
+            self.report({"WARNING"}, f"the clipboard holds no patch JSON ({e})")
+            return {"CANCELLED"}
+        schedule_rebuild(ob)
+        self.report({"INFO"}, f"pasted a {kind} patch of {n} plants")
+        return {"FINISHED"}
+
+
+class FOLIAGE_OT_glow_copy(bpy.types.Operator):
+    bl_idname = "foliage.glow_copy"
+    bl_label = "Copy Patch JSON"
+    bl_description = "Put this patch, as grown here, on the clipboard as Patch JSON, to load into the Glowshroom Generator"
+
+    def execute(self, context):
+        ob = active_plant(context)
+        if ob is None or ob.foliage.kind != "GLOW":
+            return {"CANCELLED"}
+        try:
+            text, n = glow_patch_json(ob, context.evaluated_depsgraph_get())
+        except glowgrow.GrowthError as e:
+            self.report({"WARNING"}, str(e))
+            return {"CANCELLED"}
+        context.window_manager.clipboard = text
+        self.report({"INFO"}, f"copied {n} plants")
+        return {"FINISHED"}
+
+
+class FOLIAGE_OT_glow_clear_edits(bpy.types.Operator):
+    bl_idname = "foliage.glow_clear_edits"
+    bl_label = "Clear Edits"
+    bl_description = "Forget the pasted per-plant edits: the patch grows from its options and seed alone"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        ob = active_plant(context)
+        if ob is None or ob.foliage.kind != "GLOW":
+            return {"CANCELLED"}
+        ob.foliage.glow_edits = ""
+        return {"FINISHED"}
+
+
+CLASSES = (FOLIAGE_OT_glow_paste, FOLIAGE_OT_glow_copy, FOLIAGE_OT_glow_clear_edits, FOLIAGE_OT_rebuild, FOLIAGE_OT_new_seed, FOLIAGE_OT_reset, FOLIAGE_OT_copy_settings, FOLIAGE_OT_leaf_set,
            FOLIAGE_OT_snap, FOLIAGE_OT_bake, FOLIAGE_OT_scatter)

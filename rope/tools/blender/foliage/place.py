@@ -17,6 +17,7 @@ from gpu_extras.batch import batch_for_shader
 from mathutils.geometry import intersect_line_plane
 
 from . import ops
+from .settings import KINDS
 from .stampbrush import brush
 from .surface import DOWN, FORWARD, Surface, tangent_on
 
@@ -57,7 +58,7 @@ class FOLIAGE_OT_place(bpy.types.Operator):
     )
     bl_options = {"REGISTER", "UNDO"}
 
-    kind: bpy.props.EnumProperty(items=(("FERN", "Fern", ""), ("VINE", "Hanging Vine", "")))
+    kind: bpy.props.EnumProperty(items=KINDS)
 
     @classmethod
     def poll(cls, context):
@@ -72,7 +73,7 @@ class FOLIAGE_OT_place(bpy.types.Operator):
         self.ctrl = False
         self.handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (context,), "WINDOW", "POST_VIEW")
         context.window_manager.modal_handler_add(self)
-        name = "Fern" if self.kind == "FERN" else "Hanging vine"
+        name = next(label for key, label, _description in KINDS if key == self.kind)
         context.area.header_text_set(f"{name}   LMB press at the root, drag to aim, release   Ctrl+LMB remove a plant   Esc/RMB done")
         return {"RUNNING_MODAL"}
 

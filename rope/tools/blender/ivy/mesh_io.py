@@ -66,7 +66,7 @@ def write_result(me, result):
     me.shade_smooth()
     if len(result.normals) == len(v):
         me.normals_split_custom_set_from_vertices(result.normals.astype(np.float32).tolist())
-    mat = material(result.detail)
+    mat = material(result.detail, result.atlas_size)
     if list(me.materials) != [mat]:
         me.materials.clear()
         me.materials.append(mat)
@@ -673,19 +673,34 @@ def _tint_node(nt, bsdf):
     return tint
 
 
-def material(detail="LEAVES"):
+def lod_atlas(clumps, size):
+    if size >= ATLAS_SIZE:
+        return clump_atlas() if clumps else atlas()
+    version = CLUMP_ATLAS_VERSION if clumps else ATLAS_VERSION
+    name = f"ivy-{'clump' if clumps else 'leaf'}-lod-v{version}-{size}"
+    img = bpy.data.images.get(name)
+    if img is None:
+        pixels = (_draw_clump_atlas if clumps else _draw_atlas)(size=size)
+        img = bpy.data.images.new(name, size, size, alpha=True)
+        img.pixels.foreach_set(pixels[::-1].astype(np.float32).ravel())
+        img.pack()
+    return img
+
+
+def material(detail="LEAVES", size=ATLAS_SIZE):
     """The material an ivy of this detail wears, rebuilt when its version
     moves: `Ivy` on the leaf atlas, or `IvyClumps` on the clump atlas. Either
     way a mesh has the one slot (see write_result)."""
     clumps = detail == "CLUMPS"
+    suffix = f".LOD{size}" if size < ATLAS_SIZE else ""
     if clumps:
-        mat, bsdf = _fresh(CLUMP_MATERIAL_NAME, CLUMP_MATERIAL_VERSION)
+        mat, bsdf = _fresh(CLUMP_MATERIAL_NAME + suffix, CLUMP_MATERIAL_VERSION)
     else:
-        mat, bsdf = _fresh(MATERIAL_NAME)
+        mat, bsdf = _fresh(MATERIAL_NAME + suffix)
     if bsdf is None:
         # A material of this version still wears whatever sheet it was built
         # with: a moved ATLAS_VERSION reaches it here, or never.
-        img = clump_atlas() if clumps else atlas()
+        img = lod_atlas(clumps, size)
         for n in mat.node_tree.nodes:
             if n.type == "TEX_IMAGE" and n.image != img:
                 n.image = img
@@ -698,7 +713,7 @@ def material(detail="LEAVES"):
         x, y = bsdf.location.x, bsdf.location.y
         tint = _tint_node(nt, bsdf)
         tex = nt.nodes.new("ShaderNodeTexImage")
-        tex.image = clump_atlas() if clumps else atlas()
+        tex.image = lod_atlas(clumps, size)
         tex.location = (x - 600, y + 150)
         mix = nt.nodes.new("ShaderNodeMix")
         mix.data_type = "RGBA"

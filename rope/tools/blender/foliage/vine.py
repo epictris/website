@@ -18,6 +18,7 @@ from .surface import DOWN, NO_AVOID, UP, jround, rand, smoothstep, tangent_on
 
 @dataclass
 class VineParams:
+    lod_texel: float = 0.0  # world-space generation error budget; authored settings stay unchanged
     length: float = 0.85
     radius: float = 0.008
     cling: float = 0.40
@@ -170,7 +171,7 @@ def grow(surface, root, normal, direction, p, avoid=NO_AVOID):
     if length < p.length - 0.001:
         raise VineError("the vine cannot reach its length on this surface")
 
-    out = Builder()
+    out = Builder(p.lod_texel)
     along = [0.0]
     for k in range(1, len(points)):
         along.append(along[-1] + (points[k] - points[k - 1]).length)

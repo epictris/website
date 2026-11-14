@@ -23,6 +23,15 @@ def _changed(self, context):
         ops.schedule_rebuild(ob)
 
 
+def _emission_changed(self, context):
+    # Appearance only: changing the glow must not regrow a painted mound.
+    from . import mesh_io
+
+    ob = self.id_data
+    if isinstance(ob, bpy.types.Object):
+        mesh_io.refresh_emission(ob)
+
+
 def _length(name, default, lo, hi, desc):
     return FloatProperty(name=name, default=default, min=lo, soft_max=hi, subtype="DISTANCE", unit="LENGTH", description=desc, update=_changed)
 
@@ -105,6 +114,12 @@ class MossSettings(bpy.types.PropertyGroup):
     # Colours in the panel are sRGB; params() makes them linear.
     dark: FloatVectorProperty(name="Dark", default=_srgb(_D.dark), size=3, min=0.0, max=1.0, subtype="COLOR", description="The darkest moss: the base and the rim", update=_changed)
     light: FloatVectorProperty(name="Light", default=_srgb(_D.light), size=3, min=0.0, max=1.0, subtype="COLOR", description="The lightest moss: the summits", update=_changed)
+    emission_strength: FloatProperty(name="Emission", default=0.0, min=0.0, soft_max=10.0,
+                                      description="Brightness of the lighter patches (Mound only); add game lights for illumination", update=_emission_changed)
+    emission_color: FloatVectorProperty(name="Glow Colour", default=(0.45, 1.0, 0.12), size=3, min=0.0, max=1.0,
+                                        subtype="COLOR", update=_emission_changed)
+    emission_threshold: FloatProperty(name="Glow Threshold", default=0.65, min=0.0, max=0.99,
+                                       description="Only tones above this fraction of Dark to Light glow; the dark rim stays matte", update=_emission_changed)
 
     floor: _length("Floor", _D.floor, 0.0, 0.05, "How proud of the rock the darkest moss stands, away from the rim")
     lift: _length("Lift", _D.lift, 0.0, 0.3, "How much prouder the lightest moss stands than the darkest: the lighter, the taller")
@@ -205,7 +220,7 @@ class MossSettings(bpy.types.PropertyGroup):
     def copy_from(self, other):
         """Take the other moss's settings: the values it has set, and the defaults
         where it has none (copying every value would store the day's defaults)."""
-        for k in [*Params.__dataclass_fields__, "detail"]:
+        for k in [*Params.__dataclass_fields__, "detail", "emission_strength", "emission_color", "emission_threshold"]:
             if k == "seed" or not hasattr(other, k):
                 continue
             if k in other:

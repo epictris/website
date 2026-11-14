@@ -12,8 +12,35 @@ from . import library
 from .surface import tangent_on
 
 
+def retained(samples, tolerance):
+    """Indices whose piecewise-linear interpolation stays within tolerance.
+
+    Each sample may contain many XYZ points: a card row is tested over its
+    full width. Using index interpolation also preserves the card's UV map.
+    """
+    a = np.asarray(samples, dtype=float)
+    if tolerance <= 0 or len(a) <= 2:
+        return list(range(len(a)))
+    a = a.reshape(len(a), -1, 3)
+    keep = {0, len(a) - 1}
+    todo = [(0, len(a) - 1)]
+    while todo:
+        lo, hi = todo.pop()
+        if hi <= lo + 1:
+            continue
+        f = np.arange(1, hi - lo)[:, None, None] / (hi - lo)
+        error = np.linalg.norm(a[lo + 1:hi] - (a[lo] + f * (a[hi] - a[lo])), axis=-1).max(axis=1)
+        k = int(np.argmax(error))
+        if error[k] > tolerance:
+            mid = lo + 1 + k
+            keep.add(mid)
+            todo.extend(((lo, mid), (mid, hi)))
+    return sorted(keep)
+
+
 class Builder:
-    def __init__(self):
+    def __init__(self, tolerance=0.0):
+        self.tolerance = tolerance
         self.pos = []
         self.nrm = []  # None where the vertex takes its faces' normal
         self.uv = []
@@ -33,12 +60,16 @@ class Builder:
     def grid(self, offset, rows, cols):
         """Two triangles per cell of a (rows + 1) x (cols + 1) vertex grid laid
         row after row from `offset`, wound toward the grid's face."""
-        for r in range(rows):
-            for c in range(cols):
-                a = offset + r * (cols + 1) + c
-                b = a + cols + 1
-                self.tri.append((a, a + 1, b))
-                self.tri.append((a + 1, b + 1, b))
+        pts = np.asarray(self.pos[offset:offset + (rows + 1) * (cols + 1)]).reshape(rows + 1, cols + 1, 3)
+        rs = retained(pts, self.tolerance / 2)
+        cs = retained(pts.transpose(1, 0, 2), self.tolerance / 2)
+        for r0, r1 in zip(rs, rs[1:]):
+            for c0, c1 in zip(cs, cs[1:]):
+                a = offset + r0 * (cols + 1) + c0
+                b = offset + r1 * (cols + 1) + c0
+                a1 = offset + r0 * (cols + 1) + c1
+                b1 = offset + r1 * (cols + 1) + c1
+                self.tri.extend(((a, a1, b), (a1, b1, b)))
 
     def tube(self, path, radius, colour_at, sides=8, tip=0.3):
         """A swept, tapering tube along `path` with closed ends: rings carried
@@ -46,6 +77,15 @@ class Builder:
         tapering to `tip` of its radius. `colour_at(f)` colours the ring a
         fraction f along the path (karin's tubeGeometry, without the seam
         column a texture needed: the tube samples the solid cell)."""
+        if self.tolerance > 0:
+            error = self.tolerance / 2
+            if len(path) > 2 and (path[0] - path[-1]).length < 1e-8:
+                # A luminous closed rim must not collapse to coincident ends.
+                extent = max((v - path[0]).length for v in path)
+                error = min(error, extent * 0.1)
+            path = [path[i] for i in retained(path, error)]
+            while sides > 3 and radius * (1 - math.cos(math.pi / (sides - 1))) <= self.tolerance / 2:
+                sides -= 1
         n = len(path)
         if n < 2:
             return
@@ -85,7 +125,7 @@ class Builder:
 
         bm = bmesh.new()
         try:
-            bmesh.ops.create_icosphere(bm, subdivisions=2, radius=radius)
+            bmesh.ops.create_icosphere(bm, subdivisions=1 if self.tolerance >= radius * 0.2 else 2, radius=radius)
             rot = normal.to_track_quat("Z", "Y").to_matrix().to_4x4()
             m = Matrix.Translation(centre) @ rot @ Matrix.Diagonal((1.0, 1.0, 0.55, 1.0))
             for f in bm.faces:
@@ -118,7 +158,12 @@ class Builder:
         nrm = np.where(length > 1e-12, nrm / np.maximum(length, 1e-12), np.array([0.0, 0.0, 1.0]))
         uv = np.array(self.uv, dtype=np.float64).reshape(-1, 2)
         col = np.array(self.col, dtype=np.float64).reshape(-1, 3)
-        return pos, nrm, uv, col, tri
+        if self.tolerance <= 0:
+            return pos, nrm, uv, col, tri
+        used = np.unique(tri)
+        remap = np.full(len(pos), -1, dtype=np.int64)
+        remap[used] = np.arange(len(used))
+        return pos[used], nrm[used], uv[used], col[used], remap[tri]
 
 
 def card_uv(piece, u, v):

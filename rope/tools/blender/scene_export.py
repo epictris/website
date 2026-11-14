@@ -1977,7 +1977,10 @@ def grow_painted(scene, warnings):
                 warnings.append(f"{ob.name}: {s.status}; not exported")
                 drop(ob)
                 continue
-            what = f"{s.parts} fronds, {s.leaves} leaves" if s.kind == "FERN" else f"{s.leaves} leaves"
+            if s.kind == "GLOW" and s.glow_remaining:
+                warnings.append(f"{ob.name}: {s.glow_remaining} glow plants still intersect; reduce the count or size")
+            what = (f"{s.parts} fronds, {s.leaves} leaves" if s.kind == "FERN" else
+                    f"{s.parts} glow plants" if s.kind == "GLOW" else f"{s.leaves} leaves")
             log(f"foliage {ob.name} on {s.host}: {s.triangles} triangles ({what}), {s.build_ms:.0f} ms")
 
 
@@ -2160,6 +2163,10 @@ def main():
         export_skins=False,
         export_morph=False,
         export_extras=False,
+        # Custom vertex attributes (names starting "_") are exported: the glow
+        # flora's shader inputs (_GLOW, _GILL, _SWAY, _EXTRA; foliage/glowgrow.py).
+        # Blender's own attributes never start with one, so nothing else changes.
+        export_attributes=True,
         # No Draco: the optimiser applies meshopt afterwards (scripts/optimize-asset.ts).
         export_draco_mesh_compression_enable=False,
     )

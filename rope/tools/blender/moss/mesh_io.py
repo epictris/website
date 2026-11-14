@@ -84,7 +84,7 @@ def write_result(ob, result):
     uv = me.uv_layers.get(UV) or me.uv_layers.new(name=UV)
     uv.data.foreach_set("uv", result.uvs.astype(np.float32).ravel())
     me.shade_smooth()
-    decal = ob.moss.kind == "TEXTURE"
+    decal = ob.get("moss_built_kind", ob.moss.kind) == "TEXTURE"
     kind = "decal" if decal else ("printed" if ob.moss.edge_kind == "PRINT" else "opaque")
     # A texture-only moss's decal is a preview of paint on the rock: it casts
     # no shadow (the export hides it from the bake, and never ships it).
@@ -94,6 +94,63 @@ def write_result(ob, result):
     if list(me.materials) != [mat]:
         me.materials.clear()
         me.materials.append(mat)
+    refresh_emission(ob)
+
+
+def refresh_emission(ob):
+    """Derive a glTF-ready emission image from the existing print, without
+    changing a vertex or a dab. The lightest printed tones are the summits.
+    Texture-only moss is composited into rock albedo, so it cannot emit.
+    """
+    img = bpy.data.images.get(f"{ob.name}.print")
+    if img is None or not hasattr(ob, "moss"):
+        return
+    mat = ob.data.materials[0] if ob.type == "MESH" and len(ob.data.materials) else None
+    if mat is None or mat.node_tree is None:
+        return
+    nt = mat.node_tree
+    bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        return
+    s = ob.moss
+    strength = s.emission_strength if ob.get("moss_built_kind", s.kind) == "MOUND" else 0.0
+    bsdf.inputs["Emission Strength"].default_value = strength
+    if strength == 0:
+        return
+    w, h = img.size
+    pixels = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(pixels)
+    pixels = pixels.reshape(h, w, 4)
+    # The print's byte-image pixels and the moss's Dark/Light controls are sRGB.
+    dark, light = np.array(s.dark), np.array(s.light)
+    delta = light - dark
+    denom = float(delta @ delta)
+    tone = ((pixels[..., :3] - dark) @ delta) / max(denom, 1e-12)
+    mask = np.clip((tone - s.emission_threshold) / (1 - s.emission_threshold), 0, 1)
+    # A flat-colour moss has no brighter summits to select.
+    if denom < 1e-10:
+        mask[:] = 0
+    if s.edge_kind == "PRINT":
+        mask *= pixels[..., 3] > 0.5
+    rgb = mask[..., None] * np.array(s.emission_color)
+    out = np.ones_like(pixels)
+    out[..., :3] = np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * rgb ** (1 / 2.4) - 0.055)
+    name = f"{ob.name}.emission"
+    emission = bpy.data.images.get(name)
+    if emission is None:
+        emission = bpy.data.images.new(name, w, h, alpha=False)
+    elif tuple(emission.size) != (w, h):
+        emission.scale(w, h)
+    emission.pixels.foreach_set(out.ravel())
+    emission["generated_by"] = GENERATED_BY
+    emission.pack()
+    tex = nt.nodes.get("moss emission")
+    if tex is None:
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.name = "moss emission"
+        tex.location = (bsdf.location.x - 600, bsdf.location.y + 300)
+    tex.image = emission
+    nt.links.new(tex.outputs["Color"], bsdf.inputs["Emission Color"])
 
 
 def _image(ob, pixels, alpha=False):

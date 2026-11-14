@@ -141,7 +141,7 @@ class Params:
     # "MOUND": a mound of moss with its own printed texture; "TEXTURE": no
     # geometry, the dabs painted into the rock's colour map on export.
     kind: str = "MOUND"
-    resolution: float = 0.012  # edge length the host is refined to under the paint
+    resolution: float = 0.05  # edge length the host is refined to under the paint
     threshold: float = 0.35  # paint coverage at which moss starts
     # Dabs
     dab_min: float = 0.032
@@ -163,7 +163,7 @@ class Params:
     dark: tuple = (0.0237, 0.0567, 0.0419)  # the study's darkest (sRGB 0.167, 0.264, 0.226)
     light: tuple = (0.0882, 0.1758, 0.0179)  # the study's lightest (sRGB 0.329, 0.456, 0.142)
     # Height
-    floor: float = 0.008  # the darkest moss stands this proud, away from the rim
+    floor: float = 0.001  # the darkest moss stands this proud, away from the rim
     lift: float = 0.09  # the lightest moss stands this much prouder than the darkest
     up_floor: float = 0.3  # share of the height a wall keeps
     height_blur: float = 0.027
@@ -186,10 +186,10 @@ class Params:
     grass_height: float = 0.045
     grass_blades: int = 10  # in a tuft, about
     grass_tip: tuple = (0.3185, 0.4179, 0.0467)  # linear (sRGB 0.6, 0.68, 0.24): the lightest tip
-    mound_density: float = 1500.0  # triangles per m^2 of mound
+    mound_density: float = 400.0  # triangles per m^2 of mound
     # Print
-    texel: float = 0.0015
-    max_texture: int = 2048
+    texel: float = 0.005
+    max_texture: int = 4096
     print_edge: float = 0.002
 
 
@@ -1094,7 +1094,11 @@ def finish(grown, p, decimate):
             # prices a vertex out (6 mm in), so what still moved goes back
             # onto the ring the cut made. The apron is never seen.
             ring = _open_edges(mv, mt)
-            mv, mt, attrs = decimate(mv, mt, ratio, attrs, _boundary(mt, len(mv)))
+            # Keep the crease and a ring of its neighbours: otherwise a run
+            # of individually legal collapses chords across the junction,
+            # and the clearance pass folds the long triangles as it lifts them.
+            keep = _boundary(mt, len(mv)) | _crease_vertices(mv, mt)
+            mv, mt, attrs = decimate(mv, mt, ratio, attrs, keep)
             _snap_to_ring(mv, _boundary(mt, len(mv)), ring)
             mt, flipped = _flip_folds(mv, mt, (grown.vertices, grown.triangles))
             if DEBUG:
@@ -1425,6 +1429,33 @@ def _relax(q, rest, nrm, pin, e, passes, eps, radius=None, tri=None, obstacle=No
     if DEBUG and press:
         print("[moss.debug] drape: %d clusters settled in %d passes" % (n, _ + 1))
     return q
+
+
+CREASE_ANGLE = 30.0  # degrees between neighbouring faces of the grown mound
+
+
+def _crease_vertices(v, t):
+    """Protect sharp bends and their one-ring support during collapse.
+
+    The full grown mound, not the rock's normals, is the reference: a draped
+    bridge may legitimately smooth over the rock underneath. Include both
+    sides of a bend and their neighbouring triangles so collapse cannot pull
+    the adjacent sheet away and leave a long thin fan attached to the ridge.
+    Smooth areas retain the authored triangle budget. Texture Only skips this.
+    """
+    keep = np.zeros(len(v), dtype=bool)
+    if len(t) < 2:
+        return keep
+    fn = normalize(np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]]))
+    e = np.sort(np.concatenate((t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]])), axis=1)
+    owner = np.tile(np.arange(len(t)), 3)
+    order = np.lexsort((e[:, 1], e[:, 0]))
+    e, owner = e[order], owner[order]
+    pairs = np.nonzero((e[1:] == e[:-1]).all(axis=1))[0]
+    sharp = pairs[(fn[owner[pairs]] * fn[owner[pairs + 1]]).sum(axis=1) < math.cos(math.radians(CREASE_ANGLE))]
+    keep[e[sharp].ravel()] = True
+    keep[np.unique(t[keep[t].any(axis=1)])] = True
+    return keep
 
 
 FOLD_ROUNDS = 8  # rounds of flipping folded edges, at most

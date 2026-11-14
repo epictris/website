@@ -45,6 +45,22 @@ A piece the scene already has is kept, edits and all, unless `--only` names it, 
 
 ## Where it stands
 
+The right bank extension is authored by `tools/blender/extend_grotto.py`
+(2026-11-14): six staggered solid guides, from x 20 to 44 m, with low
+water-edge shelves, a recessed high shelf and pillar, and a bank joining the
+right wall. It uses `backdrop.create` and the Formations worker. The guides'
+edges are rounded with a five-segment bevel (0.5–1.1 m by piece thickness)
+before generation to soften the extruded silhouettes. Moss is left to the
+artist's painter; the initial automatic growth has been removed.
+Each `backdrop.east-*` rock retains its
+editable guide and recipe. Run it with headless Blender on `river.blend`;
+it saves a `river.blend.pre-east-bank` backup before adding anything and
+keeps existing named additions on subsequent runs. `-- --smooth-guides`
+rounds existing additions once, regenerates them, and removes the automatic
+formation growth, with a `river.blend.pre-east-smoothing` backup.
+Export separately with
+`just scene ball` when the composition is ready for the game.
+
 The level opens with the camera locked by the camera region the spawn stands in (`lockX`, `lockY`; for the river (10.85, 8.0) m), at the guide camera's distance from the gameplay plane (10.24 m) with the level's 70 mm lens, a 19.5 degree vertical field.
 The studio picture was drawn through a 40 degree lens, so the solids cannot simply be moved and scaled into the game's view: from the game's eye they would show only the middle third of the picture.
 Instead every point keeps the angle it makes with the studio camera's axis, times `s`, at `k` times its depth.

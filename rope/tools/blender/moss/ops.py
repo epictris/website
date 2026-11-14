@@ -204,6 +204,11 @@ class _Inputs:
         # load handler's migration has not run there.
         ob.moss.migrate_scale()
         self.p = ob.moss.params()
+        self.stamps = stamp_io.read(ob.moss.stamps)
+        from .stampbrush import lod
+        texel = lod.budget(self.matrix, self.stamps, margin=self.p.grass_height,
+                           slope=lod.scene_slope(bpy.context.scene))
+        self.p = lod.moss_params(self.p, texel)
         if self.p.kind == "TEXTURE" and len(self.tri):
             # The export paints a texture-only moss into each rock's baked
             # colour map, so its decal previews that: printed at the map's
@@ -222,8 +227,7 @@ class _Inputs:
                 a, b, c = (co[tri[:, i]] for i in range(3))
                 world_area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a), axis=1).sum())
                 texels.append(render.colour_texel(h, area, world_area))
-            self.p = dataclasses.replace(self.p, texel=min(texels), max_texture=render.BAKE_SIZE_MAX)
-        self.stamps = stamp_io.read(ob.moss.stamps)
+            self.p = dataclasses.replace(self.p, texel=max(min(texels), self.p.texel), max_texture=render.BAKE_SIZE_MAX)
         self.key = _growth_key(parts_key(self.parts), self.matrix, self.stamps, self.p)
 
     @property
@@ -301,6 +305,7 @@ def apply(ob, inputs, result, reused, build_ms):
     it; `inputs` is what it was built from. Returns the result."""
     s = ob.moss
     p = inputs.p
+    ob["moss_built_kind"] = p.kind
     mesh_io.write_result(ob, result)
     s.triangles = len(result.triangles)
     s.dabs = result.dabs
@@ -380,11 +385,12 @@ def export_plan(scene):
             out.append((ob, None, None))
             continue
         inputs = _Inputs(ob, hosts, depsgraph)
-        if s.kind == "TEXTURE":
+        if inputs.p.kind == "TEXTURE":
             _export[ob.session_uid] = inputs
             s.status = _missing_status(ob)
             out.append((ob, "texture", inputs))
         elif s.built_key == _build_key(inputs.key, inputs.p) and len(ob.data.polygons) > 0:
+            mesh_io.refresh_emission(ob)
             s.status = _missing_status(ob)
             out.append((ob, "kept", inputs))
         else:
@@ -412,12 +418,14 @@ def prepare_texture_paints(scene, host_names):
     that the worker already baked is taken prepared (its surface unmoved)."""
     depsgraph = bpy.context.evaluated_depsgraph_get()
     for ob in moss_objects(scene):
-        if ob.moss.kind != "TEXTURE" or ob.session_uid in _export:
+        if ob.session_uid in _export:
             continue
         hosts = resolve_hosts(ob)
         if hosts is None or not any(h.name in host_names for h in hosts):
             continue
-        _export[ob.session_uid] = _Inputs(ob, hosts, depsgraph)
+        inputs = _Inputs(ob, hosts, depsgraph)
+        if inputs.p.kind == "TEXTURE":
+            _export[ob.session_uid] = inputs
 
 
 def texture_paints(scene):

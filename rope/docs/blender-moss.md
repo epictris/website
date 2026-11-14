@@ -1,9 +1,97 @@
 # Moss in Blender
 
+New moss defaults match `Terrace.003.moss` in `river.blend` (2026-11-14):
+Resolution **0.05 m**, Floor **0.001 m**, **400 triangles/m²**, Texel Size
+**0.005 m**, Max Texture **4096**, Detail **1**. Other generation settings and
+palette already match. Explicitly stored settings remain authoritative.
+
+## Crease protection during simplification
+
+The printed mound's collapse pass now protects bends of at least 30 degrees
+in the **grown mound**, plus the immediately neighbouring triangles. Its open
+edge remains protected as before. This keeps the surface around rock junctions
+while allowing smooth areas to follow Triangles / m²; that setting is a target,
+not a requirement to collapse away a crease. Texture Only does not run this pass.
+
+This fixes the triangular fans on `Terrace.015.moss`, spanning `Terrace.015` and
+`Cube.002`. At 400 triangles/m² the old collapse reduced a 19,277-triangle skin
+to 1,487 faces with edges up to 66 cm long; the clearance pass could lift it off
+the rock but could not recover the lost surface shape. Protecting the junction
+produces a 12,666-triangle cleared skin, with the largest sampled departure from
+the original mound reduced from 27.5 to 10.7 mm. The close-up render no longer
+shows the textured triangular fans. The paint, dab sizes and DOF rules are unchanged.
+
+Regression: `blender -b --factory-startup assets-src/scenes/river.blend
+--python-exit-code 1 --python tools/blender/moss_crease_check.py -- --render`
+checks the local crease mask, the real mound's geometric departure and rock
+clearance, then writes `/tmp/moss-crease-fixed.png`. It does not save the scene.
+
+## Automatic depth-of-field LOD
+
+Moss and ivy rebuilds (including export) now budget generated detail for the
+in-game **High** DOF setting. Blender's positive Y is behind the gameplay plane;
+foreground and the first 1.5 m behind it retain authored detail. The budget uses
+the nearest positive paint stamp's world-space extent, including its radius and
+a growth margin; ivy also includes the full extent of placed vines. An instance
+spanning sharp and blurred scenery conservatively keeps the sharper detail.
+
+The world-space blur radius is `0.016 * sensor_height / lens * (depth - 1.5)`.
+Camera distance cancels for the head-on perspective game camera. The generator
+uses two samples per blur radius for ivy, and one for moss, reading the lens from `guide.camera`, or the
+game's default 34-degree vertical field of view when no guide exists. Rebuild
+after moving scenery or changing the guide lens; export recalculates automatically.
+This is baked generation LOD, assuming High DOF, not runtime mesh switching.
+
+Moss scales its dab radii by `max(1, blur_radius / authored_dab_min)`, preserving
+the min/max ratio. It generates those larger dabs directly, without generating
+fine dabs to average later. Geometry spacing and print texels are independently
+bounded by the blur radius; mound density is capped and hidden grass omitted.
+The erosion, buffers and colour-placement controls remain authored. Once the blur
+radius reaches the authored moss grain (`Dab Min`, or `Floor + Lift` if smaller), moss automatically
+uses **Texture Only**: a decal preview in Blender and paint in the host rock's
+albedo on export, with no exported moss mesh. The authored mode stays unchanged,
+so moving it nearer restores Mound on rebuild. Like manual Texture Only, this
+mode has no emission. Authored colour
+placement and manual Detail remain in effect. Texture Only still exports into
+the host rock's existing map; this does not resize the rock's shared texture.
+Ivy switches to clump cards when individual leaves fall below the budget,
+coarsens surface refinement and clump spacing, and generates shared power-of-two
+atlas variants from 64 to 1024 pixels. Material variants keep near and far ivy's
+textures independent. Authored settings and paint are never rewritten.
+
+Verification: `blender -b --factory-startup --python-exit-code 1 --python
+tools/blender/growth_lod_check.py` checks focus/foreground, transformed paint,
+near/far ivy geometry and materials, and moss cache invalidation and generation.
+
+
 Since 2026-10-02 moss is **painted onto a scene in Blender** with the moss add-on, `tools/blender/moss/`, and grown as a low mound whose colour is printed dab by dab: a dark base at its rim, lighter clumps inside, and the lighter the moss, the taller it stands.
 It is the cave sheet study's moss carpet (the record is `cave-sheet-study/moss_study.py` and [cave-look](cave-look.md)), settled with the owner over many rounds on 2026-10-01 and 2026-10-02, made into a tool.
 Until that day "moss" was the name of the ivy add-on; it is now [blender-ivy](blender-ivy.md), and the owner's words on the difference were "the current moss pipeline is actually an ivy carpet pipeline. They are different effects".
 Like the ivy it lives entirely in Blender: the paint and the settings are saved in the `.blend`, the mound and its print are exported by `just scene <level>`, and the exporter first rebuilds any moss whose saved mound is not what its paint, settings and rock make now (see "The export keeps what is current").
+
+## Bioluminescence
+
+Since 2026-11-14 the **Bioluminescence** panel adds **Emission** (off by default),
+**Glow Colour** and **Glow Threshold** to existing **Mound** moss. Its painted
+dabs, mound geometry and tapered edges are unchanged. Only printed tones above
+the threshold between Dark and Light emit, rising toward the brightest summits;
+the dark margins stay matte. Equal Dark and Light colours have no brighter
+summits to select and emit nothing. Green/lime emission suits the entrance;
+teal/cyan suits the pool. The base palette remains the Tone panel's Dark/Light.
+
+These controls update the material directly, even with Live off: they do not
+regrow moss or change its paint. The generated emission image uses the existing
+print UVs, is packed in the `.blend`, and survives glTF as an emission texture
+with its strength. Copy to Selected and New Moss carry these controls too.
+Rebuilding the print refreshes emission, and export refreshes it for kept mounds.
+
+**Texture Only** moss is composited into rock albedo and does not support emission;
+the panel asks you to switch to **Mound** and rebuild. This avoids a Blender-only
+glow that disappears in the game. Existing moss remains non-emissive by default.
+
+For illumination of rocks, roots, vines and the player, place matching lights in
+the level editor. Emission is surface appearance; Blender scene lights are dropped
+on export. See [lighting-and-surfaces](lighting-and-surfaces.md).
 
 ## Install
 

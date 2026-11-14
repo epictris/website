@@ -31,6 +31,7 @@ from .surface import DOWN, NO_AVOID, UP, X_AXIS, clamp, jround, rand, sign, smoo
 
 @dataclass
 class FernParams:
+    lod_texel: float = 0.0  # world-space generation error budget; authored settings stay unchanged
     variety: str = "PAINTED"  # PAINTED, LEAFLET or SPRIG
     fronds: int = 18
     length: float = 0.45
@@ -209,7 +210,7 @@ class _Fern:
         self.ax_b = self.axis.cross(self.ax_a).normalized()
         self.frond_pool = list(p.pieces) or list(library.FRONDS)
         self.by_light = library.by_light(library.shades(p.shades))
-        self.out = Builder()
+        self.out = Builder(p.lod_texel)
         self.dome = self.crown - self.normal * (0.3 * p.length)  # the centre of the clump's shading dome
         self.placed = []
         self.fronds = 0

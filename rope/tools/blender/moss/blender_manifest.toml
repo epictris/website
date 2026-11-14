@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "moss"
-version = "1.0.0"
+version = "1.1.0"
 name = "Moss"
 tagline = "Paint painterly moss onto rocks: printed dabs on a mound, the lighter the taller"
 maintainer = "Tristan Bray"

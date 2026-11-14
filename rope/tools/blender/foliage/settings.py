@@ -6,16 +6,33 @@ plant. The mesh is output only: these settings and that transform are the
 source, and any rebuild (the panel's, or the scene exporter's) grows it again."""
 
 import bpy
-from bpy.props import BoolProperty, BoolVectorProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, BoolVectorProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, StringProperty
 
-from . import library
+from . import glowflora, library
 from .fern import VARIETY_DEFAULTS, FernParams
 from .vine import VineParams
 
 KINDS = (
     ("FERN", "Fern", "A clump of fronds from one crown: painted fronds, leaflets on stems, or leaf sprigs (a bush)"),
     ("VINE", "Hanging Vine", "A stem that crawls over its rock, lets go at an overhang and hangs, with painted leaves"),
+    ("MUSHROOM", "Mushrooms", "Stemmed caps or thin wall shelves with luminous rims"),
+    ("ORBS", "Pendant Orbs", "Compact ceiling bulbs on individual short stalks; no vine strands"),
+    ("GLOW", "Glow Flora", "A patch of glowing mushrooms, lantern blooms, ferns and reeds (the Glowshroom Generator's)"),
 )
+BIOLUME_KINDS = {"MUSHROOM", "ORBS"}
+GLOW_KINDS = (
+    ("GROVE", "Grove", "A mushroom cluster with lantern blooms, ferns and reeds around it"),
+    ("MUSHROOM", "Mushrooms", "A cluster of glowing mushrooms on a mound"),
+    ("LANTERN", "Lanterns", "Arched stalks with hanging glowing bulbs"),
+    ("FERN", "Ferns", "Glow ferns with unfurling fiddleheads"),
+    ("REED", "Reeds", "Blade tufts with glowing seed pods"),
+)
+GLOW_PALETTES = tuple((k.upper(), k.title(), "") for k in glowflora.PALETTES)
+
+
+def glow_prop(kind, key):
+    """The property holding a glow patch kind's option, e.g. glow_mushroom_count."""
+    return f"glow_{kind}_{key}"
 VARIETIES = (
     ("PAINTED", "Painted Fronds", "Each frond one painted card, folded down its midrib"),
     ("LEAFLET", "Leaflets", "Each frond a stem with pairs of small painted leaves"),
@@ -114,6 +131,41 @@ class FoliageSettings(bpy.types.PropertyGroup):
     frond_pieces: BoolVectorProperty(name="Fronds", size=len(library.FRONDS), default=(True,) * len(library.FRONDS),
                                      description="The painted fronds the clump picks from", update=_changed)
 
+    # Solid cave plants. Lengths are metres before the object's scale.
+    mushroom_form: EnumProperty(name="Form", items=(("CAP", "Stemmed Caps", "Umbrella caps with luminous gills"),
+                                                     ("SHELF", "Wall Shelves", "Thin fans projecting from a wall")), update=_changed)
+    cluster_count: IntProperty(name="Count", default=5, min=1, max=24, update=_changed)
+    cluster_radius: _length("Cluster Radius", 0.22, 0.01, 1.5, "Area over which individual attachments are placed")
+    bio_size: _length("Size", 0.12, 0.015, 0.6, "Cap radius, orb radius, or frond half-width")
+    bio_height: _length("Height", 0.38, 0.03, 2.0, "Stem height or frond length; shelves and orb stalks have their own proportions")
+    bio_variation: _factor("Size Variation", 0.45, "Independent seeded variation in width and height")
+    shape_variation: _factor("Shape Variation", 0.7, "Variation in cap profiles, bulb proportions, stem bends and frond curls")
+    surface_detail: _factor("Surface Detail", 0.7, "Cap surface markings, soft orb lobe depth, and subtle frond twist; outlines stay smooth")
+    cap_dome: _factor("Cap Dome", 0.32, "Cap height relative to radius; shelves use a quarter of this")
+    orb_stalk: _factor("Stalk Length", 0.65, "Short individual stalk length, as a fraction of the bulb's diameter")
+    body_color: FloatVectorProperty(name="Body Colour", size=3, subtype="COLOR", min=0.0, max=1.0,
+                                   default=(0.055, 0.18, 0.025), update=_changed)
+    glow_color: FloatVectorProperty(name="Glow Colour", size=3, subtype="COLOR", min=0.0, max=1.0,
+                                   default=(0.45, 1.0, 0.12), update=_changed)
+    glow_strength: FloatProperty(name="Emission", default=2.5, min=0.0, soft_max=10.0,
+                                 description="Surface brightness; nearby game lights illuminate the surroundings", update=_changed)
+
+    # Glow flora (glowflora.py). The patch's own options are `glow_<kind>_<key>`,
+    # one set per patch kind as the web generator keeps them, added below the class.
+    glow_kind: EnumProperty(name="Patch", items=GLOW_KINDS, default="GROVE", update=_changed)
+    glow_palette: EnumProperty(name="Palette", items=GLOW_PALETTES, default="PASTEL", update=_changed)
+    glow_detail: EnumProperty(name="Detail", items=(("0", "High", "Close-up detail"), ("1", "Mid", "About half the triangles"),
+                                                    ("2", "Low", "About an eighth of the triangles, for distant patches")),
+                              default="0", update=_changed)
+    glow_collisions: BoolProperty(name="Keep Apart", default=True, update=_changed,
+                                  description="Move plants until nothing intersects another plant, the mound, the ground or itself, "
+                                              "with room for the sway")
+    glow_edits: StringProperty(name="Edits", default="", options={"HIDDEN"}, update=_changed,
+                               description="Per-plant edits from a pasted patch (JSON): the plants as they were edited in the web generator")
+    glow_items: IntProperty(options={"HIDDEN"})
+    glow_remaining: IntProperty(options={"HIDDEN"})
+    glow_dropped: IntProperty(options={"HIDDEN"})
+
     # Read back after a build, for the panel.
     triangles: IntProperty(options={"HIDDEN"})
     leaves: IntProperty(options={"HIDDEN"})
@@ -127,8 +179,15 @@ class FoliageSettings(bpy.types.PropertyGroup):
                  "natural", "painted_leaves", "silhouette_leaves")
     FERN_KEYS = ("variety", "fronds", "fern_length", "length_var", "droop", "spread", "lean", "fold", "twist", "croziers",
                  "pinnae", "leaflets", "fern_leaf_size", "leaf_curve", "leaf_form", "mirror_pairs", "leaf_variation", "frond_pieces")
+    BIO_KEYS = ("cluster_count", "cluster_radius", "bio_size", "bio_height", "bio_variation", "shape_variation", "surface_detail",
+                "body_color", "glow_color", "glow_strength")
 
     def keys_for(self, kind):
+        if kind == "GLOW":
+            return GLOW_KEYS
+        if kind in BIOLUME_KINDS:
+            return self.BIO_KEYS + {"MUSHROOM": ("mushroom_form", "cap_dome"),
+                                   "ORBS": ("orb_stalk",)}[kind]
         return self.SHARED + (self.FERN_KEYS if kind == "FERN" else self.VINE_KEYS)
 
     def copy_from(self, other):
@@ -174,9 +233,34 @@ class FoliageSettings(bpy.types.PropertyGroup):
                           leaf_form=self.leaf_form, mirror_pairs=self.mirror_pairs, leaf_variation=self.leaf_variation,
                           pieces=tuple(p for p, on in zip(library.FRONDS, self.frond_pieces) if on), shades=tuple(self.shades))
 
+    def glow_params(self):
+        """The web generator's options for this patch: its kind's, the palette and the seed."""
+        kind = self.glow_kind.lower()
+        p = {"kind": kind, "seed": self.seed, "palette": self.glow_palette.lower()}
+        for key, *_rest in glowflora.PATCH_FIELDS[kind]:
+            p[key] = getattr(self, glow_prop(kind, key))
+        return p
+
+    def set_glow_params(self, params):
+        """Take a pasted patch's options (not live: the caller rebuilds)."""
+        kind = params["kind"]
+        self.glow_kind = kind.upper()
+        if str(params.get("palette", "")).upper() in {k for k, _l, _d in GLOW_PALETTES}:
+            self.glow_palette = params["palette"].upper()
+        self.seed = int(params.get("seed", self.seed)) & 0x7FFFFFFF
+        for key, *_rest in glowflora.PATCH_FIELDS[kind]:
+            if key in params:
+                setattr(self, glow_prop(kind, key), params[key])
+
     def reach(self, scale=1.0):
         """How far from its root the plant can reach: a sphere nothing outside of
         which can change how it grows."""
+        if self.kind == "GLOW":
+            p = self.glow_params()
+            across = p.get("spread", 0.0) + p.get("width", 0.0) * p["size"] / 0.55
+            return (3.0 * p["size"] + 2.0 * across + 0.5) * scale
+        if self.kind in BIOLUME_KINDS:
+            return (self.cluster_radius + (self.bio_height + 7 * self.bio_size) * (1 + self.bio_variation)) * scale + 0.15
         if self.kind == "VINE":
             return self.vine_length * scale + 2.0 * self.vine_leaf_size * scale + 0.1
         return self.fern_length * scale * (1.0 + self.length_var) * 1.3 + 0.1
@@ -187,6 +271,25 @@ class FoliageScatter(bpy.types.PropertyGroup):
     spacing: FloatProperty(name="Spacing", default=0.3, min=0.05, soft_max=3.0, subtype="DISTANCE", unit="LENGTH",
                            description="The least distance between two ferns' crowns")
 
+
+def _glow_options():
+    """One property per patch kind and option, ranged as the web generator's sliders."""
+    keys = []
+    for kind, fields in glowflora.PATCH_FIELDS.items():
+        for key, label, lo, hi, step in fields:
+            name = glow_prop(kind, key)
+            default = glowflora.DEFAULTS[kind][key]
+            if step >= 1:
+                prop = IntProperty(name=label, default=int(default), min=int(lo), max=int(hi), update=_changed)
+            else:
+                prop = FloatProperty(name=label, default=float(default), min=float(lo), max=float(hi), step=step * 100,
+                                     precision=2, update=_changed)
+            FoliageSettings.__annotations__[name] = prop
+            keys.append(name)
+    return tuple(keys)
+
+
+GLOW_KEYS = ("glow_kind", "glow_palette", "glow_detail", "glow_collisions", "glow_edits") + _glow_options()
 
 CLASSES = (FoliageSettings, FoliageScatter)
 

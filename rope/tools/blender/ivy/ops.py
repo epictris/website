@@ -308,9 +308,17 @@ def build_job(ob, depsgraph=None):
     finally:
         s.live = live
     depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
+    from .stampbrush import lod
+    stamps = mesh_io.read_stamps(s.stamps)
+    vines = read_vines(ob, host)
+    p = s.params()
+    texel = lod.budget(host.matrix_world, stamps, vines,
+                       margin=p.thickness + p.leaf_max + p.shadow_reach * p.shadow_drop,
+                       slope=lod.scene_slope(bpy.context.scene))
+    p = lod.ivy_params(p, texel, float(max(vines.length, default=0)))
     return {"parts": host_parts(hosts, depsgraph), "matrix": [list(r) for r in host.matrix_world],
-            "stamps": mesh_io.read_stamps(s.stamps), "vines": read_vines(ob, host),
-            "origin": read_origin(ob, host), "p": s.params()}
+            "stamps": stamps, "vines": vines,
+            "origin": read_origin(ob, host), "p": p}
 
 
 def grow_job(job):

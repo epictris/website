@@ -18,6 +18,7 @@ import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
 import { wearIvyLeaves } from "./ivyLeaves";
+import { isGlowFlora, reattachGlowFloraDepth, wearGlowFlora } from "./glowFlora";
 import { isDepthStandIn, isPicture, joinDepthPrepass, joinPictureDepth } from "./depthPrepass";
 import { isPrintedMoss, wearMossMound } from "./mossMound";
 import { threeRotation, threeY } from "./space";
@@ -61,6 +62,15 @@ export const SCENERY_TAG: unique symbol = Symbol("scenery");
 // it, so a backdrop ledge modelled flush with the plane still casts.
 const SHADOW_Z = -0.05;
 
+// A copy of a loaded export (a scene or a model) to mount: geometry and
+// materials shared, and what three's clone drops put back (a glow plant's
+// swaying shadow, glowFlora.ts).
+export function mountExport(loaded: THREE.Object3D): THREE.Object3D {
+  const clone = loaded.clone(true);
+  reattachGlowFloraDepth(clone);
+  return clone;
+}
+
 // Place a loaded scene against the bodies. `loaded` is cloned, never touched:
 // the file is cached for the page and mounted again on every rebuild (the
 // editor rebuilds on every edit), and geometry and materials are shared
@@ -69,7 +79,7 @@ export function dressScene(loaded: THREE.Object3D, targets: readonly DressTarget
   const scenery = new THREE.Group();
   scenery.name = "scenery";
   scenery.userData["pickTag"] = SCENERY_TAG;
-  const clone = loaded.clone(true);
+  const clone = mountExport(loaded);
   clone.updateMatrixWorld(true);
   // Each of the clone's top-level nodes and the file's node it is a copy of,
   // which is what a scenery node's shadow verdict is kept under (below).
@@ -256,6 +266,7 @@ function loadExportFile(file: string, bytes: number, label: string): Promise<THR
         let ivyMeshes = 0;
         let foliageMeshes = 0;
         let mossMeshes = 0;
+        let glowMeshes = 0;
         // Taken after the walk, so the walk never meets a stand-in it has
         // just added (and casts it a shadow).
         const prepass: THREE.Mesh[] = [];
@@ -299,7 +310,12 @@ function loadExportFile(file: string, bytes: number, label: string): Promise<THR
           // hanging vines) are leaves too, and wear one material, `Foliage`,
           // found by its name, which glTF and the optimiser keep: whatever
           // the plant's object is called, its cards are alpha-cut leaves.
-          const foliage = mats.some((m) => /^Foliage(\.\d+)?$/.test(m.name));
+          const foliage = mats.some((m) => /^Foliage(?:\.LOD[248])?(\.\d+)?$/.test(m.name));
+          // Glow flora (the foliage add-on's glow patches) carry their
+          // shader's inputs as vertex attributes, and wear the glow shader
+          // in place of whatever material the optimiser left them; it sways,
+          // so it keeps out of the depth prepass (its material is patched).
+          if (isGlowFlora(mesh) && wearGlowFlora(mesh)) glowMeshes++;
           mesh.castShadow = !decal;
           mesh.receiveShadow = true;
           // ...and the leaves receive with finer biases than the sun's, so a
@@ -319,6 +335,7 @@ function loadExportFile(file: string, bytes: number, label: string): Promise<THR
         if (pictures > 0) console.log(`[render3d] ${label}: ${pictures} pictures lay their depth after them`);
         if (ivyMeshes > 0) console.log(`[render3d] ${label}: ${ivyMeshes} ivy meshes cast and receive leaf shadows`);
         if (foliageMeshes > 0) console.log(`[render3d] ${label}: ${foliageMeshes} plant meshes cast and receive leaf shadows`);
+        if (glowMeshes > 0) console.log(`[render3d] ${label}: ${glowMeshes} glow flora meshes glow and sway`);
         if (mossMeshes > 0) console.log(`[render3d] ${label}: ${mossMeshes} moss mounds cut and lipped by their print`);
         return gltf.scene as THREE.Object3D;
       })

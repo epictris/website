@@ -23,7 +23,7 @@ MATERIAL_VERSION = 1
 ATLAS_CUTOFF = 0.35  # below 0.5 so mip levels do not eat the leaf edges at a distance (the ivy's cutoff)
 
 
-def write_result(me, arrays, matrix_world):
+def write_result(me, arrays, matrix_world, plant_material=None):
     """Write a builder's arrays (world space) into `me`, in the frame of the
     object whose world matrix is `matrix_world`."""
     pos, nrm, uv, col, tri = arrays
@@ -54,7 +54,7 @@ def write_result(me, arrays, matrix_world):
     layer.data.foreach_set("uv", uv[tri.ravel()].astype(np.float32).ravel())
     me.shade_smooth()
     me.normals_split_custom_set_from_vertices(ln.astype(np.float32).tolist())
-    mat = material()
+    mat = plant_material if plant_material is not None else material()
     if list(me.materials) != [mat]:
         me.materials.clear()
         me.materials.append(mat)
@@ -91,19 +91,63 @@ def atlas():
     return img
 
 
-def material():
+def lod_atlas(factor):
+    if factor == 1:
+        return atlas()
+    name = f"foliage-lod-v{library.ATLAS_VERSION}-{factor}"
+    img = bpy.data.images.get(name)
+    if img is None:
+        source = atlas()
+        w, h = source.size
+        pixels = np.empty(w * h * 4, dtype=np.float32)
+        source.pixels.foreach_get(pixels)
+        pixels = pixels.reshape(h, w, 4)
+        # Average premultiplied colour so transparent edges cannot darken.
+        rgb = pixels[..., :3]
+        pixels[..., :3] = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+        pixels[..., :3] *= pixels[..., 3:4]
+        pixels = pixels.reshape(h // factor, factor, w // factor, factor, 4).mean(axis=(1, 3))
+        pixels[..., :3] /= np.maximum(pixels[..., 3:4], 1e-8)
+        rgb = pixels[..., :3]
+        pixels[..., :3] = np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * rgb ** (1 / 2.4) - 0.055)
+        pixels = library._bleed(pixels)
+        img = bpy.data.images.new(name, w // factor, h // factor, alpha=True)
+        img.pixels.foreach_set(pixels.ravel())
+        img.pack()
+    return img
+
+
+def lod_material(arrays, texel):
+    factor = 1
+    if texel > 0:
+        pos, _nrm, uv, _col, tri = arrays
+        pitch = 0.0
+        for i, j in ((0, 1), (1, 2), (2, 0)):
+            pixels = np.linalg.norm((uv[tri[:, i]] - uv[tri[:, j]]) * (library.ATLAS_W, library.ATLAS_H), axis=1)
+            valid = pixels > 1e-6  # stems sample the solid cell
+            if valid.any():
+                metres = np.linalg.norm(pos[tri[:, i]] - pos[tri[:, j]], axis=1)
+                pitch = max(pitch, float((metres[valid] / pixels[valid]).max()))
+        # At least a two-texel sheet gutter, even for the deepest scenery.
+        while pitch > 0 and factor < 8 and pitch * factor * 2 <= texel:
+            factor *= 2
+    return material(factor)
+
+
+def material(factor=1):
     """`Foliage`, rebuilt when MATERIAL_VERSION moves. Every node is one the
     scene exporter carries to glTF: baseColorTexture x COLOR_0, alphaMode MASK
     at ATLAS_CUTOFF, doubleSided."""
-    mat = bpy.data.materials.get(MATERIAL_NAME)
+    name = MATERIAL_NAME if factor == 1 else f"{MATERIAL_NAME}.LOD{factor}"
+    mat = bpy.data.materials.get(name)
     if mat is not None and mat.get("foliage_material") == MATERIAL_VERSION:
-        img = atlas()
+        img = lod_atlas(factor)
         for n in mat.node_tree.nodes:
             if n.type == "TEX_IMAGE" and n.image != img:
                 n.image = img
         return mat
     if mat is None:
-        mat = bpy.data.materials.new(MATERIAL_NAME)
+        mat = bpy.data.materials.new(name)
     if mat.node_tree is None:
         mat.use_nodes = True
     mat["foliage_material"] = MATERIAL_VERSION
@@ -123,7 +167,7 @@ def material():
     tint.layer_name = COLOR
     tint.location = (x - 600, y - 200)
     tex = nt.nodes.new("ShaderNodeTexImage")
-    tex.image = atlas()
+    tex.image = lod_atlas(factor)
     tex.location = (x - 600, y + 150)
     mix = nt.nodes.new("ShaderNodeMix")
     mix.data_type = "RGBA"

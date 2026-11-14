@@ -3,6 +3,8 @@
 import bpy
 
 from . import icons, library, ops
+from .glowflora import PATCH_FIELDS
+from .settings import BIOLUME_KINDS, KINDS, glow_prop
 
 
 def _col(layout, s, names):
@@ -36,6 +38,8 @@ class FOLIAGE_PT_main(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator("foliage.place", text="Add Fern", icon="OUTLINER_OB_POINTCLOUD").kind = "FERN"
         row.operator("foliage.place", text="Add Vine", icon="CURVE_PATH").kind = "VINE"
+        for kind, label, _description in KINDS[2:]:
+            layout.operator("foliage.place", text=f"Add {label}", icon="ADD").kind = kind
         sc = context.scene.foliage_scatter
         box = layout.box()
         row = box.row(align=True)
@@ -49,11 +53,20 @@ class FOLIAGE_PT_main(bpy.types.Panel):
             box.label(text="Add a plant, or select one", icon="INFO")
         else:
             s = ob.foliage
-            box.label(text=f"{'Fern' if s.kind == 'FERN' else 'Hanging vine'} on {s.host}", icon="OUTLINER_OB_MESH")
+            name = next(label for key, label, _description in KINDS if key == s.kind)
+            box.label(text=f"{name} on {s.host}", icon="OUTLINER_OB_MESH")
             if s.status:
                 box.label(text=s.status, icon="ERROR")
             elif s.kind == "FERN":
                 box.label(text=f"{s.triangles:,} tris, {s.parts} fronds, {s.leaves} leaves, {s.build_ms:.0f} ms")
+            elif s.kind == "GLOW":
+                box.label(text=f"{s.triangles:,} tris, {s.glow_items} plants, {s.build_ms:.0f} ms")
+                if s.glow_remaining:
+                    box.label(text=f"{s.glow_remaining} still intersecting", icon="ERROR")
+                if s.glow_dropped:
+                    box.label(text=f"{s.glow_dropped} did not fit on the host", icon="INFO")
+            elif s.kind in BIOLUME_KINDS:
+                box.label(text=f"{s.triangles:,} tris, {s.parts} parts, {s.build_ms:.0f} ms")
             else:
                 box.label(text=f"{s.triangles:,} tris, {s.leaves} leaves, {s.build_ms:.0f} ms")
             row = box.row(align=True)
@@ -138,7 +151,8 @@ class FOLIAGE_PT_colour(_Sub, bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return ops.active_plant(context) is not None
+        ob = ops.active_plant(context)
+        return ob is not None and ob.foliage.kind in {"FERN", "VINE"}
 
     def draw(self, context):
         s = ops.active_plant(context).foliage
@@ -150,4 +164,62 @@ class FOLIAGE_PT_colour(_Sub, bpy.types.Panel):
             grid.prop(s, "shades", index=i, text=name, toggle=True)
 
 
-CLASSES = (FOLIAGE_PT_main, FOLIAGE_PT_fern, FOLIAGE_PT_vine, FOLIAGE_PT_colour)
+class FOLIAGE_PT_biolume(_Sub, bpy.types.Panel):
+    bl_label = "Cave Foliage"
+
+    @classmethod
+    def poll(cls, context):
+        ob = ops.active_plant(context)
+        return ob is not None and ob.foliage.kind in BIOLUME_KINDS
+
+    def draw(self, context):
+        s = ops.active_plant(context).foliage
+        layout = self.layout
+        if s.kind == "MUSHROOM":
+            layout.prop(s, "mushroom_form", expand=True)
+        _col(layout, s, ("cluster_count", "cluster_radius", "bio_size", "bio_variation", "shape_variation", "surface_detail"))
+        if s.kind == "MUSHROOM" and s.mushroom_form == "CAP":
+            layout.prop(s, "bio_height")
+        if s.kind == "MUSHROOM":
+            layout.prop(s, "cap_dome")
+        elif s.kind == "ORBS":
+            layout.prop(s, "orb_stalk")
+            layout.label(text="Place on an underside or overhang")
+        _col(layout, s, ("body_color", "glow_color", "glow_strength"))
+        layout.label(text="Add nearby lights in the level editor", icon="LIGHT")
+
+
+class FOLIAGE_PT_glow(_Sub, bpy.types.Panel):
+    bl_label = "Glow Flora"
+
+    @classmethod
+    def poll(cls, context):
+        ob = ops.active_plant(context)
+        return ob is not None and ob.foliage.kind == "GLOW"
+
+    def draw(self, context):
+        s = ops.active_plant(context).foliage
+        layout = self.layout
+        grid = layout.grid_flow(row_major=True, columns=3, even_columns=True, align=True)
+        grid.prop(s, "glow_kind", expand=True)
+        row = layout.row(align=True)
+        row.prop(s, "glow_palette", text="")
+        row.prop(s, "glow_detail", expand=True)
+        layout.prop(s, "glow_collisions")
+        kind = s.glow_kind.lower()
+        col = layout.column(align=True)
+        for key, *_rest in PATCH_FIELDS[kind]:
+            col.prop(s, glow_prop(kind, key))
+        box = layout.box()
+        box.label(text="Glowshroom Generator")
+        row = box.row(align=True)
+        row.operator("foliage.glow_paste", icon="PASTEDOWN")
+        row.operator("foliage.glow_copy", icon="COPYDOWN")
+        if s.glow_edits:
+            row = box.row()
+            row.label(text="Plants edited there are kept", icon="LOCKED")
+            row.operator("foliage.glow_clear_edits", text="", icon="X")
+        layout.label(text="Light the patch in the level editor", icon="LIGHT")
+
+
+CLASSES = (FOLIAGE_PT_main, FOLIAGE_PT_fern, FOLIAGE_PT_vine, FOLIAGE_PT_colour, FOLIAGE_PT_biolume, FOLIAGE_PT_glow)

@@ -67,7 +67,7 @@ import { acquireRootMeshes, releaseRootMeshes, type RootMeshSet } from "./rootBa
 import { rootMeshKey } from "./rootKey";
 import { beltLoopOf } from "../render/beltTread";
 import { orientTo, placeAt, threeY } from "./space";
-import { decodedFile, loadModelFile, noShadowBehindPlane } from "./sceneDressing";
+import { decodedFile, loadModelFile, mountExport, noShadowBehindPlane } from "./sceneDressing";
 import { modelFile } from "./models";
 
 // The floor an authored colour's brightness is lifted to before it tints a
@@ -506,7 +506,7 @@ export class BodyVisual {
       const solid = data.objects.some(isCollisionObject);
       const land = (loaded: THREE.Object3D | null, late: boolean): void => {
         if (!loaded || this.disposed) return;
-        const node = loaded.clone(true);
+        const node = mountExport(loaded);
         holder.add(node);
         node.updateWorldMatrix(true, true);
         if (!solid) noShadowBehindPlane(node);

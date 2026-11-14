@@ -54,6 +54,14 @@ def on_load(_):
         if found is not None and found.library is None:
             found.name = new
     legacy.end_edit_sessions()
+    # Preview walls and fog volumes must remain visible to lighting, but
+    # never intercept ordinary selection. Brush ray casts exclude them too
+    # (stampbrush.brush.paintable), since ray_cast ignores hide_select.
+    for ob in bpy.data.objects:
+        if ob.library is None and ob.name.startswith("game.light-preview"):
+            ob.hide_select = True
+            if ob.name in bpy.context.view_layer.objects:
+                ob.select_set(False)
     scene = bpy.context.scene
     if scene is not None and scene.library is None and outlines.collision_outlines(scene):
         if "game_outline_opacity" not in scene.bl_system_properties_get(do_create=True) \

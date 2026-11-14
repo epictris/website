@@ -1,5 +1,43 @@
 # Ivy in Blender
 
+## Automatic depth-of-field LOD
+
+Moss and ivy rebuilds (including export) now budget generated detail for the
+in-game **High** DOF setting. Blender's positive Y is behind the gameplay plane;
+foreground and the first 1.5 m behind it retain authored detail. The budget uses
+the nearest positive paint stamp's world-space extent, including its radius and
+a growth margin; ivy also includes the full extent of placed vines. An instance
+spanning sharp and blurred scenery conservatively keeps the sharper detail.
+
+The world-space blur radius is `0.016 * sensor_height / lens * (depth - 1.5)`.
+Camera distance cancels for the head-on perspective game camera. The generator
+uses two samples per blur radius for ivy, and one for moss, reading the lens from `guide.camera`, or the
+game's default 34-degree vertical field of view when no guide exists. Rebuild
+after moving scenery or changing the guide lens; export recalculates automatically.
+This is baked generation LOD, assuming High DOF, not runtime mesh switching.
+
+Moss scales its dab radii by `max(1, blur_radius / authored_dab_min)`, preserving
+the min/max ratio. It generates those larger dabs directly, without generating
+fine dabs to average later. Geometry spacing and print texels are independently
+bounded by the blur radius; mound density is capped and hidden grass omitted.
+The erosion, buffers and colour-placement controls remain authored. Once the blur
+radius reaches the authored moss grain (`Dab Min`, or `Floor + Lift` if smaller), moss automatically
+uses **Texture Only**: a decal preview in Blender and paint in the host rock's
+albedo on export, with no exported moss mesh. The authored mode stays unchanged,
+so moving it nearer restores Mound on rebuild. Like manual Texture Only, this
+mode has no emission. Authored colour
+placement and manual Detail remain in effect. Texture Only still exports into
+the host rock's existing map; this does not resize the rock's shared texture.
+Ivy switches to clump cards when individual leaves fall below the budget,
+coarsens surface refinement and clump spacing, and generates shared power-of-two
+atlas variants from 64 to 1024 pixels. Material variants keep near and far ivy's
+textures independent. Authored settings and paint are never rewritten.
+
+Verification: `blender -b --factory-startup --python-exit-code 1 --python
+tools/blender/growth_lod_check.py` checks focus/foreground, transformed paint,
+near/far ivy geometry and materials, and moss cache invalidation and generation.
+
+
 Since 2026-09-28 ivy is **painted onto a scene in Blender** and grown as real geometry: since 2026-09-30 an ivy carpet of flat leaves wherever it is painted, grown out from one origin point, and a vine of the same leaves wherever one is placed.
 It is a Blender add-on, `tools/blender/ivy/`, and it lives entirely in Blender: the paint, the origin, the vine anchors and the settings are saved in the `.blend`, the grown mesh is exported by `just scene <level>` like any other scenery, and nothing outside Blender edits it.
 See [blender-scenes](blender-scenes.md) for the scene pipeline it rides on.
