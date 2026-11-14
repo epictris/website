@@ -16,6 +16,9 @@ import {
   isKeyed,
   pathDataOf,
   CAMERA_REGION_COLOR,
+  SHELTER_COLOR,
+  FOG_REGION_COLOR,
+  fogRegionInner,
   FIREFLY_PATH_COLOR,
   chainEnds,
   chainPath,
@@ -64,7 +67,10 @@ import {
   DEFAULT_ROOT_COLOR,
   DEFAULT_VIEWPORT_SCALE,
   moveModeCloses,
+  DEFAULT_SHELTER_FRONT,
 } from "../level/levelFormat";
+import { DEFAULT_SUN_DIR, DEFAULT_SUN_INTENSITY } from "../render3d/environment";
+import { shelterShadowOffset } from "../render3d/shelterCover";
 import { MASK_ALL } from "../engine/body";
 import {
   outlineOfData,
@@ -2144,6 +2150,10 @@ export function drawEditor(
     (i) =>
       i.object === "collision" &&
       !(i.shape.kind === "path" && i.layer !== "scene") &&
+      // A shelter is light, not stuff: its own pass below draws it, on its own
+      // layer's visibility.
+      i.layer !== "shelter" &&
+      i.layer !== "fog" &&
       !isCheckpointNote(i),
   );
   const ordered = visibleLayers.has("scene")
@@ -2547,6 +2557,77 @@ export function drawEditor(
     ctx.lineTo(chainDraft.to.x, chainDraft.to.y);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  // Shelters above the geometry they darken, under the camera's annotations:
+  // a shade over the wall's outline, the outline dashed (a wall nobody sees,
+  // not a solid), and dotted where the wall's SHADOW lands on the play plane -
+  // offset along the sun's travel by its distance in front
+  // (`shelterShadowOffset`), which is the line the sun actually stops at and
+  // what a wall is placed by. The light itself is the 3D views'.
+  //
+  // MULTIPLIED, because a shade only ever takes light away: laid over as
+  // paint, the wash lifted a dark body inside the shelter toward its own slate.
+  // And over a 3D scene ("outline") there is none: the scene IS the shelter's
+  // light, and this canvas is a transparent sheet over it, where a multiply
+  // has nothing beneath it to darken and would paint the slate on instead.
+  const shelterItems = visibleLayers.has("shelter") ? model.items.filter((i) => i.layer === "shelter") : [];
+  const env = model.environment;
+  const sun =
+    (env?.sunIntensity ?? DEFAULT_SUN_INTENSITY) > 0
+      ? { x: env?.sunX ?? DEFAULT_SUN_DIR.x, y: env?.sunY ?? DEFAULT_SUN_DIR.y, z: env?.sunZ ?? DEFAULT_SUN_DIR.z }
+      : null;
+  for (const s of shelterItems) {
+    const off = shelterShadowOffset(s.shelter.front ?? DEFAULT_SHELTER_FRONT, sun);
+    if (!off) continue;
+    ctx.save();
+    ctx.translate(off.x, off.y);
+    pathBody(ctx, s);
+    ctx.restore();
+    ctx.strokeStyle = SHELTER_COLOR;
+    ctx.lineWidth = worldLine;
+    ctx.setLineDash([1.5 * PX, 3 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (layers === "fill") {
+    const op = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = "multiply";
+    for (const s of shelterItems) {
+      pathBody(ctx, s);
+      ctx.fillStyle = paint(hexToRgba(SHELTER_COLOR, s.opacity));
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = op;
+  }
+  for (const s of shelterItems) {
+    pathBody(ctx, s);
+    if (selectedIds.has(s.id)) {
+      ctx.strokeStyle = SELECT;
+      ctx.lineWidth = worldLine * 5;
+      ctx.stroke();
+    }
+    ctx.strokeStyle = SHELTER_COLOR;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (visibleLayers.has("fog")) for (const region of model.items.filter((i) => i.layer === "fog")) {
+    pathBody(ctx, region);
+    ctx.strokeStyle = selectedIds.has(region.id) ? SELECT : FOG_REGION_COLOR;
+    ctx.lineWidth = worldLine * (selectedIds.has(region.id) ? 2.5 : 1.5);
+    ctx.setLineDash([]);
+    ctx.stroke();
+    const inner = fogRegionInner(region);
+    if (inner) {
+      pathBody(ctx, inner);
+      ctx.lineWidth = worldLine;
+      ctx.setLineDash([4 * PX, 4 * PX]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 
   // Camera regions above the geometry they reshape — they are annotations on a
@@ -3016,7 +3097,8 @@ export function drawEditor(
   // because the pieces are what the physics is - the rope wraps their shared
   // corners and refuses their seams - and because a count in the panel says how
   // many there are without saying where a cut has landed across a face.
-  if (selected && selected.shape.kind === "poly" && !polyMustBeConvex(selected)) {
+  // A collision outline only: a shelter is read whole, so it has no cut.
+  if (selected && selected.shape.kind === "poly" && selected.layer === "scene" && !polyMustBeConvex(selected)) {
     const seams = decomposeSeams(selected.shape.verts);
     if (seams.length) {
       ctx.strokeStyle = SEAM;

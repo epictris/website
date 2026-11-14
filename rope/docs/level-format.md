@@ -1,5 +1,7 @@
 # Level files and format
 
+`fogRegions?: FogRegionData[]` controls where environmental fog appears. Each region has `x`, `y`, `rot` (radians), a rectangle (`shape: {kind: "rect", w, h}`) or circle (`shape: {kind: "circle", r}`), and optional `falloff`. Positions, sizes and falloff are disk pixels, converted to metres by `scaleLevelData`; absent falloff defaults to 3 m, zero makes a hard edge. Fade runs inward from the boundary. Missing `fogRegions` retains global fog, while `[]` disables fog everywhere. Regions do not affect physics or illumination. The editor preserves the difference between missing and empty, including deleting the final region.
+
 ## Level files
 
 Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
@@ -30,7 +32,7 @@ A saved level ships in the build by being **imported** into `src/level/registry.
 is how `levels/ball.json` backs the `BALL` entry: one file, edited in the editor and bundled
 into production, rather than a hand-copied TS duplicate.
 
-Beside the geometry a level carries a few lists that are not bodies: `cameraRegions` and `cameraPaths` (how it is framed), `notes` (authoring commentary nothing reads), `chains` and `vines` (what is strung between bodies), and **`checkpoints`** - named spawns, each a name and a point, which `?checkpoint=NAME` moves `player` to before the level is built (see [**Checkpoints**](running.md#checkpoints)).
+Beside the geometry a level carries a few lists that are not bodies: `cameraRegions` and `cameraPaths` (how it is framed), `shelters` (the front walls of enclosed caves, which only the sun sees, [**Shelters**](lighting-and-surfaces.md#shelters)), `notes` (authoring commentary nothing reads), `chains` and `vines` (what is strung between bodies), and **`checkpoints`** - named spawns, each a name and a point, which `?checkpoint=NAME` moves `player` to before the level is built (see [**Checkpoints**](running.md#checkpoints)).
 A chain names its two anchors and, optionally, the anchors it is routed over (`via`) or **knotted through** (`through`, with `lengths`, `slack` and `substeps` - a rope bridge; see [scene-chains](scene-chains.md#tied-chains)); `scaleLevelData` scales `length` and `lengths` and leaves the ids, the slack ratio and the substep count alone.
 `scaleLevelData` converts a checkpoint's placement and leaves its name alone, and it **drops nothing**: that function is the editor's save as much as the game's load, so a rule that deleted a blank or repeated name would delete a marker the author had just placed.
 The lookup is what enforces the name instead - trimmed, case-folded, first match wins - and the editor's panel is what reports a name that is missing or already taken.

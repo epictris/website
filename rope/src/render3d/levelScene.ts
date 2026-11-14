@@ -26,6 +26,7 @@ import { LightRig } from "./lights";
 import type { Scene3DLevel } from "./scene";
 import type { SceneDressing } from "./sceneDressing";
 import type { SceneLens } from "./space";
+import { ShelterWalls } from "./shelterCover";
 import { VineLayer } from "./vineVisual";
 
 export class LevelScene {
@@ -62,6 +63,9 @@ export class LevelScene {
   ballVisual: BallVisual | null = null;
   // The glass ball's glow on the world (see `Scene3D.setLevel`).
   ballGlow: THREE.PointLight | null = null;
+  // The front walls of the level's enclosed caves, which only the sun sees
+  // (shelterCover.ts). Built with the level: they are authored, and stand still.
+  readonly shelterWalls: ShelterWalls;
 
   constructor(
     // What this was built for: `Scene3D.render` draws a level only through the
@@ -72,6 +76,8 @@ export class LevelScene {
   ) {
     this.root.name = "level";
     this.vines = new VineLayer(this.root);
+    this.shelterWalls = new ShelterWalls(level.visualSource.data.shelters ?? []);
+    this.root.add(this.shelterWalls.root);
   }
 
   dispose(): void {
@@ -90,6 +96,7 @@ export class LevelScene {
     this.ballGlow?.dispose();
     this.ballGlow = null;
     this.vines.dispose();
+    this.shelterWalls.dispose();
     // Every visual has handed its lights back on the way through, so this is
     // the backstop rather than the mechanism.
     this.lights.dispose();

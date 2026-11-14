@@ -74,7 +74,7 @@ The authored `range` stays on screen as a fainter outer ring whenever the two di
 `levels/ball.json` is the worked example, and since 2026-09-30 it declines the outdoor answer only in part.
 Its sun is ON, but it is not a sky: a warm-neutral key (`#ffe4bd` at 6.5) from above, camera-left and toward the camera, about 40° off vertical (`sunX` 0.5, `sunY` 1, `sunZ` -0.6; it was -0.2 until 2026-09-30, when it was brought forward and lowered so the ivy's leaves throw their shadows where the camera sees them - a negative `sunZ` is the camera's side), it is the daylight falling into a ravine, and the tilt is what grades adjacent facets of the low-poly rock (a face square to it, a tilted one, a vertical one and a recessed one each take a different share) instead of every near-horizontal facet reading the same.
 A rock face that faces the camera takes a fraction of it and lives partly in the fill, which is cool and strong enough to keep the shadows blue-grey rather than black (sky `#7ab8e0`, ground `#2a3f56`, fill 3.0 - 3.8 until the same day, eased so a leaf in shadow reads darker than one in the sun - env 0.5).
-The sun's shadow frustum follows the camera in whole texels of its map (`Environment.follow` snaps the centre to the light's grid): slid continuously, every shadow edge re-rendered at a new sub-texel offset each frame the camera moved, a crawl the ivy's fine leaf shadows made plain.
+The sun's shadow frustum fits the visible receivers, including background scenery, and extends toward the sun to include offscreen casters (`SunShadowFit`, called by `Environment.follow` after visual poses sync). Receiver bounds are clipped to the view so a large scenery mesh does not force the whole level into the map. Its centre snaps to whole texels; width and height grow in powers of two from 30 m and do not shrink during the level, avoiding continuous rescaling as individual props enter and leave the frame. It remains one 2048² map, so wider views trade shadow detail for complete coverage. The depth bias is kept constant in world units as the near/far range changes.
 The start has one more light: a broad soft pool over where the ball comes to rest, a light-only static body at (9.0, 3.0) m one metre behind the plane, a 28° spot (`#ffe0b8`, 220 cd, range 12 m, penumbra 1, shadowed, no `beam`) aimed straight down, so the play area around the ball is the brightest part of the ledge and the light falls off to the right rather than the whole platform reading as one lit strip.
 That is the split Tris asked for on 2026-09-30: the play plane warmly lit, the camera-facing foreground in shadow, the background cool and darker; MORE light overall, since the picture is the bottom of a well-lit ravine and only what lies behind is a murky cave (background `#1c3856`, fog 0.34 at `#2a5075`); and, from a written critique he handed over the same day, the rule that makes it work: **the rock is neutral and the cool light turns its shadows blue**, never a blue rock under blue light.
 So the river's rock albedo is a charcoal grey (`river.blend`, an orientation tint from a near-neutral `#47474a` on up-facing to a cool `#383e48` on down-facing, multiplied by a baked ambient occlusion that darkens to 0.35 over 2 m, all baked to an image texture by the exporter, [blender-scenes](blender-scenes.md#what-blender-cannot-carry)), every rock object is shaded FLAT so the facets keep their planes, the key carries the warmth, the fill carries the blue, and the tone mapping runs at unity exposure so a bright top and a genuinely dark recess both fit (`configureRenderer`; the sun's shadow is PCF-softened at `radius` 3 so light crosses a mass gently rather than with a razor terminator on every facet).
@@ -154,6 +154,55 @@ It is authored in the editor's Environment panel: `sky hdr` picks from the manif
 Tone mapping is ACES, which is what gives the sun range to work in; the vignette is drawn on the **overlay canvas** as one gradient fill rather than as a post-processing pass, because a vignette is a screen-space multiply over the finished frame and the overlay is already exactly that.
 
 The GLTF loader is imported dynamically, so it lands in its own chunk and is fetched only by a page that actually loads a prop.
+
+## Regional fog
+
+The **Fog** editor layer draws rectangular or circular regions where the existing fog is present. Select a region and adjust **falloff** (pixels, 100 px = 1 m): fog fades smoothly inward from zero at the outer edge to full strength at the inner dashed outline. Zero gives a hard edge. Overlaps take the strongest region, never add density. Environment still controls fog colour and strength.
+
+Regions mask the view at the gameplay plane, keeping foreground and backdrop transitions aligned in the side-on game. This is an art-directed 2D mask, not a physical volume. Surface fog, beams, motes and sun shafts share it. No regions authored means legacy global fog; an explicitly empty region list means clear everywhere. After deleting the last region, untick **fog regions only** in Environment to restore global fog.
+
+Shelters and fog are independent: place a shelter over the cave and end the fog region at its entrance. Ambient/environment light continues to reach the cave. Edits preview immediately in the level editor and require no Blender export. The river starts with a 4 m fade from x=38.15 m to x=42.15 m.
+
+## Shelters
+
+A **shelter** (`ShelterData`, `LevelData.shelters`, `render3d/shelterCover.ts`; 2026-11-14) is the **front wall of an enclosed cave**, put back for the sun alone.
+A cave in a side-on level is drawn cut open on the camera's side, so the player can be seen in it, and the river's sun shines from that side (`sunZ` -0.1 travels away from the camera).
+With the wall gone nothing stands between the sun and the rock faces that face the camera, or the cave's back wall: they take full daylight, and the cave reads as an alcove in a sunlit cliff rather than somewhere enclosed.
+A shelter is that wall, never drawn: it casts the sun's shadow and does nothing else, so the sun stops at a real shadow edge cast from the wall's edge along the sun's own direction, and everything behind the wall - the camera-facing rock, the cave's inside, the ball and its chain as they go in - is out of the sun.
+The fill and environment remain active inside the cave. Fog is controlled separately by [regional fog](#regional-fog); normal play does not use baked light.
+
+**How it is built.** Each shelter is its outline extruded `SHELTER_THICKNESS` (1 m) toward the camera from `front` metres in front of the plane (absent = `DEFAULT_SHELTER_FRONT`, 2.5 m: just in front of the river scene's most forward rock, `Terrace.006` at 2.3 m, so every rock face is behind it).
+It is invisible by MATERIAL: it writes neither colour nor depth, so every pass that draws it (the view, the reflection probe's cube, the depth of field's) draws nothing, while the shadow pass draws it with three's own depth material, which copies neither flag, so it writes the shadow map like any rock; and raycasts pass through it, so the editor's clicks reach what is behind it.
+It was first put on a layer only the sun's shadow camera saw, and cast nothing: three tests a caster against the VIEW camera's layers in the shadow pass (`WebGLShadowMap.renderObject(object, camera, shadowCamera, ...)`), not the shadow camera's - the render with the wall was identical to the render without.
+Every light's shadow sees it, which is the wall being a wall: a lamp in the cave stands behind it, as does everything the lamp lights, so it never comes between them.
+The walls are built with the level's scene (`LevelScene.shelterWalls`) and disposed with it.
+
+**Where the shadow lands.** A wall `front` in front of the plane shades the plane offset along the sun's travel by front / |sunZ| times the sun's (x, y): with the river's restored sun `(0.5, 1, -0.6)` and the default 2.5 m wall, about 2.08 m right and 4.17 m down (`shelterShadowOffset`). A front wall requires sunlight travelling away from the camera (negative `sunZ`); the river's shelter was moved left 8.75 m to keep its shadow boundary at the cave entrance after correcting the sun's sign.
+A rock face nearer the camera than the plane is shaded nearer the outline, in proportion.
+The editor draws that edge, dotted, beside the wall's own dashed outline, so a wall is placed by where the sun stops.
+
+**Coverage.** Visible scenery behind the plane is included in the fitted sun shadow volume, as are shelter walls outside the view that can cast onto it. There is no fixed gameplay-distance cutoff; the single map's texel density falls as the required coverage grows.
+The root bark's painted key (`barkLight`, rootBark.ts) is emissive and takes no shadow, so a root inside a cave keeps it.
+Neither the painted water nor the Blender guide's game look knows about shelters.
+
+**Authoring.** Shelters are their own editor layer (`shelter`, between `scene` and `camera`), drawn with +Rect, +Circle and +Poly and edited by the gestures every camera region is, concave outlines included; the panel carries `front` (blank = the default).
+On the 2D canvas a shelter is a shade over its outline, MULTIPLIED (a wash laid on as paint lifted the darkest rock under it toward its slate); over a 3D view there is no shade, since the scene shows the shadow itself and the overlay is a transparent sheet where a multiply has nothing to darken.
+`cli render3d` holds the format and the editor round trip, that the wall stands where it was drawn and only the sun's shadow camera sees it, and where its shadow lands; what it cannot see is the look, which is played.
+
+### What it replaced (2026-11-13), and why
+
+Two earlier shelters changed the LIGHT inside a region instead of putting the wall back, and both were rejected.
+The first faded the sun and the sky over an authored `feather` band from the drawn edge, to an authored `sky` floor (Tris: "this doesn't feel very realistic").
+The second TRACED the light from the level's collision rock, modelling the cave as a tunnel through rock of a given width and depth, into an ambient cube per point (Tris: "this approach seems very flawed. It leaks out the background").
+Both judged a surface by its own (x, y) against a shape drawn on the play plane, and the camera has perspective: a backdrop rock 15 m behind the plane that looks inside the cave on screen sits at a quite different (x, y), so it fell outside and kept full daylight.
+And both took the sky away, which was never asked for: the cave's blue-grey air was right.
+A wall that casts a shadow has neither fault: the shadow map is in 3D, so what is behind the wall from the sun is shaded wherever it is, and nothing but the sun is touched.
+
+What survives of them as technique, should a light region ever be wanted again: patching three's `getDirectionalLightInfo`, `getHemisphereLightIrradiance` and `getIBLIrradiance`/`getIBLRadiance` scales every lit program at once, ivy, avatar and glass patches included, since those all call the same functions; and a mask texture reaches every program through three's uniform clone if it is a `DataTexture` whose `clone` returns itself.
+
+A third attempt (2026-11-14) kept the wall and stopped the FOG scattering colour in where a view ray crossed a shelter's volume, the wall's outline carried straight back; it drew the outline as a hard edge, then a soft blob in the wrong place, for the same reason as the two above - a 2D outline guessing a 3D cave (Tris: "this approach feels very hacky").
+The current approach keeps shelter shadows and controls fog separately with authored regions.
+
 
 ## The avatar's own surface
 

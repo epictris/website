@@ -846,6 +846,27 @@ def preparation(ob):
         [(name, round(render.smallest_detail(ob, name), 5)) for name in render.PASSES], ALL_SEEN
 
 
+def bake_material_slots(ob, depsgraph):
+    """Keep slot indices stable, but tolerate empty slots no evaluated face uses.
+
+    Cycles needs a writable material in every bake slot. Use an existing
+    material for unused holes on the export copy; never guess a material for
+    a face. Read the evaluated mesh so modifiers cannot hide a used hole.
+    """
+    if ob.name in PRISTINE:
+        # Validated before this worker first touched the mesh. Later tasks
+        # see per-map slot indices, not the source mesh's material indices.
+        return list(PRISTINE[ob.name])
+    evaluated = ob.evaluated_get(depsgraph)
+    materials = [s.material for s in evaluated.material_slots]
+    used = {p.material_index for p in evaluated.data.polygons}
+    missing = sorted(i for i in used if i >= len(materials) or materials[i] is None)
+    if missing or not materials or not any(m is not None for m in materials):
+        raise SystemExit(f"{ob.name}: faces have no material in slot(s) {missing}; assign a material before baking")
+    fallback = next(m for m in materials if m is not None)
+    return [m if m is not None else fallback for m in materials]
+
+
 def export_materials(ob, materials):
     """The export's own copy of each of `ob`'s `materials` (a slot's, or
     None), so each object's point at its own images; a painted slate on a
@@ -1161,8 +1182,7 @@ def worker_main(argv):
             # (a split rock's maps may come to the worker that prepared it).
             # The originals: an evaluated object's are the depsgraph's
             # copies, gone at its next evaluation.
-            PRISTINE[name] = [s.material.original if s.material is not None else None
-                              for s in ob.evaluated_get(bpy.context.evaluated_depsgraph_get()).material_slots]
+            PRISTINE[name] = [m.original for m in bake_material_slots(ob, bpy.context.evaluated_depsgraph_get())]
         moss.prepare_texture_paints(scene, {name})
         warnings = []
         # This rock's mosses only: one prepared for a rock baked before is not
@@ -1228,13 +1248,8 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     scene.cycles.samples = BAKE_SAMPLES
     # Each object's own copies of its materials, so its point at its own
     # images; a far-back rock's slate repainted to its depth.
-    materials = {ob: export_materials(ob, PRISTINE.get(ob.name)
-                                      or [s.material for s in ob.evaluated_get(depsgraph).material_slots])
+    materials = {ob: export_materials(ob, bake_material_slots(ob, depsgraph))
                  for ob in targets}
-    for ob in targets:
-        if any(m is None for m in materials[ob]) or not materials[ob]:
-            # A bake needs a material to write through on every face.
-            raise SystemExit(f"{ob.name}: a procedural material shares the object with an empty material slot")
     colored = [ob for ob in targets if ob in by_host or any(procedural_base_colors(m) for m in materials[ob])]
     bumped = [ob for ob in targets if any(procedural_normals(m) for m in materials[ob])]
     # The maps each object ships, as (kind, colour space).

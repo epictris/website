@@ -2055,6 +2055,51 @@ export interface FireflyPathData {
   verts: FireflyPathVert[];
 }
 
+// A SHELTER: the FRONT WALL of an enclosed cave - the wall between the camera
+// and the play space, cut away so the player can be seen, put back for the
+// sun alone. It is never drawn; it casts the sun's shadow and nothing else, so
+// the sun (which shines from the camera's side) stops lighting the rock faces
+// that face the camera and the cave's inside, while the fill, the environment
+// and the fog - the cave's blue-grey air - are untouched. RENDER-ONLY (see
+// "Shelters" in docs/lighting-and-surfaces.md and `render3d/shelterCover.ts`).
+//
+// The shape is the wall's outline, drawn on the gameplay plane and standing
+// `front` toward the camera from it, `SHELTER_THICKNESS` thick. Its shadow
+// lands where the sun carries it: on the plane, offset along the sun's travel
+// by front / |sunZ| (the editor draws that edge). A rect, a circle or any
+// simple polygon, concave included. Local shape under (x, y, rot), as a
+// camera region's is.
+export interface ShelterData {
+  x: number;
+  y: number;
+  rot: number;
+  shape: ShapeData;
+  // Metres (pixels on disk) the wall stands in front of the gameplay plane:
+  // in front of every rock face it should shade, behind the camera.
+  // Absent = DEFAULT_SHELTER_FRONT.
+  front?: number;
+}
+
+// Where a shelter's wall stands with nothing authored, in metres in front of
+// the plane: just in front of the river scene's most forward rock (2.3 m,
+// Terrace.006), so it shades every rock face and the shadow's edge lands as
+// near the drawn outline as it can.
+export const DEFAULT_SHELTER_FRONT = 2.5;
+// How thick the wall is, metres: a shadow needs a closed solid, not a size.
+export const SHELTER_THICKNESS = 1;
+
+// A fog mask drawn on the gameplay plane. The existing depth fog is at full
+// strength inside, fading to zero over `falloff` metres INSIDE the edge.
+// Absent fogRegions keeps global fog; an explicit [] means no fog anywhere.
+export interface FogRegionData {
+  x: number;
+  y: number;
+  rot: number;
+  shape: Extract<ShapeData, { kind: "rect" | "circle" }>;
+  falloff?: number;
+}
+export const DEFAULT_FOG_FALLOFF = 3; // metres; explicit values are pixels on disk
+
 // Default glyph height of a text note, in scene pixels.
 export const DEFAULT_NOTE_TEXT_SIZE = 12;
 
@@ -2423,6 +2468,10 @@ export interface LevelData {
   // The routes firefly swarms guide the player along (see FireflyPathData).
   // Render-only. Absent = none, and every swarm reads the camera paths.
   fireflyPaths?: FireflyPathData[];
+  // The volumes the sky does not reach (see ShelterData). Render-only. Absent
+  // = none, and the whole level is under the sky the environment authors.
+  shelters?: ShelterData[];
+  fogRegions?: FogRegionData[];
   // Editor-only annotations (see NoteData). Never read by the sim or the game
   // renderer, so a level plays identically with or without them.
   notes?: NoteData[];
@@ -2583,6 +2632,8 @@ export interface RawLevelData {
   cameraRegions?: CameraRegionData[];
   cameraPaths?: CameraPathData[];
   fireflyPaths?: FireflyPathData[];
+  shelters?: ShelterData[];
+  fogRegions?: FogRegionData[];
   notes?: NoteData[];
   checkpoints?: CheckpointData[];
   chains?: (ChainData | LegacyChainData)[];
@@ -3580,6 +3631,32 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         })),
       }),
     );
+  // A shelter's placement, shape and `front` are lengths; `rot` is not. A shape that encloses nothing - a belt, a curve, a
+  // polygon of fewer than three points - shelters nothing and is dropped here,
+  // named, rather than drawn as a volume that does nothing.
+  const shelters = data.shelters
+    ?.filter((s, i) => {
+      const k = s.shape?.kind;
+      const encloses = k === "rect" || k === "circle" || (k === "poly" && s.shape.kind === "poly" && s.shape.verts.length >= 3);
+      if (!encloses) console.warn(`[shelter] shelters[${i}] at (${s.x}, ${s.y}) is a ${k ?? "missing"} shape, which encloses nothing; dropped.`);
+      return encloses;
+    })
+    .map(
+      (s): ShelterData => ({
+        x: s.x * factor,
+        y: s.y * factor,
+        rot: s.rot,
+        shape: scaleShape(s.shape, factor),
+        ...(s.front !== undefined ? { front: s.front * factor } : {}),
+      }),
+    );
+  const fogRegions = data.fogRegions?.map((r): FogRegionData => ({
+    x: r.x * factor, y: r.y * factor, rot: r.rot,
+    shape: r.shape.kind === "circle"
+      ? { kind: "circle", r: r.shape.r * factor }
+      : { kind: "rect", w: r.shape.w * factor, h: r.shape.h * factor },
+    ...(r.falloff !== undefined ? { falloff: Math.max(0, r.falloff * factor) } : {}),
+  }));
   return {
     // A title and two flags: nothing in the block is a length, so it crosses
     // the conversion whole - copied rather than shared, like the environment
@@ -3588,6 +3665,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(regions ? { cameraRegions: regions } : {}),
     ...(paths ? { cameraPaths: paths } : {}),
     ...(fireflyPaths ? { fireflyPaths } : {}),
+    ...(shelters ? { shelters } : {}),
+    ...(fogRegions ? { fogRegions } : {}),
     // Nothing in the environment block is a length (see EnvironmentData), so it
     // is copied rather than scaled - but copied, not shared, since everything
     // else here hands the caller a fresh object.

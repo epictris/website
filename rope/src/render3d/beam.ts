@@ -297,7 +297,7 @@ export const FOG_ATTENUATE = /* glsl */ `
     #else
       float fogFactor = smoothstep( fogNear, fogFar, fogAirDepth );
     #endif
-    a *= 1.0 - fogFactor;
+    a *= 1.0 - fogFactor * regionFogForRay( cameraPosition, vFogWorldPosition );
   #endif
 `;
 

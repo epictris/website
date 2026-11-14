@@ -23,6 +23,8 @@ import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import { BALL_ZOOM, type Camera } from "../render/camera";
 import { buildCameraRules, restingCameraZoom } from "../render/cameraController";
 import { GAME_FOG_CAMERA, setGameFogCamera } from "../render3d/editorFog";
+import { fogRegionCases } from "./fogRegionCases";
+import { sunShadowCases } from "./sunShadowCases";
 import {
   applyPose,
   CAMERA_FAR,
@@ -105,6 +107,8 @@ import {
   type SceneObjectData,
   type RawLevelData,
   type CollisionObjectData,
+  DEFAULT_SHELTER_FRONT,
+  SHELTER_THICKNESS,
   LEVEL_FORMAT,
 } from "../level/levelFormat";
 import { BodyVisual, pickTagOf } from "../render3d/bodyVisuals";
@@ -185,6 +189,7 @@ import {
   fogDensity,
   skyInputs,
 } from "../render3d/environment";
+import { ShelterWalls, shelterShadowOffset } from "../render3d/shelterCover";
 import {
   AVATAR_FOG,
   AVATAR_PROGRAM_KEY,
@@ -2403,6 +2408,7 @@ function lightRoundTrip(): CaseResult[] {
     },
     ...planeReach(),
     ...fogBand(),
+    ...fogRegionCases(),
     ...skyBand(),
     {
       name: "editor: a level with no environment gains none",
@@ -5928,6 +5934,121 @@ function glassSurface(): CaseResult[] {
   ];
 }
 
+// Shelters (shelterCover.ts, `ShelterData`): the cut-away front walls of
+// enclosed caves, put back for the sun alone. What they LOOK like is a live
+// check (docs/lighting-and-surfaces.md, "Shelters"); what is held here is what
+// the look rests on and a picture cannot show - that the wall crosses the
+// px <-> m gate and the editor as authored, that it stands where it was drawn,
+// that only the sun's shadow camera ever sees it, and where its shadow lands.
+function shelters(): CaseResult[] {
+  const out: CaseResult[] = [];
+
+  // The format: placement, shape and `front` are lengths, `rot` is not, and a
+  // shape that encloses nothing is dropped rather than carried.
+  {
+    const authored: RawLevelData = {
+      player: { x: 0, y: 0, radius: 20 },
+      bodies: [{ kind: "static", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 10, h: 10 } }],
+      shelters: [
+        { x: 500, y: -200, rot: 0.25, shape: { kind: "poly", verts: [{ x: 0, y: 0 }, { x: 400, y: 0 }, { x: 0, y: 300 }] }, front: 300 },
+        { x: 0, y: 0, rot: 0, shape: { kind: "curve", width: 10, verts: [{ x: 0, y: 0 }, { x: 100, y: 0 }] } },
+      ],
+    };
+    const m = scaleLevelData(authored, PX).shelters ?? [];
+    const s = m[0];
+    const p = s?.shape.kind === "poly" ? s.shape.verts[1] : undefined;
+    const converted =
+      m.length === 1 &&
+      Math.abs(s!.x - 5) < 1e-12 &&
+      Math.abs(s!.y + 2) < 1e-12 &&
+      s!.rot === 0.25 &&
+      Math.abs(s!.front! - 3) < 1e-12 &&
+      p !== undefined &&
+      Math.abs(p.x - 4) < 1e-12;
+    // ...and the editor writes back what it read, untouched fields absent.
+    const disk: RawLevelData = { ...authored, shelters: [authored.shelters![0]!, { x: 10, y: 20, rot: 0, shape: { kind: "circle", r: 300 } }] };
+    const back = modelToDisk(modelFromDisk(disk)).shelters ?? [];
+    // Key order and the last bits of a px -> m -> px trip are not content.
+    const same = (a: unknown, b: unknown): boolean =>
+      typeof a === "number" && typeof b === "number"
+        ? Math.abs(a - b) < 1e-9
+        : typeof a === "object" && a !== null && typeof b === "object" && b !== null
+          ? Object.keys(a).length === Object.keys(b).length &&
+            Object.entries(a).every(([k, v]) => same(v, (b as Record<string, unknown>)[k]))
+          : a === b;
+    const kept =
+      back.length === 2 &&
+      same(back[0], disk.shelters![0]) &&
+      back[1]!.front === undefined &&
+      back[1]!.shape.kind === "circle";
+    out.push({
+      name: "shelter: crosses the px <-> m gate and the editor as authored",
+      pass: converted && kept,
+      detail: `metres ${JSON.stringify(m)}; editor back ${JSON.stringify(back)}`,
+    });
+  }
+
+  // The wall stands where it was drawn: the outline placed as every shape is
+  // (a quarter turn stands a wide rect upright), y flipped into three's frame,
+  // from `front` toward the camera by SHELTER_THICKNESS - and a shape that
+  // encloses nothing builds nothing.
+  {
+    const walls = new ShelterWalls([
+      { x: 4, y: 1, rot: Math.PI / 2, shape: { kind: "rect", w: 6, h: 2 }, front: 3 },
+      { x: 0, y: 0, rot: 0, shape: { kind: "circle", r: 1 } },
+      { x: 0, y: 0, rot: 0, shape: { kind: "curve", width: 1, verts: [{ x: 0, y: 0 }, { x: 1, y: 0 }] } },
+    ]);
+    walls.root.updateMatrixWorld(true);
+    const [turned, round] = walls.root.children as THREE.Mesh[];
+    const b = new THREE.Box3().setFromObject(turned!);
+    const r = new THREE.Box3().setFromObject(round!);
+    const near = (a: number, e: number) => Math.abs(a - e) < 1e-6;
+    // Turned upright: 2 wide, 6 tall, centred on (4, -1) in three's frame.
+    const placed =
+      walls.root.children.length === 2 &&
+      near(b.min.x, 3) && near(b.max.x, 5) && near(b.min.y, -4) && near(b.max.y, 2) &&
+      near(b.min.z, 3) && near(b.max.z, 3 + SHELTER_THICKNESS) &&
+      near(r.min.z, DEFAULT_SHELTER_FRONT) &&
+      Math.abs(r.max.x - 1) < 0.01;
+    // Never seen, never hit, but casting: it writes neither colour nor depth
+    // (the shadow pass draws it with three's own depth material, which copies
+    // neither flag), a ray through it finds nothing, and it is on the view's
+    // layer - three tests a caster against the VIEW camera's layers in the
+    // shadow pass, which is why a layer of its own cast nothing.
+    const ray = new THREE.Raycaster(new THREE.Vector3(4, -1, 10), new THREE.Vector3(0, 0, -1));
+    const unseen = walls.root.children.every((w) => {
+      const m = (w as THREE.Mesh).material as THREE.Material;
+      return !m.colorWrite && !m.depthWrite && w.layers.test(new THREE.PerspectiveCamera().layers);
+    });
+    const unhit = ray.intersectObject(walls.root, true).length === 0;
+    const casts = walls.root.children.every((w) => (w as THREE.Mesh).castShadow && !(w as THREE.Mesh).receiveShadow);
+    walls.dispose();
+    out.push({
+      name: "shelter: the wall stands where it was drawn, unseen and unhit, and casts",
+      pass: placed && unseen && unhit && casts,
+      detail: `turned ${JSON.stringify(b)}; round ${JSON.stringify(r)}; unseen ${unseen}; unhit ${unhit}; casts ${casts}`,
+    });
+  }
+
+  // Where its shadow lands on the play plane: along the sun's travel by
+  // front / |sunZ| - with the river's sun (0.5, 1, -0.6) and the default wall,
+  // 2.08 m right and 4.17 m down - and nowhere for a sun that does not travel
+  // away from the camera, or no sun.
+  {
+    const off = shelterShadowOffset(2.5, { x: 0.5, y: 1, z: -0.6 });
+    const lands =
+      off !== null && Math.abs(off.x - 2.5 / 1.2) < 1e-12 && Math.abs(off.y - 2.5 / 0.6) < 1e-12 &&
+      shelterShadowOffset(2.5, { x: 0.5, y: 1, z: 0.3 }) === null &&
+      shelterShadowOffset(2.5, null) === null;
+    out.push({
+      name: "shelter: its shadow lands along the sun's travel by front / |sunZ|",
+      pass: lands,
+      detail: `offset ${JSON.stringify(off)}`,
+    });
+  }
+  return out;
+}
+
 // The fill-cost patches (lightReach.ts, depthPrepass.ts). What they promise is
 // an identical picture for less work, and the picture half is a live check
 // (docs/render3d.md, "Fill cost"); what is held here is that each patch says
@@ -6066,7 +6187,9 @@ function fillCost(): CaseResult[] {
 
 export function runRender3dCases(): CaseResult[] {
   return [
+    ...sunShadowCases(),
     ...fillCost(),
+    ...shelters(),
     ...glassSurface(),
     ...blenderScenes(),
     ...debugGeometry(),

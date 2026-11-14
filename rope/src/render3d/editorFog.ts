@@ -34,6 +34,7 @@
 // (`lightShafts.ts`), so the lit air and the surfaces around it agree.
 
 import * as THREE from "three";
+import { fogRegionUniforms, REGION_FOG_GLSL } from "./fogRegions";
 
 // x: 1 while the game's camera is standing in, 0 for the camera's own fog.
 // y: that camera's world z (the gameplay plane is z = 0, +z toward it).
@@ -88,18 +89,22 @@ const THREE_FOG_FRAGMENT = `
 // it interpolates across a triangle exactly.
 const FOG_PARS_VERTEX = /* glsl */ `
 #ifdef USE_FOG
+	varying vec3 vFogWorldPosition;
 	varying float vFogDepth;
 	varying float vFogWorldZ;
 #endif
 `;
 const FOG_VERTEX = /* glsl */ `
 #ifdef USE_FOG
+	vFogWorldPosition = ( mvPosition.xyz - viewMatrix[ 3 ].xyz ) * mat3( viewMatrix );
 	vFogDepth = - mvPosition.z;
 	vFogWorldZ = dot( viewMatrix[ 2 ].xyz, mvPosition.xyz - viewMatrix[ 3 ].xyz );
 #endif
 `;
 const FOG_PARS_FRAGMENT = /* glsl */ `
 #ifdef USE_FOG
+	varying vec3 vFogWorldPosition;
+	${REGION_FOG_GLSL}
 	uniform vec3 fogColor;
 	uniform vec2 fogGameCamera;
 	varying float vFogDepth;
@@ -116,16 +121,20 @@ const FOG_PARS_FRAGMENT = /* glsl */ `
 		if ( fogGameCamera.x > 0.5 ) return max( fogGameCamera.y - vFogWorldZ, 0.0 );
 		return vFogDepth;
 	}
+	// The fraction of light the air takes over a depth d (three's own laws).
+	float fogAmountAt( const in float d ) {
+		#ifdef FOG_EXP2
+			return 1.0 - exp( - fogDensity * fogDensity * d * d );
+		#else
+			return smoothstep( fogNear, fogFar, d );
+		#endif
+	}
 #endif
 `;
 const FOG_FRAGMENT = /* glsl */ `
 #ifdef USE_FOG
 	float fogAirDepth = fogDepth();
-	#ifdef FOG_EXP2
-		float fogFactor = 1.0 - exp( - fogDensity * fogDensity * fogAirDepth * fogAirDepth );
-	#else
-		float fogFactor = smoothstep( fogNear, fogFar, fogAirDepth );
-	#endif
+	float fogFactor = fogAmountAt( fogAirDepth ) * regionFogForRay( cameraPosition, vFogWorldPosition );
 	gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );
 #endif
 `;
@@ -151,10 +160,13 @@ replaceChunk("fog_pars_vertex", THREE_FOG_PARS_VERTEX, FOG_PARS_VERTEX);
 replaceChunk("fog_vertex", THREE_FOG_VERTEX, FOG_VERTEX);
 replaceChunk("fog_pars_fragment", THREE_FOG_PARS_FRAGMENT, FOG_PARS_FRAGMENT);
 replaceChunk("fog_fragment", THREE_FOG_FRAGMENT, FOG_FRAGMENT);
-const shared = (): THREE.IUniform => ({ value: GAME_FOG_CAMERA });
-(THREE.UniformsLib.fog as Record<string, THREE.IUniform>).fogGameCamera = shared();
+const shared = (): Record<string, THREE.IUniform> => ({
+  ...fogRegionUniforms(),
+  fogGameCamera: { value: GAME_FOG_CAMERA },
+});
+Object.assign(THREE.UniformsLib.fog as Record<string, THREE.IUniform>, shared());
 for (const shader of Object.values(THREE.ShaderLib)) {
-  if ("fogDensity" in shader.uniforms) shader.uniforms.fogGameCamera = shared();
+  if ("fogDensity" in shader.uniforms) Object.assign(shader.uniforms, shared());
 }
 
 // World z in `camera`'s view space, as (world +z seen from the camera,

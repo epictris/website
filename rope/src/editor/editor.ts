@@ -44,6 +44,8 @@ import {
   DEFAULT_PATH_LOOKAHEAD_X,
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
+  DEFAULT_SHELTER_FRONT,
+  DEFAULT_FOG_FALLOFF,
   DEFAULT_PATH_REACTION,
   DEFAULT_PATH_SOFTNESS,
   DEFAULT_PATH_RANGE_Y,
@@ -103,6 +105,7 @@ import {
   bodyWithinRect,
   defaultCamera,
   defaultNote,
+  defaultShelter,
   distanceToChain,
   ED_LAYERS,
   emptyModel,
@@ -410,6 +413,9 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "vine",
     "root",
   ],
+  // A shelter is a volume: no path, which encloses nothing.
+  shelter: ["select", "rect", "circle", "poly"],
+  fog: ["select", "rect", "circle"],
   camera: ["select", "rect", "circle", "poly", "path"],
   // A firefly path is a route and nothing else: no regions to draw.
   fireflies: ["select", "path"],
@@ -459,8 +465,11 @@ const chainable = (b: EdItem): boolean =>
 // What the inspector says when nothing is selected: what the active layer is
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
+  fog: "Fog layer: draw a rectangle or circle where haze should be present. Fog fades inward from its boundary over the region's falloff distance. Outside the regions the view is clear; overlapping regions do not add fog. Colour and strength stay in the Environment panel. Place a region over the grotto and leave the sheltered cave outside it. Tab switches layer.",
   scene:
     "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is its Blender scene (Level panel, `scene`): an object there named like a body (the body's `name`) is that body's look, and a shape is drawn in 3D only while its Debug section's draw box is ticked (it starts ticked in a level with no scene). +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
+  shelter:
+    "Shelter layer: the front walls of enclosed caves. A shelter is the wall between the camera and the cave, cut away so the player can be seen, put back for the sun alone: never drawn, it casts the sun's shadow, so the cave's rock faces and its inside go out of the sun while its blue-grey air stays. Draw it over the cave (+Poly clicks out the outline, concave corners and all; +Rect / +Circle drag one out); the dotted outline is where its shadow lands on the play plane. Tab switches layer.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   fireflies:
@@ -1082,6 +1091,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const modelMetaWaiters = new Map<string, Array<() => void>>();
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
+    fogRegionsEnabled: m.fogRegionsEnabled,
     player: {
       pos: m.player.pos,
       radius: m.player.radius,
@@ -1879,6 +1889,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   function markDirty(): void {
+    if (model.items.some((i) => i.layer === "fog")) model.fogRegionsEnabled = true;
     // Every edit leaves a root a tree (rootEditing.ts): a branch whose parent
     // went away is a trunk, and every branch starts on its parent again.
     syncRoots(model);
@@ -2620,6 +2631,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.",
     fireflies:
       "Click out a firefly path, start to end: the route a swarm naming it in its `path` field guides the player along. Enter or double-click finishes it, Esc drops it. At the end the swarm leaves the player and flies back to the start.",
+    shelter: "",
+    fog: "",
     notes: "",
   };
   toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
@@ -3363,6 +3376,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const checkpoints = model.items.filter(isCheckpointNote).length;
     const extra =
       ([
+        ["shelter", "shelter", "shelters"],
+        ["fog", "fog region", "fog regions"],
         ["camera", "cam", "cam"],
         ["fireflies", "firefly path", "firefly paths"],
         ["notes", "note", "notes"],
@@ -4033,7 +4048,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // turned one wall into six. A convex outline reads 1, which is the point -
       // the number only ever grows when the shape needs it to.
       const region = items.every((b) => polyMustBeConvex(b));
-      if (!region) {
+      // Only a collision outline is cut up: a shelter is read whole, notch
+      // and all (render3d/shelter.ts), so a piece count would be a number about
+      // nothing it does.
+      const collides = items.every((b) => b.layer === "scene");
+      if (!region && collides) {
         const pieces = (): string => {
           const counts = items.map((b) =>
             b.shape.kind === "poly" ? decomposeConvex(b.shape.verts).length : 0,
@@ -4050,7 +4069,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
       describe(g, region
         ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. A camera region always stays convex."
-        : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics.");
+        : collides
+          ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics."
+          : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward: the outline is taken whole, notch and all.");
     }
   }
 
@@ -6998,6 +7019,58 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
+  // Fog regions retain the environment's fog, fading inward at their edges.
+  function buildFogGroup(regions: EdItem[]): void {
+    const group = el("div", "ed-group");
+    group.appendChild(heading(regions.length === 1 ? `Fog region #${regions[0]!.id}` : `${regions.length} fog regions selected`,
+      "Fog is present inside this outline and clear outside it. The falloff fades inward from the edge; overlapping regions use the strongest fog without adding together."));
+    const transform = section(group, "fog/Transform", "Transform");
+    addTransformFields(transform, groupNum(transform, regions), regions);
+    const g = section(group, "fog/Edge", "Edge fade");
+    groupNum(g, regions)("falloff", (b) => (b.fogFalloff ?? DEFAULT_FOG_FALLOFF) * M2PX,
+      (b, v) => { b.fogFalloff = Math.max(0, v * PX); }, 10);
+    describe(g, "Distance in pixels from the outline to full fog. Zero gives a hard edge. The Environment panel controls fog colour and strength.");
+    addActionsRow(group);
+    inspector.appendChild(group);
+  }
+
+  // A shelter is the cave's front wall, visible only to shadow maps.
+  function buildShelterGroup(shelters: EdItem[]): void {
+    const group = el("div", "ed-group");
+    group.appendChild(
+      heading(
+        shelters.length === 1 ? `Shelter #${shelters[0]!.id}` : `${shelters.length} shelters selected`,
+        "The front wall of an enclosed cave - the wall between the camera and the play space, cut away so the player can be seen - put back for the sun alone. It is never drawn; it casts the sun's shadow, so the sun stops lighting the rock faces facing the camera and the cave's inside. The fill, the environment, the fog and the lamps are untouched. The dotted outline is where its shadow lands on the play plane.",
+      ),
+    );
+    let g = section(group, "shelter/Transform", "Transform");
+    addTransformFields(g, groupNum(g, shelters), shelters);
+
+    g = section(group, "shelter/Wall", "Wall");
+    const num = groupNum(g, shelters);
+    // Blank = the format's default, which a level keeps following until one
+    // is typed.
+    num(
+      "front",
+      (b) => (b.shelter.front ?? NaN) * M2PX,
+      (b, v) => (b.shelter.front = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: String(Math.round(DEFAULT_SHELTER_FRONT * M2PX)),
+        onEmpty: () => {
+          for (const b of shelters) b.shelter.front = null;
+        },
+      },
+    );
+    describe(
+      g,
+      "front: how far in front of the play plane the wall stands. It has to be in front of every rock face it should shade (the river's reach 230 px toward the camera); the further out, the further down and along the sun its shadow lands.",
+    );
+
+    addActionsRow(group);
+    inspector.appendChild(group);
+  }
+
   // A FIREFLY PATH's panel (see `FireflyPathData`): its number, the swarms
   // that name it, and the curve's own actions. It frames nothing, so there is
   // nothing else to author on it.
@@ -7991,6 +8064,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // twentieths, since the useful range is the bottom of it.
     numEnv("fog", "fogAmount", 0.05, (v) => Math.min(1, Math.max(0, v)));
     colorEnv("fog col", "fogColor");
+    const regionRow = fieldRow("fog regions only");
+    const regionCheck = document.createElement("input");
+    regionCheck.type = "checkbox";
+    regionCheck.checked = model.fogRegionsEnabled === true || model.items.some((i) => i.layer === "fog");
+    describe(regionRow, "Restrict fog to the Fog layer's regions. With no regions, the whole level is clear. Untick after deleting regions to restore global fog.");
+    regionCheck.disabled = model.items.some((i) => i.layer === "fog");
+    regionCheck.addEventListener("change", () => {
+      beginAction();
+      model.fogRegionsEnabled = regionCheck.checked;
+      markDirty();
+    });
+    regionRow.appendChild(regionCheck);
+    g.appendChild(regionRow);
     const fw = fieldRow("show fog in editor");
     const fb = document.createElement("input");
     fb.type = "checkbox";
@@ -8141,18 +8227,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "camera",
       "campath",
       "ffpath",
+      "shelter",
+      "fog",
       "notes",
     ] as const;
     const panelOf = (b: EdItem): (typeof PANELS)[number] =>
-      b.layer === "camera"
+      b.layer === "fog" ? "fog" : b.layer === "camera"
         ? b.shape.kind === "path"
           ? "campath"
           : "camera"
         : b.layer === "fireflies"
           ? "ffpath"
-          : b.layer === "notes"
-            ? "notes"
-            : b.object;
+          : b.layer === "shelter"
+            ? "shelter"
+            : b.layer === "notes"
+              ? "notes"
+              : b.object;
     const panels = PANELS.filter((k) => sel.some((b) => panelOf(b) === k));
     selectionSpansLayers = panels.length > 1;
     if (selectionSpansLayers) {
@@ -8175,6 +8265,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (k === "camera") buildCameraGroup(items);
       else if (k === "campath") buildCameraPathGroup(items);
       else if (k === "ffpath") buildFireflyPathGroup(items);
+      else if (k === "shelter") buildShelterGroup(items);
+      else if (k === "fog") buildFogGroup(items);
       else if (k === "light") buildLightsGroup(items);
       else if (k === "anchor") buildAnchorsGroup(items);
       else if (k === "model") buildModelsGroup(items);
@@ -8846,6 +8938,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       light: defaultLight(),
       note: defaultNote(),
       modelRef: defaultModelRef(),
+      shelter: defaultShelter(),
       anchorId: 0,
       pathId: 0,
     };
@@ -10822,7 +10915,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // on any of its objects means. A body appears twice only where the stack
       // genuinely interleaves - its own object, something else's, then its next
       // one - which is the order those things are drawn in.
-      if (it.bodyId !== prevBody) {
+      //
+      // Only on the scene layer: everything on the others (a shelter, a camera
+      // region, a note) is alone in a body that is never built, so its body
+      // step was a panel of physics, bounce and mover fields for a thing that
+      // has none, and the click that reached the item's own panel the second.
+      if (it.layer === "scene" && it.bodyId !== prevBody) {
         const bodyId = it.bodyId;
         steps.push({
           apply: () => setBodySelection(bodyId),
@@ -12046,7 +12144,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (inVisuals()) {
           visuals!.apply();
           visuals!.sync(
-            { model, rev: modelRev, selectedIds, selectedBodyIds, selectedVerts, visibleLayers, lockedLayers },
+            {
+              model,
+              rev: modelRev,
+              selectedIds,
+              selectedBodyIds,
+              selectedVerts,
+              visibleLayers,
+              lockedLayers,
+            },
             polyDraftGuide(),
           );
         }

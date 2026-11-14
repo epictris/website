@@ -59,6 +59,8 @@ import {
 } from "../lib/shapeGeometry";
 import {
   DEFAULT_BODY_COLOR,
+  type FogRegionData,
+  DEFAULT_FOG_FALLOFF,
   DEFAULT_BODY_OPACITY,
   DEFAULT_NOTE_TEXT_SIZE,
   DEFAULT_BOUNCE,
@@ -78,6 +80,7 @@ import {
   type MoveMode,
   type CameraPathData,
   type FireflyPathData,
+  type ShelterData,
   type CameraRegionData,
   type ChainData,
   type VineData,
@@ -152,8 +155,20 @@ import { FIREFLY_COLOR, FIREFLY_INTENSITY, FIREFLY_RANGE, FOLLOW_Z } from "../re
 // guides the player along, drawn with the camera path's curve tools but
 // belonging to no camera. Editor furniture like the camera layer - nothing on
 // it is a body or drawn in play.
-export type EdLayer = "scene" | "camera" | "fireflies" | "notes";
-export const ED_LAYERS: EdLayer[] = ["scene", "camera", "fireflies", "notes"];
+//
+// `shelter` holds the SHELTERS (`ShelterData`): the cut-away front walls of
+// enclosed caves, put back for the sun alone. Drawn as nothing in play, but
+// seen there all the same, as the sun's shadow over everything behind them.
+export type EdLayer = "scene" | "shelter" | "fog" | "camera" | "fireflies" | "notes";
+export const ED_LAYERS: EdLayer[] = ["scene", "shelter", "fog", "camera", "fireflies", "notes"];
+
+// A SHELTER's own fields (`ShelterData`), on every item and read only on the
+// shelter layer, as `cam` is read only on the camera layer. null = the
+// format's default (DEFAULT_SHELTER_FRONT).
+export interface EdShelter {
+  front: number | null; // metres in front of the gameplay plane
+}
+export const defaultShelter = (): EdShelter => ({ front: null });
 
 // What KIND of scene object an item is - the SAME set the format has, and one
 // editor item per authored object.
@@ -720,6 +735,9 @@ export interface EdItem {
   light: EdLight;
   // Notes layer:
   note: EdNote;
+  // Shelter layer:
+  shelter: EdShelter;
+  fogFalloff?: number;
   // Anchor objects only: the id `ChainData` names this end by. It is PRESERVED
   // through a load and a save rather than minted fresh each time, so a level
   // that goes through the editor untouched comes back with the same ids it went
@@ -898,6 +916,8 @@ export interface EdBodyFrame {
 }
 
 export interface EdModel {
+  // Preserve an explicit empty mask after its last region is deleted.
+  fogRegionsEnabled?: boolean;
   // The spawn: where it is, how big the avatar is, whether the run starts on
   // the anchor (`SpawnData.hang`), how far off to the side it rolls in from
   // (`SpawnData.roll`, metres here as every length in the model is, 0 for no
@@ -1180,6 +1200,12 @@ export const NOTE_OPACITY = 0.08;
 // A firefly path is drawn in the firefly's own colour, so it reads as the
 // swarms' and not as the camera's.
 export const FIREFLY_PATH_COLOR = FIREFLY_COLOR;
+// A shelter is drawn in a cold slate blue, the colour of the shade it makes:
+// apart from the camera's violet, and dark enough under its wash that the
+// wall reads as the part of the level kept out of the sun.
+export const SHELTER_COLOR = "#5f7fa8";
+export const SHELTER_OPACITY = 0.18;
+export const FOG_REGION_COLOR = "#82cbd6";
 
 // Appearance a freshly drawn item starts with, per layer. Geometry is authored
 // from here on; the other two are fixed furniture.
@@ -1207,6 +1233,8 @@ export function newItemStyle(
 ): { color: string; opacity: number } {
   if (layer === "camera") return { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY };
   if (layer === "fireflies") return { color: FIREFLY_PATH_COLOR, opacity: CAMERA_REGION_OPACITY };
+  if (layer === "shelter") return { color: SHELTER_COLOR, opacity: SHELTER_OPACITY };
+  if (layer === "fog") return { color: FOG_REGION_COLOR, opacity: 0.08 };
   if (layer === "notes") return { color: NOTE_COLOR, opacity: NOTE_OPACITY };
   if (object === "light") return { color: DEFAULT_LIGHT_COLOR, opacity: LIGHT_FILL_OPACITY };
   return { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY };
@@ -1431,6 +1459,7 @@ function fromLevelData(data: LevelData): EdModel {
       light: defaultLight(),
       note: defaultNote(),
       modelRef: defaultModelRef(),
+      shelter: defaultShelter(),
       anchorId: 0,
       pathId: 0,
     };
@@ -1537,7 +1566,7 @@ function fromLevelData(data: LevelData): EdModel {
     });
   }
 
-  const regions: EdItem[] = (data.cameraRegions ?? []).map((r) => ({
+  const regionItem = (r: CameraRegionData): EdItem => ({
     id: newBodyId(),
     layer: "camera",
     object: "collision",
@@ -1618,8 +1647,28 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     modelRef: defaultModelRef(),
+    shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
+  });
+  const regions = (data.cameraRegions ?? []).map(regionItem);
+  // Shelters: a camera region's item moved onto the shelter layer - an
+  // outline drawn and edited by exactly the same gestures - with no framing
+  // and the shelter's own field.
+  const shelters = (data.shelters ?? []).map(
+    (s): EdItem => ({
+      ...regionItem({ x: s.x, y: s.y, rot: s.rot, shape: s.shape }),
+      layer: "shelter",
+      ...newItemStyle("shelter", "collision"),
+      cam: defaultCamera(),
+      shelter: { front: s.front ?? null },
+    }),
+  );
+
+  const fogRegions = (data.fogRegions ?? []).map((r): EdItem => ({
+    ...regionItem({ x: r.x, y: r.y, rot: r.rot, shape: r.shape }),
+    layer: "fog", ...newItemStyle("fog", "collision"), cam: defaultCamera(),
+    ...(r.falloff !== undefined ? { fogFalloff: r.falloff } : {}),
   }));
 
   // Camera paths: the same item type as a region, distinguished by its shape
@@ -1723,6 +1772,7 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     modelRef: defaultModelRef(),
+    shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
   });
@@ -1829,6 +1879,7 @@ function lightItem(
     },
     note: defaultNote(),
     modelRef: defaultModelRef(),
+    shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
   };
@@ -1893,6 +1944,7 @@ function lightItem(
     cam: defaultCamera(),
     light: defaultLight(),
     modelRef: defaultModelRef(),
+    shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
     note,
@@ -1991,7 +2043,8 @@ function lightItem(
       roll: data.player.roll ?? 0,
       arrival: data.player.arrival ?? "",
     },
-    items: [...bodies, ...regions, ...camPaths, ...fireflyPaths, ...notes],
+    items: [...bodies, ...shelters, ...fogRegions, ...regions, ...camPaths, ...fireflyPaths, ...notes],
+    ...(data.fogRegions !== undefined ? { fogRegionsEnabled: true } : {}),
     chains,
     vines,
     // Only the bodies whose file frame is somewhere no object sits. Everything
@@ -2067,6 +2120,48 @@ export function pathDataOf(i: EdItem): CameraPathData {
   };
 }
 
+// A shelter item as the format writes it, or null for any other item. `front`
+// only where it was authored: absent is the format's default, so the file
+// keeps following it.
+export function shelterDataOf(i: EdItem): ShelterData | null {
+  if (i.layer !== "shelter") return null;
+  const s = i.shape;
+  const shape: ShapeData | null =
+    s.kind === "rect"
+      ? { kind: "rect", w: s.w, h: s.h }
+      : s.kind === "circle"
+        ? { kind: "circle", r: s.r }
+        : s.kind === "poly"
+          ? { kind: "poly", verts: s.verts.map((v) => ({ x: v.x, y: v.y })) }
+          : null;
+  if (!shape) return null;
+  return {
+    x: i.pos.x,
+    y: i.pos.y,
+    rot: i.rot,
+    shape,
+    ...(i.shelter.front !== null ? { front: i.shelter.front } : {}),
+  };
+}
+
+export function fogRegionDataOf(i: EdItem): FogRegionData | null {
+  if (i.layer !== "fog" || (i.shape.kind !== "rect" && i.shape.kind !== "circle")) return null;
+  return { x: i.pos.x, y: i.pos.y, rot: i.rot, shape: { ...i.shape },
+    ...(i.fogFalloff !== undefined ? { falloff: i.fogFalloff } : {}) };
+}
+
+// The line where the edge fade reaches full strength, for both editors.
+export function fogRegionInner(i: EdItem): EdItem | null {
+  const f = Math.max(0, i.fogFalloff ?? DEFAULT_FOG_FALLOFF);
+  if (f === 0) return null;
+  const s = i.shape;
+  if (s.kind === "rect" && s.w > 2 * f && s.h > 2 * f) {
+    return { ...i, shape: { kind: "rect", w: s.w - 2 * f, h: s.h - 2 * f } };
+  }
+  if (s.kind === "circle" && s.r > f) return { ...i, shape: { kind: "circle", r: s.r - f } };
+  return null;
+}
+
 export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number>): LevelData {
   // A camera PATH has no ShapeData form at all - an open polyline is not one of
   // the three shapes - so it never reaches here: the camera layer is split by
@@ -2129,6 +2224,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       };
     });
 
+  const shelters = model.items.flatMap((i) => shelterDataOf(i) ?? []);
+  const fogRegions = model.items.flatMap((i) => fogRegionDataOf(i) ?? []);
   const cameraRegions: CameraRegionData[] = model.items
     .filter((i) => i.layer === "camera" && i.shape.kind !== "path")
     .map((i) => ({
@@ -2638,6 +2735,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(cameraPaths.length ? { cameraPaths } : {}),
     ...(fireflyPaths.length ? { fireflyPaths } : {}),
+    ...(shelters.length ? { shelters } : {}),
+    ...(model.fogRegionsEnabled || fogRegions.length ? { fogRegions } : {}),
     // Written back verbatim. It is not derived from anything in the item list,
     // so there is nothing to rebuild - and leaving it out is not "the editor
     // does not support it", it is the editor DELETING a level's lighting the
@@ -3533,6 +3632,8 @@ function bodyKindLabel(members: readonly EdItem[]): string {
   if (first.object === "model") return "model";
   if (first.layer === "camera") return "camera";
   if (first.layer === "fireflies") return "fireflies";
+  if (first.layer === "shelter") return "shelter";
+  if (first.layer === "fog") return "fog";
   if (first.layer === "notes") return first.note.kind === "checkpoint" ? "checkpoint" : "note";
   return "decor";
 }
@@ -3559,6 +3660,8 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
   // A firefly path is named by the number swarms name it by.
   if (item.layer === "fireflies") return `firefly path ${item.pathId}`;
+  if (item.layer === "shelter") return "shelter";
+  if (item.layer === "fog") return "fog region";
   const form =
     item.shape.kind === "rect"
       ? `${n(item.shape.w)}×${n(item.shape.h)}`
@@ -4669,6 +4772,7 @@ export function emptyModel(): EdModel {
         light: defaultLight(),
         note: defaultNote(),
         modelRef: defaultModelRef(),
+        shelter: defaultShelter(),
         anchorId: 0,
         pathId: 0,
       },

@@ -1,5 +1,7 @@
 # The Visuals workspace
 
+Fog regions have cyan outer guides and dashed inner guides marking full fog strength; selected guides are orange. They can be picked and edited in either workspace. Their guides have no opaque fill, so the scene itself shows the fog transition. Fog regions are projected from the gameplay plane, so judge the transition from the game view rather than an edge-on free camera.
+
 Status: implemented on the `visuals-workspace` branch, 2026-09-25 ([plans/visuals-workspace.md](../plans/visuals-workspace.md), whose Delivery section lists what shipped, what deviated and what is unverified).
 It holds the free view, the guides, and the workspace in the editor: switching, navigation, picking through the guides, editing in the scene, the tools that work on the plane, and a light dropped on a surface.
 Since 2026-09-29 the level's look is its Blender scene ([blender-scenes](blender-scenes.md)), so the workspace dresses nothing itself; the rock and mushroom tools it used to carry are retired (see [Rocks and mushrooms](#rocks-and-mushrooms)).
@@ -63,6 +65,7 @@ It draws what the 2D overlay draws, in the overlay's colours (imported from `edi
 - each light's icon (a pixel-sized sprite at the light's own `z`), its reach, range and wake rings and a spot's cone on the plane, and a stalk from the icon to the plane when it is off it;
 - the spawn ring, the ball's footprint, the crosshair and a rolling entry's start;
 - camera regions, camera paths, firefly paths and notes as their outlines on the plane;
+- shelters (enclosed caves' front walls) as dashed outlines in the shelter colour;
 - the selected polygon's or path's corners and edge midpoints as the overlay's handle glyphs, pixel-sized, in the item's own plane (`guidePlaneZ`);
 - a tool's draft (`setDraft`, `draftView.ts`): the placed points, the run to the cursor or the closing edge, and the warning colour for a crossed loop.
 

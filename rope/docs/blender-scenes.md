@@ -1,5 +1,7 @@
 # Blender scenes
 
+Environment lighting, shelters and [fog regions](lighting-and-surfaces.md#regional-fog) are authored and previewed in the level editor without a Blender export. Blender's Fog preview does not reproduce regional masks; judge those transitions in the level editor.
+
 A level is **dressed in Blender**: one `.blend` holds the level's whole look, and one recipe puts it in the game.
 The loop is: edit the scene in Blender, `just scene <level>`, refresh the browser.
 This page is what a scene is, how it binds to the level, how the files move, and what Blender cannot carry.
@@ -106,6 +108,9 @@ The dev server serves `/scenes/` itself, uncached (`src/server/scenes.ts`), beca
 The Level panel shows the export's summary and the body panel offers the exported object names in the `name` field and says whether the name is dressed.
 
 ## The bake cache
+
+Unused empty material slots are tolerated during baking: the export copy fills them with an existing material while retaining slot indices. The source `.blend` is unchanged. Faces referencing an empty or missing slot still fail with the object and slot numbers; validation uses the evaluated mesh so modifier-generated faces are checked too. This fixes Cube.006's unused second slot blocking the river export (2026-11-14).
+Workers validate and retain the original slots before their first task. Later map tasks reuse those validated materials: a prepared mesh has additional slots per texture map, so its face indices cannot be checked against the original slot count.
 
 Preparing and baking is most of an export, and an edit usually touches one or two objects, so every baked object's prepared mesh (modifiers applied, creases rebuilt and still straight, the bake unwrap) and final maps (its `baked colour` and `baked normal` images, as the glTF gets them) are kept in `rope/.cache/scene-bake/<scene>/` (gitignored), and an object whose key has not changed loads them instead (`tools/blender/bake_cache.py`, since 2026-10-04; the mesh since 2026-10-07).
 A cached object is neither prepared nor baked: no crease rebuild (100 s for Terrace.011 alone, 170 s for the river's Terraces), no unwrap, no detail high poly.

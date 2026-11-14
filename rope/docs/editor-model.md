@@ -1,8 +1,11 @@
 # Editor model: layers, outliner, notes, compound bodies
 
+The **fog** layer sits between shelter and camera. It offers rectangles and circles, a transform, and an inward edge falloff (100 px = 1 m). Its items serialize to `fogRegions`, not bodies. `fogRegionsEnabled` preserves an explicitly empty mask after the last region is deleted, including undo/redo; Environment's **fog regions only** checkbox restores global fog when unchecked. See [regional fog](lighting-and-surfaces.md#regional-fog).
+
 ## Layers
 
-The model is a flat list of `EdItem`s - one per SCENE OBJECT - each carrying a **`layer`** and a **`bodyId`**, listed in draw order: `scene` (the level itself: every shape, every light, everything in a body), `camera` (the camera-behaviour volumes, see [**Camera**](camera.md) below) and `notes` (authoring annotations, see below).
+The model is a flat list of `EdItem`s - one per SCENE OBJECT - each carrying a **`layer`** and a **`bodyId`**, listed in draw order: `scene` (the level itself: every shape, every light, everything in a body), `shelter` (the front walls of enclosed caves, which only the sun sees, see [**Shelters**](lighting-and-surfaces.md#shelters)), `camera` (the camera-behaviour volumes, see [**Camera**](camera.md) below), `fireflies` (the firefly paths) and `notes` (authoring annotations, see below).
+A click on anything off the scene layer selects the item itself, in one click: each is alone in a body that is never built, so the body step the scene layer takes first (body, then object) was a panel of physics, bounce and mover fields for a thing that has none.
 
 There were four, and geometry and lights were two of them. Merging those is the same correction the format made: a light is not a KIND OF LAYER, it is a scene object like a shape and it belongs to a body exactly as a shape does. Two layers made that impossible to express - a lamp's fitting and its light sat on different layers, so one could be hidden or locked without the other, and putting them in one body was a cross-layer selection. What distinguishes them is `EdItem.object`, which is what the FORMAT distinguishes them by: `collision`, `light` or `anchor`, one item per authored object.
 There is deliberately **no decoration layer** either, and no decoration: what a level looks like is its Blender scene (see [**No decoration**](#no-decoration)).

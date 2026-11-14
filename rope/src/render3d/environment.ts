@@ -71,6 +71,7 @@ import "./editorFog";
 import "./lightReach";
 import "./depthPrepass";
 import { threeY } from "./space";
+import { SunShadowFit } from "./sunShadow";
 
 // The page's own background (see index.html and LETTERBOX_COLOR): the frame's
 // surround, so the scene fades into it rather than ending at it.
@@ -91,15 +92,8 @@ export const DEFAULT_FILL_INTENSITY = 1.3;
 // collision outline reads as a solid rather than as a sticker.
 export const DEFAULT_SUN_DIR = { x: 0.55, y: 0.8, z: -0.5 };
 
-// How far behind the camera the sun is placed and how wide its orthographic
-// shadow frustum is. One cascade following the camera is enough at this scene
-// scale (a frame is ~10 m of world), and a second would cost more than it buys.
+// Initial volume before the first view is fitted.
 const SHADOW_DISTANCE = 30;
-// Scratch for `follow`, which runs every frame.
-const _centre = new THREE.Vector3();
-const _lightZ = new THREE.Vector3();
-const _lightX = new THREE.Vector3();
-const _lightY = new THREE.Vector3();
 const SHADOW_MAP_SIZE = 2048;
 
 // The generated environment, and how much of it is let in.
@@ -199,6 +193,7 @@ export class Environment {
   readonly sun: THREE.DirectionalLight | null;
   readonly fill: THREE.HemisphereLight;
   private readonly dir = new THREE.Vector3();
+  private readonly shadowFit = new SunShadowFit();
   private readonly target = new THREE.Object3D();
   private readonly sunColor: THREE.Color;
 
@@ -375,40 +370,13 @@ export class Environment {
     }
   }
 
-  // Keep the shadow frustum around what the camera is looking at. A single
-  // cascade only covers SHADOW_DISTANCE of world, so it has to travel; sliding
-  // it with the camera rather than fitting it to the scene is what keeps the
-  // texel density constant as the view zooms, which is what stops shadow edges
-  // shimmering during a camera blend.
-  //
-  // `centre` is the sim-frame point the view is centred on: the 2D camera's
-  // position, or the target of the editor's free pose (see `ViewPose`).
-  follow(centre: { x: number; y: number }): void {
-    // The fog needs nothing here: its density is a property of the air, and the
-    // distance it is applied over is the one three.js already has per fragment.
-    if (!this.sun) return;
-    // IN WHOLE TEXELS (2026-09-30). Slid continuously, the frustum lands on a
-    // different sub-texel offset every frame the camera moves, and every shadow
-    // edge crawls with it - a shimmer the ivy's leaf shadows made plain. The
-    // centre is snapped to the shadow map's own grid: its components along the
-    // light's right and up axes (the ones `lookAt` will give the shadow camera,
-    // z = toward the sun, x = up cross z) are rounded to the texel, so the map
-    // moves by whole texels and a shadow stays where it was in the world.
-    const c = _centre.set(centre.x, threeY(centre.y), 0);
-    const z = _lightZ.copy(this.dir).normalize();
-    const x = _lightX.set(0, 1, 0).cross(z);
-    if (x.lengthSq() < 1e-8) x.set(1, 0, 0);
-    x.normalize();
-    const y = _lightY.crossVectors(z, x);
-    const texel = SHADOW_DISTANCE / SHADOW_MAP_SIZE;
-    const dx = Math.round(c.dot(x) / texel) * texel - c.dot(x);
-    const dy = Math.round(c.dot(y) / texel) * texel - c.dot(y);
-    const dz = Math.round(c.dot(z) / texel) * texel - c.dot(z); // along the light: no grid, but a target that only ever steps
-    c.addScaledVector(x, dx).addScaledVector(y, dy).addScaledVector(z, dz);
-    this.target.position.copy(c);
-    this.target.updateMatrixWorld();
-    this.sun.position.copy(c).addScaledVector(this.dir, SHADOW_DISTANCE);
-    this.sun.updateMatrixWorld();
+  // Called after visual poses are synced, so moving casters use this frame's
+  // bounds. Receivers include visible background scenery at any depth.
+  follow(camera: THREE.Camera): void {
+    if (!this.sun || !this.sun.castShadow) return;
+    this.target.position.set(0, 0, 0);
+    this.sun.position.copy(this.dir);
+    this.shadowFit.fit(this.scene, camera, this.sun);
   }
 
   dispose(): void {

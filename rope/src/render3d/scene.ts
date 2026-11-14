@@ -31,6 +31,7 @@ import type { Camera } from "../render/camera";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { SceneDressing, sceneryWater, type DressTarget } from "./sceneDressing";
+import { setFogRegions } from "./fogRegions";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { LevelScene } from "./levelScene";
@@ -1349,6 +1350,7 @@ export class Scene3D {
     slime: VineSlime | null = null,
   ): void {
     const rect = this.viewportRect;
+    setFogRegions(level.visualSource.data.fogRegions);
     // The level's own visuals, built the first time it is drawn if nothing
     // asked for it before (`setLevel`).
     if (!this.current) this.setLevel(level);
@@ -1384,7 +1386,6 @@ export class Scene3D {
       syncCamera(this.camera, camera, slot.lens, orbit);
       syncCamera(other, camera, slot.lens, orbit);
     }
-    this.env.follow(centre);
     const clock = this.pinnedClock ?? performance.now() / 1000;
     // The spray's point sprites and a beam's dust are sized in metres and need
     // the viewport's pixel height to stay that size (see water.ts
@@ -1490,6 +1491,7 @@ export class Scene3D {
     // a material swap on meshes the reconciliation above may have only just
     // created, and it costs a traverse only while something is selected.
     this.syncHighlight();
+    this.env.follow(this.camera);
 
     // Inside the timer: the probe is six more draws of the scene, and the
     // perf HUD should say what the frame costs, not what the main view does.

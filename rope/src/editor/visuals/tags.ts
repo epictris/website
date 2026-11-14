@@ -26,7 +26,7 @@ export type GuidePart =
   | "light"
   // The player's spawn ring (`id` is `SPAWN_GUIDE_ID`).
   | "spawn"
-  // A camera region's outline.
+  // A camera region's or a shelter's outline.
   | "region"
   // A camera path or firefly path.
   | "path"

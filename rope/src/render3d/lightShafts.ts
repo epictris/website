@@ -56,6 +56,7 @@ import {
   type Shaft,
 } from "./beam";
 import { GAME_FOG_CAMERA, worldZInView } from "./editorFog";
+import { fogRegionUniforms, REGION_FOG_GLSL } from "./fogRegions";
 
 // The light a fully visible beam (`beam = 1`) puts into its air, as a
 // multiple of the spot's colour, relative to the fog colour the rest of the
@@ -139,6 +140,8 @@ const VIEW_Z_GLSL = /* glsl */ `
   }`;
 
 const MARCH_FRAGMENT = /* glsl */ `
+  ${REGION_FOG_GLSL}
+  uniform mat4 viewToWorld;
   ${VIEW_Z_GLSL}
   #ifdef SHADOWED
     uniform sampler2DShadow tShadow;
@@ -374,7 +377,9 @@ const MARCH_FRAGMENT = /* glsl */ `
       }
       sum += light * collected;
     }
-    gl_FragColor = vec4(sum, -sceneZ);
+    vec3 worldOrigin = (viewToWorld * vec4(o, 1.0)).xyz;
+    vec3 worldAlong = (viewToWorld * vec4(o + d, 1.0)).xyz;
+    gl_FragColor = vec4(sum * regionFogForRay(worldOrigin, worldAlong), -sceneZ);
   }`;
 
 const COMPOSITE_FRAGMENT = /* glsl */ `
@@ -437,6 +442,8 @@ function marchMaterial(shadowed: boolean): THREE.ShaderMaterial {
     defines: shadowed ? { SHADOWED: "" } : {},
     uniforms: {
       ...viewZUniforms(),
+      ...fogRegionUniforms(),
+      viewToWorld: { value: new THREE.Matrix4() },
       tShadow: { value: null },
       viewToShadow: { value: new THREE.Matrix4() },
       shadowSoftness: { value: 0 },
@@ -594,6 +601,7 @@ export class LightShafts {
         u.cameraFar!.value = camera.far;
         u.orthographic!.value = orthographic;
         (u.projectionInverse!.value as THREE.Matrix4).copy(camera.projectionMatrixInverse);
+        (u.viewToWorld!.value as THREE.Matrix4).copy(camera.matrixWorld);
         (u.rect!.value as THREE.Vector4).set(rect.x, rect.y, rect.w, rect.h);
         u.factor!.value = this.factor;
         this.cone(s);
