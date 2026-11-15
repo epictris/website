@@ -10,7 +10,6 @@ then projected into nine real spherical harmonics of outgoing white radiance
 import json
 import importlib.util
 import math
-import os
 import struct
 from pathlib import Path
 
@@ -20,6 +19,8 @@ from mathutils import Vector
 
 UV = "GameLightmap"
 KEY = "gameBakedLighting"
+# Cast lighting gain; visible emitter materials retain their authored strength.
+EMISSION_GAIN = 50.0
 
 
 def basis(n):
@@ -136,8 +137,9 @@ def unwrap_receiver(ob, scene, log=print):
     mesh.loop_triangles.foreach_get("vertices", tri)
     points = world[tri.reshape(-1, 3)]
     area = np.linalg.norm(np.cross(points[:, 1]-points[:, 0], points[:, 2]-points[:, 0]), axis=1).sum() / 2
-    if "game_lightmap_size" in scene:
-        size = int(scene["game_lightmap_size"])
+    override = ob.get("game_lightmap_size", scene.get("game_lightmap_size"))
+    if override is not None:
+        size = int(override)
         if size not in (128, 256, 512, 1024, 2048, 4096):
             raise ValueError("game_lightmap_size must be 128, 256, 512, 1024, 2048 or 4096")
     else:
@@ -155,12 +157,69 @@ def unwrap_receiver(ob, scene, log=print):
     # the lightmap four pixels between islands, without percentage margins.
     scene_export.unwrap(ob, np.ones(len(mesh.polygons), bool), [size], [size // 2])
     mesh.uv_layers[-1].name = UV
+    repair_lightmap_overlap(ob, size, log)
     if active and active in mesh.uv_layers:
         mesh.uv_layers.active = mesh.uv_layers[active]
     if render and render in mesh.uv_layers:
         mesh.uv_layers[render].active_render = True
     log(f"emission lightmap: {ob.name}: {area:.1f} m², {size}x{size}")
     return size
+
+
+def repair_lightmap_overlap(ob, size, log=print):
+    """Separate self-overlapping projected faces before baking illumination.
+
+    Smart Project can fold an island over itself. Packing that island as a
+    unit retains the overlap, allowing hidden faces to overwrite visible ones.
+    Only the affected faces become independent charts; geometry stays intact.
+    """
+    import native
+    import scene_export
+
+    mesh = ob.data
+    mesh.uv_layers.active = mesh.uv_layers[UV]
+    tool = bpy.context.scene.tool_settings
+    sync, mode = tool.use_uv_select_sync, tuple(tool.mesh_select_mode)
+    select([ob])
+    try:
+        tool.use_uv_select_sync = True
+        tool.mesh_select_mode = (False, False, True)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="DESELECT")
+        bpy.ops.uv.select_overlap()
+        bpy.ops.object.mode_set(mode="OBJECT")
+        overlap = np.empty(len(mesh.polygons), dtype=bool)
+        mesh.polygons.foreach_get("select", overlap)
+        if not overlap.any():
+            return
+        uv = np.empty((len(mesh.loops), 2), dtype=np.float64)
+        mesh.uv_layers[UV].data.foreach_get("uv", uv.ravel())
+        co = np.empty((len(mesh.vertices), 3), dtype=np.float64)
+        mesh.vertices.foreach_get("co", co.ravel())
+        # Export vertices are split at shading seams; packing must still see
+        # the same continuous charts as the welded unwrap.
+        weld = np.unique(co, axis=0, return_inverse=True)[1].ravel()
+        vert = np.empty(len(mesh.loops), dtype=np.int32)
+        mesh.loops.foreach_get("vertex_index", vert)
+        vert = weld[vert].astype(np.int32)
+        total = np.empty(len(mesh.polygons), dtype=np.int32)
+        mesh.polygons.foreach_get("loop_total", total)
+        separate = np.flatnonzero(np.repeat(overlap, total))
+        vert[separate] = len(mesh.vertices) + np.arange(len(separate))
+        mesh.calc_loop_triangles()
+        tri = np.empty((len(mesh.loop_triangles), 3), dtype=np.int32)
+        mesh.loop_triangles.foreach_get("loops", tri.ravel())
+        grid = min(scene_export.PACK_GRID, size // 2)
+        gap = max(1, math.ceil(scene_export.PACK_GAP_PX * grid / (size // 2)))
+        out, share = native.pack_islands(uv, vert, tri, grid, gap)
+        if share < 0:
+            raise ValueError(f"{ob.name}: repaired lightmap islands do not fit")
+        mesh.uv_layers[UV].data.foreach_set("uv", out.astype(np.float32).ravel())
+        log(f"emission lightmap: {ob.name}: separated {overlap.sum()} overlapping faces; coverage {share:.2f}")
+    finally:
+        if ob.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        tool.use_uv_select_sync, tool.mesh_select_mode = sync, mode
 
 
 def bake_field(objects, scene):
@@ -231,9 +290,6 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
     if not sources or not scene.get("game_bake_emission", True):
         return {}, None
     log(f"emission lighting: {len(sources)} emissive meshes")
-    diagnostic_gain = float(os.environ.get("SCENE_EMISSION_TEST_GAIN", "1"))
-    if not math.isfinite(diagnostic_gain) or diagnostic_gain <= 0:
-        raise ValueError("SCENE_EMISSION_TEST_GAIN must be finite and positive")
     saved_world, saved_engine = scene.world, scene.render.engine
     hidden = {ob: ob.hide_render for ob in scene.objects
               if ob.type == "LIGHT" or (ob not in objects and ob.type in {"MESH", "CURVE", "SURFACE", "FONT"})
@@ -254,8 +310,8 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
     boosted = []
     denoiser = None
     try:
-        if diagnostic_gain != 1:
-            log(f"emission lighting: diagnostic Cycles source strength x{diagnostic_gain:g}")
+        if EMISSION_GAIN != 1:
+            log(f"emission lighting: Cycles source strength x{EMISSION_GAIN:g}")
             for mat in {m for ob in sources for m in ob.data.materials if m and m.node_tree}:
                 nt = mat.node_tree
                 for node in list(nt.nodes):
@@ -267,13 +323,13 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
                         original = socket.links[0].from_socket
                         scale = nt.nodes.new("ShaderNodeMath")
                         scale.operation = "MULTIPLY"
-                        scale.inputs[1].default_value = diagnostic_gain
+                        scale.inputs[1].default_value = EMISSION_GAIN
                         nt.links.new(original, scale.inputs[0])
                         nt.links.new(scale.outputs[0], socket)
                         boosted.append((nt,socket,original,scale))
                     else:
                         boosted.append((nt,socket,socket.default_value,None))
-                        socket.default_value *= diagnostic_gain
+                        socket.default_value *= EMISSION_GAIN
         field = None if surface_only else bake_field(objects, scene)
         log(f"emission lighting: {math.prod(field['size']) if field else 0} probes")
         receivers = []
@@ -299,7 +355,18 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
             images[ob] = image
             receivers.append(ob)
         if receivers:
-            diffuse_bake(receivers)
+            # A prominent receiver can need cleaner lighting without making
+            # every distant rock and the probe field pay for its sample count.
+            groups = {}
+            for ob in receivers:
+                count = int(ob.get("game_light_samples", scene.get("game_light_samples", 64)))
+                if count < 1:
+                    raise ValueError(f"{ob.name}: game_light_samples must be positive")
+                groups.setdefault(count, []).append(ob)
+            for count, group in sorted(groups.items()):
+                scene.cycles.samples = count
+                log(f"emission lighting: baking {len(group)} receivers at {count} samples")
+                diffuse_bake(group)
             from lightmap_denoise import LightmapDenoiser
             denoiser = LightmapDenoiser()
         # Wire only after ALL baking: a lightmap must never illuminate another bake.

@@ -37,7 +37,8 @@
 // detaches between steps, which is the same rule the 2D renderer already keeps.
 
 import * as THREE from "three";
-import mushroomVariants from "../level/mushroomVariants.json";
+import { mushroomParameters } from "../level/mushroom";
+import { proceduralMushroom } from "./proceduralMushroom";
 import { MushroomBounce } from "./mushroomBounce";
 import type { ContactPulses } from "../engine/contactPulses";
 
@@ -466,6 +467,8 @@ export class BodyVisual {
         let copy = copies.get(m);
         if (!copy) {
           copy = std.clone();
+          copy.onBeforeCompile = std.onBeforeCompile;
+          copy.customProgramCacheKey = std.customProgramCacheKey;
           copies.set(m, copy);
           this.ownedMaterials.push(copy);
           this.driven.push({ material: copy, authored: copy.emissiveIntensity });
@@ -508,12 +511,26 @@ export class BodyVisual {
       // that collides with nothing is decoration and keeps the scenery's rule
       // (see `dressScene`).
       const solid = data.objects.some(isCollisionObject);
+      const params = mushroomParameters(o.model, o.mushroom);
+      if (params) {
+        const node = proceduralMushroom(params);
+        holder.add(node);
+        node.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            this.owned.push(child.geometry);
+            this.ownedMaterials.push(child.material as THREE.Material);
+          }
+        });
+        this.mushrooms.push(new MushroomBounce(node, params.stemHeight));
+        node.updateWorldMatrix(true, true);
+        if (!solid) noShadowBehindPlane(node);
+        this.adoptDressing(node);
+        return;
+      }
       const land = (loaded: THREE.Object3D | null, late: boolean): void => {
         if (!loaded || this.disposed) return;
         const node = mountExport(loaded);
         holder.add(node);
-        const mushroom = mushroomVariants.find((v) => v.model === o.model);
-        if (mushroom) this.mushrooms.push(new MushroomBounce(node, mushroom.stemHeight));
         node.updateWorldMatrix(true, true);
         if (!solid) noShadowBehindPlane(node);
         this.adoptDressing(node);

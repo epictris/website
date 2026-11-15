@@ -1,3 +1,4 @@
+import { mushroomOutline, mushroomParameters, type MushroomParameters } from "../level/mushroom";
 import mushroomVariants from "../level/mushroomVariants.json";
 // Editor scene model. Mirrors LevelData but keeps positions as Vec2 in WORLD
 // METRES (so it shares the camera/pointer un-projection with the sim), plus a
@@ -190,6 +191,7 @@ export type EdObject = "collision" | "light" | "anchor" | "model";
 // a light. `name` is the library's model; the placement (`pos`, `rot`) is the
 // item's own, as every object's is.
 export interface EdModelRef {
+  mushroom?: MushroomParameters;
   name: string;
   z: number;
   rotX: number;
@@ -1538,6 +1540,7 @@ function fromLevelData(data: LevelData): EdModel {
           root: null,
           modelRef: {
             name: o.model,
+            ...(o.mushroom ? { mushroom: { ...o.mushroom } } : {}),
             z: o.z ?? 0,
             rotX: o.rotX ?? 0,
             rotY: o.rotY ?? 0,
@@ -2363,6 +2366,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         emit(i, {
           type: "model",
           model: m.name,
+          ...(m.mushroom ? { mushroom: { ...m.mushroom } } : {}),
           ...localOf(i),
           ...(m.z !== 0 ? { z: m.z } : {}),
           ...(m.rotX !== 0 ? { rotX: m.rotX } : {}),
@@ -4785,18 +4789,13 @@ export function emptyModel(): EdModel {
  * model, scale and collision preserve the chosen variation exactly. */
 export function mushroomBody(pos: Vec2, variant = 0, scale = 1): LevelBodyData {
   const spec = mushroomVariants[Math.abs(variant) % mushroomVariants.length]!;
-  const w = spec.width * scale;
-  const h = spec.capHeight * scale;
+  const params = mushroomParameters(spec.model)!;
   return {
     kind: "static", x: pos.x, y: pos.y, rot: 0,
     color: "#b28be8", bounce: 1, launch: 6.5,
     objects: [
-      { type: "collision", debug: { on: false }, shape: { kind: "poly", verts: [
-        { x: -.5*w, y: 0 }, { x: -.4*w, y: -.6*h }, { x: -.2*w, y: -.92*h },
-        { x: 0, y: -h }, { x: .2*w, y: -.92*h }, { x: .4*w, y: -.6*h },
-        { x: .5*w, y: 0 }, { x: .4*w, y: .6*h }, { x: -.4*w, y: .6*h },
-      ] } },
-      { type: "model", model: spec.model, scale },
+      { type: "collision", debug: { on: false }, shape: { kind: "poly", verts: mushroomOutline(params, scale) } },
+      { type: "model", model: spec.model, scale, mushroom: params },
       { type: "light", color: "#9cbbff", intensity: 5, range: 2.5*scale,
         wake: 6, wakeDelay: 0, wakeRise: .2, wakeFall: 1 },
     ],
@@ -4807,4 +4806,18 @@ export function mushroomModel(pos: Vec2): EdModel {
   const variant = Math.floor(Math.random() * mushroomVariants.length);
   const scale = .75 + Math.random() * .6;
   return fromLevelData({ player: { x: pos.x, y: pos.y, radius: .08 }, bodies: [mushroomBody(pos, variant, scale)] });
+}
+
+export function resizeMushroom(model: EdModel, item: EdItem, key: keyof MushroomParameters, value: number): void {
+  const params = mushroomParameters(item.modelRef.name, { ...mushroomParameters(item.modelRef.name, item.modelRef.mushroom)!, [key]: value });
+  if (!params) return;
+  item.modelRef.mushroom = params;
+  const caps = model.items.filter(b => b.bodyId === item.bodyId && b.object === "collision");
+  if (caps.length !== 1) return;
+  const cap = caps[0]!;
+  const c = Math.cos(item.rot - cap.rot), s = Math.sin(item.rot - cap.rot);
+  const dx = item.pos.x - cap.pos.x, dy = item.pos.y - cap.pos.y;
+  const ox = dx * Math.cos(cap.rot) + dy * Math.sin(cap.rot);
+  const oy = -dx * Math.sin(cap.rot) + dy * Math.cos(cap.rot);
+  cap.shape = { kind: "poly", verts: mushroomOutline(params, item.modelRef.scale).map(v => new Vec2(ox + v.x*c - v.y*s, oy + v.x*s + v.y*c)) };
 }

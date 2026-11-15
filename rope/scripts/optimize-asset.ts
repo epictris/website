@@ -90,6 +90,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+// Use the installed dependency under Node. `bunx` can resolve/download a
+// different executable after a long bake, making packaging depend on the network.
+const GLTF_CLI = join(import.meta.dir, "../node_modules/@gltf-transform/cli/bin/cli.js");
+
 const argv = process.argv.slice(2);
 // `--center`, `--keep-nodes` and `--keep-hierarchy` are bare flags, so they come
 // out of the argument list before anything positional is read; everything below
@@ -165,8 +169,8 @@ const tmp = center ? mkdtempSync(join(tmpdir(), "assets-center-")) : null;
 const optimizeInput = tmp ? join(tmp, "centered.glb") : input;
 if (tmp) {
   const c = spawnSync(
-    "bunx",
-    ["@gltf-transform/cli", "center", resolve(input), optimizeInput, "--pivot", "center"],
+    "node",
+    [GLTF_CLI, "center", resolve(input), optimizeInput, "--pivot", "center"],
     { stdio: "inherit" },
   );
   if (c.status !== 0) {
@@ -176,9 +180,9 @@ if (tmp) {
 }
 
 const r = spawnSync(
-  "bunx",
+  "node",
   [
-    "@gltf-transform/cli",
+    GLTF_CLI,
     "optimize",
     resolve(optimizeInput),
     resolve(output),
@@ -231,7 +235,11 @@ const r = spawnSync(
   { stdio: "inherit" },
 );
 if (tmp) rmSync(tmp, { recursive: true, force: true });
-if (r.status !== 0) process.exit(r.status ?? 1);
+if (r.status !== 0) {
+  if (r.error) console.error(`[assets] optimiser could not start: ${r.error.message}`);
+  if (r.signal) console.error(`[assets] optimiser stopped by ${r.signal}`);
+  process.exit(r.status ?? 1);
+}
 
 if (ownEncoding) {
   // In place on the output, in Node (see the script for why neither the `webp`

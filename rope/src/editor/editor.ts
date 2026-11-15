@@ -1,3 +1,5 @@
+import { mushroomParameters, type MushroomParameters } from "../level/mushroom";
+import { resizeMushroom } from "./model";
 // Level editor. Owns its own canvas loop and DOM overlay (toolbar + inspector),
 // manipulates an EdModel with the mouse, tests the scene with either controller,
 // and saves/loads levels from disk through the dev-server API.
@@ -7607,6 +7609,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const name = first.modelRef.name;
       if (!name) return "No model: nothing is drawn. Type or pick one.";
       if (!isModelName(name)) return `"${name}" is not a model name.`;
+      if (mushroomParameters(name)) return "Procedural mushroom · edit dimensions below · no model export needed";
       const meta = modelMetaFor(name, () => (hint.textContent = hintText()));
       if (meta === undefined) return `Looking for /models/${name}/meta.json…`;
       if (meta === null) return `Not exported here: run \`just model ${name}\` (assets-src/models/${name}.blend).`;
@@ -7627,8 +7630,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     describe(tx.parentElement!, "Turned about the screen's horizontal axis before its turn in the plane: positive tips its top toward the camera.");
     const ty = num("tilt y°", (b) => deg(b.modelRef.rotY), (b, v) => (b.modelRef.rotY = (v * Math.PI) / 180), 15);
     describe(ty.parentElement!, "Turned about the screen's vertical axis before its turn in the plane: positive brings its right side toward the camera.");
-    const sc = num("scale", (b) => b.modelRef.scale, (b, v) => (b.modelRef.scale = Math.max(MODEL_MIN_SCALE, v)), 0.1);
+    const sc = num("scale", (b) => b.modelRef.scale, (b, v) => {
+      b.modelRef.scale = Math.max(MODEL_MIN_SCALE, v);
+      const params = mushroomParameters(b.modelRef.name, b.modelRef.mushroom);
+      if (params) resizeMushroom(model, b, "width", params.width);
+    }, 0.1);
     describe(sc.parentElement!, "Its size against the size it was modelled at.");
+
+    if (items.every(b => mushroomParameters(b.modelRef.name))) {
+      const shape = section(g, "model/Mushroom", "Mushroom shape");
+      const control = groupNum(shape, items);
+      for (const [key, label] of [["width", "cap width"], ["capHeight", "cap height"], ["stemHeight", "stem height"]] as [keyof MushroomParameters, string][]) {
+        const field = control(label, b => mushroomParameters(b.modelRef.name, b.modelRef.mushroom)![key],
+          (b, v) => resizeMushroom(model, b, key, v), .05);
+        describe(field.parentElement!, "Metres before model scale. Lower cap height makes a flatter cap; higher makes a rounded bell. Updates the body's single cap collision too.");
+      }
+    }
 
     addGroupSection(g, title);
     addActionsRow(g);

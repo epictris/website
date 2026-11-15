@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import bpy
 import numpy as np
 import native
-from emission_bake import UV, unwrap_receiver
+from emission_bake import UV, unwrap_receiver, repair_lightmap_overlap
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 vertices, faces = [], []
@@ -29,6 +29,10 @@ uvs = np.random.default_rng(17).random(len(mesh.loops)*2).astype(np.float32)
 original.data.foreach_set("uv", uvs)
 before = np.asarray([tuple(n.vector) for n in mesh.corner_normals])
 bpy.context.scene["game_lightmap_size"] = 256
+ob["game_lightmap_size"] = 512
+assert unwrap_receiver(ob, bpy.context.scene) == 512
+assert bpy.context.scene["game_lightmap_size"] == 256
+del ob["game_lightmap_size"]
 assert unwrap_receiver(ob, bpy.context.scene) == 256
 assert len(mesh.vertices) == len(vertices)
 assert np.array_equal(np.asarray([tuple(v.co) for v in mesh.vertices]), np.asarray(vertices, dtype=np.float32))
@@ -44,6 +48,26 @@ a, b = p[:, 1]-p[:, 0], p[:, 2]-p[:, 0]
 coverage = np.abs(a[:, 0]*b[:, 1]-a[:, 1]*b[:, 0]).sum()/2
 assert coverage > .5, coverage
 assert uv.min() >= 0 and uv.max() <= 1
+
+# A hidden triangle projected inside a visible face used to overwrite its
+# illumination. More pixels preserve this defect: the charts must separate.
+overlap_mesh = bpy.data.meshes.new("overlapping lightmap")
+overlap_mesh.from_pydata([(0,0,0), (1,0,0), (0,1,0),
+                         (0,0,-1), (1,0,-1), (0,1,-1)], [], [(0,1,2), (3,4,5)])
+overlap_ob = bpy.data.objects.new(overlap_mesh.name, overlap_mesh)
+bpy.context.scene.collection.objects.link(overlap_ob)
+overlap_mesh.uv_layers.new(name=UV)
+overlap_mesh.uv_layers[UV].data.foreach_set("uv", np.array(
+    [(0,0), (1,0), (0,1), (.2,.2), (.4,.2), (.2,.4)], np.float32).ravel())
+repair_lightmap_overlap(overlap_ob, 256)
+fixed = np.array([v.uv[:] for v in overlap_mesh.uv_layers[UV].data]).reshape(2,3,2)
+edges = np.roll(fixed, -1, axis=1) - fixed
+axes = np.stack((-edges[:,:,1], edges[:,:,0]), axis=-1).reshape(-1,2)
+projected = fixed @ axes.T
+assert np.any((projected[0].max(axis=0) < projected[1].min(axis=0)) |
+              (projected[1].max(axis=0) < projected[0].min(axis=0))), fixed
+assert len(overlap_mesh.vertices) == 6 and len(overlap_mesh.polygons) == 2
+print("EMISSION_OVERLAP_REGRESSION_OK hidden and visible faces have separate texels")
 
 pixels = np.zeros((16, 16, 4), np.float32)
 pixels[3:7, 3:7] = (0, 0, 0, 1)  # Real shadow, not missing data.

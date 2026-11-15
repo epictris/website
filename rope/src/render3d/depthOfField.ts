@@ -55,11 +55,8 @@ export const DOF_MAX_BLUR: Readonly<Record<DepthOfFieldLevel, number>> = {
 // rolls on is part of the plane.
 export const FOCUS_BAND = 1.5;
 
-// About how many lines the blur is worked at, whatever the frame is drawn at:
-// the frame divided by a whole factor of at least 2 (half at 1080p, a quarter
-// at 4K). A blur holds no detail finer than itself, and at half of 4K the High
-// blur alone cost 0.9 ms on an RTX 4070 SUPER, which pushed a 4K frame past
-// 144 Hz's 6.9 ms.
+// Work near 540 lines to keep the blur's per-frame cost bounded. Dense
+// sub-texel taps below smooth bright edges before this image is enlarged.
 const BLUR_LINES = 540;
 const MAX_FACTOR = 4;
 
@@ -151,8 +148,10 @@ const BLUR_FRAGMENT = /* glsl */ `
       return;
     }
     // The spiral adds about 2 * step to radius^2 per tap, so this step reaches
-    // the edge of the circle in MAX_SAMPLES taps at most.
-    float step = max(0.5, coc * coc / (2.0 * float(${MAX_SAMPLES})));
+    // the edge of the circle in MAX_SAMPLES taps at most. Small circles
+    // need sub-texel spacing too: sparse taps repeat bright plant rims
+    // into visible steps instead of a continuous defocused silhouette.
+    float step = max(0.125, coc * coc / (2.0 * float(${MAX_SAMPLES})));
     vec3 sum = centre.rgb;
     float count = 1.0;
     float radius = step;
@@ -187,18 +186,29 @@ const COMPOSITE_FRAGMENT = /* glsl */ `
     // In focus: the frame's own samples stay as they are.
     if (coc < 0.5) discard;
     vec4 sharp = texture2D(tColor, vUv);
-    // Bilinear by hand over the four nearest small texels, leaving out the
-    // in-focus ones: at the plane's edge they hold the plane's colour. In
-    // small-texel units, from this pixel's place in the blocks step 2 made.
+    // Cubic B-spline reconstruction with four bilinear fetches. A bilinear
+    // enlargement exposes the small target's grid on bright silhouettes.
+    // Keep the same fetch budget, and exclude in-focus coverage as before.
     vec2 p = gl_FragCoord.xy / factor - 0.5;
     vec2 base = floor(p);
     vec2 f = p - base;
+    vec2 f2 = f * f;
+    vec2 f3 = f2 * f;
+    vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+    vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    vec2 w2c = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+    vec2 w3 = f3 / 6.0;
+    vec2 g0 = w0 + w1;
+    vec2 g1 = w2c + w3;
+    vec2 h0 = base - 1.0 + w1 / g0;
+    vec2 h1 = base + 1.0 + w3 / g1;
     vec3 sum = vec3(0.0);
     float total = 0.0;
     for (int i = 0; i < 4; i++) {
       vec2 o = vec2(float(i - (i / 2) * 2), float(i / 2));
-      vec4 tap = texture2D(tBlur, (clamp(base + o, vec2(0.0), blurSize - 1.0) + 0.5) / blurSize);
-      vec2 w2 = mix(1.0 - f, f, o);
+      vec2 sampleAt = mix(h0, h1, o);
+      vec4 tap = texture2D(tBlur, (clamp(sampleAt, vec2(0.0), blurSize - 1.0) + 0.5) / blurSize);
+      vec2 w2 = mix(g0, g1, o);
       float w = w2.x * w2.y * (tap.a >= 0.5 ? 1.0 : 1e-4);
       sum += tap.rgb * w;
       total += w;

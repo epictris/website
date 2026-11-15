@@ -31,6 +31,7 @@ const playtests = readdirSync(join(ROOT, "playtests"))
   .map<Step>((f) => ({ name: `play ${f}`, cmd: ["bun", "run", CLI, "play", join("playtests", f)] }));
 
 const steps: Step[] = [
+  { name: "mushrooms", cmd: ["bun", "run", "scripts/test-mushrooms.ts"] },
   { name: "typecheck", cmd: ["bunx", "tsc", "--noEmit"] },
   { name: "dmath", cmd: ["bun", "run", CLI, "dmath"] },
   { name: "selftest", cmd: ["bun", "run", CLI, "selftest"] },

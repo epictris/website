@@ -32,7 +32,10 @@ import { waterTime } from "./waterLook";
 // emission's overall multiplier here.
 
 const look = {
-  uGlow: { value: 1 },
+  // Surface radiance only: the grove's baked lighting and light sources keep
+  // their authored strength. The generator's full emission washes out the
+  // pastel body colours in the cave, hiding the caps, stems and leaf detail.
+  uGlow: { value: 0.22 },
   uPulse: { value: 0.18 },
   uSway: { value: 1 },
   uRim: { value: 0.3 },

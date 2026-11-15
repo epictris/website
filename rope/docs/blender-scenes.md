@@ -125,7 +125,11 @@ Static opaque receivers get a non-overlapping `GameLightmap` UV set and a
 separate diffuse-light texture. The existing base colour and normals remain
 separate. The unwrap welds a temporary copy before finding islands, so split
 shading vertices do not turn every triangle into an isolated speck. It uses
-the surface export's packer with four-pixel gaps. Resolution follows world
+the surface export's packer with four-pixel gaps. Smart Project can still
+fold a chart over itself: before baking, the lightmap pass detects overlapping
+UV faces and repacks those faces as independent charts. The render geometry,
+shading seams and colour UVs stay intact. This prevents a hidden dark face
+from overwriting illumination on a visible wall. Resolution follows world
 surface area at 32 texels/metre, with a complexity allowance for disconnected
 pieces, rounded up to a power of two from 128 to 2048. Fine rock detail stays
 in the separate normal maps; the lightmaps store diffuse illumination.
@@ -180,6 +184,10 @@ Optional Blender scene custom properties:
 | `game_probe_spacing` | 2 | Desired probe spacing in metres |
 | `game_probe_min`, `game_probe_max` | automatic | Three-component bounds in **game** coordinates (x, up, toward camera) |
 
+Meshes may override `game_lightmap_size` and `game_light_samples` individually.
+The object takes precedence over the scene. Receivers are baked in groups
+with the same sample count; the scene setting still controls probe samples.
+
 A mesh with `game_dynamic` set, or parented to one, stays out of the bake.
 The export also recognises named rigid bodies, scripted movers and root bodies
 from the level. They neither receive static maps nor leave permanent baked
@@ -192,13 +200,13 @@ texture cache. The first river validation produced 64 lightmaps and 756 probes;
 the full export took about eleven minutes. Re-export after moving emitters or
 occluders. No source `.blend` is saved by the bake.
 
-## The surface bake cache
+Every scene export multiplies emitting shader strength by **50×** during the
+Cycles lightmap and probe bake, then restores authored strength before glTF
+export. This controls cast lighting independently of visible emitter brightness.
+The gain is defined by `EMISSION_GAIN` in `tools/blender/emission_bake.py`; no
+environment variable is needed, and the source `.blend` is not modified.
 
-Diagnostic emission export: `SCENE_EMISSION_TEST_GAIN=1000 bun run scene:export ball`
-temporarily multiplies emitting shader strength during the Cycles lightmap and
-probe bake, then restores it before glTF export. This isolates cast lighting
-from visible emitter brightness. The normal default is 1; the source file is
-not modified. Re-export without the variable to remove the diagnostic boost.
+## The surface bake cache
 
 Unused empty material slots are tolerated during baking: the export copy fills them with an existing material while retaining slot indices. The source `.blend` is unchanged. Faces referencing an empty or missing slot still fail with the object and slot numbers; validation uses the evaluated mesh so modifier-generated faces are checked too. This fixes Cube.006's unused second slot blocking the river export (2026-11-14).
 Workers validate and retain the original slots before their first task. Later map tasks reuse those validated materials: a prepared mesh has additional slots per texture map, so its face indices cannot be checked against the original slot count.
@@ -227,6 +235,12 @@ A cached encode goes into the file at the point of the pass that would have made
 After every export `scene-export.ts` checks that the optimiser encoded every baked map as one (`baked colour` and `baked normal`, both AVIF): it finds them by image name, and a name the glTF exporter cut short at a dot (`Terrace.003 baked colour` went out as `Terrace`) shipped the four dotted Terraces as lossy WebP at 1k until 2026-10-04.
 On a miss it names the maps the optimised file lacks (Blender's meta lists them, `baked_maps`).
 The optimiser writes into the export's scratch directory and the file is copied into `public/scenes/<scene>/` only once every check has passed, so a failed export leaves the last good scene in place; until 2026-10-18 the checks ran on the shipped file, and a failed export left its broken file in the game.
+
+Packaging runs the installed glTF Transform CLI under Node, without a `bunx`
+package lookup. If an export fails after Blender wrote `raw.glb`, its scratch
+directory (including the raw scene and metadata) is retained and printed for
+recovery. Successful exports still clean their scratch directory. This avoids
+losing a long lighting bake to a later optimizer or encoding failure.
 
 A bake that writes no texel into a map fails the export, naming the object, the pass and the map (`fill_baked` in `scene_export.py`), before anything is cached.
 An empty map fills to solid black, the glTF exporter ships a one-colour image as a factor with no image, and the bake cache would keep it for every export after.
@@ -375,3 +389,48 @@ A **model** that is someone else's work has no image to be found by, so it carri
 The export writes the sets it found into `meta.json` (`credits`) and prints them; an image the table does not know, or a `credits` name that is not a set, is an export warning.
 `just publish` pins the credits beside the scene's sha256 in `src/render3d/sceneAssets.json` (and refuses a `meta.json` that describes a different `scene.glb`), and `bun run assets:credits` lists them in `CREDITS.md` under "Inside Blender scenes".
 So a new texture in a scene is one line in the table; `CREDITS.md` stays generated.
+
+### Cave texture quality
+
+The river chamber (`Cube.002`) uses `export_map_max = 4096`,
+`export_maps = 2`, and `export_texels = 400`. The map count is a hard
+memory budget, not a guarantee of the requested texel density. The two
+colour atlases cover about 590 m² of visible rock, with half-size normal
+atlases. These overrides are saved in `assets-src/scenes/river.blend`.
+A full `bun run scene:export ball` rebuilds the scene from them. Use
+`SCENE_EXPORT_WORKERS=1` for an isolated serial bake when GPU memory is
+limited, and `SCENE_EXPORT_DEVICE=CUDA` to bypass a failing OptiX driver.
+These switches affect export only. Emission lighting uses the standard
+50× export gain for both lightmaps and probes.
+
+An eight-atlas trial on 2026-11-15 approximately doubled the measured
+linear texture density (159–176 to 273–354 colour texels/metre averaged
+over each atlas's full surface), but barely changed the 4K view at
+`at=52,4` with High DOF. It was reverted: the extra 640 MiB of GPU texture
+memory did not address the visible softness. Atlas dimensions alone do
+not establish the quality of the final, defocused image. A 1080-line DOF
+working-buffer trial at the same blur strength also left the broad surface
+patches essentially unchanged and was reverted.
+
+The separate illumination map was still 2048 across the entire chamber.
+Isolating the runtime colour and normal maps left the dark chip outlines and
+patches under the glowing shelves; disabling the lightmap removed them.
+The chamber now overrides `game_lightmap_size = 4096` and
+`game_light_samples = 1024`, rather than spending more colour-map memory.
+The lightmap adds 64 MiB including mipmaps; higher sampling costs bake time
+only. The other receivers and probes keep the scene's settings.
+The initial 256-sample 3840×2160 High-DOF capture improved the lighting, but retained a dark
+triangle and uneven shelf lighting. A subsequent raycast traced the triangle
+to overlapping lightmap UV faces: atlas dimensions and sample count do not
+repair UV overlap. The overlap repair removes that triangle. The 256-sample
+lighting still showed Monte Carlo mottling with DOF disabled; increasing only
+the chamber to 1024 samples substantially reduces that mottling in the same
+3840×2160 view. Keep the original DOF settings when comparing fixes.
+
+Verify this view at 3840×2160 with depth of field both off and high. The
+shot log reports the actual drawing-buffer size; the browser screenshot size
+alone does not establish the render resolution. Blur softness is expected,
+but the painted lines and bright plant rims should not have a coarse grid.
+The blur keeps its 540-line working target and 48-tap cap. Denser small-radius
+sampling plus cubic reconstruction (still four composite texture reads)
+removes the coarse silhouette without increasing render-target resolution.

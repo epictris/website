@@ -11,7 +11,7 @@ spanning sharp and blurred scenery conservatively keeps the sharper detail.
 
 The world-space blur radius is `0.016 * sensor_height / lens * (depth - 1.5)`.
 Camera distance cancels for the head-on perspective game camera. The generator
-uses two samples per blur radius for ivy, and one for moss, reading the lens from `guide.camera`, or the
+uses eight samples per blur radius for ivy, and one for moss, reading the lens from `guide.camera`, or the
 game's default 34-degree vertical field of view when no guide exists. Rebuild
 after moving scenery or changing the guide lens; export recalculates automatically.
 This is baked generation LOD, assuming High DOF, not runtime mesh switching.

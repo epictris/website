@@ -213,7 +213,7 @@ BAKE_UV = "SceneBake"
 # speckle came back (2.5 and 4 levels rms, single texels off by 229).
 BAKE_SAMPLES = 8
 # How many worker Blenders prepare and bake the objects side by side
-# (`run_workers`; SCENE_EXPORT_WORKERS overrides it, 1 bakes everything here).
+# (`run_workers`; SCENE_EXPORT_WORKERS=1 uses one isolated worker).
 # Each holds the whole scene and its own Cycles session on the one GPU, and
 # Blender handles a bake's every texel on one thread, so the bakes scale with
 # the workers until the GPU is busy.
@@ -285,7 +285,13 @@ def bake_device():
     "CPU" when none does. `--factory-startup` leaves the preferences at their
     defaults (no compute device), so the export chooses for itself."""
     prefs = bpy.context.preferences.addons["cycles"].preferences
-    for kind in GPU_BACKENDS:
+    # Allow a stable fallback when a driver's preferred backend fails while
+    # baking. This changes offline export only, never the runtime renderer.
+    requested = os.environ.get("SCENE_EXPORT_DEVICE", "").upper()
+    if requested and requested not in (*GPU_BACKENDS, "CPU"):
+        raise SystemExit(f"Unknown SCENE_EXPORT_DEVICE: {requested}")
+    backends = () if requested == "CPU" else (requested,) if requested else GPU_BACKENDS
+    for kind in backends:
         try:
             prefs.compute_device_type = kind
         except TypeError:
@@ -891,6 +897,23 @@ def export_mesh_name(ob):
     return f"{ob.name} export"
 
 
+def bake_image(name, side, colorspace):
+    """Keep canonical map names when one worker handles several split maps.
+
+    Earlier tasks leave 1x1 stand-ins with the later maps' names. Keep their
+    references valid, but release the name before making the real image so
+    cache filenames and encoder rules never acquire Blender's .001 suffix.
+    """
+    previous = bpy.data.images.get(name)
+    if previous is not None:
+        previous.name = name + " previous task"
+    image = bpy.data.images.new(name, side, side, alpha=True)
+    image.generated_color = (0, 0, 0, 0)
+    image.colorspace_settings.name = colorspace
+    image["generated_by"] = "tools/blender/scene_export.py"
+    return image
+
+
 def image_name(ob, kind, i=0, count=1):
     """The name of `ob`'s `kind` map ("baked colour", ...), the `i`th of its
     `count`. No dot in it: the glTF exporter takes everything after the last
@@ -1302,13 +1325,13 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     step("bake", f"{len(todo)} of {len(targets)} objects to bake"
          + (f", {len(loaded)} cached" if cache else ", cache off")
          + (f" ({len(stale)} with stale occlusion)" if stale else "")
-         + (f", {min(WORKERS, len(todo))} workers" if WORKER_OUT is None and WORKERS > 1 and len(todo) > 1 else ""))
+         + (f", {min(WORKERS, len(todo))} workers" if WORKER_OUT is None and WORKERS >= 1 and len(todo) > 1 else ""))
 
     # The objects to bake, prepared and baked by worker Blenders side by side
     # (`run_workers`), each handing back its mesh and maps as the cache keeps
     # them; taken here as a cached object is, then kept in the cache too.
     worked = set()
-    if WORKER_OUT is None and WORKERS > 1 and len(todo) > 1:
+    if WORKER_OUT is None and WORKERS >= 1 and len(todo) > 1:
         entries, worker_warnings = run_workers(todo)
         if warnings is not None:
             warnings.extend(worker_warnings)
@@ -1409,11 +1432,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
                 # With alpha, cleared to 0: the bake writes 1 where it baked,
                 # which is the mask `fill_background` fills the rest by.
                 side = map_size(size, kind) if WORKER_MAP is None or i == WORKER_MAP else 1
-                im = bpy.data.images.new(image_name(ob, kind, i, len(sizes[ob])), side, side, alpha=True)
-                im.generated_color = (0, 0, 0, 0)
-                im.colorspace_settings.name = colorspace
-                # Drawn by this export for this object: an original, no credit owed.
-                im["generated_by"] = "tools/blender/scene_export.py"
+                im = bake_image(image_name(ob, kind, i, len(sizes[ob])), side, colorspace)
                 if side != map_size(size, kind):
                     im["stand_in"] = True  # neither filled, packed nor handed back
                 out[ob].append(im)

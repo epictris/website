@@ -183,10 +183,21 @@ export function exportArgs(args: string[], tag: string, usage: string): ExportAr
 export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
   const { tag, name } = opts;
   const scratch = mkdtempSync(join(tmpdir(), `${opts.kind}-export-`));
+  let shipped = false;
+  let cleaned = false;
+  const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
+    if (!shipped && existsSync(join(scratch, "raw.glb"))) {
+      console.error(`${tag} retained baked scene for recovery: ${scratch}`);
+    } else {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
   // fail() exits without unwinding the `finally` below, and Ctrl-C without
   // even the exit hook unless it is caught (below, once the steps are drawn;
   // Blender, in the same process group, gets the Ctrl-C itself).
-  process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
+  process.on("exit", cleanup);
   try {
     mkdirSync(dirname(opts.shipped), { recursive: true });
     const raw = join(scratch, "raw.glb");
@@ -321,9 +332,11 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       checkLighting(optimised, (JSON.parse(readFileSync(rawMeta, "utf8")) as BlenderMeta).lighting);
       copyFileSync(optimised, opts.shipped);
     }
-    return JSON.parse(readFileSync(rawMeta, "utf8")) as BlenderMeta;
+    const meta = JSON.parse(readFileSync(rawMeta, "utf8")) as BlenderMeta;
+    shipped = true;
+    return meta;
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    cleanup();
   }
 }
 

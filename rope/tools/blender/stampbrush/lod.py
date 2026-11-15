@@ -66,6 +66,10 @@ def moss_params(p, texel):
 def ivy_params(p, texel, vine_length=0.0):
     if texel <= 0:
         return p
+    # Cutout leaves need more samples than solid moss: the alpha silhouette
+    # and gaps between leaves remain visible through High DOF. Keep eight
+    # samples per blur radius before switching cards or shrinking the atlas.
+    texel *= 0.25
     clumps = p.detail == "CLUMPS" or texel >= p.leaf_min / 4
     kw = {"resolution": max(p.resolution, texel)}
     if clumps:

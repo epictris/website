@@ -73,12 +73,14 @@ glassOptionsFrom(q);
 // shown — a window-shaped canvas would frame the scene differently from the game
 // and quietly change what the picture is evidence of.
 //
-// `scale=N` draws it at N times the frame's pixels (2 is 4K), the way a player
-// with the resolution setting raised does: for a fill-cost reading (`bench`).
+// `scale=N` overrides DPR: N drawing pixels per CSS pixel. At the CLI
+// default 1920x1080 viewport, 2 is 4K; at a 4K viewport use 1. Log the
+// actual buffer so a large screenshot cannot conceal an upscaled render.
 const pixelScale = Math.min(Math.max(Number(q.get("scale") ?? 1) || 1, 0.25), 4);
 const view = use3d
   ? fitCanvas([sceneCanvas, canvas], pixelScale, VIEW_WIDTH * pixelScale)
   : fitCanvas(canvas, pixelScale, VIEW_WIDTH * pixelScale);
+console.log(`[shot] drawing buffer ${canvas.width}x${canvas.height}, viewport ${window.innerWidth}x${window.innerHeight}, dpr ${pixelScale}`);
 
 const rec = (await (await fetch(q.get("bundle")!)).json()) as Recording;
 const level = levelFromRecording(rec);

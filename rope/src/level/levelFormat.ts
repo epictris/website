@@ -1,3 +1,4 @@
+import type { MushroomParameters } from "./mushroom";
 // Canonical, hand-editable level format — the single source of truth for the
 // level schema, shared by the runtime loaders (`Level`, `BallLevel`) and the
 // level editor. `levelData.ts` is auto-generated from a Godot scene and stays
@@ -943,6 +944,7 @@ export interface AnchorObjectData extends ObjectPlacement {
 // its side keeps that tilt as its body swings. `scale` is a uniform factor
 // against the modelled size.
 export interface ModelObjectData extends ObjectPlacement {
+  mushroom?: MushroomParameters;
   type: "model";
   // Which model: a name in `MODEL_NAME`'s spelling (render3d/models.ts), the
   // file `assets-src/models/<model>.blend` and the release asset it ships as.
@@ -3340,6 +3342,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     return {
       type: "model",
       model: o.model,
+      ...(o.mushroom ? { mushroom: { ...o.mushroom } } : {}),
       ...placed,
       ...(o.z !== undefined ? { z: o.z * factor } : {}),
       ...(o.rotX !== undefined ? { rotX: o.rotX } : {}),
