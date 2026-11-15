@@ -1567,7 +1567,7 @@ export function runCameraCases(): CameraResult[] {
         return {
           moving: Math.abs(walk[119]!.x - out[119]!.pos.x),
           settled: Math.abs(walk[479]!.x - out[479]!.pos.x),
-          halfASecond: Math.abs(walk[149]!.x - out[149]!.pos.x),
+          aTenth: Math.abs(walk[125]!.x - out[125]!.pos.x),
         };
       });
       return [
@@ -1578,13 +1578,15 @@ export function runCameraCases(): CameraResult[] {
         { label: "the stroll rests on the margin", got: rest[0]!.settled, want: inner, tol: 1e-6 },
         { label: "the run rests on the margin", got: rest[1]!.settled, want: inner, tol: 1e-6 },
         { label: "the launch rests on the margin", got: rest[2]!.settled, want: inner, tol: 1e-6 },
-        // And it is a clock that takes them there rather than a snap: half a
-        // second after the launch stops, the correction is measurably still
-        // running. Stated as "still short" rather than as a residual, because
-        // the exact number is CAMERA_EDGE_SMOOTHING's and the spring's to move
-        // and what this case is about is that the arrival is gradual and the
-        // destination is the margin.
-        { label: "half a second in, the correction is still running", got: inner - rest[2]!.halfASecond > 0.01 ? 1 : 0, want: 1 },
+        // And it is a clock that takes them there rather than a snap: a tenth
+        // of a second after the launch stops, the avatar is measurably still
+        // past the margin. Stated as "still past" rather than as a residual,
+        // because the exact number is CAMERA_EDGE_SMOOTHING's and the spring's
+        // to move and what this case is about is that the arrival is gradual
+        // and the destination is the margin. (It was half a second until
+        // 60fdfee firmed the spring - CAMERA_FREQ 1.2 -> 1.5, CAMERA_MAX_ACCEL
+        // 8 -> 20 - and the correction now closes in about a quarter of one.)
+        { label: "a tenth of a second in, the correction is still running", got: rest[2]!.aTenth - inner > 0.01 ? 1 : 0, want: 1 },
       ];
     }),
 
@@ -2151,7 +2153,9 @@ export function runCameraCases(): CameraResult[] {
       // demand is `|lock - avatar| - inner` and nothing else), and stood there.
       for (let i = 0; i < 60; i++) walk.push(new Vec2(6 - 6 * (i / 59), 0));
       for (let i = 0; i < 360; i++) walk.push(new Vec2(0, 0));
-      const out = ride(rules, walk);
+      // Hanging throughout, because the stick is a hang's: off the line it is
+      // dropped and never charged (see `stick-is-a-hangs` below).
+      const out = ride(rules, walk, true, () => true);
       // The first frame the window asks nothing at all.
       const quiet = walk.findIndex((p, i) => i > 300 && Math.abs(p.x) <= inner);
       const at = (seconds: number): number => Math.abs(out[quiet + Math.round(seconds * 60)]!.stick.x);

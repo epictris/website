@@ -1,12 +1,14 @@
 // WHAT THIS BROWSER REMEMBERS OF THE EDITOR: the toolbar's view toggles (snap,
-// edge clamp, all debug, reflections, shadows, water, roots and scene) and the level
-// last open. They are how the author likes to work rather than anything about
+// edge clamp, all debug, reflections, shadows, water, roots and scene), which
+// layers are hidden or locked, the root widths and the level last open. They are how the author likes to work rather than anything about
 // a level, so they are kept in `localStorage` and never written into a file.
 //
 // Every access is guarded: `localStorage` throws in some privacy modes and is
 // empty after site data is cleared, and the editor must open with the defaults
 // then. A stored toggle of the wrong type is ignored field by field, so a
 // toggle added later starts at its default rather than voiding the rest.
+
+import { ED_LAYERS, type EdLayer } from "./model";
 
 export interface EditorViewSettings {
   snap: boolean;
@@ -56,6 +58,45 @@ export function writeViewSetting<K extends keyof EditorViewSettings>(key: K, val
     const settings = readViewSettings();
     settings[key] = value;
     localStorage.setItem(VIEW_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Unwritable storage: remembered for this session only.
+  }
+}
+
+// Which layers are hidden and which are locked: how the author has the stack
+// set up to work against, so a reload opens it the same way. Kept per browser
+// rather than per level, like the view toggles. A stored name that is not a
+// layer (one renamed or retired since) is dropped, and a list that hides every
+// layer is read as hiding none, since the editor refuses to hide the last one.
+export const LAYER_SETTINGS_KEY = "rope.editor.layers";
+
+export interface LayerSettings {
+  hidden: EdLayer[];
+  locked: EdLayer[];
+}
+
+export function readLayerSettings(): LayerSettings {
+  const out: LayerSettings = { hidden: [], locked: [] };
+  try {
+    const raw = localStorage.getItem(LAYER_SETTINGS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (typeof parsed !== "object" || parsed === null) return out;
+    const stored = parsed as Record<string, unknown>;
+    for (const key of ["hidden", "locked"] as const) {
+      const v = stored[key];
+      if (!Array.isArray(v)) continue;
+      out[key] = ED_LAYERS.filter((l) => v.includes(l));
+    }
+    if (out.hidden.length === ED_LAYERS.length) out.hidden = [];
+  } catch {
+    // Unreadable storage: every layer visible and unlocked.
+  }
+  return out;
+}
+
+export function writeLayerSettings(settings: LayerSettings): void {
+  try {
+    localStorage.setItem(LAYER_SETTINGS_KEY, JSON.stringify(settings));
   } catch {
     // Unwritable storage: remembered for this session only.
   }

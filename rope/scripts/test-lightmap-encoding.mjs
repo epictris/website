@@ -11,7 +11,7 @@ import sharp from 'sharp';
 
 const scratch = mkdtempSync(join(tmpdir(), 'lightmap-encoding-'));
 try {
-  const width = 2048, height = 16;
+  const width = 8192, height = 16;
   const pixels = Buffer.alloc(width * height * 3);
   for (let i = 0; i < pixels.length; i++) pixels[i] = (i * 73 + (i >> 4)) % 256;
   const png = await sharp(pixels, {raw: {width, height, channels: 3}}).png().toBuffer();
@@ -20,7 +20,7 @@ try {
   // This is the broken name Blender previously produced from Cube.002.
   const texture = doc.createTexture('Cube').setMimeType('image/png').setImage(png);
   const mat = doc.createMaterial().setEmissiveTexture(texture).setEmissiveFactor([1, 1, 1])
-    .setExtras({gameBakedLighting: {version: 1}});
+    .setExtras({gameBakedLighting: {version: 1, encoding: 'log1p', range: 194}});
   const primitive = doc.createPrimitive().setMaterial(mat)
     .setAttribute('POSITION', doc.createAccessor().setType('VEC3').setArray(new Float32Array([0,0,0, 1,0,0, 0,1,0])).setBuffer(buffer))
     .setAttribute('TEXCOORD_0', doc.createAccessor().setType('VEC2').setArray(new Float32Array([0,0, 1,0, 0,1])).setBuffer(buffer));
@@ -37,7 +37,9 @@ try {
     assert.equal(files.length, 1);
     if (run) assert.deepEqual(files, cachedFiles, 'cache hit must not rewrite the encoded image');
     cachedFiles = files;
-    const out = (await io.read(path)).getRoot().listTextures()[0];
+    const output = (await io.read(path)).getRoot();
+    assert.deepEqual(output.listMaterials()[0].getExtras(), mat.getExtras());
+    const out = output.listTextures()[0];
     assert.equal(out.getMimeType(), 'image/webp');
     const decoded = await sharp(out.getImage()).removeAlpha().raw().toBuffer({resolveWithObject: true});
     assert.equal(decoded.info.width, width);

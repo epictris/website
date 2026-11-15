@@ -24,6 +24,8 @@ them, unquantised. The game finds a glow plant by its `_glow` attribute, not
 by its material's name, which the optimiser may merge or replace."""
 
 import math
+import json
+from pathlib import Path
 
 import bpy
 import numpy as np
@@ -33,7 +35,8 @@ from . import glowflora
 from .stampbrush import lod
 
 MATERIAL_NAME = "Glow Flora"
-MATERIAL_VERSION = 1
+MATERIAL_VERSION = 2
+EMISSION_STRENGTH = json.loads(Path(__file__).with_name("glow_look.json").read_text())["emissionStrength"]
 GRID = 0.01  # the ground's memo grid, patch units
 ABOVE = 0.6  # a ground ray starts this far above the root (patch units)...
 BELOW = 1.5  # ...and finds ground at most this far below it
@@ -215,7 +218,7 @@ def material():
             nt.nodes.remove(n)
     bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
     bsdf.inputs["Roughness"].default_value = 0.42
-    bsdf.inputs["Emission Strength"].default_value = 1.0
+    bsdf.inputs["Emission Strength"].default_value = EMISSION_STRENGTH
     mat.use_backface_culling = True
     mat.diffuse_color = (0.8, 0.6, 0.95, 1.0)
     x, y = bsdf.location.x, bsdf.location.y

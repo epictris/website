@@ -1,6 +1,7 @@
 // Emission-only irradiance from Blender. Static lightmaps and the dynamic
 // SH field both store white diffuse radiance (E / pi), in linear RGB.
 import * as THREE from "three";
+import { patchBakedContactShadow, updateBakedContactShadow } from "./bakedContactShadow";
 
 const KEY = "gameBakedLighting";
 export interface BakedFieldData {
@@ -78,7 +79,36 @@ export function restoreLightmap(material: THREE.Material): void {
     mat.lightMap = new THREE.DataTexture(new Float32Array([c.r,c.g,c.b,1]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
     mat.lightMap.needsUpdate = true;
   }
-  mat.lightMapIntensity = Math.PI * mat.emissiveIntensity;
+  const encoding = mat.userData[KEY] as { encoding?: string; range?: number };
+  if (encoding.encoding === "log1p") {
+    const range = encoding.range;
+    if (typeof range !== "number" || !Number.isFinite(range) || range < 1) throw new Error("Invalid logarithmic lightmap range");
+    const previous = mat.onBeforeCompile;
+    const key = mat.customProgramCacheKey();
+    mat.onBeforeCompile = function(shader, renderer) {
+      previous.call(this, shader, renderer);
+      // Matches lightmap_encoding.py: reserve precision for dim cave light.
+      shader.uniforms.bakedLightmapLogRange = { value: Math.log2(1 + 16 * range) };
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nuniform float bakedLightmapLogRange;")
+        .replace("#include <lights_fragment_maps>", THREE.ShaderChunk.lights_fragment_maps);
+      const sample = "lightMapTexel.rgb * lightMapIntensity";
+      if (!shader.fragmentShader.includes(sample)) throw new Error("Lightmap decode shader hook missing");
+      shader.fragmentShader = shader.fragmentShader.replace(sample,
+        "((exp2(lightMapTexel.rgb * bakedLightmapLogRange) - 1.0) / 16.0) * lightMapIntensity");
+    };
+    mat.customProgramCacheKey = () => `${key}|baked-lightmap-log1p`;
+    mat.lightMapIntensity = Math.PI;
+  } else {
+    mat.lightMapIntensity = Math.PI * mat.emissiveIntensity;
+  }
+  const previous = mat.onBeforeCompile;
+  const key = mat.customProgramCacheKey();
+  mat.onBeforeCompile = function(shader, renderer) {
+    previous.call(this, shader, renderer);
+    patchBakedContactShadow(shader);
+  };
+  mat.customProgramCacheKey = () => `${key}|baked-contact-shadow-1`;
   mat.emissiveMap = null;
   mat.emissive.setRGB(0, 0, 0);
   mat.emissiveIntensity = 0;
@@ -127,6 +157,7 @@ vec3 bakedIrradiance(vec3 worldNormal) {
 
 const patched = new WeakMap<THREE.Material, THREE.Material["onBeforeCompile"]>();
 function wearField(mat: THREE.Material): void {
+  if (mat.userData.gameBakedLightingReceiver === false) return;
   if (!(mat as THREE.MeshStandardMaterial).isMeshStandardMaterial || (mat as THREE.MeshStandardMaterial).lightMap) return;
   if (patched.get(mat) === mat.onBeforeCompile) return;
   const previous = mat.onBeforeCompile;
@@ -150,17 +181,25 @@ function wearField(mat: THREE.Material): void {
       .replace("#include <common>", `#include <common>\n${declarations}`)
       .replace("#include <lights_fragment_end>", `
         if (bakedFieldEnabled > 0.5) {
-          irradiance += bakedIrradiance(inverseTransformDirection(geometryNormal, viewMatrix));
+          // Use the IBL path so metals receive the field too. SH stores
+          // cosine-convolved radiance: this is a broad specular approximation,
+          // while the reflection cube still supplies sharp local reflections.
+          iblIrradiance += bakedIrradiance(transformDirectionByInverseViewMatrix(geometryNormal, viewMatrix));
+          vec3 bakedReflect = reflect(-geometryViewDir, geometryNormal);
+          bakedReflect = normalize(mix(bakedReflect, geometryNormal, pow4(material.roughness)));
+          radiance += bakedIrradiance(transformDirectionByInverseViewMatrix(bakedReflect, viewMatrix)) * RECIPROCAL_PI;
         }
         #include <lights_fragment_end>`);
   };
   patched.set(mat, mat.onBeforeCompile);
-  mat.customProgramCacheKey = () => `${key}|baked-field-1`;
+  mat.customProgramCacheKey = () => `${key}|baked-field-2`;
   mat.needsUpdate = true;
 }
 
 /** Call before any view (including reflections) of the currently drawn level. */
-export function useBakedLighting(root: THREE.Object3D, field: BakedField | null): void {
+export function useBakedLighting(root: THREE.Object3D, field: BakedField | null,
+  player?: { position: THREE.Vector3; radius: number }): void {
+  updateBakedContactShadow(field?.data ?? null, player?.position, player?.radius);
   uniforms.bakedFieldEnabled.value = field ? 1 : 0;
   if (!field) return;
   uniforms.bakedFieldTexture.value = field.texture;

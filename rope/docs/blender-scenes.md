@@ -125,7 +125,8 @@ Static opaque receivers get a non-overlapping `GameLightmap` UV set and a
 separate diffuse-light texture. The existing base colour and normals remain
 separate. The unwrap welds a temporary copy before finding islands, so split
 shading vertices do not turn every triangle into an isolated speck. It uses
-the surface export's packer with four-pixel gaps. Smart Project can still
+the surface export's packer with four-pixel gaps and camera visibility
+weighting, reserving most texels for visible faces rather than hidden backs. Smart Project can still
 fold a chart over itself: before baking, the lightmap pass detects overlapping
 UV faces and repacks those faces as independent charts. The render geometry,
 shading seams and colour UVs stay intact. This prevents a hidden dark face
@@ -139,8 +140,12 @@ emission and diffuse bounce. Cycles' render denoising does not process texture
 bakes, so these maps explicitly run through Blender's bundled Open Image
 Denoise in HDR mode before encoding. This removes Monte Carlo speckles from
 received lighting without filtering the rock's colour or normal texture.
-HDR values use a per-map scale, then explicit
-sRGB encoding; they ship lossless. glTF transports these maps in the emission
+New HDR maps use logarithmic encoding before sRGB storage and lossless
+compression: `log(1 + 16 * radiance) / log(1 + 16 * range)`. The material
+metadata carries `encoding: "log1p"` and `range`; the shader decodes after the
+sRGB texture read. Legacy maps retain their original linear scale. A single
+hot texel previously forced most cave light into fewer than eight byte values,
+losing smooth gradients and colour ratios regardless of atlas resolution. glTF transports these maps in the emission
 slot with a `gameBakedLighting` material marker. The loader moves them to
 three's `lightMap` and restores the irradiance units with pi. Actual emitting
 materials keep their emission. A constant map folded into a factor by the
@@ -163,8 +168,33 @@ a three-dimensional field at their deformed world positions. It carries nine
 RGB spherical-harmonic coefficients per sample, so light follows the surface
 normal instead of tinting the whole object one colour. The field is embedded
 in the GLB scene extras; no separate download or manual probe placement is
-needed. The shader composes with the avatar's existing reflection probe.
-The cached GLB owns the field texture across scene rebuilds.
+needed. The shader feeds the IBL diffuse and specular paths, so metallic receivers
+receive emission too. Since the field stores cosine-convolved illumination,
+its specular contribution is broad; the avatar's existing reflection cube
+still provides detailed reflections. The diffuse contribution is counted
+once through the IBL path.
+The cached GLB owns the field texture across scene rebuilds. Probe baking
+runs on the CPU: the prepared river scene exhausted GPU memory and Cycles
+returned success with an unwritten, entirely black field. Probe images now
+start with zero alpha and every sample must be written before export. Static
+lightmaps also start transparent and bake without clearing, so an unwritten
+image fails the existing coverage check rather than becoming a black map.
+
+Glow flora do not sample their own coarse, boosted probe field: it washed
+out their pastel surface colours. Their visible and Blender emission strength
+now share `foliage/glow_look.json` (0.22). An isolated glTF rebake must restore
+emission from the `_GLOW` vertex attribute; the exported white fallback
+material is not the generator's shader. Green/purple bioluminescent plants
+instead carry textured masks, so their emitting area differs substantially.
+
+The player adds an analytic soft contact shadow to nearby lightmap receivers.
+Its sphere's local occlusion and the probe field's average light direction attenuate
+baked illumination, fading out within six player radii. It adds shader maths
+but no shadow-map render, draw call or texture fetch. It leaves the player's
+own field lighting and ordinary direct lighting alone, follows interpolated
+render poses, and respects the Shadows toggle. This approximates local
+contact under multiple emitters, not long accurate cast shadows. `cli shot`
+can compare `contactshadow=0` at the same grounded pose.
 
 Automatic probes surround emissive geometry with an eight-metre XY margin,
 clipped to the linked game camera's route footprint, in the gameplay depth
@@ -180,7 +210,7 @@ Optional Blender scene custom properties:
 | --- | --- | --- |
 | `game_bake_emission` | true | Enable the emission bake on scene exports |
 | `game_light_samples` | 64 | Cycles bake samples |
-| `game_lightmap_size` | automatic | Optional fixed map side: 128, 256, 512, 1024, 2048 or 4096; otherwise sized by surface area |
+| `game_lightmap_size` | automatic | Optional fixed map side: 128, 256, 512, 1024, 2048, 4096 or 8192; otherwise sized by surface area |
 | `game_probe_spacing` | 2 | Desired probe spacing in metres |
 | `game_probe_min`, `game_probe_max` | automatic | Three-component bounds in **game** coordinates (x, up, toward camera) |
 
@@ -415,9 +445,9 @@ patches essentially unchanged and was reverted.
 The separate illumination map was still 2048 across the entire chamber.
 Isolating the runtime colour and normal maps left the dark chip outlines and
 patches under the glowing shelves; disabling the lightmap removed them.
-The chamber now overrides `game_lightmap_size = 4096` and
+The first correction used `game_lightmap_size = 4096` and
 `game_light_samples = 1024`, rather than spending more colour-map memory.
-The lightmap adds 64 MiB including mipmaps; higher sampling costs bake time
+That increase added 64 MiB including mipmaps; higher sampling costs bake time
 only. The other receivers and probes keep the scene's settings.
 The initial 256-sample 3840×2160 High-DOF capture improved the lighting, but retained a dark
 triangle and uneven shelf lighting. A subsequent raycast traced the triangle
@@ -427,6 +457,32 @@ lighting still showed Monte Carlo mottling with DOF disabled; increasing only
 the chamber to 1024 samples substantially reduces that mottling in the same
 3840×2160 view. Keep the original DOF settings when comparing fixes.
 
+The subsequent 8K chamber trial targeted the wrong receiver for the glowing
+mushroom shelf: that shelf belongs to `Terrace.015`, whose entire 72 m span
+still shared a 2K lightmap. The chamber is back to 4K. The terrain's existing
+spatial colour-atlas sections can now carry separate lightmaps using
+`game_lightmap_chunk_sizes`, one size per exported material slot. The river
+uses six 4096 maps so the cave mouth and the mushroom shelf both receive
+local detail without making the whole terrain one oversized texture. Fresh exports independently
+unwrap each section with overlap repair and visibility weighting, preserving
+geometry and normals. The first targeted rebake reused colour UVs, but those
+also contained overlapping faces (3,150 in the mushroom section, alongside
+3,677 in its old lightmap UVs). The surface unwrap now detects overlaps
+after packing, isolates affected faces, and repacks each atlas independently
+before baking colour and normals. This applies the earlier background
+lightmap repair to all surface maps; extra pixels alone cannot repair those
+angular dark patches. The foreground lightmaps use 1024 samples. During the irradiance bake only,
+input textures are capped at 2048 to fit the GPU; runtime surface maps and
+lightmap output dimensions retain their full sizes. The player
+probe field must also be rebaked when emitter strengths change; leaving the
+old field installed kept its bright white specular rim after the surface maps
+were corrected. Probe samples are now 128 in the river source.
+
+The foreground cluster is `Terrace.015.glow-flora`, near world
+`(45.88, -6.37, 0.08)`. Use the shot camera `--at 45.5,5.6 --orbit 0,25 --zoom 4`; the cave-mouth slab is immediately left of it. The nearby
+`Cube.002.glow-flora` at `(51.24, -5.47, -1.14)` is a different, background
+cluster: a clean render there does not validate the foreground shelf.
+
 Verify this view at 3840×2160 with depth of field both off and high. The
 shot log reports the actual drawing-buffer size; the browser screenshot size
 alone does not establish the render resolution. Blur softness is expected,
@@ -434,3 +490,14 @@ but the painted lines and bright plant rims should not have a coarse grid.
 The blur keeps its 540-line working target and 48-tap cap. Denser small-radius
 sampling plus cubic reconstruction (still four composite texture reads)
 removes the coarse silhouette without increasing render-target resolution.
+
+Fine diagonal striping at the cave-mouth shadow boundary was a separate
+runtime filter artifact: the default PCF kernel randomized five samples per
+screen pixel, without temporal accumulation to resolve the pattern. The
+renderer now uses nine fixed weighted bilinear depth reads for directional
+and spot shadows (`shadowFiltering.ts`). Shadow-map sizes and render passes
+are unchanged; point-light filtering remains separate.
+
+Export scratch, including Blender worker snapshots and Cycles tile buffers,
+lives under `.cache/export-tmp` on the project drive. Large lightmaps can
+exhaust a RAM-backed `/tmp`; this keeps those intermediate files off it.

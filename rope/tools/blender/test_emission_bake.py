@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import bpy
 import numpy as np
 import native
-from emission_bake import UV, unwrap_receiver, repair_lightmap_overlap
+from emission_bake import UV, unwrap_receiver, repair_lightmap_overlap, bake_field
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 vertices, faces = [], []
@@ -31,6 +31,9 @@ before = np.asarray([tuple(n.vector) for n in mesh.corner_normals])
 bpy.context.scene["game_lightmap_size"] = 256
 ob["game_lightmap_size"] = 512
 assert unwrap_receiver(ob, bpy.context.scene) == 512
+ob["game_lightmap_size"] = 8192
+assert unwrap_receiver(ob, bpy.context.scene) == 8192
+ob["game_lightmap_size"] = 512
 assert bpy.context.scene["game_lightmap_size"] == 256
 del ob["game_lightmap_size"]
 assert unwrap_receiver(ob, bpy.context.scene) == 256
@@ -79,6 +82,19 @@ assert np.array_equal(pixels[known], baked)
 assert np.isfinite(pixels).all() and (pixels[:, :, 3] == 1).all()
 print(f"EMISSION_UV_REGRESSION_OK coverage={coverage:.3f}; mesh, shading and colour UVs unchanged; shadow-safe padding")
 
+from emission_bake import receiver_targets
+for name in ('section a','section b'):
+    mesh.materials.append(bpy.data.materials.new(name))
+for polygon in mesh.polygons:
+    polygon.material_index = int(polygon.index >= len(mesh.polygons)//2)
+ob['game_lightmap_chunk_sizes'] = [256, 512]
+assert receiver_targets(ob, bpy.context.scene) == [(256, [0]), (512, [1])]
+mesh.uv_layers['Colour'].data.foreach_get('uv', after)
+assert np.array_equal(uvs, after)
+assert np.array_equal(before, np.asarray([tuple(n.vector) for n in mesh.corner_normals]))
+assert len(mesh.vertices) == len(vertices)
+print('EMISSION_SECTIONS_OK separate lightmap atlases preserve colour UVs, vertices and normals')
+
 from lightmap_denoise import LightmapDenoiser
 noise = np.ones((128, 128, 4), np.float32)
 noise[:, :, :3] += np.random.default_rng(13).normal(0, .1, (128, 128, 3)).astype(np.float32)
@@ -98,3 +114,72 @@ try:
 finally:
     denoiser.close()
 print("EMISSION_DENOISE_REGRESSION_OK isolated bright noise removed; mean illumination and unlit maps preserved")
+
+# An actual Cycles bake must light dynamic receivers. A failed GPU bake can
+# return FINISHED without writing pixels; an all-black SH check alone would
+# confuse that failure with a legitimate unlit volume.
+bpy.ops.wm.read_factory_settings(use_empty=True)
+scene = bpy.context.scene
+scene.render.engine = 'CYCLES'
+scene.cycles.samples = 16
+scene.cycles.device = 'GPU'  # bake_field temporarily uses CPU, then restores it.
+scene['game_probe_min'] = [-.5, -.5, -.5]
+scene['game_probe_max'] = [.5, .5, .5]
+bpy.ops.mesh.primitive_uv_sphere_add(radius=.3, location=(0, 0, 1.5))
+emitter = bpy.context.object
+mat = bpy.data.materials.new('probe regression emitter')
+bsdf = mat.node_tree.nodes.get('Principled BSDF')
+bsdf.inputs['Emission Color'].default_value = (1, .5, .1, 1)
+bsdf.inputs['Emission Strength'].default_value = 10
+emitter.data.materials.append(mat)
+field = bake_field([emitter], scene)
+assert max(field['coefficients']) > .01
+assert scene.cycles.device == 'GPU'
+import emission_bake
+original_bake = emission_bake.diffuse_bake
+emission_bake.diffuse_bake = lambda objects: None
+try:
+    try:
+        bake_field([emitter], scene)
+        raise AssertionError('unwritten probe bake was accepted')
+    except RuntimeError as error:
+        assert 'unwritten samples' in str(error)
+    assert scene.cycles.device == 'GPU'
+    assert not any(ob.name.startswith('game.probe-bake') for ob in scene.objects)
+finally:
+    emission_bake.diffuse_bake = original_bake
+print('EMISSION_PROBE_REGRESSION_OK real illumination, CPU device restoration and unwritten-bake rejection')
+
+from lightmap_encoding import encode_lightmap, decode_lightmap
+# Bright source contact must not crush dim, neutral and coloured light into
+# a few sRGB code values. Include a continuous ramp to catch visible steps.
+ramp = np.geomspace(.01, 194, 1000).reshape(-1, 1) * np.array([1, .7, .4])
+encoded = np.round(encode_lightmap(ramp, 194) * 255) / 255
+restored = decode_lightmap(encoded, 194)
+assert np.max(np.abs(restored-ramp)/ramp) < .04
+assert np.all(decode_lightmap(np.zeros((1,3)),194) == 0)
+low = ramp[:,0] < .1
+assert len(np.unique(encoded[low,0])) > 20
+print('EMISSION_LOG_ENCODING_OK dim colours and gradients survive 8-bit HDR transport')
+
+# A failed lighting bake must not leave source/runtime texture simplification
+# enabled. The limit is temporary input residency, not an export quality cap.
+scene.render.use_simplify = False
+scene.cycles.texture_limit_render = 'OFF'
+original_field_bake = emission_bake.bake_field
+def interrupted_field(objects, scene):
+    assert scene.render.use_simplify
+    assert scene.cycles.texture_limit_render == '2048'
+    raise RuntimeError('interrupted field test')
+emission_bake.bake_field = interrupted_field
+try:
+    try:
+        emission_bake.bake([emitter], set())
+        raise AssertionError('interrupted bake was accepted')
+    except RuntimeError as error:
+        assert str(error) == 'interrupted field test'
+    assert not scene.render.use_simplify
+    assert scene.cycles.texture_limit_render == 'OFF'
+finally:
+    emission_bake.bake_field = original_field_bake
+print('EMISSION_INPUT_LIMIT_OK restored after interrupted bake')

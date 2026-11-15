@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { waterTime } from "./waterLook";
+import glowLook from "../../tools/blender/foliage/glow_look.json";
 
 // Glow flora: the Blender foliage add-on's glowing mushrooms, lantern blooms,
 // ferns and reeds (tools/blender/foliage/glowflora.py, a port of the
@@ -32,10 +33,9 @@ import { waterTime } from "./waterLook";
 // emission's overall multiplier here.
 
 const look = {
-  // Surface radiance only: the grove's baked lighting and light sources keep
-  // their authored strength. The generator's full emission washes out the
-  // pastel body colours in the cave, hiding the caps, stems and leaf detail.
-  uGlow: { value: 0.22 },
+  // Shared with the Blender source material so visible glow and baked spill
+  // agree. The live override below remains a preview until the next bake.
+  uGlow: { value: glowLook.emissionStrength },
   uPulse: { value: 0.18 },
   uSway: { value: 1 },
   uRim: { value: 0.3 },
@@ -94,6 +94,9 @@ function surfaceMaterial(): THREE.MeshPhysicalMaterial {
     emissiveIntensity: 1,
     side: THREE.FrontSide,
   });
+  // The coarse irradiance field includes this patch's boosted emission.
+  // Feeding it back into the source washes out its authored pastel colours.
+  mat.userData.gameBakedLightingReceiver = false;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, look);
     swayPatch(

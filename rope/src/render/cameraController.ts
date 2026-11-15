@@ -394,11 +394,38 @@ export const CAMERA_EDGE_SMOOTHING = 0.3;
 //    window stops asking, and the stick decays while the spring glides the
 //    camera forward to its lead.
 //
-// That is the HORIZONTAL axis, and it is not gated on being anchored: the
-// guarantee is inert in ordinary play (it binds on a locked room the avatar has
-// left, on a path leading well off them, and on being outrun), and where it
-// does bind a slow return is at worst a calmer camera.
+// That is the HORIZONTAL axis while the avatar hangs.
 //
+// THE STICK IS A HANG'S AND NOBODY ELSE'S: the frame the line lets go, it is
+// dropped outright, on both axes, and while nothing holds the avatar it is
+// never charged - the aim is the window's answer of this frame and nothing
+// more. A step in the aim, which the motion layer absorbs like any other.
+//
+// It used to be given back on the release law instead, on the argument that
+// where the guarantee binds a slow return is at worst a calmer camera. Play
+// found the worst (`session-392f`, 2026-11-15): the ball dipped out of the
+// bottom of the frame under a rock, the guarantee pulled the aim down a metre,
+// and the line let go into the climb back out. The stick was still holding
+// 0.3 m a second later, so the camera hung low while the ball rose ahead of
+// it - the ball rode 0.43 m ABOVE the middle of the frame on a route that
+// framed it 0.83 m below, which is further from the level's framing than no
+// guarantee at all would have put it. "The camera then feels like it lags
+// behind." The stick's argument is a swing's - the return half of an
+// oscillation says nothing about where the player is going - and off the line
+// there is no swing: coming back is where they are going.
+//
+// The same session ended with the route handing over to the plain follow
+// while the stick still held 1.3 m, which it went on applying to the new
+// target - past the avatar, carried 1.5 m above the middle of the frame. The
+// ball was off the line by then, so dropping the stick there is what fixes it.
+// A BOUND was tried as well and rejected, measured: the stick may move the aim
+// toward the avatar and never past them. Under a hang it binds on every swing
+// that carries the avatar back across the held aim (13 bundles of the corpus),
+// and there it is the rocking the stick exists to stop - camera travel while
+// hanging up 7-34% (`session-646f-torque` 2.00 -> 2.68 m) for no less slide
+// of the avatar in the frame.
+//
+
 // THE VERTICAL AXIS IS A LOCK WHILE THE AVATAR HANGS, and that was the first
 // play of the decay (`session-336f` on the rails level, 2026-09-22): "the
 // screen is bobbing up and down". A hang on a short line is a swing of a few
@@ -416,8 +443,8 @@ export const CAMERA_EDGE_SMOOTHING = 0.3;
 // So while the avatar is anchored the vertical stick does not decay at all: it
 // holds the furthest the guarantee has moved the aim on that side, moves only
 // when the guarantee moves it further (or asks the other way, which replaces
-// it outright as always), and is given back on the same release law as x the
-// frame the anchor lets go - or the frame the WIND RELEASE below fires. It is
+// it outright as always), and is dropped with x the frame the anchor lets go
+// - or given back on the release law the frame the WIND RELEASE below fires. It is
 // a displacement off the rule's target rather than a coordinate, exactly as
 // the decaying stick is, so a target that moves during the hang (the lead
 // ratcheting forward) carries the hold with it.
@@ -469,8 +496,8 @@ export const CAMERA_STICK_RELEASE = 0.4;
 // edge of the frame drags it after them a shove at a time. So the lock is
 // opened once the winding has carried them `windBuffer` metres along the route
 // (the path's field, read where they hang), and the vertical stick goes back
-// to the rule's target on the release law, exactly as it does when the anchor
-// lets go. A path's release and nobody else's: a lock under a locked room has
+// to the rule's target on the release law, as x does through the hang. A
+// path's release and nobody else's: a lock under a locked room has
 // no route to be ahead on.
 //
 // These two are the re-arm: how long the avatar has to have stopped winding
@@ -2052,7 +2079,7 @@ export class CameraController {
       this.vel = Vec2.ZERO;
       this.zoomVel = 0;
       this.logZoom = Math.log(Math.max(1e-9, target.zoom));
-      this.aim = this.softEdge(camera, target.pos, follow, Infinity, lockY, wound);
+      this.aim = this.softEdge(camera, target.pos, follow, Infinity, anchored, lockY, wound);
       this.pos = this.holdEdge(camera, this.aim, follow, Infinity);
       camera.position = this.pos;
       camera.zoom = this.zoom;
@@ -2100,7 +2127,7 @@ export class CameraController {
     // turns over rather than reversing; the HARD half is applied last and to
     // where the camera actually IS, because a target the avatar can outrun is
     // not a guarantee and outrunning the spring is exactly what a launch does.
-    const aimPos = this.softEdge(camera, target.pos, follow, step, lockY, wound);
+    const aimPos = this.softEdge(camera, target.pos, follow, step, anchored, lockY, wound);
     this.aim = aimPos;
     // The spring, then the caps, then integrate what is left, with the position
     // integrated from the capped velocity rather than from the spring's own
@@ -2189,6 +2216,10 @@ export class CameraController {
   // follow point carries the stick with it rather than having it re-applied on
   // the wrong side.
   //
+  // `anchored` is whether anything holds the avatar: off the line the stick is
+  // dropped and never charged, so the aim is this frame's window and nothing
+  // more (see CAMERA_STICK_TAU).
+  //
   // `lockY` is the vertical lock: while it is on, the vertical stick is not
   // released at all, so it holds the furthest the guarantee has pushed the aim
   // on that side until the guarantee pushes it further or asks the other way.
@@ -2200,6 +2231,7 @@ export class CameraController {
     aim: Vec2,
     follow: Vec2,
     dt: number,
+    anchored: boolean,
     lockY: boolean,
     wound: number,
   ): Vec2 {
@@ -2224,8 +2256,10 @@ export class CameraController {
       const left = Math.abs(held) * decay - give;
       return left <= 0 ? 0 : held < 0 ? -left : left;
     };
-    const keptX = windIn(released(this.stickX), wound);
-    const keptY = windIn(lockY ? this.stickY : released(this.stickY), wound);
+    // Off the line there is nothing to keep: the stick is a hang's (see
+    // CAMERA_STICK_TAU), so the frame the anchor lets go it is dropped.
+    const keptX = anchored ? windIn(released(this.stickX), wound) : 0;
+    const keptY = anchored ? windIn(lockY ? this.stickY : released(this.stickY), wound) : 0;
     this.stickX = stick(x.pos - aim.x, keptX);
     this.stickY = stick(y.pos - aim.y, keptY);
     return new Vec2(aim.x + this.stickX, aim.y + this.stickY);

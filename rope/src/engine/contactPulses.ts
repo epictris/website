@@ -6,25 +6,31 @@ import type { ContactConstraint } from "./world";
  * reads these values; a WeakMap releases removed surfaces automatically. */
 export class ContactPulses {
   time = 0;
-  readonly latest = new WeakMap<CollisionObject2D, { time: number; impulse: number }>();
+  readonly latest = new WeakMap<CollisionObject2D, { time: number; impulse: number; directionX: number; directionY: number }>();
   private touching = new Set<string>();
 
   scan(contacts: readonly ContactConstraint[], dt: number): void {
     this.time += dt;
     const touching = new Set<string>();
-    const hits = new Map<PhysicsBody2D, number>();
-    const visit = (body: PhysicsBody2D, other: PhysicsBody2D, impulse: number): void => {
+    const hits = new Map<PhysicsBody2D, { impulse: number; directionX: number; directionY: number }>();
+    const visit = (body: PhysicsBody2D, other: PhysicsBody2D, impulse: number, nx: number, ny: number): void => {
       if (body.launchSpeed <= 0) return;
       const key = `${body.id}:${other.id}`;
       touching.add(key);
-      if (!this.touching.has(key)) hits.set(body, (hits.get(body) ?? 0) + impulse);
+      if (!this.touching.has(key)) {
+        const hit = hits.get(body) ?? { impulse: 0, directionX: 0, directionY: 0 };
+        hit.impulse += impulse;
+        hit.directionX += nx * impulse;
+        hit.directionY += ny * impulse;
+        hits.set(body, hit);
+      }
     };
     for (const c of contacts) {
       if (c.normalImpulse <= 0) continue;
-      visit(c.a, c.b, c.normalImpulse);
-      visit(c.b, c.a, c.normalImpulse);
+      visit(c.a, c.b, c.normalImpulse, -c.normal.x, -c.normal.y);
+      visit(c.b, c.a, c.normalImpulse, c.normal.x, c.normal.y);
     }
-    for (const [body, impulse] of hits) this.latest.set(body, { time: this.time, impulse });
+    for (const [body, hit] of hits) this.latest.set(body, { time: this.time, ...hit });
     this.touching = touching;
   }
 }

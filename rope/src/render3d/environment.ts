@@ -61,6 +61,7 @@
 // read as a window cut into a different game.
 
 import * as THREE from "three";
+import { installStableShadowFiltering } from "./shadowFiltering";
 import type { EnvironmentData } from "../level/levelFormat";
 import { loadedHdri, loadHdri } from "./assets";
 // Replaces three's fog chunks before any material is made (see `editorFog.ts`).
@@ -516,6 +517,7 @@ export function equirectPixels({ sky, ground, sunColor, sunDir, withSun }: SkyIn
 // so the lighting above has range instead of clipping to white at the first
 // highlight. Applied once, when the renderer is created.
 export function configureRenderer(renderer: THREE.WebGLRenderer): void {
+  installStableShadowFiltering();
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   // Unity exposure (2026-09-30, was 1.15): brightness is the key light's job,
   // so a bright top face and a genuinely dark recess both fit in the curve;

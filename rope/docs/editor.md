@@ -382,6 +382,7 @@ It is the renderer's (`Scene3D.setSceneShown` → `SceneDressing.setShown`), hel
 Hidden scenery is not picked and not dropped onto: `Scene3D.hitsAt` skips any hit whose object or an ancestor is invisible, because three's raycaster tests hidden objects too.
 
 The toolbar's view boxes - **snap**, **edge clamp**, **all debug**, **reflections**, **shadows**, **water**, **roots** and **scene** - are remembered by the browser (`localStorage` key `rope.editor.view`, `editor/prefs.ts`), so the editor opens as it was last left; each box writes itself back when it changes.
+So is the layer stack's hidden and locked state (`rope.editor.layers`), per browser rather than per level, written by every path that changes it (the eye and padlock, a paste or pick that reveals a layer); a stored name that is no longer a layer is dropped, and a stack stored with every layer hidden opens with none hidden.
 So is the level last open (`rope.editor.level`), which a fresh editor reopens: it is written by Load and Save As, and cleared by New and Delete File, so an editor last left on an unnamed model opens empty.
 The reopen waits for the level list and is skipped for a name no longer on disk (forgotten, without a dialog) and for a model already edited while the list was on its way.
 

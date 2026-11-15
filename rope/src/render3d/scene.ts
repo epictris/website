@@ -390,6 +390,9 @@ export class Scene3D {
     }
   }
 
+  private bakedContactShadows = true;
+  setBakedContactShadows(on: boolean): void { this.bakedContactShadows = on; }
+
   // Off, no light casts a shadow, so the shadow pass draws nothing and compiles
   // no depth programs: the editor's "shadows" toggle. Lights keep what they
   // were authored with, so switching back on restores the same shadows.
@@ -1494,7 +1497,9 @@ export class Scene3D {
     this.syncHighlight();
     this.env.follow(this.camera);
 
-    useBakedLighting(this.scene, slot.dressing?.field ?? null);
+    useBakedLighting(this.scene, slot.dressing?.field ?? null,
+      this.shadowsOn && this.bakedContactShadows && level.ball && slot.ballVisual?.root.visible
+        ? { position: slot.ballVisual.root.position, radius: level.ball.radius } : undefined);
 
     // Inside the timer: the probe is six more draws of the scene, and the
     // perf HUD should say what the frame costs, not what the main view does.

@@ -18,7 +18,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { DOF_MAX_BLUR, FOCUS_BAND } from "../src/render3d/depthOfField";
 import type { SceneCredit, SceneNodeMeta } from "../src/render3d/scenes";
@@ -182,7 +181,11 @@ export function exportArgs(args: string[], tag: string, usage: string): ExportAr
 // exits the process on any failure, having shipped nothing.
 export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
   const { tag, name } = opts;
-  const scratch = mkdtempSync(join(tmpdir(), `${opts.kind}-export-`));
+  // Large lightmap tile buffers and worker snapshots can exhaust a RAM-backed
+  // /tmp. Keep export scratch on the project drive, including Blender workers.
+  const exportTemp = join(ROOT, ".cache", "export-tmp");
+  mkdirSync(exportTemp, { recursive: true });
+  const scratch = mkdtempSync(join(exportTemp, `${opts.kind}-export-`));
   let shipped = false;
   let cleaned = false;
   const cleanup = (): void => {
@@ -240,7 +243,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       },
       // The finer detail passes add nothing the game's High depth of field
       // would blur away (formations/render.py `detail_blur`), with its numbers.
-      { ...process.env, SCENE_EXPORT_DOF: JSON.stringify({ maxBlur: DOF_MAX_BLUR.high, focusBand: FOCUS_BAND }),
+      { ...process.env, TMPDIR: exportTemp, SCENE_EXPORT_DOF: JSON.stringify({ maxBlur: DOF_MAX_BLUR.high, focusBand: FOCUS_BAND }),
         SCENE_EXPORT_EMISSION: opts.kind === "scene" ? "1" : "0",
         SCENE_EXPORT_DYNAMIC: JSON.stringify(opts.dynamicNodes ?? []),
       },

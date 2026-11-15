@@ -616,6 +616,31 @@ def unwrap(ob, seen, sides, gap_sides):
             raise SystemExit(f"{ob.name}: map {k}'s islands fit its {sides[k]} square at no scale")
         uv[mine] = out
         shares.append(share)
+    # Packing whole charts cannot fix Smart Project folding a chart over
+    # itself. This affects colour and tangent normals as well as lightmaps:
+    # hidden faces can overwrite the visible rock with dark angular patches.
+    # Offset the atlases temporarily so overlap selection compares only faces
+    # that will actually share an image.
+    check_uv = uv.copy()
+    check_uv[:, 0] += 2 * image[corner_face]
+    put(check_uv)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="DESELECT")
+    bpy.ops.uv.select_overlap()
+    bpy.ops.object.mode_set(mode="OBJECT")
+    overlap = np.empty(len(welded.polygons), dtype=bool)
+    welded.polygons.foreach_get("select", overlap)
+    if overlap.any():
+        separate = np.flatnonzero(overlap[corner_face])
+        w_vert[separate] = len(welded.vertices) + np.arange(len(separate))
+        # Give affected faces independent charts; the original mesh and its
+        # split normals are still transferred back unchanged below.
+        for k in np.unique(image[overlap]):
+            mine, out, share = pack(k)
+            if share < 0:
+                raise SystemExit(f"{ob.name}: repaired map {k} does not fit")
+            uv[mine] = out
+        log(f"unwrap {ob.name}: separated {overlap.sum()} overlapping faces")
     put(uv)
     log(f"unwrap {ob.name}: islands cover {', '.join(f'{s:.2f}' for s in shares)} of the maps")
     bpy.ops.object.mode_set(mode="OBJECT")

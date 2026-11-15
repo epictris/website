@@ -297,6 +297,7 @@ What it also bites on is a locked region the avatar has left, and a path whose l
 ### The stick
 
 **The window's pull decays rather than stopping** (`CAMERA_STICK_TAU`, 1.5 s, per axis) - **and on the vertical axis it does not decay at all while the avatar hangs**.
+**The stick is a hang's**: the frame the line lets go it is dropped outright on both axes, and while nothing holds the avatar it is never charged (see **Off the line** below).
 
 A swing that carries the avatar out of the frame carries them out twice an arc, so the clamp binds, releases and binds again for as long as they hang there - and if each release let the aim snap home, the camera would rock for the whole swing with an amplitude set by how far the guarantee had to move it.
 So the aim is the window's answer **outright while it is asking**, exactly as it always was, and when the window stops asking the aim returns to the rule's target over a second and a half instead of on the next frame.
@@ -388,17 +389,34 @@ It worked, and it cost four mechanisms to keep working:
 Every one of those is a patch for the pin being a **latch** - a state with an edge, which has to be entered, held and handed back.
 A decaying pull has no edge, so the first three go, and the fourth goes on the horizontal axis:
 
-- nothing has to be handed back when the anchor releases - the vertical lock is a held stick, so the frame the anchor lets go it simply starts being released;
+- nothing has to be handed back when the anchor releases - the stick is simply dropped, and the step in the aim is the motion layer's to absorb like any other;
 - nothing creeps, because a held stick is the largest demand rather than a re-pulled pin, and there is nothing for a deadband to stop;
 - nothing has to open on a clock, because the lock is a displacement the aim already carries;
 - **winding up the line needs no special case horizontally**: the player moves toward the middle of the frame, the window stops asking, and the stick decays while the spring glides the camera forward to its lead. Vertically the lock needs the wind release back, since a lock that never decays has to be opened by something (see **The vertical lock**).
 
-The horizontal stick is **not gated on being anchored**, and does not need to be: the guarantee is inert in ordinary play, and where it does bind a slow return is at worst a calmer camera.
-The vertical lock is, exactly as the lead **ratchet** is (see [**The anchored episode**](camera-paths.md#the-anchored-episode)): both are the one-sided answer to a swing, and a player rolling along the route does not oscillate.
+#### Off the line
+
+The stick used to be gated on nothing - off the line it was given back on the release law, on the argument that where the guarantee binds a slow return is at worst a calmer camera.
+Play found the worst (`session-392f`, 2026-11-15): "the camera then feels like it lags behind".
+The ball dipped out of the bottom of the frame under a rock, the guarantee pulled the aim down a metre, and the line let go into the climb back out.
+The stick still held 0.3 m a second later, so the camera hung low while the ball rose ahead of it: the ball rode 0.43 m **above** the middle of the frame on a route that framed it 0.83 m below - further from the level's framing than no guarantee at all would have put it.
+The stick's argument is a swing's - the return half of an oscillation says nothing about where the player is going - and off the line there is no swing: coming back is where they are going.
+Dropped at the let-go, the ball sits 0.05 m above to 0.17 m below the middle over the same climb.
+
+The same session ended with the route handing over to the plain follow while the stick still held 1.3 m, which it went on applying to the new target - past the ball, carried 1.5 m above the middle of the frame, by a guarantee whose job is to bring it in.
+The ball was off the line by then, so the drop fixes that too (0.04 m).
+
+**A bound was tried and rejected**: the stick may move the aim toward the avatar and never past them.
+Under a hang it binds on every swing that carries the avatar back across the held aim (13 bundles of the corpus), and there it is the rocking the stick exists to stop: camera travel while hanging up 7-34% (`session-646f-torque` 2.00 -> 2.68 m) for no less slide of the avatar in the frame.
+
+Over the corpus the drop moves the camera in 49 bundles; the avatar's vertical spread in the frame falls in most (`session-1052f` 0.76 -> 0.39 m, `session-1010f` 0.96 -> 0.70, `session-151f` 0.46 -> 0.31).
+What it costs is a few single-frame peaks where the hard half catches a fast ball the old stick had happened to leave the camera leaning toward (`session-702f` 301 -> 448 m/s², `session-1010f` 122 -> 231, `session-646f-torque` 384 -> 480; `session-1256f-spin` goes 954 -> 765 the other way) - the unbounded hard half, which is a hole of its own.
+
+The vertical lock is gated on being anchored, exactly as the lead **ratchet** is (see [**The anchored episode**](camera-paths.md#the-anchored-episode)): both are the one-sided answer to a swing, and a player rolling along the route does not oscillate.
 
 The guarantee still **outranks the ratchet** and is outranked by nothing: with the lead ratcheted the target stays forward while the avatar swings back, so far enough back and the guarantee hauls the camera after them, down the track and against the ratchet's whole bias.
 
-`cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` measures the release law itself half a tau and one tau after the window goes quiet, that the hold and the camera both outlast the spring's own 0.3 s settle, and that it is finished by the time the law says where a bare exponential would still be giving back; `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
+`cli camera` asserts the stick's two facts, and each is red both ways under ablation (no clock, and no hold): `stick-holds-after-the-ask-stops` (ridden hanging, since off the line there is no stick) measures the release law itself half a tau and one tau after the window goes quiet, that the hold and the camera both outlast the spring's own 0.3 s settle, and that it is finished by the time the law says where a bare exponential would still be giving back; `stick-decays-when-nothing-asks` measures that it reaches zero and the camera is back on the room's lock.
 No bar is put on how much of the return happens by a given second, because that is the release rate and the release rate is a feel constant.
 
 Played through five rounds as of 2026-09-22 (`session-222f`, `session-684f`, `session-726f`, `session-538f`, and the rails `session-336f` that made the vertical axis a lock); the feel constants (`CAMERA_FREQ`, `CAMERA_MAX_ACCEL`, `CAMERA_STICK_TAU`, `CAMERA_STICK_RELEASE`) are tuned in the play and nowhere else.

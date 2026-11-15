@@ -55,6 +55,7 @@ const steps: Step[] = [
   { name: "camera", cmd: ["bun", "run", CLI, "camera"] },
   { name: "render3d", cmd: ["bun", "run", CLI, "render3d"] },
   { name: "baked lighting", cmd: ["bun", "run", "scripts/test-baked-lighting.ts"] },
+  { name: "shadow filtering", cmd: ["bun", "run", "scripts/test-shadow-filtering.ts"] },
   { name: "vine braid", cmd: ["bun", "run", "scripts/test-vine-braid.ts"] },
   { name: "berry vines", cmd: ["bun", "run", "scripts/test-berry-vines.ts"] },
   { name: "grain", cmd: ["bun", "run", "scripts/test-grain.ts"] },

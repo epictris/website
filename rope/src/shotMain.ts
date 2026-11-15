@@ -154,6 +154,7 @@ const camera: Camera = {
 // readable drawing buffer so the tiles below and the blank-frame check can read
 // what was actually drawn.
 const scene3d = use3d ? new Scene3D(sceneCanvas, { diagnostics: true }) : null;
+scene3d?.setBakedContactShadows(q.get("contactshadow") !== "0");
 shards.useCollision(scene3d);
 // The glass ball's pieces and their engine, on either path, and before the
 // prewarm compiles them.

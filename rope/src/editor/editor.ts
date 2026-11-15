@@ -361,9 +361,11 @@ import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
 import { colorInput } from "./colorPicker";
 import {
   readLastLevel,
+  readLayerSettings,
   readRootWidths,
   readViewSettings,
   writeLastLevel,
+  writeLayerSettings,
   writeRootWidths,
   writeViewSetting,
 } from "./prefs";
@@ -958,6 +960,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // and visibility are independent: one keeps a layer out of the way, the other
   // keeps it on screen and out of harm's way.
   const lockedLayers = new Set<EdLayer>();
+  // Both sets open as this browser last left them (prefs.ts), applied at boot
+  // through the same setters a click uses. Until then the setters are only
+  // painting the defaults, which must not overwrite what is stored.
+  let layerPrefsLive = false;
+  function saveLayerState(): void {
+    if (!layerPrefsLive) return;
+    writeLayerSettings({
+      hidden: ED_LAYERS.filter((l) => !visibleLayers.has(l)),
+      locked: ED_LAYERS.filter((l) => lockedLayers.has(l)),
+    });
+  }
   // The toolbar's view toggles open as this browser last left them
   // (prefs.ts); each one's change writes itself back.
   const viewSettings = readViewSettings();
@@ -2816,6 +2829,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     eye.classList.toggle("off", !visible);
     eye.title = `${visible ? "Hide" : "Show"} the ${l} layer`;
     eye.setAttribute("aria-pressed", String(visible));
+    saveLayerState();
     if (!visible) {
       // Nothing hidden stays selected: it can no longer be seen or clicked, but
       // a nudge, an inspector edit or a Delete would still reach it.
@@ -2842,6 +2856,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lock.classList.toggle("on", locked);
     lock.title = `${locked ? "Unlock" : "Lock"} the ${l} layer`;
     lock.setAttribute("aria-pressed", String(locked));
+    saveLayerState();
     if (locked) {
       let dropped = false;
       for (const b of model.items) {
@@ -12349,6 +12364,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // --- boot -----------------------------------------------------------------
   camera.position = model.player.pos;
   setLayer("scene");
+  // The layer stack as this browser left it. Hiding the active layer here moves
+  // the edit focus exactly as the eye does.
+  {
+    const layerPrefs = readLayerSettings();
+    for (const l of layerPrefs.hidden) setLayerVisible(l, false);
+    for (const l of layerPrefs.locked) setLayerLocked(l, true);
+    layerPrefsLive = true;
+  }
   rebuildInspector();
   updateTitle();
   // Reopen the level this browser last had open (prefs.ts), once the list

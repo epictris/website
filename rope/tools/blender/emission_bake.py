@@ -115,7 +115,7 @@ def target(mat, image, uv=UV):
 def diffuse_bake(objects):
     select(objects)
     bpy.ops.object.bake(type="DIFFUSE", pass_filter={"DIRECT", "INDIRECT"},
-                        target="IMAGE_TEXTURES", uv_layer=UV, margin=0, use_clear=True,
+                        target="IMAGE_TEXTURES", uv_layer=UV, margin=0, use_clear=False,
                         use_selected_to_active=False)
 
 
@@ -140,8 +140,8 @@ def unwrap_receiver(ob, scene, log=print):
     override = ob.get("game_lightmap_size", scene.get("game_lightmap_size"))
     if override is not None:
         size = int(override)
-        if size not in (128, 256, 512, 1024, 2048, 4096):
-            raise ValueError("game_lightmap_size must be 128, 256, 512, 1024, 2048 or 4096")
+        if size not in (128, 256, 512, 1024, 2048, 4096, 8192):
+            raise ValueError("game_lightmap_size must be 128, 256, 512, 1024, 2048, 4096 or 8192")
     else:
         # 32 texels/metre for diffuse illumination, allowing for typical 70%
         # coverage. Fine surface detail remains in the separate normal map.
@@ -155,7 +155,11 @@ def unwrap_receiver(ob, scene, log=print):
         mesh.uv_layers.remove(mesh.uv_layers[UV])
     # Surface unwrap uses a two-pixel gap. A half-sized packing grid gives
     # the lightmap four pixels between islands, without percentage margins.
-    scene_export.unwrap(ob, np.ones(len(mesh.polygons), bool), [size], [size // 2])
+    # Spend the atlas on surfaces visible to the game camera, using
+    # the same visibility weighting as the colour/normal bake. Hidden backs
+    # still receive texels, but no longer consume foreground resolution.
+    seen = scene_export.seen_faces(mesh, ob.matrix_world)
+    scene_export.unwrap(ob, seen, [size], [size // 2])
     mesh.uv_layers[-1].name = UV
     repair_lightmap_overlap(ob, size, log)
     if active and active in mesh.uv_layers:
@@ -222,6 +226,54 @@ def repair_lightmap_overlap(ob, size, log=print):
         tool.use_uv_select_sync, tool.mesh_select_mode = sync, mode
 
 
+def receiver_targets(ob, scene, log=print):
+    """Separate lightmaps for existing spatial colour-atlas sections."""
+    sizes = ob.get("game_lightmap_chunk_sizes")
+    if sizes is None:
+        return [(unwrap_receiver(ob, scene, log), list(range(len(ob.material_slots))))]
+    if len(sizes) != len(ob.material_slots):
+        raise ValueError(f"{ob.name}: game_lightmap_chunk_sizes must match its {len(ob.material_slots)} surface atlas materials")
+    mesh = ob.data
+    active = mesh.uv_layers.active.name if mesh.uv_layers.active else None
+    render = next((uv.name for uv in mesh.uv_layers if uv.active_render), None)
+    if UV in mesh.uv_layers:
+        mesh.uv_layers.remove(mesh.uv_layers[UV])
+    output = mesh.uv_layers.new(name=UV)
+    coords = np.asarray([v.co[:] for v in mesh.vertices])
+    uv = np.zeros((len(mesh.loops), 2), dtype=np.float32)
+    groups = []
+    for slot, side in enumerate(sizes):
+        faces = [p for p in mesh.polygons if p.material_index == slot]
+        if not faces:
+            continue
+        vertices = np.concatenate([p.vertices[:] for p in faces])
+        unique, inverse = np.unique(vertices, return_inverse=True)
+        starts = np.cumsum([0, *[len(p.vertices) for p in faces]])
+        part = bpy.data.meshes.new("game.lightmap-section")
+        part.from_pydata(coords[unique].tolist(), [],
+                         [inverse[a:b].tolist() for a, b in zip(starts[:-1], starts[1:])])
+        temp = bpy.data.objects.new(f"{ob.name} lightmap section {slot}", part)
+        scene.collection.objects.link(temp)
+        temp.matrix_world = ob.matrix_world.copy()
+        temp["game_lightmap_size"] = side
+        try:
+            size = unwrap_receiver(temp, scene, log)
+            values = np.empty(len(part.loops) * 2, dtype=np.float32)
+            part.uv_layers[UV].data.foreach_get("uv", values)
+            loops = np.concatenate([p.loop_indices[:] for p in faces])
+            uv[loops] = values.reshape(-1, 2)
+            groups.append((size, [slot]))
+        finally:
+            bpy.data.objects.remove(temp, do_unlink=True)
+            bpy.data.meshes.remove(part)
+    output.data.foreach_set("uv", uv.ravel())
+    if active and active in mesh.uv_layers:
+        mesh.uv_layers.active = mesh.uv_layers[active]
+    if render and render in mesh.uv_layers:
+        mesh.uv_layers[render].active_render = True
+    return groups
+
+
 def bake_field(objects, scene):
     grid = field_grid(objects, scene)
     if grid is None:
@@ -265,10 +317,19 @@ def bake_field(objects, scene):
     mat.node_tree.links.new(diffuse.outputs[0], out.inputs["Surface"])
     mesh.materials.append(mat)
     image = bpy.data.images.new("game.probe-bake", width, height, float_buffer=True)
+    image.generated_color = (0, 0, 0, 0)
     target(mat, image)
+    # The prepared scene's textures can exhaust VRAM even for this tiny atlas.
+    # Cycles reports FINISHED on that failure and leaves the image unwritten.
+    # This small bake is inexpensive on the CPU; keep GPU capacity for surfaces.
+    device = scene.cycles.device
     try:
+        scene.cycles.device = "CPU"
         diffuse_bake([ob])
-        pixels = np.asarray(image.pixels[:], dtype=np.float32).reshape(-1,4)[:total, :3]
+        rgba = np.asarray(image.pixels[:], dtype=np.float32).reshape(-1,4)[:total]
+        if not np.all(rgba[:, 3] > 0):
+            raise RuntimeError("Probe bake left unwritten samples; refusing to export an empty lighting field")
+        pixels = rgba[:, :3]
         if not np.isfinite(pixels).all():
             raise ValueError("non-finite probe bake")
         # Least-squares projection avoids the finite Fibonacci set's integration bias.
@@ -277,6 +338,7 @@ def bake_field(objects, scene):
         return {"version": 1, "min": lo.tolist(), "max": hi.tolist(), "size": dims.tolist(),
                 "coefficients": np.round(coefficients, 6).ravel().tolist()}
     finally:
+        scene.cycles.device = device
         bpy.data.objects.remove(ob, do_unlink=True)
         bpy.data.meshes.remove(mesh)
         bpy.data.materials.remove(mat)
@@ -301,6 +363,12 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
     scene.render.engine = "CYCLES"
     samples = scene.cycles.samples
     saved_clamps = (scene.cycles.sample_clamp_direct, scene.cycles.sample_clamp_indirect, scene.cycles.use_fast_gi)
+    saved_simplify = (scene.render.use_simplify, scene.cycles.texture_limit_render)
+    # The irradiance bake needs the normal maps and broad surface colours,
+    # not every full-size colour atlas resident on the GPU at once. This
+    # matches the isolated high-quality bakes; output maps keep their own size.
+    scene.render.use_simplify = True
+    scene.cycles.texture_limit_render = "2048"
     scene.cycles.sample_clamp_direct = scene.cycles.sample_clamp_indirect = 0
     scene.cycles.use_fast_gi = False
     scene.cycles.samples = int(scene.get("game_light_samples", 64))
@@ -333,7 +401,7 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
         field = None if surface_only else bake_field(objects, scene)
         log(f"emission lighting: {math.prod(field['size']) if field else 0} probes")
         receivers = []
-        images = {}
+        images = []
         for ob in objects:
             if ob.type != "MESH" or ob in sources or mobile(ob, dynamic_names) or ob.hide_render:
                 continue
@@ -345,14 +413,19 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
             if not all(m and any(n.type == "BSDF_PRINCIPLED" for n in m.node_tree.nodes) for m in ob.data.materials):
                 continue
             ob.data = ob.data.copy()
-            size = unwrap_receiver(ob, scene, log)
+            sections = receiver_targets(ob, scene, log)
             # glTF treats the last dot as a file extension and would truncate
             # e.g. "Cube.002 baked light" to "Cube", losing the encoder rule.
-            image = bpy.data.images.new(f"{ob.name.replace('.', '-')} baked light", size, size, float_buffer=True)
             for slot in ob.material_slots:
                 slot.material = slot.material.copy()
-                target(slot.material, image)
-            images[ob] = image
+            for section, (size, slots) in enumerate(sections):
+                suffix = f"-{section}" if len(sections) > 1 else ""
+                image = bpy.data.images.new(f"{ob.name.replace('.', '-')}{suffix} baked light", size, size, float_buffer=True)
+                image.generated_color = (0, 0, 0, 0)
+                materials = [ob.material_slots[i].material for i in slots]
+                for mat in materials:
+                    target(mat, image)
+                images.append((ob, image, materials))
             receivers.append(ob)
         if receivers:
             # A prominent receiver can need cleaner lighting without making
@@ -370,7 +443,7 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
             from lightmap_denoise import LightmapDenoiser
             denoiser = LightmapDenoiser()
         # Wire only after ALL baking: a lightmap must never illuminate another bake.
-        for ob, image in images.items():
+        for ob, image, materials in images:
             import native
             values = np.empty(image.size[1] * image.size[0] * 4, dtype=np.float32)
             image.pixels.foreach_get(values)
@@ -385,10 +458,12 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
             if not np.isfinite(values).all():
                 raise ValueError(f"non-finite lightmap: {ob.name}")
             strength = max(1., float(values[:,:3].max()))
-            linear = np.maximum(0, values[:,:3] / strength)
-            # glTF emission images are sRGB. Blender exports a float Linear
-            # Rec.709 image as linear PNG bytes, so explicitly encode here.
-            values[:,:3] = np.where(linear <= .0031308, linear*12.92, 1.055*linear**(1/2.4)-.055)
+            if surface_only:
+                linear = np.maximum(0, values[:,:3] / strength)
+                values[:,:3] = np.where(linear <= .0031308, linear*12.92, 1.055*linear**(1/2.4)-.055)
+            else:
+                from lightmap_encoding import encode_lightmap
+                values[:,:3] = encode_lightmap(values[:,:3], strength)
             name = image.name
             image.name = name + " linear"
             encoded = bpy.data.images.new(name, image.size[0], image.size[1], alpha=False)
@@ -396,7 +471,7 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
             encoded["generated_by"] = "tools/blender/emission_bake.py"
             encoded.pixels.foreach_set(values.ravel())
             encoded.pack()
-            for mat in ob.data.materials:
+            for mat in materials:
                 node = next(n for n in mat.node_tree.nodes if n.type == "TEX_IMAGE" and n.image == image)
                 node.image = encoded
                 if surface_only:
@@ -405,8 +480,9 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
                 else:
                     for bsdf in (n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"):
                         mat.node_tree.links.new(node.outputs["Color"], bsdf.inputs["Emission Color"])
-                        bsdf.inputs["Emission Strength"].default_value = strength
-                maps[mat.name] = {"version": 1}
+                        bsdf.inputs["Emission Strength"].default_value = 1
+                maps[mat.name] = {"version": 1} if surface_only else {
+                    "version": 1, "encoding": "log1p", "range": strength}
         log(f"emission lighting: {len(images)} static lightmaps")
         return maps, field
     finally:
@@ -420,6 +496,7 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
                 nt.nodes.remove(scale)
         scene.world, scene.render.engine, scene.cycles.samples = saved_world, saved_engine, samples
         scene.cycles.sample_clamp_direct, scene.cycles.sample_clamp_indirect, scene.cycles.use_fast_gi = saved_clamps
+        scene.render.use_simplify, scene.cycles.texture_limit_render = saved_simplify
         for ob, state in hidden.items():
             ob.hide_render = state
         bpy.data.worlds.remove(dark)
