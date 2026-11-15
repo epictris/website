@@ -59,8 +59,8 @@ PROUD_MAX = 0.004
 # CREASE_FULL (the planar dissolve leaves many 20-45 degree edges inside what
 # reads as one plane, so the ramp starts well above them).
 CREASE_MIN, CREASE_FULL = 18.0, 40.0
-# Chips per metre of fully sharp crease, scattered.
-DENSITY = 8.0
+# Chips per metre of fully sharp crease, scattered (75% fewer, 2026-11-15).
+DENSITY = 2.0
 # Chip length along the crease, metres: a truncated power law, many small
 # and few large (Tris, cycle 2: half the first size).
 SIZE_MIN, SIZE_MAX, SIZE_POWER = 0.03, 0.175, 1.2

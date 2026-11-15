@@ -43,7 +43,7 @@ Under a key light from above a given tilt reads about half as strong as under a 
 ### Chips
 
 A chip is a flake knocked off a convex crease: the rock above two planes through the chip's deepest point, each tipped along the crease so it comes back out of the rock at one end, so the chip closes at both ends with no walls (`detail.cutter`).
-Chips sit on creases sharper than `CREASE_MIN` 18 degrees, denser up to `CREASE_FULL` 40, `DENSITY` 8 per metre of fully sharp crease, 3 to 17.5 cm long on a power law (many small, few large), at least 0.4 times as wide as long, biased toward one face (a plane near the bisector is a bevel and reads as rounding).
+Chips sit on creases sharper than `CREASE_MIN` 18 degrees, denser up to `CREASE_FULL` 40, `DENSITY` 2 per metre of fully sharp crease (reduced 75% from 8 on 2026-11-15), 3 to 17.5 cm long on a power law (many small, few large), at least 0.4 times as wide as long, biased toward one face (a plane near the bisector is a bevel and reads as rounding).
 The bias is bounded: each side of the chip's plane is at least `BIAS_MIN` a quarter of the crease angle off its face (and `MIN_BITE` 8 degrees), the near side at most `BIAS_MAX` 0.4 of it.
 At the 8 degree minimum alone (cycles 1 to 24) a chip leaning toward the shaded face left a sliver a quarter as wide as its length on the lit face, dark along every lit crease and two texels wide in the game: on the exported Terrace 222 of 302 chips, median 8 mm, the worst 4 cm by 5 mm.
 With the quarter bound the narrow side is about 40 % wider (median 11 mm, the worst aspect 7:1 instead of 9:1), which thins the slivers without removing them: the sliver is the chip's floor on the face it leans away from, and its aspect is the chip's length against that width.
