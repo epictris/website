@@ -18,12 +18,18 @@ def module(name):
 
 
 def set_enabled(scene, on):
+    ambient = module("emission_ambient")
+    ambient.clear(scene)
     module("emission_materials").clear()
+    strength = module("emission_strength")
+    strength.clear()
     for ob in scene.objects:
         if ob.name.startswith(("game.emission-light.", "game.emission-preview")):
             ob.hide_viewport = ob.hide_render = True
     if not on:
         return
+    strength.enable(scene)
+    ambient.enable(scene)
     scene.render.engine = "CYCLES"
     scene.cycles.use_preview_denoising = True
     scene.cycles.preview_samples = 64
@@ -51,7 +57,7 @@ class GAME_OT_bake_emission_preview(bpy.types.Operator):
                 for area in window.screen.areas:
                     if area.type == "VIEW_3D":
                         area.spaces.active.shading.type = "RENDERED"
-            self.report({"INFO"}, "Cycles mesh-emission preview enabled; materials control emitted light")
+            self.report({"INFO"}, "Cycles emission preview enabled at the game's bake strength")
             return {"FINISHED"}
         except (ValueError, RuntimeError) as e:
             self.report({"ERROR"}, str(e))

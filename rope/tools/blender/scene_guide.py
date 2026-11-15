@@ -460,7 +460,7 @@ def build_world(job):
 
     fill = job["fill"]
     k = fill["intensity"] / math.pi
-    hemi = node("ShaderNodeMix", data_type="RGBA")
+    hemi = node("ShaderNodeMix", name="Game hemisphere fill", data_type="RGBA")
     links.new(math_node("GREATER_THAN", bz, 0.0), hemi.inputs["Factor"])
     hemi.inputs[6].default_value = [c * k for c in fill["ground"]] + [1]
     hemi.inputs[7].default_value = [c * k for c in fill["sky"]] + [1]

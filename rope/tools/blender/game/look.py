@@ -152,8 +152,6 @@ def apply_lighting(scene, view_layer):
                 ob.hide_viewport = hide_viewport
                 ob.hide_render = hide_render
         del scene[SAVED_LIGHTING]
-    from . import emission_preview
-    emission_preview.set_enabled(scene, on)
     if on:
         # Older linked guides may still contain copied point/spot lights.
         for ob in scene.objects:
@@ -178,6 +176,8 @@ def apply_lighting(scene, view_layer):
                     shading.use_scene_world = True
                     shading.use_scene_lights_render = True
                     shading.use_scene_world_render = True
+    from . import emission_preview
+    emission_preview.set_enabled(scene, on)
 
 
 # --- Fog -----------------------------------------------------------------------

@@ -113,6 +113,9 @@ The Level panel shows the export's summary and the body panel offers the exporte
 Use **Game → Preview Emission (Cycles)** as the authoring reference. The
 actual surfaces emit light; generated point-light proxies are retired and
 excluded from export, and the old `game_light_spill` boost is ignored.
+Preview also reproduces the game's unshadowed hemisphere and diffuse sky fill
+on materials; this preview-only fill is removed before export so it cannot become
+an emitting surface or contaminate surface/lightmap bakes.
 
 `just scene <level>` follows the surface bake with an emission-only Cycles
 bake (`tools/blender/emission_bake.py`). Author emission on the actual mesh in
@@ -215,6 +218,31 @@ Optional Blender scene custom properties:
 | `game_probe_min`, `game_probe_max` | automatic | Three-component bounds in **game** coordinates (x, up, toward camera) |
 
 Meshes may override `game_lightmap_size` and `game_light_samples` individually.
+For terrain with multiple surface atlases, `game_lightmap_section_size` assigns
+that resolution to each section, automatically following the exported atlas count.
+`game_lightmap_chunk_sizes` takes precedence when individual section sizes are needed.
+
+Emission now has a separate scene-wide cache beside the surface bake cache
+(`.cache/scene-bake/<scene>-lighting`). An unchanged export restores lightmap
+images, lightmap UVs and the probe field without running Cycles, unwrapping or
+denoising. Source and linked-file contents, prepared geometry/materials,
+lighting settings, bake code and Blender version invalidate it. This is
+deliberately conservative: indirect light can reach other receivers, so a
+changed scene rebuilds lighting as a whole. `--no-cache` bypasses it. Damaged
+entries are rejected, and only the last completed bake is retained.
+Receiver UVs have an independent cache: moving an emitter or changing its
+strength rebakes illumination but retains unchanged receivers' UV layouts.
+Changing receiver geometry, transform or map resolution rebuilds its layout.
+
+Fresh bakes reuse repaired surface UV charts when available, repacking them
+with lightmap padding instead of repeating visibility rays and Smart Project.
+The log reports probe, UV, sampling and denoising/encoding times separately.
+On the river verification export (RTX 4070 SUPER), cold lighting took
+13m37s with four 4096 foreground maps at 1024 samples; an unchanged export
+restored the lighting in 14.4s and completed in 1m48s overall. The cold bake
+spent 277s preparing UVs, 233s on the 128-sample receiver group, 212s on the
+1024-sample group, and 72s denoising/encoding. Cache hits avoid these phases;
+the independent UV cache avoids the layout phase after lighting-only edits.
 The object takes precedence over the scene. Receivers are baked in groups
 with the same sample count; the scene setting still controls probe samples.
 
@@ -462,7 +490,7 @@ mushroom shelf: that shelf belongs to `Terrace.015`, whose entire 72 m span
 still shared a 2K lightmap. The chamber is back to 4K. The terrain's existing
 spatial colour-atlas sections can now carry separate lightmaps using
 `game_lightmap_chunk_sizes`, one size per exported material slot. The river
-uses six 4096 maps so the cave mouth and the mushroom shelf both receive
+uses `game_lightmap_section_size = 4096` (currently four maps) so the cave mouth and the mushroom shelf both receive
 local detail without making the whole terrain one oversized texture. Fresh exports independently
 unwrap each section with overlap repair and visibility weighting, preserving
 geometry and normals. The first targeted rebake reused colour UVs, but those
@@ -478,10 +506,39 @@ probe field must also be rebaked when emitter strengths change; leaving the
 old field installed kept its bright white specular rim after the surface maps
 were corrected. Probe samples are now 128 in the river source.
 
-The foreground cluster is `Terrace.015.glow-flora`, near world
-`(45.88, -6.37, 0.08)`. Use the shot camera `--at 45.5,5.6 --orbit 0,25 --zoom 4`; the cave-mouth slab is immediately left of it. The nearby
-`Cube.002.glow-flora` at `(51.24, -5.47, -1.14)` is a different, background
-cluster: a clean render there does not validate the foreground shelf.
+The foreground quality overrides were subsequently missing from the source:
+the shipped terrain reverted to one 2048 map at the scene's 128 samples,
+while `Cube.002` retained 4096/1024. Restore both the per-section size and
+`game_light_samples = 1024` on `Terrace.015`. The uniform section setting
+replaces the fixed six-entry list, which would become stale when terrain
+edits change the colour-atlas count.
+
+In the current river source the foreground shelf cluster is
+`Terrace.015.mushrooms.003`, near game-render world `(52.35, -0.55, 1.39)`.
+Use `--at 52,1 --orbit 0,0 --zoom 3 --query 'dof=off&scale=2'` for its
+4K comparison. The earlier `Terrace.015.glow-flora` / `45.5,5.6` view predates
+the repainted mushrooms. The six-shelf cluster behind it is
+`Cube.002.mushrooms.001`, near `(51.34, -5.05, -2.79)`: a clean render there
+does not validate the foreground shelf.
+
+The ground beneath `Terrace.008.mushrooms.001` is a different receiver:
+its parent is `Terrace.008`, near game `(48.35, -6.81)` for the cluster.
+It previously had no quality overrides, so the full ground assembly shared
+one 2048 lightmap at 128 samples even after the shelf fix. Its source now sets
+`game_lightmap_section_size = 2048` and `game_light_samples = 1024`, allocating
+one lightmap per spatial surface atlas. Validate this patch separately with
+`--at 48,7 --orbit 0,0 --zoom 3 --query 'dof=off&scale=2'` (the CLI uses
+simulator coordinates, whose vertical axis points down).
+
+Foliage must also follow the export's crease deformation. Previously
+`bend_growths` handled moss, ivy and formation growth but omitted foliage:
+the roots of `Terrace.008.mushrooms` remained about 13 cm above the bent rock.
+All foliage now receives its host's bow field before the emission bake, as
+the other attached growth does. On the measured river roots this reduces the
+gap to 3–4 mm (the mesh's surface approximation). The source scene remains
+straight; the export moves both rock and plants together.
+`test_foliage_bend.py` checks root contact under a translated, rotated and
+nonuniformly scaled host, and preservation of an unrelated mesh.
 
 Verify this view at 3840×2160 with depth of field both off and high. The
 shot log reports the actual drawing-buffer size; the browser screenshot size

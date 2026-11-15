@@ -48,6 +48,7 @@ import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import bmesh
 import bpy
@@ -127,6 +128,29 @@ def skip_reason(ob, excluded):
     if ob.hide_render:
         return "hidden in render"
     return None
+
+
+@contextmanager
+def material_bake_visibility(kept):
+    """Only shipped geometry may occlude a material bake.
+
+    The game-look shelter walls are render-visible for Blender previews,
+    despite belonging to the excluded guide collection. AO ignores their
+    transparent shader and imprints their edges into the rock's colour.
+    Hide before cache keys and worker snapshots so both see the same scene.
+    """
+    kept = set(kept)
+    hidden = {ob: ob.hide_render for ob in bpy.context.scene.objects
+              if ob not in kept and ob.type in EXPORTABLE}
+    try:
+        for ob in hidden:
+            ob.hide_render = True
+        bpy.context.view_layer.update()
+        yield
+    finally:
+        for ob, value in hidden.items():
+            ob.hide_render = value
+        bpy.context.view_layer.update()
 
 
 def carries_vertex_color(node):
@@ -1216,6 +1240,10 @@ def worker_main(argv):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import emission_materials
     emission_materials.clear()
+    import emission_ambient
+    emission_ambient.clear(bpy.context.scene)
+    import emission_strength
+    emission_strength.clear()
     WORKER_OUT = argv[argv.index("--worker") + 1]
     ALL_SEEN = "--all-seen" in argv
     import moss
@@ -1574,7 +1602,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
 
 
 def bend_growths(kept, warnings):
-    """Bend every ivy, moss and formation growth piece in `kept` with the
+    """Bend every ivy, moss, foliage and formation growth piece in `kept` with the
     rocks it grows on. The bake
     bends a painted slate rock's long straight creases into bows after its
     maps (formations/curve.py, `ob["scene_bows"]`), but a growth was grown,
@@ -1603,6 +1631,10 @@ def bend_growths(kept, warnings):
             names = moss_ops.host_names(ob.moss)
         elif ivy_ops.is_ivy(ob):
             names = ivy_ops.host_names(ob.ivy)
+        elif ob.get("grown_by") == "foliage":
+            # Foliage is grown before the surface bake, on the straight host.
+            # Leaving it out floats mushrooms above inward-bowed terrain.
+            names = [ob.foliage.host]
         elif ob.get("formation_growth_owner") is not None:
             # formations/growth.py: planted on the straight rock too
             owner = ob["formation_growth_owner"]
@@ -2089,6 +2121,10 @@ def main():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import emission_materials
     emission_materials.clear()
+    import emission_ambient
+    emission_ambient.clear(bpy.context.scene)
+    import emission_strength
+    emission_strength.clear()
     # Preview helpers must not contribute to any export preparation either.
     for helper in bpy.context.scene.objects:
         if helper.name.startswith(("game.emission-light.", "game.emission-preview")):
@@ -2160,7 +2196,8 @@ def main():
     cut = moss.cut_for_bake(kept)
     view_layer.update()
     try:
-        baked = bake_procedural_textures(kept, cache_dir, paints, warnings, stale_occlusion)
+        with material_bake_visibility(kept):
+            baked = bake_procedural_textures(kept, cache_dir, paints, warnings, stale_occlusion)
     finally:
         moss.uncut(cut)
         view_layer.update()
@@ -2172,8 +2209,13 @@ def main():
     if os.environ.get("SCENE_EXPORT_EMISSION") == "1":
         import emission_bake
         step("lighting")
-        lighting_maps, lighting_field = emission_bake.bake(
-            kept, set(json.loads(os.environ.get("SCENE_EXPORT_DYNAMIC", "[]"))), log)
+        dynamic = set(json.loads(os.environ.get("SCENE_EXPORT_DYNAMIC", "[]")))
+        if cache_dir:
+            import emission_cache
+            lighting_maps, lighting_field = emission_cache.bake(
+                kept, dynamic, cache_dir + "-lighting", log)
+        else:
+            lighting_maps, lighting_field = emission_bake.bake(kept, dynamic, log)
     # Baking selects its own targets; the export selection is restored after.
     if baked or lighting_maps or lighting_field:
         for ob in scene.objects:

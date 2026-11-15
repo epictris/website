@@ -95,6 +95,31 @@ assert np.array_equal(before, np.asarray([tuple(n.vector) for n in mesh.corner_n
 assert len(mesh.vertices) == len(vertices)
 print('EMISSION_SECTIONS_OK separate lightmap atlases preserve colour UVs, vertices and normals')
 
+del ob['game_lightmap_chunk_sizes']
+ob['game_lightmap_section_size'] = 256
+assert receiver_targets(ob, bpy.context.scene) == [(256, [0]), (256, [1])]
+# Atlas counts change when geometry is re-authored; no stale list to update.
+mesh.materials.append(bpy.data.materials.new('section c'))
+for polygon in list(mesh.polygons)[-100:]:
+    polygon.material_index = 2
+assert receiver_targets(ob, bpy.context.scene) == [(256, [0]), (256, [1]), (256, [2])]
+print('EMISSION_SECTION_BUDGET_OK uniform budget follows changing atlas counts')
+
+# A prepared surface already has repaired charts. Reuse them without another
+# visibility pass/Smart Project, retaining independent material atlases.
+import scene_export
+prepared = mesh.uv_layers.new(name=scene_export.BAKE_UV)
+prepared.data.foreach_set('uv', np.asarray([v.uv[:] for v in mesh.uv_layers[UV].data], np.float32).ravel())
+original_unwrap = scene_export.unwrap
+def no_reprojection(*args, **kwargs):
+    raise AssertionError('prepared surface was projected again')
+scene_export.unwrap = no_reprojection
+try:
+    assert receiver_targets(ob, bpy.context.scene) == [(256, [0]), (256, [1]), (256, [2])]
+finally:
+    scene_export.unwrap = original_unwrap
+print('EMISSION_CHART_REUSE_OK existing surface charts skip reprojection')
+
 from lightmap_denoise import LightmapDenoiser
 noise = np.ones((128, 128, 4), np.float32)
 noise[:, :, :3] += np.random.default_rng(13).normal(0, .1, (128, 128, 3)).astype(np.float32)

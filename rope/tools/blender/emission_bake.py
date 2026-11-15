@@ -11,6 +11,7 @@ import json
 import importlib.util
 import math
 import struct
+import time
 from pathlib import Path
 
 import bpy
@@ -20,7 +21,7 @@ from mathutils import Vector
 UV = "GameLightmap"
 KEY = "gameBakedLighting"
 # Cast lighting gain; visible emitter materials retain their authored strength.
-EMISSION_GAIN = 50.0
+from emission_strength import GAIN as EMISSION_GAIN
 
 
 def basis(n):
@@ -158,9 +159,33 @@ def unwrap_receiver(ob, scene, log=print):
     # Spend the atlas on surfaces visible to the game camera, using
     # the same visibility weighting as the colour/normal bake. Hidden backs
     # still receive texels, but no longer consume foreground resolution.
-    seen = scene_export.seen_faces(mesh, ob.matrix_world)
-    scene_export.unwrap(ob, seen, [size], [size // 2])
-    mesh.uv_layers[-1].name = UV
+    if scene_export.BAKE_UV in mesh.uv_layers:
+        # Surface export already welded, visibility-weighted and repaired
+        # these charts. Repack them at lightmap padding instead of repeating
+        # visibility rays, Smart Project and its overlap repair from scratch.
+        import native
+        uv = np.empty((len(mesh.loops), 2), np.float64)
+        mesh.uv_layers[scene_export.BAKE_UV].data.foreach_get("uv", uv.ravel())
+        weld = np.unique(co.reshape(-1, 3), axis=0, return_inverse=True)[1]
+        vertices = np.empty(len(mesh.loops), np.int32)
+        mesh.loops.foreach_get("vertex_index", vertices)
+        # Different surface atlases may use identical UV coordinates.
+        slots = np.repeat([p.material_index for p in mesh.polygons],
+                          [p.loop_total for p in mesh.polygons])
+        vertices = (weld[vertices] + slots * len(mesh.vertices)).astype(np.int32)
+        loops = np.empty((len(mesh.loop_triangles), 3), np.int32)
+        mesh.loop_triangles.foreach_get("loops", loops.ravel())
+        grid = min(scene_export.PACK_GRID, size // 2)
+        gap = max(1, math.ceil(scene_export.PACK_GAP_PX * grid / (size // 2)))
+        packed, share = native.pack_islands(uv, vertices, loops, grid, gap)
+        if share < 0:
+            raise ValueError(f"{ob.name}: surface charts do not fit lightmap")
+        mesh.uv_layers.new(name=UV).data.foreach_set("uv", packed.astype(np.float32).ravel())
+        log(f"emission lightmap: {ob.name}: reused surface charts; coverage {share:.2f}")
+    else:
+        seen = scene_export.seen_faces(mesh, ob.matrix_world)
+        scene_export.unwrap(ob, seen, [size], [size // 2])
+        mesh.uv_layers[-1].name = UV
     repair_lightmap_overlap(ob, size, log)
     if active and active in mesh.uv_layers:
         mesh.uv_layers.active = mesh.uv_layers[active]
@@ -229,6 +254,10 @@ def repair_lightmap_overlap(ob, size, log=print):
 def receiver_targets(ob, scene, log=print):
     """Separate lightmaps for existing spatial colour-atlas sections."""
     sizes = ob.get("game_lightmap_chunk_sizes")
+    # A uniform per-section budget follows the surface export's atlas count.
+    # Explicit lists remain available for sections with different budgets.
+    if sizes is None and "game_lightmap_section_size" in ob:
+        sizes = [ob["game_lightmap_section_size"]] * len(ob.material_slots)
     if sizes is None:
         return [(unwrap_receiver(ob, scene, log), list(range(len(ob.material_slots))))]
     if len(sizes) != len(ob.material_slots):
@@ -252,6 +281,12 @@ def receiver_targets(ob, scene, log=print):
         part = bpy.data.meshes.new("game.lightmap-section")
         part.from_pydata(coords[unique].tolist(), [],
                          [inverse[a:b].tolist() for a, b in zip(starts[:-1], starts[1:])])
+        import scene_export
+        loops = np.concatenate([p.loop_indices[:] for p in faces])
+        if scene_export.BAKE_UV in mesh.uv_layers:
+            source_uv = np.empty((len(mesh.loops), 2), np.float32)
+            mesh.uv_layers[scene_export.BAKE_UV].data.foreach_get("uv", source_uv.ravel())
+            part.uv_layers.new(name=scene_export.BAKE_UV).data.foreach_set("uv", source_uv[loops].ravel())
         temp = bpy.data.objects.new(f"{ob.name} lightmap section {slot}", part)
         scene.collection.objects.link(temp)
         temp.matrix_world = ob.matrix_world.copy()
@@ -260,7 +295,6 @@ def receiver_targets(ob, scene, log=print):
             size = unwrap_receiver(temp, scene, log)
             values = np.empty(len(part.loops) * 2, dtype=np.float32)
             part.uv_layers[UV].data.foreach_get("uv", values)
-            loops = np.concatenate([p.loop_indices[:] for p in faces])
             uv[loops] = values.reshape(-1, 2)
             groups.append((size, [slot]))
         finally:
@@ -345,7 +379,7 @@ def bake_field(objects, scene):
         bpy.data.images.remove(image)
 
 
-def bake(objects, dynamic_names, log=print, *, surface_only=False):
+def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_receiver=None):
     scene = bpy.context.scene
     sources = [ob for ob in objects if not mobile(ob, dynamic_names)
                and any(emits(m) for m in getattr(ob.data, "materials", []))]
@@ -398,8 +432,11 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
                     else:
                         boosted.append((nt,socket,socket.default_value,None))
                         socket.default_value *= EMISSION_GAIN
+        started = time.monotonic()
         field = None if surface_only else bake_field(objects, scene)
         log(f"emission lighting: {math.prod(field['size']) if field else 0} probes")
+        log(f"emission timing: probes {time.monotonic()-started:.1f}s")
+        started = time.monotonic()
         receivers = []
         images = []
         for ob in objects:
@@ -413,7 +450,7 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
             if not all(m and any(n.type == "BSDF_PRINCIPLED" for n in m.node_tree.nodes) for m in ob.data.materials):
                 continue
             ob.data = ob.data.copy()
-            sections = receiver_targets(ob, scene, log)
+            sections = (prepare_receiver or receiver_targets)(ob, scene, log)
             # glTF treats the last dot as a file extension and would truncate
             # e.g. "Cube.002 baked light" to "Cube", losing the encoder rule.
             for slot in ob.material_slots:
@@ -427,6 +464,7 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
                     target(mat, image)
                 images.append((ob, image, materials))
             receivers.append(ob)
+        log(f"emission timing: UV preparation {time.monotonic()-started:.1f}s")
         if receivers:
             # A prominent receiver can need cleaner lighting without making
             # every distant rock and the probe field pay for its sample count.
@@ -439,9 +477,12 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
             for count, group in sorted(groups.items()):
                 scene.cycles.samples = count
                 log(f"emission lighting: baking {len(group)} receivers at {count} samples")
+                started = time.monotonic()
                 diffuse_bake(group)
+                log(f"emission timing: {count}-sample bake {time.monotonic()-started:.1f}s")
             from lightmap_denoise import LightmapDenoiser
             denoiser = LightmapDenoiser()
+        started = time.monotonic()
         # Wire only after ALL baking: a lightmap must never illuminate another bake.
         for ob, image, materials in images:
             import native
@@ -483,6 +524,8 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False):
                         bsdf.inputs["Emission Strength"].default_value = 1
                 maps[mat.name] = {"version": 1} if surface_only else {
                     "version": 1, "encoding": "log1p", "range": strength}
+            bpy.data.images.remove(image)
+        log(f"emission timing: denoise and encode {time.monotonic()-started:.1f}s")
         log(f"emission lighting: {len(images)} static lightmaps")
         return maps, field
     finally:

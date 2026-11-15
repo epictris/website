@@ -44,18 +44,34 @@ Every conversion is measured in EEVEE against three's physical lights rather tha
 | Game (three.js) | Blender |
 |---|---|
 | sun, intensity I | sun, strength I (both light white diffuse to I/pi) |
-| hemisphere fill, sky over ground, intensity I | the world, sky above and ground below at I/pi (the same diffuse irradiance, linear in the normal's height) |
+| hemisphere fill, sky over ground, intensity I | camera-visible diffuse material fill at I/pi, interpolated by the normal's height; unshadowed, including inside caves |
 | the generated sky it reflects, at `envIntensity` | the same pixels in the world, sampled with three's equirectangular mapping |
 | the background colour it clears to (never tone mapped) | the world to camera rays, at the colour the tone mapping shows as those bytes |
 | ACES Filmic at exposure 1 | ACES 1.3 at exposure log2(1 / 0.6) (three divides by 0.6 first; mean error 0.005 over a grey ramp and random colours) |
 
 A white diffuse card facing the camera under the guide's world and sun renders within 3 % of three's formula with the same numbers.
-What is not the same: the sun's shadow is softened by a 5 degree disc, which matches the game's fixed-width filter only about a metre from the occluder; the hemisphere fill has no specular in three and the world does in Blender; and the materials are Blender's, not the exported game's. Runtime editor lights can still affect the game, but are intentionally absent from the Blender preview.
+What is not the same: the sun's shadow is softened by a 5 degree disc, which matches the game's fixed-width filter only about a metre from the occluder; environment specular reflections are occluded by geometry in Blender; and the materials are Blender's, not the exported game's. Runtime editor lights can still affect the game, but are intentionally absent from the Blender preview.
 A level that names a captured sky (`hdri`) still gets the generated one.
 
 **Preview Emission (Cycles)** selects Cycles and Rendered viewport shading.
 The actual emitting mesh surfaces cast light, with occlusion and bounce light;
-there are no generated point lights, position offsets, grouping or spill boosts.
+there are no generated point lights, position offsets or grouping.
+The preview applies the same 50× illumination gain as the export bake.
+Camera rays retain the authored visible glow; diffuse/bounce rays receive the
+gain. Repeated clicks do not multiply it again, disabling Lighting restores
+the authored sockets, and export removes the preview nodes before baking.
+The game's hemisphere ambient fill is applied directly to camera-visible
+diffuse materials, so cave walls cannot block the blue rock fill. It uses the
+guide's sky/ground colours, surface normal, base colour and metallic fraction.
+That component is removed from a temporary copy of the guide world to avoid
+double lighting outdoors. Toggling Lighting off restores the original world
+and material links; export removes this fill before any bake.
+The sky environment's diffuse contribution is also unshadowed. Preview
+cosine-convolves the guide's sky pixels into a shared 64×32 radiance texture,
+at the guide's environment intensity, sampled by the surface normal. This
+approximates the game's roughest PMREM level; it is not an exposure multiplier.
+The world retains its glossy contribution but supplies no additional diffuse
+sky light, preventing double lighting outside the cave.
 Material emission colour and strength are the source of truth. Material Preview
 still uses Eevee; use Rendered shading for this reference. The viewport uses
 64 samples and denoising and progressively refines after an edit; no preview
