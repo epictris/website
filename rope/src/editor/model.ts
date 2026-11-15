@@ -1,3 +1,4 @@
+import mushroomVariants from "../level/mushroomVariants.json";
 // Editor scene model. Mirrors LevelData but keeps positions as Vec2 in WORLD
 // METRES (so it shares the camera/pointer un-projection with the sim), plus a
 // stable id per item for selection. Conversions to/from the on-disk pixel
@@ -4778,4 +4779,32 @@ export function emptyModel(): EdModel {
       },
     ],
   };
+}
+
+/** A complete reusable bounce mushroom. Randomness is editor-only; the saved
+ * model, scale and collision preserve the chosen variation exactly. */
+export function mushroomBody(pos: Vec2, variant = 0, scale = 1): LevelBodyData {
+  const spec = mushroomVariants[Math.abs(variant) % mushroomVariants.length]!;
+  const w = spec.width * scale;
+  const h = spec.capHeight * scale;
+  return {
+    kind: "static", x: pos.x, y: pos.y, rot: 0,
+    color: "#b28be8", bounce: 1, launch: 6.5,
+    objects: [
+      { type: "collision", debug: { on: false }, shape: { kind: "poly", verts: [
+        { x: -.5*w, y: 0 }, { x: -.4*w, y: -.6*h }, { x: -.2*w, y: -.92*h },
+        { x: 0, y: -h }, { x: .2*w, y: -.92*h }, { x: .4*w, y: -.6*h },
+        { x: .5*w, y: 0 }, { x: .4*w, y: .6*h }, { x: -.4*w, y: .6*h },
+      ] } },
+      { type: "model", model: spec.model, scale },
+      { type: "light", color: "#9cbbff", intensity: 5, range: 2.5*scale,
+        wake: 6, wakeDelay: 0, wakeRise: .2, wakeFall: 1 },
+    ],
+  };
+}
+
+export function mushroomModel(pos: Vec2): EdModel {
+  const variant = Math.floor(Math.random() * mushroomVariants.length);
+  const scale = .75 + Math.random() * .6;
+  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: .08 }, bodies: [mushroomBody(pos, variant, scale)] });
 }

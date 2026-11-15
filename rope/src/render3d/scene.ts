@@ -31,6 +31,7 @@ import type { Camera } from "../render/camera";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { SceneDressing, sceneryWater, type DressTarget } from "./sceneDressing";
+import { useBakedLighting } from "./bakedLighting";
 import { setFogRegions } from "./fogRegions";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
@@ -1428,10 +1429,10 @@ export class Scene3D {
     // the belt has run, so a replay shows the same belt at the same frame and a
     // paused game shows it standing.
     const treadTime = beltRenderTime(level.frame ?? 0, alpha);
-    for (const visual of slot.bodies.values()) visual.sync(alpha, treadTime);
+    for (const visual of slot.bodies.values()) visual.sync(alpha, treadTime, level.world.contactPulses);
     // Standing bodies built no engine body and have no pose to follow, but a
     // drawn-only conveyor still runs its tread.
-    for (const visual of slot.standing) visual.sync(alpha, treadTime);
+    for (const visual of slot.standing) visual.sync(alpha, treadTime, level.world.contactPulses);
 
     // The cuff is drawn at the depth of whatever it bit (`BodyVisual.depth`).
     this.chains.sync(level, alpha, retract, this.depthOf, snap);
@@ -1492,6 +1493,8 @@ export class Scene3D {
     // created, and it costs a traverse only while something is selected.
     this.syncHighlight();
     this.env.follow(this.camera);
+
+    useBakedLighting(this.scene, slot.dressing?.field ?? null);
 
     // Inside the timer: the probe is six more draws of the scene, and the
     // perf HUD should say what the frame costs, not what the main view does.

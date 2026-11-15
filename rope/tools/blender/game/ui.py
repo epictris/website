@@ -34,10 +34,16 @@ class GAME_PT_main(bpy.types.Panel):
             row.prop(scene, "game_fog", toggle=True)
             # "Depth of Field" is cut short at the sidebar's width.
             row.prop(scene, "game_dof", text="DoF", toggle=True)
+            box.operator("game.bake_emission_preview", icon="SHADING_RENDERED")
+            box.label(text="Cycles: actual mesh emission")
             if scene.get(look.ERROR):
                 box.label(text=scene[look.ERROR], icon="ERROR")
             elif look.enabled(scene):
-                box.label(text="Shows in Rendered shading")
+                box.label(text="Use Rendered shading for Cycles")
+                if scene.game_fog:
+                    box.label(text="Fog: game camera view only")
+                    if context.space_data.region_3d.view_perspective != "CAMERA":
+                        box.label(text="Click Look Through Game Camera", icon="INFO")
         if busy:
             layout.label(text=core.rebuild_progress, icon="TIME")
 

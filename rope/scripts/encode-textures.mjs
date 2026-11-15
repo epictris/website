@@ -49,6 +49,9 @@ if (!file || (cacheAt !== -1 && !cacheDir)) {
 
 const STANDARD = 1024;
 const rules = [];
+// Linear lighting transported as an sRGB emission image. Preserve its values
+// and UV padding; small maps need neither chroma subsampling nor resizing.
+rules.push({ name: "baked light, lossless", pattern: / baked light$/, targetFormat: "webp", lossless: true });
 
 // A map the scene export BAKED (tools/blender/scene_export.py names them
 // "<object> baked colour" and "<object> baked normal") is painted stone at up
@@ -154,6 +157,23 @@ const io = new NodeIO()
   .registerDependencies({ "meshopt.decoder": MeshoptDecoder, "meshopt.encoder": MeshoptEncoder });
 const doc = await io.read(file);
 
+// Identify lightmaps by their transport marker, not only an image name that
+// Blender/glTF may truncate at a dot. They must never hit the lossy 1k fallback.
+const lightmaps = new Set(doc.getRoot().listMaterials()
+  .filter((m) => m.getExtras().gameBakedLighting)
+  .map((m) => m.getEmissiveTexture()).filter(Boolean));
+for (const texture of lightmaps) {
+  if (!/ baked light$/.test(texture.getName())) {
+    texture.setName(`${texture.getName().replaceAll('.', '-')} baked light`);
+  }
+}
+const pixelDigest = async (texture) => {
+  const {data, info} = await sharp(texture.getImage()).removeAlpha().raw().toBuffer({resolveWithObject: true});
+  return `${info.width}x${info.height}:${createHash('sha256').update(data).digest('hex')}`;
+};
+const lightmapPixels = new Map();
+for (const texture of lightmaps) lightmapPixels.set(texture, await pixelDigest(texture));
+
 // Each pass takes only maps still PNG or JPEG, so a map a rule encoded is never
 // encoded again, and the last pass (everything else) gets exactly the rest.
 const RAW = /^image\/(png|jpeg)$/;
@@ -194,6 +214,13 @@ for (const rule of rules) {
   }
   progress();
   if (name) console.log(`[assets] ${plan.filter((p) => p.rule === rule && !isRaw(p.texture)).length} texture(s): ${name}`);
+}
+// A compressed lightmap must retain its dimensions and every decoded RGB
+// value. Check cached results too, before accepting or shipping an encode.
+for (const texture of lightmaps) {
+  if (await pixelDigest(texture) !== lightmapPixels.get(texture)) {
+    throw new Error(`Lightmap was resized or encoded lossily: ${texture.getName()}`);
+  }
 }
 if (cacheDir) {
   mkdirSync(cacheDir, { recursive: true });

@@ -383,27 +383,8 @@ def build_lighting(job):
         # A sun shines down its -Z; three's `dir` is where its lamp sits.
         ob.rotation_euler = to_blender_dir(sun["dir"]).to_track_quat("Z", "Y").to_euler()
         coll.objects.link(ob)
-    for i, light in enumerate(job.get("lights", [])):
-        kind = "SPOT" if light["kind"] == "spot" else "POINT"
-        data = bpy.data.lights.new(f"guide.light.{i}", kind)
-        data.color = light["color"]
-        data.energy = 4 * math.pi * light["intensity"]
-        data.shadow_soft_size = 0
-        data.use_shadow = light["castShadow"]
-        # three's reach fades the light out by (1 - (d/range)^4)^2; Blender's
-        # cuts it off there.
-        data.use_custom_distance = True
-        data.cutoff_distance = light["range"]
-        if kind == "SPOT":
-            data.spot_size = math.radians(light["angle"]) * 2
-            data.spot_blend = light["penumbra"]
-        ob = bpy.data.objects.new(f"guide.light.{i}", data)
-        ob.location = to_blender(*light["position"])
-        if kind == "SPOT":
-            ob.rotation_euler = (-to_blender_dir(light["direction"])).to_track_quat("Z", "Y").to_euler()
-        coll.objects.link(ob)
     build_world(job)
-    log(f"game lighting: {'a sun, ' if sun else ''}{len(job.get('lights', []))} lights, "
+    log(f"game lighting: {'a sun, ' if sun else ''}no copied editor lights, "
         f"{'HDRI ' + job['hdri'] + ' (not carried: the generated sky stands in)' if job.get('hdri') else 'generated sky'}")
 
 
@@ -503,6 +484,41 @@ def build_world(job):
     world["game_tone_exposure"] = math.log2(job["toneMappingExposure"] / .6)
 
 
+def build_shelters(job):
+    """The cut-away cave walls cast shadows, but stay transparent to the view."""
+    from mathutils.geometry import tessellate_polygon
+    coll = bpy.data.collections.get(LIGHTS_COLLECTION)
+    if coll is None:
+        return
+    mat = bpy.data.materials.new("guide.shelter-shadow")
+    nt = mat.node_tree
+    nt.nodes.clear()
+    path = nt.nodes.new("ShaderNodeLightPath")
+    clear = nt.nodes.new("ShaderNodeBsdfTransparent")
+    opaque = nt.nodes.new("ShaderNodeBsdfDiffuse")
+    mix = nt.nodes.new("ShaderNodeMixShader")
+    nt.links.new(path.outputs["Is Shadow Ray"], mix.inputs[0])
+    nt.links.new(clear.outputs[0], mix.inputs[1])
+    nt.links.new(opaque.outputs[0], mix.inputs[2])
+    output = nt.nodes.new("ShaderNodeOutputMaterial")
+    nt.links.new(mix.outputs[0], output.inputs["Surface"])
+    for i, s in enumerate(job.get("shelters", [])):
+        points = [Vector((x, -s["front"], y)) for x, y in s["outline"]]
+        count = len(points)
+        vertices = points + [p + Vector((0, -s["thickness"], 0)) for p in points]
+        triangles = tessellate_polygon([points])
+        faces = [tuple(p if isinstance(p, int) else points.index(p) for p in t) for t in triangles]
+        faces += [tuple(i+count for i in reversed(t)) for t in list(faces)]
+        faces += [(i,(i+1)%count,(i+1)%count+count,i+count) for i in range(count)]
+        name = f"guide.shelter.{i}"
+        mesh = bpy.data.meshes.new(name)
+        mesh.from_pydata(vertices, [], faces)
+        mesh.materials.append(mat)
+        ob = bpy.data.objects.new(name, mesh)
+        coll.objects.link(ob)
+        ob.hide_select = True
+
+
 def fresh_file():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     # No `.blend1` beside a file this script rewrites on every run.
@@ -530,6 +546,7 @@ def main():
         build_camera(job["camera"], coll)
     if job.get("lighting"):
         build_lighting(job["lighting"])
+        build_shelters(job["lighting"])
     os.makedirs(os.path.dirname(os.path.abspath(guide_path)), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(guide_path))
     log(f"wrote {guide_path}: {len(job['bodies'])} bodies")

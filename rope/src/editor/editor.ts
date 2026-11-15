@@ -192,6 +192,7 @@ import {
   type EdLayer,
   type EdModel,
   glowModel,
+  mushroomModel,
   fireflyModel,
   cloneRouteNode,
   peakSurfaceSpeed,
@@ -940,6 +941,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // An empty selection, for drawing the overlay as if nothing were selected.
   const NO_IDS: ReadonlySet<number> = new Set<number>();
   let tool: Tool = "select";
+  let placingMushroom = false;
   let newKind: BodyKind = "static";
   // Layers. Every *visible* layer is hit-testable, so a selection may span them
   // and the inspector shows one panel per layer it contains. The active layer is
@@ -2615,9 +2617,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     root: button("Root", () => setTool("root")),
     light: button("Light", () => setTool("light")),
     model: button("Model", () => setTool("model")),
-    glow: button("Glow", () => setTool("glow")),
+    glow: button("Glow", () => { placingMushroom = false; setTool("glow"); }),
     fireflies: button("Fireflies", () => setTool("fireflies")),
   };
+  const mushroomButton = button("Mushroom", () => { placingMushroom = true; setTool("glow"); });
+  mushroomButton.title = "Click to plant a glowing, bouncy mushroom. Its cap expands on impact. Adjust Bounce and Launch on its body.";
   for (const [key, shortcut] of Object.entries({ select: "V", rect: "R", circle: "C", poly: "P", text: "T", arrow: "A", chain: "K", checkpoint: "S" })) {
     toolBtns[key as Tool].dataset["shortcut"] = shortcut;
     toolBtns[key as Tool].setAttribute("aria-keyshortcuts", shortcut);
@@ -2758,6 +2762,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.light,
     toolBtns.model,
     toolBtns.glow,
+    mushroomButton,
     toolBtns.fireflies,
     kindWrap,
     rootWidthsWrap,
@@ -2856,6 +2861,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [k, b] of Object.entries(toolBtns)) {
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
+    mushroomButton.style.display = tools.includes("glow") ? "" : "none";
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
@@ -3451,9 +3457,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (t !== "root") cancelRootDraft();
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) {
-      b.classList.toggle("active", k === t);
-      b.setAttribute("aria-pressed", String(k === t));
+      b.classList.toggle("active", k === t && !(t === "glow" && placingMushroom));
+      b.setAttribute("aria-pressed", String(k === t && !(t === "glow" && placingMushroom)));
     }
+    mushroomButton.classList.toggle("active", t === "glow" && placingMushroom);
+    mushroomButton.setAttribute("aria-pressed", String(t === "glow" && placingMushroom));
     refreshToolOptions();
     applyToolCursor();
   }
@@ -8817,7 +8825,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // holding that body would load as. Always a body of its own: a mushroom is a
   // thing in the level, not a part of whatever happens to be selected.
   function placeGlow(at: Vec2): void {
-    const arrived = glowModel(at);
+    const arrived = placingMushroom ? mushroomModel(at) : glowModel(at);
     beginAction();
     const copy = cloneBodies(arrived.items, Vec2.ZERO, arrived.bodyFrames);
     addAndSelect(copy.items, [], [], copy.frames);

@@ -15,9 +15,9 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, FloatProperty
 
-from . import legacy, look, ops, outlines, ui
+from . import emission_preview, legacy, look, ops, outlines, ui
 
-CLASSES = ops.CLASSES + ui.CLASSES
+CLASSES = ops.CLASSES + emission_preview.CLASSES + ui.CLASSES
 
 # Until 2026-10-08 all of this was the Formations add-on's, and a file saved
 # then holds it under these names (the toggles and the depth step as the
@@ -63,6 +63,11 @@ def on_load(_):
             if ob.name in bpy.context.view_layer.objects:
                 ob.select_set(False)
     scene = bpy.context.scene
+    for local_scene in bpy.data.scenes:
+        if local_scene.library is None:
+            look.retire_volume_preview(local_scene)
+    if scene is not None and scene.library is None and look.enabled(scene):
+        look.toggled(scene, bpy.context)
     if scene is not None and scene.library is None and outlines.collision_outlines(scene):
         if "game_outline_opacity" not in scene.bl_system_properties_get(do_create=True) \
                 and not outlines.outlines_shown(scene):
@@ -86,7 +91,7 @@ def register():
                     "behind the gameplay plane (it blurs in front of it too, which the game does not)")
     bpy.types.Scene.game_lighting = BoolProperty(
         name="Lighting", default=False, update=look.toggled,
-        description="The game's light at rest: its sun, the level's always-on lights, its sky and fill as the "
+        description="The game's environment: its sun, its sky and fill as the "
                     "world, and its tone mapping (ACES). The scene's own lights are hidden until it is off")
     bpy.types.Scene.game_outline_opacity = FloatProperty(
         name="Opacity", default=outlines.DEFAULT_OPACITY, min=0, max=1, subtype="FACTOR",

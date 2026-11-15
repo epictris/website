@@ -111,6 +111,8 @@ def excluded_collections(view_layer):
 
 
 def skip_reason(ob, excluded):
+    if ob.name.startswith(("game.light-preview", "game.emission-light.", "game.emission-preview")):
+        return "game preview helper"
     if ob.library is not None or ob.override_library is not None:
         return f"linked from {os.path.basename(ob.library.filepath) if ob.library else 'a library'}"
     data = getattr(ob, "data", None)
@@ -1164,6 +1166,8 @@ def worker_main(argv):
     `NAME<tab>MAP` is one map of a split rock (SPLIT_MAPS)."""
     global WORKER_OUT, ALL_SEEN, WORKER_MAP
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import emission_materials
+    emission_materials.clear()
     WORKER_OUT = argv[argv.index("--worker") + 1]
     ALL_SEEN = "--all-seen" in argv
     import moss
@@ -2039,6 +2043,12 @@ def main():
     out_glb, out_meta = argv[0], argv[1]
     cache_dir = argv[3] if len(argv) == 4 else None
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import emission_materials
+    emission_materials.clear()
+    # Preview helpers must not contribute to any export preparation either.
+    for helper in bpy.context.scene.objects:
+        if helper.name.startswith(("game.emission-light.", "game.emission-preview")):
+            helper.hide_render = helper.hide_viewport = True
     t0 = time.time()
     # The game's depth of field, from scripts/scene-export.ts (it reads them
     # from src/render3d/depthOfField.ts); the finer passes are budgeted by it.
@@ -2114,8 +2124,14 @@ def main():
             ob.hide_render = False
     bend_growths(kept, warnings)
     view_layer.update()
+    lighting_maps, lighting_field = {}, None
+    if os.environ.get("SCENE_EXPORT_EMISSION") == "1":
+        import emission_bake
+        step("lighting")
+        lighting_maps, lighting_field = emission_bake.bake(
+            kept, set(json.loads(os.environ.get("SCENE_EXPORT_DYNAMIC", "[]"))), log)
     # Baking selects its own targets; the export selection is restored after.
-    if baked:
+    if baked or lighting_maps or lighting_field:
         for ob in scene.objects:
             try:
                 ob.select_set(ob in kept)
@@ -2150,6 +2166,7 @@ def main():
         filepath=out_glb,
         export_format="GLB",
         use_selection=True,
+        use_active_scene=True,
         export_apply=True,
         export_yup=True,
         export_normals=True,
@@ -2173,6 +2190,8 @@ def main():
     props = bpy.ops.export_scene.gltf.get_rna_type().properties.keys()
     kwargs = {k: v for k, v in kwargs.items() if k in props}
     bpy.ops.export_scene.gltf(**kwargs)
+    if lighting_maps or lighting_field:
+        emission_bake.embed(out_glb,lighting_maps,lighting_field)
 
     meta = {
         "blender": bpy.app.version_string,
@@ -2180,6 +2199,7 @@ def main():
         "credits": credits,
         "skipped": skipped,
         "warnings": warnings,
+        "lighting": {"lightmaps": len(lighting_maps), "probes": math.prod(lighting_field["size"]) if lighting_field else 0},
         # Every baked map the glTF should carry, by name: scene-export.ts
         # names the ones the shipped file lacks. Not part of the scene's meta.
         "baked_maps": sorted(im.name for im in bpy.data.images
@@ -2194,4 +2214,5 @@ def main():
         f"{pictures} pictures, {len(skipped)} skipped, {len(warnings)} warnings, {time.time() - t0:.1f}s")
 
 
-main()
+if __name__ == "__main__":
+    main()

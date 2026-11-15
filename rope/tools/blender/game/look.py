@@ -3,12 +3,13 @@
 Three toggles in the Game panel, each the game's own law with the game's numbers,
 which `just scene-guide <level>` bakes into the guide (tools/blender/scene_guide.py):
 
-- LIGHTING: the game's light at rest instead of the scene's own. The guide's
-  `guide.lights` collection (the sun and the level's always-on lights) is
+- LIGHTING: the game's environment instead of the scene's own. The guide's
+  `guide.lights` collection (the sun and shelter shadow walls) is
   linked in, its `guide.world` (the generated sky three reflects, the
   hemisphere fill, the background colour) becomes the scene's world, the
   scene's own lights are hidden, and the view transform becomes three's ACES
   Filmic (ACES 1.3 at three's exposure). All of it is put back when it is off.
+  Editor point and spot lights are never copied into the guide.
 - DEPTH OF FIELD at Medium: the scene camera becomes `guide.camera.dof`, the
   game camera through Blender's own depth of field, its aperture set so the
   blur behind the plane is the game's (it also blurs in front, which the game
@@ -25,6 +26,7 @@ which `just scene-guide <level>` bakes into the guide (tools/blender/scene_guide
 from __future__ import annotations
 
 import json
+from math import cos, sin
 
 import bpy
 
@@ -60,6 +62,7 @@ def apply(context):
     """Make the scene match the toggles. Lighting first: it sets the view
     transform the fog's tree converts through."""
     scene = context.scene
+    retire_volume_preview(scene)
     if camera.game_camera(scene) is None:
         if enabled(scene):
             raise ValueError(camera.NO_CAMERA)
@@ -67,6 +70,14 @@ def apply(context):
     apply_lighting(scene, context.view_layer)
     apply_dof(scene)
     apply_fog(context)
+
+
+def retire_volume_preview(scene):
+    """The old scattering box duplicated the game's post-process fog."""
+    for ob in scene.objects:
+        if ob.library is None and ob.name.startswith("game.light-preview.fog"):
+            ob.hide_render = True
+            ob.hide_viewport = True
 
 
 # --- Depth of field ------------------------------------------------------------
@@ -141,6 +152,32 @@ def apply_lighting(scene, view_layer):
                 ob.hide_viewport = hide_viewport
                 ob.hide_render = hide_render
         del scene[SAVED_LIGHTING]
+    from . import emission_preview
+    emission_preview.set_enabled(scene, on)
+    if on:
+        # Older linked guides may still contain copied point/spot lights.
+        for ob in scene.objects:
+            if ob.type == "LIGHT" and ob.library is not None and ob.name.startswith("guide.light."):
+                ob.hide_set(True, view_layer=view_layer)
+                ob.hide_render = True
+        # A saved scene may have been manually exposed after Lighting was
+        # enabled. Reapplying Game Lighting restores the guide's current view.
+        world = linked("worlds", WORLD, library)
+        scene.world = world
+        scene.view_settings.view_transform = world["game_tone_view"]
+        scene.view_settings.look = "None"
+        scene.view_settings.exposure = world["game_tone_exposure"]
+        scene.view_settings.gamma = 1.0
+        # Material Preview otherwise uses its studio HDRI even though the
+        # game's world and lights have been linked into the scene.
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D":
+                    shading = area.spaces.active.shading
+                    shading.use_scene_lights = True
+                    shading.use_scene_world = True
+                    shading.use_scene_lights_render = True
+                    shading.use_scene_world_render = True
 
 
 # --- Fog -----------------------------------------------------------------------
@@ -150,7 +187,10 @@ def fog_of(scene):
     written before the look)."""
     cam = camera.game_camera(scene)
     look = json.loads(cam.get("game_look", "{}")) if cam is not None else {}
-    return look.get("fog")
+    fog = look.get("fog")
+    if fog is not None and "fogRegions" in look:
+        fog["regions"] = look["fogRegions"]
+    return fog
 
 
 def apply_fog(context):
@@ -161,6 +201,7 @@ def apply_fog(context):
             scene.compositing_node_group = None
             saved = json.loads(scene.get(SAVED_FOG, "{}"))
             context.view_layer.use_pass_z = saved.get("use_pass_z", context.view_layer.use_pass_z)
+            context.view_layer.use_pass_position = saved.get("use_pass_position", context.view_layer.use_pass_position)
             shade_viewports(context, "DISABLED")
         if SAVED_FOG in scene:
             del scene[SAVED_FOG]
@@ -173,8 +214,10 @@ def apply_fog(context):
     if abs(scene.view_settings.gamma - 1) > 1e-6:
         raise ValueError("The fog needs the scene's colour management gamma at 1")
     if SAVED_FOG not in scene:
-        scene[SAVED_FOG] = json.dumps({"use_pass_z": context.view_layer.use_pass_z})
+        scene[SAVED_FOG] = json.dumps({"use_pass_z": context.view_layer.use_pass_z,
+                                      "use_pass_position": context.view_layer.use_pass_position})
     context.view_layer.use_pass_z = True
+    context.view_layer.use_pass_position = True
     scene.compositing_node_group = build_fog(scene, context.view_layer, fog)
     shade_viewports(context, "CAMERA")
 
@@ -239,6 +282,48 @@ def build_fog(scene, view_layer, fog):
     d = math("MULTIPLY", depth, fog["density"])
     clear = math("EXPONENT", math("MULTIPLY", math("MULTIPLY", d, d), -1.0))
     amount = math("MULTIPLY", math("SUBTRACT", 1.0, clear), math("LESS_THAN", depth, SKY_DEPTH))
+    if "regions" in fog:
+        # Match fogRegions.ts: intersect each view ray with the gameplay
+        # plane, then evaluate the region there. Distant scenery uses the
+        # same screen-space boundary as a nearby root or the player.
+        position = node("ShaderNodeSeparateXYZ")
+        links.new(layers.outputs["Position"], position.inputs[0])
+        surface = position.outputs
+        eye = []
+        for axis in "XYZ":
+            value = node("ShaderNodeValue")
+            curve = value.outputs[0].driver_add("default_value")
+            variable = curve.driver.variables.new()
+            variable.name, variable.type = "eye", "TRANSFORMS"
+            variable.targets[0].id = scene.camera
+            variable.targets[0].transform_type = "LOC_" + axis
+            variable.targets[0].transform_space = "WORLD_SPACE"
+            curve.driver.expression = "eye"
+            eye.append(value.outputs[0])
+        # Blender y is negative game z; sim y is negative Blender z.
+        along = math("DIVIDE", math("MULTIPLY", eye[1], -1), math("SUBTRACT", surface[1], eye[1]))
+        px = math("ADD", eye[0], math("MULTIPLY", math("SUBTRACT", surface[0], eye[0]), along))
+        py = math("MULTIPLY", math("ADD", eye[2], math("MULTIPLY", math("SUBTRACT", surface[2], eye[2]), along)), -1)
+        weight = 0
+        for region in fog["regions"]:
+            dx, dy = math("SUBTRACT", px, region["x"]), math("SUBTRACT", py, region["y"])
+            c, s = cos(region.get("rot", 0)), sin(region.get("rot", 0))
+            u = math("ADD", math("MULTIPLY", dx, c), math("MULTIPLY", dy, s))
+            v = math("ADD", math("MULTIPLY", dx, -s), math("MULTIPLY", dy, c))
+            shape = region["shape"]
+            if shape["kind"] == "circle":
+                inside = math("SUBTRACT", shape["r"], math("SQRT", math("ADD", math("MULTIPLY", u, u), math("MULTIPLY", v, v))))
+            else:
+                inside = math("MINIMUM", math("SUBTRACT", shape["w"]*.5, math("ABSOLUTE", u)),
+                              math("SUBTRACT", shape["h"]*.5, math("ABSOLUTE", v)))
+            falloff = max(0, region["falloff"])
+            if falloff:
+                t = math("MINIMUM", 1, math("MAXIMUM", 0, math("DIVIDE", inside, falloff)))
+                fade = math("MULTIPLY", math("MULTIPLY", t, t), math("SUBTRACT", 3, math("MULTIPLY", 2, t)))
+            else:
+                fade = math("GREATER_THAN", inside, -1e-7)
+            weight = math("MAXIMUM", weight, fade)
+        amount = math("MULTIPLY", amount, weight)
     mix = node("ShaderNodeMix", data_type="RGBA", label="Fog")
     links.new(amount, mix.inputs["Factor"])
     links.new(display.outputs["Image"], mix.inputs[6])

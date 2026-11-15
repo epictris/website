@@ -4,6 +4,7 @@
 // closely enough for the character controller and rope; it is self-consistent
 // (deterministic replay), not bit-compatible with Godot.
 
+import { ContactPulses } from "./contactPulses";
 import { dmath } from "./dmath";
 import { Vec2 } from "./vec2";
 import { circleShape, shapeExtents, shapeWorldVertices } from "./shapes";
@@ -1624,6 +1625,7 @@ export class World {
   // solver; a caller that wants to know what a body touched this frame asks here
   // rather than re-deriving contacts it would then have to keep in step.
   frameContacts: ContactConstraint[] = [];
+  readonly contactPulses = new ContactPulses();
 
   // Did a contact this frame pay a LAUNCH - a trampoline throwing something
   // harder than its arrival justified (see `contactBounce`)?
@@ -2596,6 +2598,7 @@ export class World {
     // deliberately does not: `BallPlayer.applyLoopCap` needs to know that the
     // ball's mounting loop met a surface, and which way that surface faces.
     this.frameContacts = constraints;
+    this.contactPulses.scan(constraints, dt);
 
     // A tied body's contacts with the scenery are its island's, and the pin
     // and the stick are not for it; its contacts with a free body - the ball

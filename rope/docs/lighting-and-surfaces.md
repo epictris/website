@@ -29,7 +29,14 @@ The patch for that was to **derive** a light from the glowing shape, out of seve
 All of it is gone.
 A light object in the same body as the fitting is a **child of the group that body is drawn in**, so it rides that body's pose for nothing at all: a lantern welded into a swinging crate swings with its light, and there is no per-frame transform in the light rig. One authored thing cannot disagree with itself, and this time that is structural rather than derived.
 
-Emission is therefore **appearance and nothing else**: an emissive material on an object in the level's Blender scene says that this thing reads as bright, and three.js has no global illumination, so it reaches nothing. What lights the room is the light object beside them. That separation is what makes both halves say what they mean - a deep-orange flame that lights a whole room is a dim emissive and a wide, bright light, which the fused version could only reach by fighting one knob against the other.
+**Emissive scenery uses Cycles mesh emission.**
+Cycles Rendered shading is the Blender reference. `just scene` bakes emission
+onto static scenery and into a lighting field for the player, roots and vines.
+There are no generated point-light proxies or independent spill multipliers.
+See [Blender scenes](blender-scenes.md#emissive-lighting) for authoring, the
+export format and limitations. Three.js still has no runtime mesh-emission
+GI: the game approximates the reference using baked textures and probes. Editor lights remain useful
+for waking and flickering sources and authored shadows. Existing lights are retained.
 
 Two things follow for authoring, and both are the light's own fields rather than a second spelling of them.
 A **spot** is what a wall fitting wants: it has a real **distance**, so `range` is a hard edge and the light ends where the author says the room does (an area light has no cutoff at all, and a point light's is a sphere in every direction, including back through the wall the lamp is bolted to), and its shadow is **one render** where a point light's is a cube of six - which is why a lamp can occlude at all.

@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { DOF_MAX_BLUR, FOCUS_BAND } from "../src/render3d/depthOfField";
 import type { SceneCredit, SceneNodeMeta } from "../src/render3d/scenes";
+import { validateBakedField } from "../src/render3d/bakedLighting";
 import { StepProgress } from "./stepProgress";
 
 export const ROOT = resolve(import.meta.dirname, "..");
@@ -35,9 +36,11 @@ export interface BlenderMeta {
   warnings: string[];
   credits: SceneCredit[];
   baked_maps?: string[];
+  lighting?: { lightmaps: number; probes: number };
 }
 
 export interface BlendExport {
+  dynamicNodes?: string[];
   // The `.blend` to export.
   blend: string;
   // Where the shipped GLB goes.
@@ -119,6 +122,19 @@ function glbImages(path: string): GlbImage[] {
   });
 }
 
+function checkLighting(path: string, expected: BlenderMeta["lighting"]): void {
+  if (!expected || (!expected.lightmaps && !expected.probes)) return;
+  const bytes = readFileSync(path);
+  const doc = JSON.parse(bytes.subarray(20, 20+bytes.readUInt32LE(12)).toString("utf8"));
+  if (expected.probes) {
+    const field = validateBakedField(doc.scenes?.[doc.scene ?? 0]?.extras?.gameBakedLighting);
+    if (field.size.reduce((a,b)=>a*b,1) !== expected.probes) throw new Error("Baked probe count changed during export");
+  }
+  if (expected.lightmaps && !doc.materials?.some((m: {extras?: {gameBakedLighting?: unknown}}) => m.extras?.gameBakedLighting)) {
+    throw new Error("Baked lightmap metadata was lost during export");
+  }
+}
+
 // Levenshtein distance, for naming the flag a typo meant.
 function distance(a: string, b: string): number {
   let row = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -184,6 +200,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       { id: "open", label: `start Blender, open ${relative(ROOT, opts.blend)}` },
       { id: "grow", label: "grow ivy, moss and foliage" },
       { id: "bake", label: "bake textures" },
+      { id: "lighting", label: "bake mesh emission (Cycles)" },
       { id: "gltf", label: "write glTF" },
       { id: "optimise", label: "optimise" },
       { id: "encode", label: "encode textures" },
@@ -212,7 +229,10 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       },
       // The finer detail passes add nothing the game's High depth of field
       // would blur away (formations/render.py `detail_blur`), with its numbers.
-      { ...process.env, SCENE_EXPORT_DOF: JSON.stringify({ maxBlur: DOF_MAX_BLUR.high, focusBand: FOCUS_BAND }) },
+      { ...process.env, SCENE_EXPORT_DOF: JSON.stringify({ maxBlur: DOF_MAX_BLUR.high, focusBand: FOCUS_BAND }),
+        SCENE_EXPORT_EMISSION: opts.kind === "scene" ? "1" : "0",
+        SCENE_EXPORT_DYNAMIC: JSON.stringify(opts.dynamicNodes ?? []),
+      },
     );
     // Everything Blender said, kept: the steps show only the export's own
     // lines, and a bake that went wrong on the device (a black map, 2026-10-18)
@@ -235,6 +255,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
     }
 
     if (opts.raw) {
+      checkLighting(raw, (JSON.parse(readFileSync(rawMeta, "utf8")) as BlenderMeta).lighting);
       progress.skip("optimise", "--raw");
       progress.skip("encode", "--raw");
       progress.finish();
@@ -297,6 +318,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
         fail(tag, `Blender shipped ${pictures} pictures but the optimiser encoded ${lossless} as pictures; the rest would ship lossy at 1k (an image name the glTF exporter cut short?). Nothing shipped`);
       }
       // Only now, checked: a file that failed a check never reaches the game.
+      checkLighting(optimised, (JSON.parse(readFileSync(rawMeta, "utf8")) as BlenderMeta).lighting);
       copyFileSync(optimised, opts.shipped);
     }
     return JSON.parse(readFileSync(rawMeta, "utf8")) as BlenderMeta;

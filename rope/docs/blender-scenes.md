@@ -87,7 +87,8 @@ It **creates `<scene>.blend`** when there is none, with the `Guide` collection l
 The guide file is overwritten on every run and never exports.
 
 `just scene <level>` (`scripts/scene-export.ts`, `tools/blender/scene_export.py`) runs headless Blender over the scene: every object with geometry goes out with its world transform and modifiers applied, except one **linked** from another file (the guide), one in a collection named `guide*` or **excluded from the view layer**, and one **hidden in render**, itself or through a collection it is in (the camera icon - render visibility is what ships, viewport visibility is the artist's).
-Lights, cameras, empties and armatures never go out.
+Lights, cameras, empties, armatures and `game.light-preview*` helpers never go out.
+Only the active scene exports; other scenes in the same file are authoring previews.
 Before anything is selected, every grown ivy and moss object is grown again from its paint (see [blender-ivy](blender-ivy.md) and [blender-moss](blender-moss.md)), and every plant from its settings and placement ([blender-foliage](blender-foliage.md)), so what ships always matches the rock it grows on as the file now stands.
 Plants are hidden in render while the textures bake, so they are in no rock's occlusion and no rock's cache key.
 One whose host is gone is a warning and stays out, with everything parented to it: render visibility is not inherited, and until 2026-10-04 the river shipped the shadow decals of five deleted boulders' ivy as ghostly shading at the level's origin.
@@ -107,7 +108,97 @@ Skipped objects that share a reason are counted on one line (an excluded collect
 The dev server serves `/scenes/` itself, uncached (`src/server/scenes.ts`), because vite's public handler knows only the files its watcher saw at startup and the directory is off the watcher; a refresh shows the new export.
 The Level panel shows the export's summary and the body panel offers the exported object names in the `name` field and says whether the name is dressed.
 
-## The bake cache
+## Emissive lighting
+
+Use **Game → Preview Emission (Cycles)** as the authoring reference. The
+actual surfaces emit light; generated point-light proxies are retired and
+excluded from export, and the old `game_light_spill` boost is ignored.
+
+`just scene <level>` follows the surface bake with an emission-only Cycles
+bake (`tools/blender/emission_bake.py`). Author emission on the actual mesh in
+Blender: its size, shape, colour and strength determine the spill. Point and
+spot lights and the world are disabled for this pass, so the game still owns
+the sun, ambient environment and interactive lights without baking them twice.
+Models exported independently do not bake a level's lighting.
+
+Static opaque receivers get a non-overlapping `GameLightmap` UV set and a
+separate diffuse-light texture. The existing base colour and normals remain
+separate. The unwrap welds a temporary copy before finding islands, so split
+shading vertices do not turn every triangle into an isolated speck. It uses
+the surface export's packer with four-pixel gaps. Resolution follows world
+surface area at 32 texels/metre, with a complexity allowance for disconnected
+pieces, rounded up to a power of two from 128 to 2048. Fine rock detail stays
+in the separate normal maps; the lightmaps store diffuse illumination.
+Unbaked background is extended from the baked island edges for filtering;
+actual shadow samples remain untouched. The map contains received white diffuse radiance, including direct
+emission and diffuse bounce. Cycles' render denoising does not process texture
+bakes, so these maps explicitly run through Blender's bundled Open Image
+Denoise in HDR mode before encoding. This removes Monte Carlo speckles from
+received lighting without filtering the rock's colour or normal texture.
+HDR values use a per-map scale, then explicit
+sRGB encoding; they ship lossless. glTF transports these maps in the emission
+slot with a `gameBakedLighting` material marker. The loader moves them to
+three's `lightMap` and restores the irradiance units with pi. Actual emitting
+materials keep their emission. A constant map folded into a factor by the
+optimiser is restored as a one-texel lightmap.
+
+Lightmap image names contain no dots (Blender would treat the suffix as an
+extension). The encoder also identifies them by the material marker and
+checks decoded RGB pixels and dimensions before and after compression,
+including cache hits, so the ordinary lossy/downscaled texture rule cannot
+silently process a lightmap.
+
+`blender -b --factory-startup --python-exit-code 1 --python tools/blender/test_emission_bake.py`
+checks packing on split render vertices, preservation of geometry, normals and
+colour UVs, and background padding that preserves real black shadow samples.
+`node scripts/test-lightmap-encoding.mjs` checks lossless full-resolution
+encoding and caching even when the input image name was truncated.
+
+Moving objects, runtime roots and vines, and surfaces without a lightmap sample
+a three-dimensional field at their deformed world positions. It carries nine
+RGB spherical-harmonic coefficients per sample, so light follows the surface
+normal instead of tinting the whole object one colour. The field is embedded
+in the GLB scene extras; no separate download or manual probe placement is
+needed. The shader composes with the avatar's existing reflection probe.
+The cached GLB owns the field texture across scene rebuilds.
+
+Automatic probes surround emissive geometry with an eight-metre XY margin,
+clipped to the linked game camera's route footprint, in the gameplay depth
+band -2..2 metres. They default to two-metre spacing and coarsen if necessary
+to stay within 4096 samples. Clipping prevents deliberately parked plants a
+kilometre below the level from consuming the grid. Light fades over one grid
+cell outside the volume. Close to thin walls, interpolation may leak or darken
+light: lightmaps retain sharper occlusion than the field.
+
+Optional Blender scene custom properties:
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `game_bake_emission` | true | Enable the emission bake on scene exports |
+| `game_light_samples` | 64 | Cycles bake samples |
+| `game_lightmap_size` | automatic | Optional fixed map side: 128, 256, 512, 1024, 2048 or 4096; otherwise sized by surface area |
+| `game_probe_spacing` | 2 | Desired probe spacing in metres |
+| `game_probe_min`, `game_probe_max` | automatic | Three-component bounds in **game** coordinates (x, up, toward camera) |
+
+A mesh with `game_dynamic` set, or parented to one, stays out of the bake.
+The export also recognises named rigid bodies, scripted movers and root bodies
+from the level. They neither receive static maps nor leave permanent baked
+shadows or emission. Moving emitters and waking/flickering effects still need
+runtime lighting; a static bake cannot follow them. Existing editor lights are
+not deleted automatically.
+
+Lighting rebakes on each scene export, independently of the surface
+texture cache. The first river validation produced 64 lightmaps and 756 probes;
+the full export took about eleven minutes. Re-export after moving emitters or
+occluders. No source `.blend` is saved by the bake.
+
+## The surface bake cache
+
+Diagnostic emission export: `SCENE_EMISSION_TEST_GAIN=1000 bun run scene:export ball`
+temporarily multiplies emitting shader strength during the Cycles lightmap and
+probe bake, then restores it before glTF export. This isolates cast lighting
+from visible emitter brightness. The normal default is 1; the source file is
+not modified. Re-export without the variable to remove the diagnostic boost.
 
 Unused empty material slots are tolerated during baking: the export copy fills them with an existing material while retaining slot indices. The source `.blend` is unchanged. Faces referencing an empty or missing slot still fail with the object and slot numbers; validation uses the evaluated mesh so modifier-generated faces are checked too. This fixes Cube.006's unused second slot blocking the river export (2026-11-14).
 Workers validate and retain the original slots before their first task. Later map tasks reuse those validated materials: a prepared mesh has additional slots per texture map, so its face indices cannot be checked against the original slot count.
@@ -232,7 +323,7 @@ Another file becomes a source by naming it once: `bun run assets:publish-sources
   Three causes, all fixed with the meshes unchanged (the rebuilt and bent rock byte for byte, the high poly face for face): the creases' grid and its clearance were tested point by point in Python (`detail.points_in_polygon`, `edge_distances` now take every point at once); the bow field was evaluated in blocks of `FIELD_BLOCK` over every bow (96 points a block on Cube) and measured every pair (now blocks over the bows that can reach the points, and only the pairs in a bow's box); and `crumple` deleted each plane on its own, every delete walking the whole mesh (110 ms a delete at 360 k faces; now one delete).
   Cube: 94 s of creases and 24 s of detail.
   An Ambient Occlusion node bakes what Cycles sees, other exported objects included, so a rock pushed into or under another darkens where they meet (boulder-1 under the river's floor slabs).
-  Only the colour is baked, never light: the game lights it.
+  This pass bakes surface colour only. A separate emission-lighting pass follows it (below).
   A **painted slate** rock also gets a detail normal map of the sub-facets and chips the export makes from the rock's own mesh (`bake_detail_normals`, each texel cast natively at the detail since 2026-11-13; [rock-detail](rock-detail.md)), which goes in under the slate's shading Bevel so the normal the game gets is both combined, and every painted slate material is rebuilt to the formations add-on's current shader before the bake (`repaint_slate`), as the ivy and moss are regrown.
   An object with a `detail_scale` (a backdrop rock, [blender-backdrop](blender-backdrop.md)) is baked at the texel density divided by it and its slate's lengths multiplied by it, so it is as fine on screen as a rock on the gameplay plane.
   The chamfer strips, curved creases and chips each leave out what the game's High depth of field would blur away where the rock stands, and the whole pass once its largest feature is (`render.setting`, since 2026-11-13; before, a solid formation skipped the creases and chips at any depth, `SOLID_SKIPS`); a rock's own Render toggles override that (the river's four old-generator rocks have creases and chips off).

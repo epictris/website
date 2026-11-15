@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { nodeNameOf, isSceneName, SCENE_ASSETS, sceneFile, sceneMetaFile, type SceneMeta } from "../src/render3d/scenes";
+import type { LevelBodyData } from "../src/level/levelFormat";
 import { exportArgs, exportBlend, fail as failWith, reportSkipped, ROOT } from "./blendExport";
 
 const SCENES_SRC = join(ROOT, "assets-src", "scenes");
@@ -53,7 +54,7 @@ const levelName = basename(levelPath, ".json");
 
 interface RawLevel {
   scene?: string;
-  bodies: { name?: string }[];
+  bodies: LevelBodyData[];
 }
 const level = JSON.parse(readFileSync(levelPath, "utf8")) as RawLevel;
 const scene = level.scene;
@@ -80,6 +81,9 @@ const blenderMeta = await exportBlend({
   noCache: args.noCache,
   staleOcclusion: args.staleOcclusion,
   blender: args.blender,
+  dynamicNodes: level.bodies.filter((b) => b.kind === "rigid" || b.swingAmp || b.spinPeriod || b.moveSpeed ||
+    b.objects.some((o) => o.type === "collision" && o.root))
+    .flatMap((b) => b.name ? [nodeNameOf(b.name)] : []),
 });
 
 // The meta: Blender's account, the shipped file's facts, and the binding

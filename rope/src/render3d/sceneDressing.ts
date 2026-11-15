@@ -14,6 +14,7 @@
 // bodies, so `cli render3d` holds it without a file, a fetch or a GPU.
 
 import * as THREE from "three";
+import { bakedFieldOf, restoreLightmap, type BakedField } from "./bakedLighting";
 import type { Vec2 } from "../engine/vec2";
 import { gltfLoader, trackPending } from "./assets";
 import { withDownload } from "./download";
@@ -300,6 +301,7 @@ function loadExportFile(file: string, bytes: number, label: string): Promise<THR
           // opaque and needs nothing.
           const names = blenderNames(mesh);
           const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          for (const mat of mats) restoreLightmap(mat);
           const decal = names.some((n) => /\.(ivy|moss)\.shadow$/.test(n));
           const ivy = !decal && names.some((n) => /\.ivy$/.test(n));
           if (isPrintedMoss(names, mats)) {
@@ -363,6 +365,7 @@ const decoded = new Map<string, THREE.Object3D | null>();
 // which their `BodyVisual`s clear; `root` is the scenery.
 export class SceneDressing {
   readonly root = new THREE.Group();
+  field: BakedField | null = null;
   private disposed = false;
   // What was bound, for a probe or a panel; empty until the file lands.
   bound: Map<string, THREE.Object3D> = new Map();
@@ -393,6 +396,8 @@ export class SceneDressing {
     landed: ((scenery: THREE.Group) => void) | undefined,
   ): void {
     if (!loaded || this.disposed) return;
+    this.field = bakedFieldOf(loaded);
+    if (this.field) console.log(`[render3d] scene "${scene}": ${this.field.data.size.reduce((a, b) => a * b, 1)} baked-light probes`);
     const dressed = dressScene(loaded, targets);
     this.bound = dressed.bound;
     this.unbound = dressed.unbound;

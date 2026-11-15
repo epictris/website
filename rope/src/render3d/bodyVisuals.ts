@@ -37,6 +37,9 @@
 // detaches between steps, which is the same rule the 2D renderer already keeps.
 
 import * as THREE from "three";
+import mushroomVariants from "../level/mushroomVariants.json";
+import { MushroomBounce } from "./mushroomBounce";
+import type { ContactPulses } from "../engine/contactPulses";
 
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
@@ -275,6 +278,7 @@ export class BodyVisual {
   // the scene lands, since a scene arrives after its bodies are built.
   private readonly driven: DrivenEmission[] = [];
   private readonly waking: boolean;
+  private readonly mushrooms: MushroomBounce[] = [];
   // The conveyor cleat rings this body draws, one per untextured belt, and the
   // textured bands whose surface it scrolls, one per textured one. A band's
   // geometry is in `owned` like any other.
@@ -508,6 +512,8 @@ export class BodyVisual {
         if (!loaded || this.disposed) return;
         const node = mountExport(loaded);
         holder.add(node);
+        const mushroom = mushroomVariants.find((v) => v.model === o.model);
+        if (mushroom) this.mushrooms.push(new MushroomBounce(node, mushroom.stemHeight));
         node.updateWorldMatrix(true, true);
         if (!solid) noShadowBehindPlane(node);
         this.adoptDressing(node);
@@ -791,7 +797,8 @@ export class BodyVisual {
   // and nothing at all for one that never moves - plus, on a conveyor, its
   // texture or its cleats carried to `time`, the sim instant the frame stands
   // for (`beltRenderTime`), which a belt at rest skips.
-  sync(alpha: number, time = 0): void {
+  sync(alpha: number, time = 0, pulses?: ContactPulses): void {
+    if (this.body && pulses) for (const mushroom of this.mushrooms) mushroom.sync(this.body, pulses, alpha);
     for (const t of this.treads) t.sync(time);
     for (const r of this.rings) r.sync(time);
     if (!this.body) return;
@@ -813,6 +820,7 @@ export class BodyVisual {
   dispose(): void {
     this.disposed = true;
     this.modelHolders.length = 0;
+    this.mushrooms.length = 0;
     this.disposeDebug();
     this.disposeRoots();
     for (const l of this.lights) this.rig?.drop(l);

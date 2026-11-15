@@ -1,0 +1,383 @@
+"""Emission-only diffuse lighting, exported inside the scene GLB.
+
+Static receivers carry a separate UV lightmap through glTF's emissive slot;
+the loader moves it to lightMap. Actual emitters keep their emission and use
+the probe field as receivers. Probes are tiny diffuse cards baked together,
+then projected into nine real spherical harmonics of outgoing white radiance
+(irradiance / pi). No authored point lights are involved.
+"""
+
+import json
+import importlib.util
+import math
+import os
+import struct
+from pathlib import Path
+
+import bpy
+import numpy as np
+from mathutils import Vector
+
+UV = "GameLightmap"
+KEY = "gameBakedLighting"
+
+
+def basis(n):
+    x, y, z = np.moveaxis(np.asarray(n), -1, 0)
+    return np.stack((np.full_like(x, .282095), .488603*y, .488603*z, .488603*x,
+                     1.092548*x*y, 1.092548*y*z, .315392*(3*z*z-1),
+                     1.092548*x*z, .546274*(x*x-y*y)), axis=-1)
+
+
+def emits(mat):
+    if not mat or not mat.node_tree:
+        return False
+    for n in mat.node_tree.nodes:
+        if n.type == "EMISSION":
+            return True
+        if n.type == "BSDF_PRINCIPLED":
+            c, s = n.inputs["Emission Color"], n.inputs["Emission Strength"]
+            if (s.is_linked or s.default_value > 0) and (c.is_linked or max(c.default_value[:3]) > 0):
+                return True
+    return False
+
+
+def mobile(ob, names):
+    import re
+    while ob:
+        name = re.sub(r"[\[\]\.:/]", "", re.sub(r"\s", "_", ob.name))
+        if name in names or ob.get("game_dynamic"):
+            return True
+        ob = ob.parent
+    return False
+
+
+def field_grid(objects, scene):
+    """Concentrate samples around emissive geometry, not the distant backdrop.
+
+    Levels may have kilometre-deep kill floors or scenery. Including those
+    makes a capped grid too sparse precisely where the player needs it.
+    """
+    points = []
+    for ob in objects:
+        if ob.hide_render:
+            continue
+        if not any(emits(m) for m in getattr(ob.data, "materials", [])):
+            continue
+        corners = [ob.matrix_world @ Vector(c) for c in ob.bound_box]
+        points.extend((c.x, c.z, -c.y) for c in corners)
+    if not points:
+        return None
+    p = np.asarray(points)
+    lo = np.array((p[:, 0].min()-8, p[:, 1].min()-8, -2.0))
+    hi = np.array((p[:, 0].max()+8, p[:, 1].max()+8, 2.0))
+    # Load the shared pure helper without importing Game's registration code.
+    spec = importlib.util.spec_from_file_location("emission_bounds", Path(__file__).parent / "game/emission_bounds.py")
+    bounds = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bounds)
+    a, b = bounds.clip_to_camera(Vector((lo[0],-hi[2],lo[1])), Vector((hi[0],-lo[2],hi[1])), scene)
+    lo, hi = np.array((a.x,a.z,-b.y)), np.array((b.x,b.z,-a.y))
+    if "game_probe_min" in scene and "game_probe_max" in scene:
+        lo, hi = np.array(scene["game_probe_min"], float), np.array(scene["game_probe_max"], float)
+    if not np.all(np.isfinite([lo, hi])) or np.any(hi <= lo):
+        raise ValueError("game_probe_min/max must define a finite, positive game-space volume")
+    spacing = max(.25, float(scene.get("game_probe_spacing", 2)))
+    dims = np.maximum(2, np.ceil((hi-lo)/spacing).astype(int)+1)
+    while np.prod(dims) > 4096:
+        spacing *= 1.2
+        dims = np.maximum(2, np.ceil((hi-lo)/spacing).astype(int)+1)
+    positions = np.array([(x, y, z) for z in np.linspace(lo[2], hi[2], dims[2])
+                          for y in np.linspace(lo[1], hi[1], dims[1])
+                          for x in np.linspace(lo[0], hi[0], dims[0])])
+    return lo, hi, dims, positions
+
+
+def select(objects):
+    bpy.ops.object.select_all(action="DESELECT")
+    for ob in objects:
+        ob.hide_set(False)
+        ob.select_set(True)
+    bpy.context.view_layer.objects.active = objects[0]
+
+
+def target(mat, image, uv=UV):
+    nt = mat.node_tree
+    node = nt.nodes.new("ShaderNodeTexImage")
+    node.image = image
+    uv_node = nt.nodes.new("ShaderNodeUVMap")
+    uv_node.uv_map = uv
+    nt.links.new(uv_node.outputs["UV"], node.inputs["Vector"])
+    nt.nodes.active = node
+    return node
+
+
+def diffuse_bake(objects):
+    select(objects)
+    bpy.ops.object.bake(type="DIFFUSE", pass_filter={"DIRECT", "INDIRECT"},
+                        target="IMAGE_TEXTURES", uv_layer=UV, margin=0, use_clear=True,
+                        use_selected_to_active=False)
+
+
+def unwrap_receiver(ob, scene, log=print):
+    """Pack welded islands, retaining the export mesh and its shading seams.
+
+    Export meshes split vertices at normal/UV seams. Projecting those directly
+    makes every triangle an island and spends almost the entire image on gaps.
+    Reuse the surface export's welded-copy unwrap and pixel-based packer.
+    """
+    import scene_export
+
+    mesh = ob.data
+    mesh.calc_loop_triangles()
+    co = np.empty(len(mesh.vertices) * 3, np.float64)
+    mesh.vertices.foreach_get("co", co)
+    world = co.reshape(-1, 3) @ np.asarray(ob.matrix_world)[:3, :3].T
+    tri = np.empty(len(mesh.loop_triangles) * 3, np.int32)
+    mesh.loop_triangles.foreach_get("vertices", tri)
+    points = world[tri.reshape(-1, 3)]
+    area = np.linalg.norm(np.cross(points[:, 1]-points[:, 0], points[:, 2]-points[:, 0]), axis=1).sum() / 2
+    if "game_lightmap_size" in scene:
+        size = int(scene["game_lightmap_size"])
+        if size not in (128, 256, 512, 1024, 2048, 4096):
+            raise ValueError("game_lightmap_size must be 128, 256, 512, 1024, 2048 or 4096")
+    else:
+        # 32 texels/metre for diffuse illumination, allowing for typical 70%
+        # coverage. Fine surface detail remains in the separate normal map.
+        # Disconnected pieces (moss mounds, ivy) also need room for island
+        # padding, even when their combined physical area is small.
+        needed = max(32 * math.sqrt(area / .7), 4 * math.sqrt(len(mesh.polygons)))
+        size = min(2048, max(128, 2 ** math.ceil(math.log2(max(1, needed)))))
+    active = mesh.uv_layers.active.name if mesh.uv_layers.active else None
+    render = next((uv.name for uv in mesh.uv_layers if uv.active_render), None)
+    if UV in mesh.uv_layers:
+        mesh.uv_layers.remove(mesh.uv_layers[UV])
+    # Surface unwrap uses a two-pixel gap. A half-sized packing grid gives
+    # the lightmap four pixels between islands, without percentage margins.
+    scene_export.unwrap(ob, np.ones(len(mesh.polygons), bool), [size], [size // 2])
+    mesh.uv_layers[-1].name = UV
+    if active and active in mesh.uv_layers:
+        mesh.uv_layers.active = mesh.uv_layers[active]
+    if render and render in mesh.uv_layers:
+        mesh.uv_layers[render].active_render = True
+    log(f"emission lightmap: {ob.name}: {area:.1f} m², {size}x{size}")
+    return size
+
+
+def bake_field(objects, scene):
+    grid = field_grid(objects, scene)
+    if grid is None:
+        return None
+    lo, hi, dims, positions = grid
+    count = 64
+    i = np.arange(count)
+    y = 1 - 2*(i+.5)/count
+    angle = i * math.pi * (3-math.sqrt(5))
+    directions = np.column_stack((np.sqrt(1-y*y)*np.cos(angle), y, np.sqrt(1-y*y)*np.sin(angle)))
+    total = len(positions)*count
+    width = 512
+    height = math.ceil(total/width)
+    vertices, faces, uvs = [], [], []
+    for j, pos in enumerate(positions):
+        center = Vector((pos[0], -pos[2], pos[1]))
+        for k, d in enumerate(directions):
+            n = Vector((d[0], -d[2], d[1]))
+            a = n.orthogonal().normalized() * .003
+            b = n.cross(a)
+            start = len(vertices)
+            vertices.extend(center + a*s + b*t for s, t in ((-1,-1),(1,-1),(1,1),(-1,1)))
+            faces.append(tuple(range(start, start+4)))
+            pixel = j*count+k
+            x, row = pixel % width, pixel // width
+            uvs.extend(((x/width,row/height),((x+1)/width,row/height),
+                        ((x+1)/width,(row+1)/height),(x/width,(row+1)/height)))
+    mesh = bpy.data.meshes.new("game.probe-bake")
+    mesh.from_pydata(vertices, [], faces)
+    uv = mesh.uv_layers.new(name=UV)
+    uv.data.foreach_set("uv", np.asarray(uvs, dtype=np.float32).ravel())
+    ob = bpy.data.objects.new(mesh.name, mesh)
+    scene.collection.objects.link(ob)
+    # Cards receive rays for their bake but never occlude or bounce onto one another.
+    ob.visible_diffuse = ob.visible_glossy = ob.visible_shadow = ob.visible_transmission = False
+    mat = bpy.data.materials.new("game.probe-bake")
+    mat.node_tree.nodes.clear()
+    diffuse = mat.node_tree.nodes.new("ShaderNodeBsdfDiffuse")
+    diffuse.inputs["Color"].default_value = (1,1,1,1)
+    out = mat.node_tree.nodes.new("ShaderNodeOutputMaterial")
+    mat.node_tree.links.new(diffuse.outputs[0], out.inputs["Surface"])
+    mesh.materials.append(mat)
+    image = bpy.data.images.new("game.probe-bake", width, height, float_buffer=True)
+    target(mat, image)
+    try:
+        diffuse_bake([ob])
+        pixels = np.asarray(image.pixels[:], dtype=np.float32).reshape(-1,4)[:total, :3]
+        if not np.isfinite(pixels).all():
+            raise ValueError("non-finite probe bake")
+        # Least-squares projection avoids the finite Fibonacci set's integration bias.
+        coefficients = np.einsum("kn,pnc->pkc", np.linalg.pinv(basis(directions)),
+                                 pixels.reshape(-1,count,3))
+        return {"version": 1, "min": lo.tolist(), "max": hi.tolist(), "size": dims.tolist(),
+                "coefficients": np.round(coefficients, 6).ravel().tolist()}
+    finally:
+        bpy.data.objects.remove(ob, do_unlink=True)
+        bpy.data.meshes.remove(mesh)
+        bpy.data.materials.remove(mat)
+        bpy.data.images.remove(image)
+
+
+def bake(objects, dynamic_names, log=print, *, surface_only=False):
+    scene = bpy.context.scene
+    sources = [ob for ob in objects if not mobile(ob, dynamic_names)
+               and any(emits(m) for m in getattr(ob.data, "materials", []))]
+    if not sources or not scene.get("game_bake_emission", True):
+        return {}, None
+    log(f"emission lighting: {len(sources)} emissive meshes")
+    diagnostic_gain = float(os.environ.get("SCENE_EMISSION_TEST_GAIN", "1"))
+    if not math.isfinite(diagnostic_gain) or diagnostic_gain <= 0:
+        raise ValueError("SCENE_EMISSION_TEST_GAIN must be finite and positive")
+    saved_world, saved_engine = scene.world, scene.render.engine
+    hidden = {ob: ob.hide_render for ob in scene.objects
+              if ob.type == "LIGHT" or (ob not in objects and ob.type in {"MESH", "CURVE", "SURFACE", "FONT"})
+              or mobile(ob, dynamic_names)}
+    dark = bpy.data.worlds.new("game.emission-only")
+    dark.color = (0,0,0)
+    dark.node_tree.nodes.get("Background").inputs["Strength"].default_value = 0
+    scene.world = dark
+    scene.render.engine = "CYCLES"
+    samples = scene.cycles.samples
+    saved_clamps = (scene.cycles.sample_clamp_direct, scene.cycles.sample_clamp_indirect, scene.cycles.use_fast_gi)
+    scene.cycles.sample_clamp_direct = scene.cycles.sample_clamp_indirect = 0
+    scene.cycles.use_fast_gi = False
+    scene.cycles.samples = int(scene.get("game_light_samples", 64))
+    for ob in hidden:
+        ob.hide_render = True
+    maps, field = {}, None
+    boosted = []
+    denoiser = None
+    try:
+        if diagnostic_gain != 1:
+            log(f"emission lighting: diagnostic Cycles source strength x{diagnostic_gain:g}")
+            for mat in {m for ob in sources for m in ob.data.materials if m and m.node_tree}:
+                nt = mat.node_tree
+                for node in list(nt.nodes):
+                    key = "Emission Strength" if node.type == "BSDF_PRINCIPLED" else "Strength" if node.type == "EMISSION" else None
+                    if key is None:
+                        continue
+                    socket = node.inputs[key]
+                    if socket.is_linked:
+                        original = socket.links[0].from_socket
+                        scale = nt.nodes.new("ShaderNodeMath")
+                        scale.operation = "MULTIPLY"
+                        scale.inputs[1].default_value = diagnostic_gain
+                        nt.links.new(original, scale.inputs[0])
+                        nt.links.new(scale.outputs[0], socket)
+                        boosted.append((nt,socket,original,scale))
+                    else:
+                        boosted.append((nt,socket,socket.default_value,None))
+                        socket.default_value *= diagnostic_gain
+        field = None if surface_only else bake_field(objects, scene)
+        log(f"emission lighting: {math.prod(field['size']) if field else 0} probes")
+        receivers = []
+        images = {}
+        for ob in objects:
+            if ob.type != "MESH" or ob in sources or mobile(ob, dynamic_names) or ob.hide_render:
+                continue
+            if not ob.data.polygons or not ob.data.materials:
+                continue
+            # Cards, water and animated foliage use the field; no static card shadows.
+            if ob.get("grown_by") == "foliage" or any(m and m.surface_render_method == "BLENDED" for m in ob.data.materials):
+                continue
+            if not all(m and any(n.type == "BSDF_PRINCIPLED" for n in m.node_tree.nodes) for m in ob.data.materials):
+                continue
+            ob.data = ob.data.copy()
+            size = unwrap_receiver(ob, scene, log)
+            # glTF treats the last dot as a file extension and would truncate
+            # e.g. "Cube.002 baked light" to "Cube", losing the encoder rule.
+            image = bpy.data.images.new(f"{ob.name.replace('.', '-')} baked light", size, size, float_buffer=True)
+            for slot in ob.material_slots:
+                slot.material = slot.material.copy()
+                target(slot.material, image)
+            images[ob] = image
+            receivers.append(ob)
+        if receivers:
+            diffuse_bake(receivers)
+            from lightmap_denoise import LightmapDenoiser
+            denoiser = LightmapDenoiser()
+        # Wire only after ALL baking: a lightmap must never illuminate another bake.
+        for ob, image in images.items():
+            import native
+            values = np.empty(image.size[1] * image.size[0] * 4, dtype=np.float32)
+            image.pixels.foreach_get(values)
+            values = values.reshape(image.size[1], image.size[0], 4)
+            # Fill only unbaked background, never genuine zero-light samples.
+            # This extends island edges into the gaps for texture filtering.
+            if not native.fill_background(values):
+                raise ValueError(f"empty lightmap bake: {ob.name}")
+            denoiser.apply(values)
+            log(f"emission lightmap denoised: {ob.name}")
+            values = values.reshape(-1, 4)
+            if not np.isfinite(values).all():
+                raise ValueError(f"non-finite lightmap: {ob.name}")
+            strength = max(1., float(values[:,:3].max()))
+            linear = np.maximum(0, values[:,:3] / strength)
+            # glTF emission images are sRGB. Blender exports a float Linear
+            # Rec.709 image as linear PNG bytes, so explicitly encode here.
+            values[:,:3] = np.where(linear <= .0031308, linear*12.92, 1.055*linear**(1/2.4)-.055)
+            name = image.name
+            image.name = name + " linear"
+            encoded = bpy.data.images.new(name, image.size[0], image.size[1], alpha=False)
+            encoded.colorspace_settings.name = "sRGB"
+            encoded["generated_by"] = "tools/blender/emission_bake.py"
+            encoded.pixels.foreach_set(values.ravel())
+            encoded.pack()
+            for mat in ob.data.materials:
+                node = next(n for n in mat.node_tree.nodes if n.type == "TEX_IMAGE" and n.image == image)
+                node.image = encoded
+                if surface_only:
+                    mat["game_preview_lightmap"] = encoded
+                    mat["game_preview_lightmap_strength"] = strength
+                else:
+                    for bsdf in (n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"):
+                        mat.node_tree.links.new(node.outputs["Color"], bsdf.inputs["Emission Color"])
+                        bsdf.inputs["Emission Strength"].default_value = strength
+                maps[mat.name] = {"version": 1}
+        log(f"emission lighting: {len(images)} static lightmaps")
+        return maps, field
+    finally:
+        if denoiser is not None:
+            denoiser.close()
+        for nt,socket,original,scale in boosted:
+            if scale is None:
+                socket.default_value = original
+            else:
+                nt.links.new(original,socket)
+                nt.nodes.remove(scale)
+        scene.world, scene.render.engine, scene.cycles.samples = saved_world, saved_engine, samples
+        scene.cycles.sample_clamp_direct, scene.cycles.sample_clamp_indirect, scene.cycles.use_fast_gi = saved_clamps
+        for ob, state in hidden.items():
+            ob.hide_render = state
+        bpy.data.worlds.remove(dark)
+        if objects:
+            select(objects)
+
+
+def embed(path, maps, field):
+    """Keep only our metadata, without exporting all Blender custom properties."""
+    if not maps and field is None:
+        return
+    with open(path, "rb") as f:
+        data = f.read()
+    length = struct.unpack_from("<I", data, 12)[0]
+    doc = json.loads(data[20:20+length])
+    for mat in doc.get("materials", []):
+        if mat.get("name") in maps:
+            mat.setdefault("extras", {})[KEY] = maps[mat["name"]]
+    if field:
+        doc["scenes"][doc.get("scene", 0)].setdefault("extras", {})[KEY] = field
+    raw = json.dumps(doc, separators=(",", ":")).encode()
+    raw += b" " * (-len(raw) % 4)
+    tail = data[20+length:]
+    with open(path, "wb") as f:
+        f.write(struct.pack("<III", 0x46546c67, 2, 20+len(raw)+len(tail)))
+        f.write(struct.pack("<II", len(raw), 0x4e4f534a))
+        f.write(raw)
+        f.write(tail)

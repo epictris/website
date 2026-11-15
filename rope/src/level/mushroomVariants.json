@@ -1,0 +1,6 @@
+[
+  { "model": "bouncy-mushroom", "width": 1, "capHeight": 0.14, "stemHeight": 0.6, "seed": 19 },
+  { "model": "bouncy-mushroom-flat", "width": 1.3, "capHeight": 0.09, "stemHeight": 0.48, "seed": 37 },
+  { "model": "bouncy-mushroom-round", "width": 0.85, "capHeight": 0.25, "stemHeight": 0.65, "seed": 61 },
+  { "model": "bouncy-mushroom-wide", "width": 1.55, "capHeight": 0.2, "stemHeight": 0.72, "seed": 83 }
+]
