@@ -1,4 +1,8 @@
 {
+  "models/bouncy-mushroom-flat.blend": {
+    "sha256": "4e409f93105b6eed2abc6f4df84a8eaf036c1f74cb1e580a9cb3c459d0d54242",
+    "bytes": 250811
+  },
   "scenes/grotto.blend": {
     "sha256": "a90c0d5b1ec7956338da7ccd8890df6a447fb2ec204ac3b91c9d6922493e080f",
     "bytes": 8671379
@@ -12,8 +16,8 @@
     "bytes": 88527
   },
   "scenes/river.blend": {
-    "sha256": "ee1c0a5ae2a144abad18009a3e9d0cf8cd11f0348ffef8060b429f4f2e02647e",
-    "bytes": 187660170
+    "sha256": "e9f330a83260a0cae74c0e4799c220acb1cbe1da95dc8f6adfd1d771bbf768b9",
+    "bytes": 210682524
   },
   "scenes/textures/foliage-components-v3.png": {
     "sha256": "bbd46bc1aa504c2857fc2d38853584daad04b2007bc69c36e55d9f3309a10296",
