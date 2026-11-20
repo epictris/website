@@ -58,6 +58,14 @@ const MIN_WRAPPED_TAUT = 10;
 // the drape is out for this many frames instead.
 const LOOSE_RUNS = new Set(["session-310f.json"]);
 const MIN_DRAPE_FRAMES = 120;
+// Runs on which the drape still comes round a piece the other way from the
+// chain, with why: the statement is expected red on them, and the run fails
+// the moment it goes green, so the fix that closes it removes the entry.
+const KNOWN_OTHER_WAY: Record<string, string> = {
+  "session-256f.json":
+    "f41-43: a segment's push-out lays its neighbours back across the box, and one pass over the segments leaves them there",
+  "session-276f.json": "f51: the drape comes off the box in the throw, as on session-256f",
+};
 // Spacing of the points a segment is tested at, metres: a fifth of the
 // thinnest piece the runs wrap (the box's 10 cm), well under a node's 2.8 cm.
 const SEGMENT_SAMPLE = 0.005;
@@ -87,6 +95,7 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".json")).sort()) {
   let deepest = { depth: 0, frame: 0, node: 0 };
   let across = { depth: 0, frame: 0, node: 0 };
   let acrossFrames = 0;
+  const otherWay: number[] = [];
   let thrown = { over: 0, frame: 0, node: 0 };
   let lastDrape: unknown = null;
   let lastNodes: Vec2[] | null = null;
@@ -151,11 +160,25 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".json")).sort()) {
     }
     if (acrossHere) acrossFrames++;
 
-    if (chain.maxRopeLength - chain.getCurrentLength() > 0) continue;
     const path = chain.path();
     const points = path.map((n) => n.contact.globalPosition);
     const wrapped = new Set<CollisionShape2D>();
     for (const n of path) if (n.contact.obj instanceof StaticBody2D) wrapped.add(n.contact.shape);
+
+    // Slack or taut, the drape is never wound round a piece the chain touches
+    // the other way from the chain: both ends are pinned where the chain's
+    // are, so it can only get there through the piece. Red on `session-58f`
+    // before the sweeps: the drape went under the box the chain was over
+    // (f35-40) and was hauled back through it as the slack ran out.
+    for (const s of wrapped) {
+      const c = s.globalPosition;
+      if (Math.abs(turns(nodes, c) - turns(points, c)) > 0.5) {
+        otherWay.push(frame);
+        break;
+      }
+    }
+
+    if (chain.maxRopeLength - chain.getCurrentLength() > 0) continue;
     let any = false;
     for (const s of wrapped) {
       const c = s.globalPosition;
@@ -205,6 +228,11 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".json")).sort()) {
         ? `, deepest ${(across.depth * 1000).toFixed(1)} mm at f${across.frame} n${across.node}-${across.node + 1}`
         : "") + ")",
   );
+  const known = KNOWN_OTHER_WAY[file];
+  const otherWhat = `the drape never winds round a piece the other way from the chain (${otherWay.length} frames` +
+    (otherWay.length > 0 ? `, f${otherWay[0]}-f${otherWay[otherWay.length - 1]}` : "") + ")";
+  if (known === undefined) check(otherWay.length === 0, otherWhat);
+  else check(otherWay.length > 0, `expected red: ${otherWhat} - ${known}`);
   console.log(`${file}\n${lines.join("\n")}`);
 }
 

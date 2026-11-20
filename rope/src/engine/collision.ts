@@ -556,6 +556,119 @@ export function circleOverlapFrom(
   return { normal: toWorldDir(polyEdgeNormal(verts, edge), rot), depth: r - dist };
 }
 
+// A vertex-loop piece (poly or rect) read into world space once, for the many
+// circle queries a caller makes against it in one pose: its world vertices,
+// each face's outward normal and plane offset as plain numbers, and which
+// faces are seams (`isSeam`). The queries below are `circleOverlap` and
+// `circleOverlapFrom` asked in world space instead of the piece's frame, the
+// same planes and the same choices, equal to rounding: what they drop is the
+// rotation into the frame, the trig-slot lookup and the allocations each
+// local-space query pays, which on a slack drape lying across a heap of rock
+// pieces (`session-310f`) were most of its step. Valid only while the piece
+// does not move.
+export interface WorldLoop {
+  readonly target: ShapeTransform;
+  readonly verts: readonly Vec2[];
+  // Per face i (from vertex i to i + 1): outward unit normal and n . verts[i].
+  // A degenerate face has a zero normal and is skipped, as `deepestPlane`
+  // skips it.
+  readonly nx: Float64Array;
+  readonly ny: Float64Array;
+  readonly off: Float64Array;
+  readonly seam: Uint8Array;
+  // How close outside its surface a point counts as on it, squared: a rect's
+  // query takes EPS itself there and a poly's EPS squared, so each loop keeps
+  // the answer its shape's own query gives.
+  readonly onSq: number;
+}
+
+// The piece's `WorldLoop`, or null for a circle (whose own queries need no
+// frame).
+export function worldLoop(target: ShapeTransform): WorldLoop | null {
+  if (target.shape.kind === "circle") return null;
+  const verts = shapeWorldVertices(target);
+  const k = verts.length;
+  const nx = new Float64Array(k);
+  const ny = new Float64Array(k);
+  const off = new Float64Array(k);
+  const seam = new Uint8Array(k);
+  for (let i = 0; i < k; i++) {
+    const n = polyEdgeNormal(verts, i);
+    nx[i] = n.x;
+    ny[i] = n.y;
+    off[i] = n.x * verts[i]!.x + n.y * verts[i]!.y;
+    seam[i] = isSeam(target, k, i) ? 1 : 0;
+  }
+  return { target, verts, nx, ny, off, seam, onSq: target.shape.kind === "rect" ? EPS : EPS * EPS };
+}
+
+// `circleOverlap` against a `WorldLoop`.
+export function circleOverlapLoop(p: Vec2, r: number, loop: WorldLoop): { normal: Vec2; depth: number } | null {
+  const { nx, ny, off } = loop;
+  let edge = 0;
+  let dist = -Infinity;
+  for (let i = 0; i < nx.length; i++) {
+    if (nx[i] === 0 && ny[i] === 0) continue;
+    const d = nx[i]! * p.x + ny[i]! * p.y - off[i]!;
+    if (d > dist) {
+      dist = d;
+      edge = i;
+    }
+  }
+  if (dist > r) return null;
+  if (dist <= 0) {
+    if (loop.seam[edge]) return surfaceExit(p, r, loop.target);
+    return { normal: new Vec2(nx[edge]!, ny[edge]!), depth: r - dist };
+  }
+  const near = closestOnLoop(p, loop.verts);
+  if (near.distSq > r * r) return null;
+  if (near.edge >= 0 && loop.seam[near.edge]) return surfaceExit(p, r, loop.target);
+  if (near.distSq > loop.onSq) {
+    const d = Math.sqrt(near.distSq);
+    return { normal: new Vec2((p.x - near.point.x) / d, (p.y - near.point.y) / d), depth: r - d };
+  }
+  // On the surface: a poly takes its deepest face's normal at the radius, a
+  // rect leaves as from inside, by that face at the radius plus its plane
+  // distance (`circleOverlap`'s two answers).
+  if (loop.target.shape.kind === "rect") {
+    if (loop.seam[edge]) return surfaceExit(p, r, loop.target);
+    return { normal: new Vec2(nx[edge]!, ny[edge]!), depth: r - dist };
+  }
+  return { normal: new Vec2(nx[edge]!, ny[edge]!), depth: r };
+}
+
+// `circleOverlapFrom` against a `WorldLoop`.
+export function circleOverlapFromLoop(
+  p: Vec2,
+  r: number,
+  loop: WorldLoop,
+  from: Vec2,
+  onFace = 0,
+): { normal: Vec2; depth: number } | null {
+  const { nx, ny, off } = loop;
+  let deepest = -Infinity;
+  for (let i = 0; i < nx.length; i++) {
+    if (nx[i] === 0 && ny[i] === 0) continue;
+    const d = nx[i]! * p.x + ny[i]! * p.y - off[i]!;
+    if (d > deepest) deepest = d;
+  }
+  if (deepest > r) return null;
+  if (deepest > 0) return circleOverlapLoop(p, r, loop);
+  let edge = -1;
+  let dist = -Infinity;
+  for (let i = 0; i < nx.length; i++) {
+    if (nx[i] === 0 && ny[i] === 0) continue;
+    if (nx[i]! * from.x + ny[i]! * from.y - off[i]! <= -onFace) continue;
+    const d = nx[i]! * p.x + ny[i]! * p.y - off[i]!;
+    if (d > dist) {
+      dist = d;
+      edge = i;
+    }
+  }
+  if (edge < 0) return circleOverlapLoop(p, r, loop);
+  return { normal: new Vec2(nx[edge]!, ny[edge]!), depth: r - dist };
+}
+
 // If a circle at `p` (radius r) overlaps `target`, return the minimum-translation
 // normal (pointing out of the target) and penetration depth; else null.
 export function circleOverlap(

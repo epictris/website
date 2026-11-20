@@ -64,8 +64,7 @@ import { Mathf } from "../engine/mathf";
 import { PX } from "../engine/units";
 import { CHAIN_LINK_HALF_WIDTH, CHAIN_LINK_LEN } from "../render/chainMetrics";
 import { GRAVITY } from "../engine/world";
-import { shapeExtents, shapeWorldVertices } from "../engine/shapes";
-import { circleOverlapFrom } from "../engine/collision";
+import { circleOverlapFrom, circleOverlapFromLoop, worldLoop, type WorldLoop } from "../engine/collision";
 import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import { ringEnd } from "../lib/vineClamp";
 import { MANACLE_REACH } from "../lib/manacle";
@@ -112,8 +111,39 @@ export const STICK_STEP = 0.25 * PX; // 2.5 mm per step ≈ 0.15 m/s
 // converge toward.
 const ITERATIONS = 16;
 // Constraint iterations between collision resolutions (the final iteration
-// always collides last, so the frame ends clear of the scenery).
-export const COLLIDE_EVERY = 4;
+// always collides last, so the frame ends clear of the scenery), of which
+// those where nothing has moved far are skipped (`COLLIDE_MOVE`). Every one:
+// the sweeps take each node and segment from where it was last clear, and a
+// collision after every pass is what keeps that a short, straight move. At
+// every fourth, as before the sweeps, the drape still came off the box on
+// `session-58f` and `session-256f` and ended steps across it. Fewer passes
+// (8, 10, 12) let it come off the box on `session-58f` again.
+export const COLLIDE_EVERY = 1;
+// The cadence a step falls back to once it is over its time budget (see
+// `timeBudgetMs`): every fourth pass, as before the sweeps.
+const COLLIDE_EVERY_BEHIND = 4;
+// How far a node may have moved since it was last clear before the next
+// collision pass is due, metres; a pass none has moved that far since is
+// skipped. The first and last passes of a step always collide. What a skipped
+// pass saves is the sweep the next one makes anyway, covering the same short
+// move: the sweeps run from where each node was last clear, so nothing goes
+// through a piece between passes. A drape at rest on the introduction's rocks
+// (`session-310f`) then collides about 5 times a step instead of 16 (0.84 to
+// 0.32 ms a step in bun); a drape being thrown still collides on nearly every
+// pass. A quarter of the node's radius, 5.6 mm: the drape test holds to
+// 10 mm, and at 20 mm the drape came off the box on `session-58f` again.
+// Skipping by the clock instead (the budget's every-fourth fallback) is what
+// let the drape off the box before the sweeps; skipping by distance keeps
+// every sweep short.
+// The first pass is not optional: a step that starts with a node inside a
+// piece (the segment push-out, which a step ends with, can leave one there)
+// has to put it out before the constraints work from it, or the step's one
+// final pass met the same node in the same place every step, 15-27 mm in the
+// box for 182 frames of `session-256f`.
+const COLLIDE_MOVE = NODE_RADIUS / 4;
+// How many budgets a step may run to, colliding at the fallback cadence,
+// before it stops after its next collision pass.
+const BUDGET_STOP = 4;
 // How far a node may stray from its arc-length position on the wrap path, as
 // a multiple of sqrt(path length x slack). A shallow chain with slack s over a
 // span L hangs with a sag of sqrt(3·L·s/8), 0.61 of that root, so at 1 the
@@ -127,6 +157,7 @@ const SAG_BOUND_FACTOR = 1;
 // clear of all of them (see solveCollisions). Two settles a seam; the third
 // is headroom.
 export const SEAM_ROUNDS = 3;
+
 // How close to a face's plane, inside it, a sag-bound target still counts as
 // outside that face, metres. The target is on the wrap path, which runs along
 // the faces the chain is wrapped round (a lerp between two corners), so it
@@ -141,12 +172,14 @@ export const MAX_STEP = 0.5;
 // A shape the drape may touch this step, with everything the per-node test
 // reads about it taken ONCE. The narrowphase runs nodes × seam rounds ×
 // collision passes times over this list (63 × 3 × 4 = 756 visits a shape a
-// step), and taking a shape's extents and world centre on every visit was the
+// step at the four passes of the time), and taking a shape's extents and world centre on every visit was the
 // whole cost of the drape: 0.75 of the 0.88 ms a step it took on session-417f,
 // nearly all of it in `shapeExtents` and `globalPosition` for shapes the box
 // test then rejected. Nothing here can change during a step - the drape moves
 // only its own nodes - so it is read at the top and the visits are four
 // comparisons on numbers.
+const NO_VERTS: readonly Vec2[] = [];
+
 export interface Candidate {
   readonly shape: CollisionShape2D;
   readonly owner: CollisionObject2D;
@@ -163,6 +196,10 @@ export interface Candidate {
   readonly moving: boolean;
   // Owned by the body the manacle is cuffed to (see the cuff note in `step`).
   readonly cuffed: boolean;
+  // The piece in world space, read once for the step's every query against
+  // it (`WorldLoop`); null for a circle. Bodies do not move during a drape
+  // step, which runs on the frame's final transforms.
+  readonly loop: WorldLoop | null;
 }
 
 // Every wrappable shape of every SOLID body near `points` this step. Both
@@ -199,7 +236,7 @@ export function drapeCandidates(
     for (const s of body.getShapes()) {
       if (!s.wrappable) continue;
       const c = s.globalPosition;
-      const e = shapeExtents(s);
+      const e = s.extents();
       if (
         c.x + e.x < minX - margin ||
         c.x - e.x > maxX + margin ||
@@ -222,6 +259,7 @@ export function drapeCandidates(
         ey: e.y + NODE_RADIUS,
         moving,
         cuffed: body === cuffBody,
+        loop: worldLoop(s),
       });
     }
   }
@@ -245,33 +283,46 @@ export function bodyCarried(body: CollisionObject2D, q: Vec2): Vec2 {
   return body.globalPosition.add(q.sub(prevPos).rotated(body.globalRotation - prevRot));
 }
 
-// The segments between nodes `first`..`last` off the corners of the scenery.
-// The node push-out keeps every node clear, and that is not the chain clear:
-// two nodes each clear of a piece on two of its faces hold the segment between
-// them across the corner, and nothing pushes back on a segment. A chain sliding
-// round the end of a thin piece is where that grows: the drape slung over the
-// end of the 20 x 10 cm box on `session-53f` was hauled toward the ball, its
-// nodes on the two faces were dragged along them away from the end (each kept
-// on its own face by the came-from push-out, which is right for each node),
-// and the segment between them cut the corner 8 mm, then 29 mm, then crossed
-// the box through its middle (f25-27). So each segment is held off a piece's
-// vertices as the nodes are held off its faces, by the broad link's
-// half-width: the textbook edge-vertex contact, the vertex's projection on
-// the segment moved clear along the segment's normal and the move shared
-// between the two nodes by where it falls (`1 - t` and `t`, scaled so the
-// point moves the whole way). The side is away from the piece's centre, which
-// is right for any corner cut caught while it is shallow, and every one is: a
-// cut starts at nothing. A cut with no vertex over the segment (a segment
-// across the middle of a piece longer than it) has no corner to come off and
-// is left to the node push-out. The normal velocity is killed as the node
-// push-out kills it. Vertex loops only: a circle has no corner, and the one a
-// drape lies on most is the ball's own rim, whose coil chords sit inside the
-// rim by their sagitta (0.7 mm at 2.8 cm on the 14 cm rim) - held off it, the
-// coil was pushed out on every pass, and a ball pressed against the box the
-// chain is wrapped round pushed the drape off its rim into the box.
+// The segments between nodes `first`..`last` off the corners of the scenery,
+// continuously. The node push-out keeps every node clear, and that is not the
+// chain clear: a corner can pass between two nodes as the segment joining them
+// moves, both nodes ending clear on two faces of the piece with the segment
+// across it, and nothing pushes back on a segment. On `session-53f` the drape
+// slung over the end of the 20 x 10 cm box was hauled toward the ball and the
+// segment between its nodes on the two faces cut the corner 8 mm, then 29 mm,
+// then crossed the box through its middle (f25-27); on `session-58f` corners
+// passing between nodes carried the drape from over the box to under it while
+// the chain stayed over it, and as the slack ran out the sag bound hauled it
+// back through: the chain phasing through the box and snapping back.
+//
+// So each segment is held off a piece's vertices as the nodes are held off its
+// faces: by the broad link's half-width, on the side the vertex was on. Which
+// side is the continuous answer, the segment's came-from: the segment is taken
+// to have moved linearly from where its nodes started the step (`from`) to
+// where they are, and a vertex that lay on the moving segment at some moment
+// of that move (`vertexCrossed`, the textbook edge-vertex test: the roots in
+// [0, 1] of the quadratic the cross product makes) went through it, so is put
+// back on the side it started on. A vertex that did not cross is held on the
+// side it is on. Asked in each piece's own frame: for a body that moved the
+// start is carried with it, as the node push-out's came-from is. A segment
+// that crosses a piece without any vertex having crossed it this step was
+// across it when the step began; it is put out on the side away from the
+// piece's centre, which is right for a cut while it is shallow.
+//
+// The move is the textbook edge-vertex contact: the vertex's projection on the
+// segment moved clear along the segment's normal, shared between the two nodes
+// by where it falls (`1 - t` and `t`, scaled so the point moves the whole way),
+// and the normal velocity killed as the node push-out kills it. Vertex loops
+// only: a circle has no corner, and the one a drape lies on most is the ball's
+// own rim, whose coil chords sit inside the rim by their sagitta (0.7 mm at
+// 2.8 cm on the 14 cm rim) - held off it, the coil was pushed out on every
+// pass, and a ball pressed against the box the chain is wrapped round pushed
+// the drape off its rim into the box.
 export function pushSegmentsOut(
   pos: Vec2[],
   prev: Vec2[],
+  from: readonly Vec2[],
+  carry: readonly boolean[],
   candidates: readonly Candidate[],
   first: number,
   last: number,
@@ -283,11 +334,15 @@ export function pushSegmentsOut(
     for (let round = 0; round < SEAM_ROUNDS; round++) {
       const a = pos[j]!;
       const b = pos[j + 1]!;
-      const ab = b.sub(a);
-      const len = ab.length();
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const len = Math.sqrt(abx * abx + aby * aby);
       if (len < 1e-9) break;
-      const u = ab.div(len);
-      const m = u.orthogonal();
+      const ux = abx / len;
+      const uy = aby / len;
+      // m.w is the cross product u x w: positive with w to the left of a->b.
+      const mx = -uy;
+      const my = ux;
       const minX = Math.min(a.x, b.x);
       const maxX = Math.max(a.x, b.x);
       const minY = Math.min(a.y, b.y);
@@ -299,37 +354,68 @@ export function pushSegmentsOut(
       let owner: Candidate | null = null;
       for (const c of candidates) {
         if (maxX < c.cx - c.ex || minX > c.cx + c.ex || maxY < c.cy - c.ey || minY > c.cy + c.ey) continue;
-        const verts = shapeWorldVertices(c.shape);
-        if (verts.length === 0) continue;
-        let cx = 0;
-        let cy = 0;
+        if (c.loop === null) continue;
+        const verts = c.loop.verts;
+        // The segment's ends where they were last clear, and the box the
+        // segment swept from there, read when the first vertex projecting
+        // into the segment asks: most pieces a segment's box reaches have
+        // none, and a moving piece's carry is two rotations.
+        let a0 = Vec2.ZERO;
+        let b0 = Vec2.ZERO;
+        let sx0 = NaN;
+        let sx1 = 0;
+        let sy0 = 0;
+        let sy1 = 0;
+        // For a segment already across the piece with no vertex crossing it
+        // this step: whether it is (asked once, when first needed), and the
+        // side of the segment the piece's centre is on, which every vertex
+        // is put back on, the segment going out away from the centre.
+        let across: boolean | null = null;
+        let centreSide = 0;
         for (const v of verts) {
-          cx += v.x;
-          cy += v.y;
-        }
-        // +1 when the piece's centre is on the +m side of the segment.
-        const side = m.dot(new Vec2(cx / verts.length - a.x, cy / verts.length - a.y)) >= 0 ? 1 : -1;
-        // Whether the segment crosses the piece at all, asked only once a
-        // vertex is over it on the far side: such a vertex says the segment
-        // cut the piece only if it did, and on a piece much bigger than the
-        // segment (a level's rock) it can stand metres off a segment lying
-        // nowhere near it, which pushed the segment those metres and threw
-        // the drape about (`session-310f`, 2-7 m segments).
-        let crosses: boolean | null = null;
-        for (const v of verts) {
-          const tv = v.sub(a).dot(u) / len;
+          // In plain numbers, as in `sweptEntry`.
+          const wx = v.x - a.x;
+          const wy = v.y - a.y;
+          const tv = (wx * ux + wy * uy) / len;
           if (tv <= 0 || tv >= 1) continue;
-          const h = side * m.dot(v.sub(a));
-          const need = NODE_RADIUS - h;
-          if (need <= depth) continue;
-          if (h < 0) {
-            crosses ??= segmentCrossesLoop(a, b, verts);
-            if (!crosses) continue;
+          const now = mx * wx + my * wy;
+          let side = now >= 0 ? 1 : -1;
+          if (Number.isNaN(sx0)) {
+            a0 = c.moving && carry[j] ? bodyCarried(c.owner, from[j]!) : from[j]!;
+            b0 = c.moving && carry[j + 1] ? bodyCarried(c.owner, from[j + 1]!) : from[j + 1]!;
+            sx0 = Math.min(minX, a0.x, b0.x);
+            sx1 = Math.max(maxX, a0.x, b0.x);
+            sy0 = Math.min(minY, a0.y, b0.y);
+            sy1 = Math.max(maxY, a0.y, b0.y);
           }
-          if (c.cuffed && cuff !== null && a.add(ab.mul(tv)).distanceTo(cuff.at) < MANACLE_REACH) continue;
+          const swept = v.x >= sx0 && v.x <= sx1 && v.y >= sy0 && v.y <= sy1;
+          if (swept && vertexCrossed(a0, b0, a, b, v)) {
+            const was = b0.sub(a0).cross(v.sub(a0));
+            if (was !== 0) side = was > 0 ? 1 : -1;
+          } else {
+            across ??= segmentCrossesLoop(a, b, verts);
+            if (across) {
+              if (centreSide === 0) {
+                let cx = 0;
+                let cy = 0;
+                for (const w of verts) {
+                  cx += w.x;
+                  cy += w.y;
+                }
+                centreSide = mx * (cx / verts.length - a.x) + my * (cy / verts.length - a.y) >= 0 ? 1 : -1;
+              }
+              side = centreSide;
+            }
+          }
+          // The vertex is to be on `side`, NODE_RADIUS off the segment.
+          const need = NODE_RADIUS - side * now;
+          if (need <= depth) continue;
+          if (c.cuffed && cuff !== null && new Vec2(a.x + abx * tv, a.y + aby * tv).distanceTo(cuff.at) < MANACLE_REACH) {
+            continue;
+          }
           depth = need;
           t = tv;
-          dir = m.mul(-side);
+          dir = new Vec2(mx * -side, my * -side);
           owner = c;
         }
       }
@@ -350,17 +436,360 @@ export function pushSegmentsOut(
   }
 }
 
+// Whether the point `v` lay on the segment at some moment of its linear move
+// from a0-b0 to a1-b1: the textbook 2D edge-vertex continuous test. With
+// a(t) = a0 + t da and b(t) = b0 + t db, the cross product
+// (b(t) - a(t)) x (v - a(t)) is a quadratic in t; at each of its roots in
+// [0, 1] the point is on the segment's line, and on the segment itself if its
+// projection falls within it.
+export function vertexCrossed(a0: Vec2, b0: Vec2, a1: Vec2, b1: Vec2, v: Vec2): boolean {
+  // In plain numbers, as in `sweptEntry`.
+  const dax = a1.x - a0.x;
+  const day = a1.y - a0.y;
+  const e0x = b0.x - a0.x;
+  const e0y = b0.y - a0.y;
+  const dex = b1.x - b0.x - dax;
+  const dey = b1.y - b0.y - day;
+  const w0x = v.x - a0.x;
+  const w0y = v.y - a0.y;
+  // (e0 + t de) x (w0 - t da) = c0 + c1 t + c2 t^2
+  const c0 = e0x * w0y - e0y * w0x;
+  const c1 = (dex * w0y - dey * w0x) - (e0x * day - e0y * dax);
+  const c2 = -(dex * day - dey * dax);
+  let t0 = NaN;
+  let t1 = NaN;
+  if (Math.abs(c2) < 1e-14) {
+    if (Math.abs(c1) > 1e-14) t0 = -c0 / c1;
+  } else {
+    const disc = c1 * c1 - 4 * c2 * c0;
+    if (disc < 0) return false;
+    const sq = Math.sqrt(disc);
+    t0 = (-c1 - sq) / (2 * c2);
+    t1 = (-c1 + sq) / (2 * c2);
+  }
+  return onSegmentAt(t0, e0x, e0y, dex, dey, w0x, w0y, dax, day) ||
+    onSegmentAt(t1, e0x, e0y, dex, dey, w0x, w0y, dax, day);
+}
+
+// Whether, at root `t` of `vertexCrossed` (NaN for none), the point projects
+// within the segment.
+function onSegmentAt(
+  t: number, e0x: number, e0y: number, dex: number, dey: number,
+  w0x: number, w0y: number, dax: number, day: number,
+): boolean {
+  if (!(t >= 0 && t <= 1)) return false;
+  const ex = e0x + dex * t;
+  const ey = e0y + dey * t;
+  const wx = w0x - dax * t;
+  const wy = w0y - day * t;
+  const ee = ex * ex + ey * ey;
+  if (ee < 1e-18) return false;
+  const s = (wx * ex + wy * ey) / ee;
+  return s >= 0 && s <= 1;
+}
+
+// Where a node that started its step at `from` (clear of everything) and is
+// now at `to` first went into a piece's vertex loop on the way, or `to` if
+// the straight move crossed none. Each piece is asked in its own frame: for a
+// body that moved, `from` is carried with it, as the push-out's came-from is.
+// Circles are left to the push-out, as the segment push-out leaves them.
+export function sweptEntry(from: Vec2, carry: boolean, to: Vec2, candidates: readonly Candidate[]): Vec2 {
+  let best = 1;
+  let at = to;
+  for (const c of candidates) {
+    if (c.loop === null) continue;
+    const a = c.moving && carry ? bodyCarried(c.owner, from) : from;
+    // Against the piece's own box, not the one grown by the node's radius:
+    // a move that stays outside it crosses no edge of the piece.
+    const ex = c.ex - NODE_RADIUS;
+    const ey = c.ey - NODE_RADIUS;
+    if (
+      Math.max(a.x, to.x) < c.cx - ex ||
+      Math.min(a.x, to.x) > c.cx + ex ||
+      Math.max(a.y, to.y) < c.cy - ey ||
+      Math.min(a.y, to.y) > c.cy + ey
+    ) {
+      continue;
+    }
+    const verts = c.loop.verts;
+    // In plain numbers: run once per node, piece and collision pass, the
+    // vectors this was written with were most of what it cost.
+    const dx = to.x - a.x;
+    const dy = to.y - a.y;
+    const dl = Math.sqrt(dx * dx + dy * dy);
+    if (dl < 1e-12) continue;
+    // A start on a face (where the bound lays a node, see `BOUND_ON_FACE`)
+    // goes in through that face at the very start of the move; counted as a
+    // crossing at s = 0 rather than missed, which left only the far face's
+    // exit and let the node through (`session-58f` f36).
+    const onFace = BOUND_ON_FACE / dl;
+    for (let k = 0; k < verts.length; k++) {
+      const v = verts[k]!;
+      const w = verts[(k + 1) % verts.length]!;
+      const ex = w.x - v.x;
+      const ey = w.y - v.y;
+      const den = dx * ey - dy * ex; // move x edge
+      if (Math.abs(den) < 1e-15) continue;
+      const avx = v.x - a.x;
+      const avy = v.y - a.y;
+      const s = (avx * ey - avy * ex) / den; // along the move
+      const u = (avx * dy - avy * dx) / den; // along the edge
+      if (s < -onFace || s >= best || u < 0 || u > 1) continue;
+      best = s;
+      at = s > 0 ? new Vec2(a.x + dx * s, a.y + dy * s) : a;
+    }
+  }
+  return at;
+}
+
+// A piece the sag bound routes round: its world vertex loop drawn in toward
+// its centre by `ROUTE_INSET`, and that loop's bounding box. Drawn in so that
+// a target on the wrap path, which lies ON the faces the chain is wrapped
+// round, stands just outside it: on the hull of the loop it is then a corner
+// of its own rather than a point on an edge, and a straight line from it
+// along the face it lies on does not count as going through the piece.
+interface RouteLoop {
+  readonly verts: readonly Vec2[];
+  readonly minX: number;
+  readonly minY: number;
+  readonly maxX: number;
+  readonly maxY: number;
+}
+// Metres. Far below anything a drawn chain could show, and ten times below
+// `BOUND_ON_FACE`, so a node the route lays along a face reads as outside it.
+const ROUTE_INSET = 1e-7;
+// Rounds of adding the pieces a route round the first ones runs into.
+const ROUTE_ROUNDS = 4;
+
+// The vertex-loop pieces of `candidates`, less the one the cuff is threaded
+// on (the chain threads round it, see the cuff in `step`), as `RouteLoop`s.
+// Circles are not routed round, as the segment push-out does not push off
+// them (see `pushSegmentsOut`).
+function routeLoops(candidates: readonly Candidate[]): RouteLoop[] {
+  const out: RouteLoop[] = [];
+  for (const c of candidates) {
+    if (c.cuffed) continue;
+    const world = c.loop?.verts ?? NO_VERTS;
+    if (world.length < 3) continue;
+    let cx = 0;
+    let cy = 0;
+    for (const v of world) {
+      cx += v.x;
+      cy += v.y;
+    }
+    const centre = new Vec2(cx / world.length, cy / world.length);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const verts = world.map((v) => {
+      const to = centre.sub(v);
+      const d = to.length();
+      const w = d > ROUTE_INSET ? v.add(to.mul(ROUTE_INSET / d)) : v;
+      if (w.x < minX) minX = w.x;
+      if (w.y < minY) minY = w.y;
+      if (w.x > maxX) maxX = w.x;
+      if (w.y > maxY) maxY = w.y;
+      return w;
+    });
+    out.push({ verts, minX, minY, maxX, maxY });
+  }
+  return out;
+}
+
+function segmentMayHit(a: Vec2, b: Vec2, l: RouteLoop): boolean {
+  return !(
+    Math.max(a.x, b.x) < l.minX ||
+    Math.min(a.x, b.x) > l.maxX ||
+    Math.max(a.y, b.y) < l.minY ||
+    Math.min(a.y, b.y) > l.maxY
+  );
+}
+
+function loopContains(l: RouteLoop, p: Vec2): boolean {
+  if (p.x < l.minX || p.x > l.maxX || p.y < l.minY || p.y > l.maxY) return false;
+  const v = l.verts;
+  let sign = 0;
+  for (let i = 0; i < v.length; i++) {
+    const c = v[(i + 1) % v.length]!.sub(v[i]!).cross(p.sub(v[i]!));
+    const s = c > 0 ? 1 : c < 0 ? -1 : 0;
+    if (s === 0) continue;
+    if (sign === 0) sign = s;
+    else if (s !== sign) return false;
+  }
+  return true;
+}
+
+// Convex hull of `pts`, counter-clockwise by index into `pts`, collinear
+// points dropped (Andrew's monotone chain).
+function hullOf(pts: readonly Vec2[]): number[] {
+  const order = pts.map((_, i) => i).sort((i, j) => pts[i]!.x - pts[j]!.x || pts[i]!.y - pts[j]!.y);
+  const turn = (o: number, a: number, b: number): number =>
+    pts[a]!.sub(pts[o]!).cross(pts[b]!.sub(pts[o]!));
+  const lower: number[] = [];
+  for (const i of order) {
+    while (lower.length >= 2 && turn(lower[lower.length - 2]!, lower[lower.length - 1]!, i) <= 0) lower.pop();
+    lower.push(i);
+  }
+  const upper: number[] = [];
+  for (let k = order.length - 1; k >= 0; k--) {
+    const i = order[k]!;
+    while (upper.length >= 2 && turn(upper[upper.length - 2]!, upper[upper.length - 1]!, i) <= 0) upper.pop();
+    upper.push(i);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function polylineLength(route: readonly Vec2[]): number {
+  let len = 0;
+  for (let k = 1; k < route.length; k++) len += route[k - 1]!.distanceTo(route[k]!);
+  return len;
+}
+
+// The sag bound for a node at `p` whose target is `t`, measured round the
+// pieces in between. The way round is a side of the convex hull of the node,
+// its target and the pieces the straight line runs through (the pieces that
+// way round runs into are added and the hull taken again), which is the
+// shortest way round one convex piece on that side and the way round the
+// outside of several. The side is the one the drape is wound round the piece
+// by, not the shorter: on `session-58f` the shorter way from a node at the
+// box's top corner to its target on the far face was under the box, while the
+// drape and the chain both went over it, and the bound laid the drape under
+// it (f37). `pathTo` is the path from the loop to the target (the targets up
+// to this node), `drapeTo` the drape from the loop to this node. Returns:
+// - null when the straight line is clear, or when the node is inside a piece
+//   or the hull does not have both ends on it: the caller's straight bound;
+// - `p` itself when the way round is within the bound;
+// - otherwise the point on the way round at the bound from the target.
+export function boundRoute(
+  p: Vec2,
+  t: Vec2,
+  bound: number,
+  loops: readonly RouteLoop[],
+  pathTo: readonly Vec2[],
+  drapeTo: readonly Vec2[],
+): Vec2 | null {
+  const blocking: RouteLoop[] = [];
+  for (const l of loops) {
+    if (loopContains(l, p)) return null;
+    if (segmentMayHit(p, t, l) && segmentCrossesLoop(p, t, l.verts)) blocking.push(l);
+  }
+  if (blocking.length === 0) return null;
+  let route: Vec2[] = [];
+  for (let round = 0; round < ROUTE_ROUNDS; round++) {
+    const pts: Vec2[] = [p, t];
+    for (const l of blocking) pts.push(...l.verts);
+    const hull = hullOf(pts);
+    const ip = hull.indexOf(0);
+    const it = hull.indexOf(1);
+    if (ip < 0 || it < 0) return null;
+    const n = hull.length;
+    const forward: Vec2[] = [];
+    for (let k = ip; ; k = (k + 1) % n) {
+      forward.push(pts[hull[k]!]!);
+      if (k === it) break;
+    }
+    const backward: Vec2[] = [];
+    for (let k = ip; ; k = (k - 1 + n) % n) {
+      backward.push(pts[hull[k]!]!);
+      if (k === it) break;
+    }
+    // The way round the drape is wound: the side whose loop with the path
+    // and the drape (see `encloses`) holds none of the pieces. The shorter
+    // only when both or neither do.
+    const fwdBad = blocking.some((l) => encloses(pathTo, forward, drapeTo, l));
+    const bwdBad = blocking.some((l) => encloses(pathTo, backward, drapeTo, l));
+    route = fwdBad !== bwdBad
+      ? (fwdBad ? backward : forward)
+      : polylineLength(forward) <= polylineLength(backward) ? forward : backward;
+    let grew = false;
+    for (const l of loops) {
+      if (blocking.includes(l)) continue;
+      for (let k = 1; k < route.length; k++) {
+        if (segmentMayHit(route[k - 1]!, route[k]!, l) && segmentCrossesLoop(route[k - 1]!, route[k]!, l.verts)) {
+          blocking.push(l);
+          grew = true;
+          break;
+        }
+      }
+    }
+    if (!grew) break;
+  }
+  const total = polylineLength(route);
+  if (total <= bound) return p;
+  // Walk from the node along the way round until the rest of it is `bound`.
+  let walk = total - bound;
+  for (let k = 1; k < route.length; k++) {
+    const a = route[k - 1]!;
+    const b = route[k]!;
+    const leg = a.distanceTo(b);
+    if (walk <= leg) return leg > 0 ? a.lerp(b, walk / leg) : b;
+    walk -= leg;
+  }
+  return t;
+}
+
+// Whether the closed loop made of `pathTo` (loop -> target), `route`
+// reversed (target -> node) and `drapeTo` reversed (node -> loop) winds round
+// the piece `l`, tested at its first vertex drawn a little further in (a point
+// inside the piece). The drape and the chain are wound round every piece the
+// same way when that loop holds none of them; a side of the hull that makes it
+// hold one is the way round the drape is not.
+function encloses(
+  pathTo: readonly Vec2[],
+  route: readonly Vec2[],
+  drapeTo: readonly Vec2[],
+  l: RouteLoop,
+): boolean {
+  const loop: Vec2[] = [...pathTo];
+  for (let k = route.length - 2; k >= 1; k--) loop.push(route[k]!);
+  for (let k = drapeTo.length - 1; k >= 0; k--) loop.push(drapeTo[k]!);
+  let cx = 0;
+  let cy = 0;
+  for (const v of l.verts) {
+    cx += v.x;
+    cy += v.y;
+  }
+  return windingNumber(loop, new Vec2(cx / l.verts.length, cy / l.verts.length)) !== 0;
+}
+
+// The winding number of the closed polygon `poly` about `c`, by signed
+// crossings of the rightward ray from `c` (no trigonometry).
+function windingNumber(poly: readonly Vec2[], c: Vec2): number {
+  let w = 0;
+  for (let k = 0; k < poly.length; k++) {
+    const a = poly[k]!;
+    const b = poly[(k + 1) % poly.length]!;
+    const left = b.sub(a).cross(c.sub(a));
+    if (a.y <= c.y) {
+      if (b.y > c.y && left > 0) w++;
+    } else if (b.y <= c.y && left < 0) {
+      w--;
+    }
+  }
+  return w;
+}
+
+function clearLine(a: Vec2, b: Vec2, loops: readonly RouteLoop[]): boolean {
+  for (const l of loops) if (segmentMayHit(a, b, l) && segmentCrossesLoop(a, b, l.verts)) return false;
+  return true;
+}
+
 // Whether segment ab crosses an edge of the vertex loop `verts`.
 function segmentCrossesLoop(a: Vec2, b: Vec2, verts: readonly Vec2[]): boolean {
-  const ab = b.sub(a);
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
   for (let i = 0; i < verts.length; i++) {
     const p = verts[i]!;
     const q = verts[(i + 1) % verts.length]!;
-    const pq = q.sub(p);
-    const d1 = ab.cross(p.sub(a));
-    const d2 = ab.cross(q.sub(a));
-    const d3 = pq.cross(a.sub(p));
-    const d4 = pq.cross(b.sub(p));
+    const pqx = q.x - p.x;
+    const pqy = q.y - p.y;
+    const d1 = abx * (p.y - a.y) - aby * (p.x - a.x);
+    const d2 = abx * (q.y - a.y) - aby * (q.x - a.x);
+    const d3 = pqx * (a.y - p.y) - pqy * (a.x - p.x);
+    const d4 = pqx * (b.y - p.y) - pqy * (b.x - p.x);
     if ((d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0)) return true;
   }
   return false;
@@ -380,12 +809,14 @@ export interface DrapeContact {
 export class SlackChain {
   // Wall-clock budget for one step, milliseconds. The drape is visual only,
   // so it is the one simulation in the game allowed to do LESS work when the
-  // machine is behind: its step is Gauss-Seidel blocks (constraint passes
-  // then a collision pass), and once a block ends past the budget the rest
-  // are skipped. Every step runs at least one block, so the frame still ends
-  // clear of the scenery; what a cut step loses is convergence - a little
-  // stretch in a drape that is being flung about - and the next step takes it
-  // up. Infinite by default, which is what the tools want (`cli render`,
+  // machine is behind: its step is constraint passes each followed by a
+  // collision pass, and once it is past the budget it collides only every
+  // fourth pass (what it gives up is the sweeps' resolution: a node or a
+  // segment can travel further between the points it is swept from), and
+  // past four budgets it stops after its next collision pass, so the frame
+  // still ends clear of the scenery; what a cut step loses is convergence - a
+  // little stretch in a drape that is being flung about - and the next step
+  // takes it up. Infinite by default, which is what the tools want (`cli render`,
   // `cli shot`, the self-replay verdict): a drawn drape that depends on how
   // fast the machine was is not a reference frame. The live page sets it
   // (see main.ts). Measured on session-417f under a 4x CPU throttle, a step
@@ -424,6 +855,19 @@ export class SlackChain {
   // step toward (null where it moved none): the side such a node is pushed
   // out of the scenery by (see the bound in `step`).
   private boundFrom: (Vec2 | null)[] = [];
+  // Where each node was last known clear of the scenery within this step,
+  // what every sweep and came-from is taken from: at the start of the step
+  // where it ended the last one (or where the bound laid it), then where each
+  // collision pass leaves it. `clearCarry` marks a position still in the
+  // frame-start pose, carried along with a moving body before it is compared
+  // with it.
+  private clear: Vec2[] = [];
+  private clearCarry: boolean[] = [];
+  // Whether each node's long-range attachment to the loop (A) and the far
+  // end (B) holds this step: its straight line to the pin is clear of the
+  // pieces the bound routes round (see `solveLongRange`).
+  private reachA: boolean[] = [];
+  private reachB: boolean[] = [];
   // The chain's length as of the last step - the wrap path plus the slack -
   // which is what a reel starts from (render/chainReel.ts), and what the
   // renderers count the links by (`chainLength`). `lengthFrom` is its value a
@@ -559,12 +1003,41 @@ export class SlackChain {
     // round on `session-53f` f36-37, the chain phasing through it. The target
     // is on the wrapped face itself, so the push-out reads it as outside a
     // face it lies on (`BOUND_ON_FACE`).
+    //
+    // And the reach is measured the way the drape would have to go, round the
+    // pieces between a node and its target, not through them (`boundRoute`):
+    // a node that is too far is moved along that way, so the drape slides
+    // round a corner it hangs over rather than being pulled through the piece.
+    // Measured straight, the nodes of a drape lying over the 20 x 10 cm box on
+    // `session-58f` had their targets on its near face 33 cm off through it,
+    // and as the slack ran out the bound pulled them straight through (f36).
+    //
+    // Clamped around a rail the chain ends at the centre of a ring threaded on
+    // the bar, millimetres from the bar's own surface, and the chain leaves
+    // the ring at its rim: the nodes inside the cuff's disc are metal the bar
+    // is already threaded through, not chain to be pushed out of it. Pushed,
+    // the last few nodes were shoved off the handle every step and the drape
+    // twitched at the cuff for as long as the ball hung still (`session-291f`).
+    // A ring on a vine has no such body: the vine is not scenery the drape
+    // collides with at all (see `drapeCandidates`).
+    const cuff = clamp !== null ? { body: clamp.contact.obj, at: clamp.contact.globalPosition } : null;
+    // Read before the bound, which routes round them, and over the path as
+    // well as the nodes, since the bound moves nodes toward the path.
+    const candidates = drapeCandidates(this.pos.concat(pathPoints), bodies, [this.tipBody], cuff?.body ?? null);
     const boundFrom: (Vec2 | null)[] = new Array<Vec2 | null>(SEGMENTS + 1).fill(null);
     this.boundFrom = boundFrom;
+    const loops = routeLoops(candidates);
     if (pathLen > 1e-9) {
       const bound = SAG_BOUND_FACTOR * Math.sqrt(pathLen * slack);
       const target = SlackChain.sampleByArc(pathPoints, SEGMENTS);
       for (let i = 1; i < SEGMENTS; i++) {
+        const routed = boundRoute(this.pos[i]!, target[i]!, bound, loops, target.slice(0, i + 1), this.pos.slice(0, i + 1));
+        if (routed !== null) {
+          if (routed === this.pos[i]) continue;
+          this.pos[i] = routed;
+          boundFrom[i] = routed;
+          continue;
+        }
         const off = this.pos[i]!.sub(target[i]!);
         const dist = off.length();
         if (dist <= bound) continue;
@@ -573,45 +1046,55 @@ export class SlackChain {
       }
     }
 
-    // Clamped around a rail the chain ends at the centre of a ring threaded on
-    // the bar, millimetres from the bar's own surface, and the chain leaves
-    // the ring at its rim: the nodes inside the cuff's disc are metal the bar
-    // is already threaded through, not chain to be pushed out of it. Pushed,
-    // the last few nodes were shoved off the handle every step and the drape
-    // twitched at the cuff for as long as the ball hung still (`session-291f`).
-    // A ring on a vine has no such body: the vine is not scenery the drape
-    // collides with at all (see `collectCandidates`).
-    const cuff = clamp !== null ? { body: clamp.contact.obj, at: clamp.contact.globalPosition } : null;
-    const candidates = this.collectCandidates(bodies, cuff?.body ?? null);
-    // Blocks of COLLIDE_EVERY constraint passes, each ended by a collision
-    // pass, so the last thing a step does is push the nodes clear. The budget
-    // is checked between blocks (see `timeBudgetMs`); the clock is only read
-    // when there is a budget to hold, so a tool's run is the same arithmetic
-    // whatever the machine.
+    // Which long-range attachments hold this step (see `solveLongRange`).
+    for (let i = 1; i < SEGMENTS; i++) {
+      this.reachA[i] = clearLine(pinA, this.pos[i]!, loops);
+      this.reachB[i] = clearLine(pinB, this.pos[i]!, loops);
+    }
+    for (let i = 0; i <= SEGMENTS; i++) {
+      const b = i === 0 || i === SEGMENTS ? this.pos[i]! : boundFrom[i];
+      this.clear[i] = b ?? this.renderFrom[i]!;
+      this.clearCarry[i] = b === null || b === undefined;
+    }
+    // Constraint passes, each followed by a collision pass (COLLIDE_EVERY)
+    // where a node has moved far enough since the last to need one
+    // (`COLLIDE_MOVE`), and the first and last always, so the last thing a
+    // step does is push the nodes clear. The clock is only read when there is a budget to hold, so a
+    // tool's run is the same arithmetic whatever the machine. Once the step is
+    // over its budget (see `timeBudgetMs`) it collides only every
+    // COLLIDE_EVERY_BEHIND passes for the rest, keeping all the passes'
+    // convergence and giving up some of the sweeps' resolution, which is what
+    // the collision passes cost; past BUDGET_STOP budgets it stops after its
+    // next collision pass.
     const budget = SlackChain.timeBudgetMs;
     const timed = Number.isFinite(budget);
     const started = timed ? performance.now() : 0;
-    const blocks = ITERATIONS / COLLIDE_EVERY;
-    for (let block = 0; block < blocks; block++) {
-      for (let k = 0; k < COLLIDE_EVERY; k++) {
-        const iter = block * COLLIDE_EVERY + k;
-        this.solveDistances(restLen, iter % 2 === 1);
-        this.solveBend(restLen);
-        this.solveLongRange(restLen, pinA, pinB);
+    let every = COLLIDE_EVERY;
+    let since = 0;
+    for (let iter = 0; iter < ITERATIONS; iter++) {
+      this.solveDistances(restLen, iter % 2 === 1);
+      this.solveBend(restLen);
+      this.solveLongRange(restLen, pinA, pinB);
+      since++;
+      if (iter !== 0 && iter !== ITERATIONS - 1) {
+        if ((iter + 1) % every !== 0) continue;
+        if (!this.movedSinceClear(COLLIDE_MOVE)) continue;
       }
-      this.solveCollisions(candidates, cuff);
-      if (timed && performance.now() - started > budget) break;
+      // The friction of every pass since the last collision pass, so a
+      // drape slides the same however many passes it skipped.
+      let keep = 1;
+      for (let k = 0; k < since; k++) keep *= 1 - FRICTION;
+      since = 0;
+      this.solveCollisions(candidates, cuff, keep);
+      this.clear = this.pos.slice();
+      this.clearCarry.fill(false);
+      if (!timed) continue;
+      const spent = performance.now() - started;
+      if (spent > BUDGET_STOP * budget) break;
+      if (spent > budget) every = COLLIDE_EVERY_BEHIND;
     }
   }
 
-  // The scenery this drape may touch this step (`drapeCandidates`), less the
-  // far end's own body (hook / dangling tip): the chain threads into it.
-  private collectCandidates(
-    bodies: readonly PhysicsBody2D[],
-    cuffBody: CollisionObject2D | null,
-  ): Candidate[] {
-    return drapeCandidates(this.pos, bodies, [this.tipBody], cuffBody);
-  }
 
   // One equality-constraint pass over the segments. Alternating the sweep
   // direction between passes symmetrises convergence between the two pins.
@@ -701,11 +1184,11 @@ export class SlackChain {
       const maxA = i * restLen;
       const fromA = this.pos[i]!.sub(pinA);
       const dA = fromA.length();
-      if (dA > maxA) this.pos[i] = pinA.add(fromA.mul(maxA / dA));
+      if (dA > maxA && this.reachA[i] !== false) this.pos[i] = pinA.add(fromA.mul(maxA / dA));
       const maxB = (SEGMENTS - i) * restLen;
       const fromB = this.pos[i]!.sub(pinB);
       const dB = fromB.length();
-      if (dB > maxB) this.pos[i] = pinB.add(fromB.mul(maxB / dB));
+      if (dB > maxB && this.reachB[i] !== false) this.pos[i] = pinB.add(fromB.mul(maxB / dB));
     }
   }
 
@@ -718,12 +1201,53 @@ export class SlackChain {
   // and the glass into the lamp's interior (`session-1038f` f858-862, the
   // slack chain falling through the lamp); the same held a drape still on any
   // swinging platform it was heaped on.
+  // Whether any interior node is further than `dist` from where it was last
+  // clear (see `COLLIDE_MOVE`).
+  private movedSinceClear(dist: number): boolean {
+    const limit = dist * dist;
+    for (let i = 1; i < SEGMENTS; i++) {
+      const dx = this.pos[i]!.x - this.clear[i]!.x;
+      const dy = this.pos[i]!.y - this.clear[i]!.y;
+      if (dx * dx + dy * dy > limit) return true;
+    }
+    return false;
+  }
+
   private solveCollisions(
     candidates: readonly Candidate[],
     cuff: { body: CollisionObject2D; at: Vec2 } | null,
+    keep: number,
+  ): void {
+    this.collideNodes(candidates, cuff, keep);
+    // After the nodes, whose push-out is what lays a segment across a corner:
+    // a node still inside the piece is no end to take a segment from. Once,
+    // and last: a node pass after it put corners back across segments (5-8 mm
+    // on three of the drape recordings), and a second segment pass, or
+    // sweeping the segments until none moved, pushed nodes 20-30 mm into the
+    // pieces with nothing after to put them out.
+    pushSegmentsOut(this.pos, this.prev, this.clear, this.clearCarry, candidates, 1, SEGMENTS - 1, cuff);
+  }
+
+  // `keep` is the share of a contacting node's tangential velocity the pass
+  // leaves it: FRICTION's, once for every constraint pass since the last
+  // collision pass (see `COLLIDE_MOVE`).
+  private collideNodes(
+    candidates: readonly Candidate[],
+    cuff: { body: CollisionObject2D; at: Vec2 } | null,
+    keep: number,
   ): void {
     for (let i = 1; i < SEGMENTS; i++) {
       let p = this.pos[i]!;
+      // Swept: a node whose move this step crossed a piece is stopped where
+      // it went in, and the push-out below then puts it out by that face.
+      // The constraints can carry a node right through a thin piece between
+      // two collision passes, and a node that ends clear on the far side is
+      // one the push-out never sees: a single long-range pass with the ball
+      // pulling away at 6.7 m/s dragged a drape lying over the 20 x 10 cm
+      // box through it to hang underneath (`session-58f` f34-35, four nodes
+      // in one step). A node the bound moved is swept from where the bound
+      // put it, which it reached round the pieces, not through them.
+      p = sweptEntry(this.clear[i]!, this.clearCarry[i]!, p, candidates);
       // Repeated until the node ends clear of every shape. A compound body's
       // pieces overlap at their seams (the lantern's handle-top piece stands
       // inside its glass), so a push out of one piece can land inside the
@@ -744,12 +1268,11 @@ export class SlackChain {
           // push-out (`session-1038f` f858-862). A node the sag bound moved
           // came from its target on the wrap path, already in this frame's
           // pose, and lying on the faces the chain is wrapped round.
-          const bound = this.boundFrom[i];
-          const ov = bound !== null && bound !== undefined
-            ? circleOverlapFrom(p, NODE_RADIUS, c.shape, bound, BOUND_ON_FACE)
-            : circleOverlapFrom(p, NODE_RADIUS, c.shape, c.moving
-              ? bodyCarried(c.owner, this.renderFrom[i]!)
-              : this.renderFrom[i]!);
+          const was = this.clear[i]!;
+          const from = c.moving && this.clearCarry[i] ? bodyCarried(c.owner, was) : was;
+          const ov = c.loop !== null
+            ? circleOverlapFromLoop(p, NODE_RADIUS, c.loop, from, BOUND_ON_FACE)
+            : circleOverlapFrom(p, NODE_RADIUS, c.shape, from, BOUND_ON_FACE);
           if (!ov) continue;
           hit = true;
           p = p.add(ov.normal.mul(ov.depth));
@@ -781,15 +1304,12 @@ export class SlackChain {
           const rel = p.sub(this.prev[i]!).sub(surfaceStep);
           const vn = ov.normal.mul(rel.dot(ov.normal));
           const vt = rel.sub(vn);
-          this.prev[i] = p.sub(surfaceStep.add(vt.mul(1 - FRICTION)));
+          this.prev[i] = p.sub(surfaceStep.add(vt.mul(keep)));
         }
         if (!hit) break;
       }
       this.pos[i] = p;
     }
-    // After the nodes, whose push-out is what lays a segment across a corner:
-    // a node still inside the piece is no end to take a segment from.
-    pushSegmentsOut(this.pos, this.prev, candidates, 1, SEGMENTS - 1, cuff);
   }
 
   // The full drawn polyline, loop → anchor: the simulated drape, its two ends
