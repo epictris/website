@@ -7,6 +7,7 @@ It was a disc lying in the plane, drawn flat-on with the chain ending at its cen
 
 **The chain's end node is the hinge pin** - free, bitten or clamped - so the length the sim enforces is the length to the pin the links hang from, and the drawn chain ends where the physics does with nothing trimmed or lifted (`trimPathStart` went with the rim it trimmed to).
 Free, the pin is a `RopeContact` on the hook body at that offset; bitten, it is a contact on the anchor body one ring radius from the bite along the cuff (`BallPlayer.onHookAttached`); around a rail the ring's centre stays the node and the drape is pinned to its rim, as before.
+Round a ROD - a rail through the plane, a ladder's rung or a handle - the node is the rod's axis, the cuff is centred on it, seen face-on and turned freely by the chain, with no state of its own ([rails](rails.md#rods-rails-through-the-plane)).
 The flight budget (`deployLimit`) and the chain-out seat are measured to the pin too, and `BallPlayer.manaclePose` is the one answer both renderers draw from: centre, hinge direction, clamped or free, and the face the cuff is buried under.
 
 A pin standing proud of the face is a chain end the wrap solver reaches from OUTSIDE its own shape, and the self-intersection resolvers - whose job the span's own endpoint shape is, since the scan excludes it - answered it as if it sat on the loop.

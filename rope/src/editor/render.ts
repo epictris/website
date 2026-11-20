@@ -689,6 +689,16 @@ function drawBeltGlyph(ctx: CanvasRenderingContext2D, item: EdItem, worldLine: n
 // simplifies it (`lib/stroke.ts`), so the line on the canvas is the line the
 // ring rides. A bar shorter than it is thick is a peg and gets a dot.
 function drawRailGlyph(ctx: CanvasRenderingContext2D, item: EdItem, worldLine: number): void {
+  // A ROD, a rail through the plane (`lib/rod.ts`): its axis end-on, a steel
+  // dot at the centre the cuff closes round - the line a curve's glyph draws,
+  // seen down its length.
+  if (item.shape.kind === "circle") {
+    ctx.fillStyle = IMPERMEABLE_EDGE;
+    ctx.beginPath();
+    ctx.arc(item.pos.x, item.pos.y, Math.min(item.shape.r * 0.35, 3 * worldLine), 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
   if (item.shape.kind !== "path") return;
   const line = curveLine(curveNodes(item.shape), item.shape.width).map((p) =>
     item.pos.add(p.rotated(item.rot)),

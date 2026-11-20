@@ -2459,10 +2459,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         // category order, so an edit that changes nothing writes nothing.
         ...(passesFromMask(i.mask).length > 0 ? { passes: passesFromMask(i.mask) } : {}),
         // Absent means a face the hook bites, so only a rail says so - and
-        // only a CURVE can be one, so a flag left on a shape of any other
-        // kind (a level authored before rails were curves) is dropped rather
-        // than written for the loader to ignore.
-        ...(i.rail && i.shape.kind === "path" ? { rail: true } : {}),
+        // only a CURVE or a CIRCLE (a rod, a rail through the plane) can be
+        // one, so a flag left on a shape of any other kind (a level authored
+        // before rails were curves) is dropped rather than written for the
+        // loader to ignore.
+        ...(i.rail && (i.shape.kind === "path" || i.shape.kind === "circle") ? { rail: true } : {}),
         // Absent means a face that holds the cuff still, so only mud says so.
         ...(i.viscosity > 0 ? { viscosity: i.viscosity } : {}),
         // ...and only mud with a floor says it has one.

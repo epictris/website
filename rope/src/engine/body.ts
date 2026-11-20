@@ -168,6 +168,18 @@ export class CollisionShape2D implements ShapeTransform {
   // stands on it, bodies collide with it, other chains wrap its corners.
   rail: RailCurve | null = null;
 
+  // Is this surface a ROD - a rail running THROUGH the gameplay plane, which
+  // the plane cuts as a circle: a ladder's rung seen end-on, a handle, a peg
+  // stood out of a wall? The manacle closes round it CENTRED on its axis and
+  // turns freely about it (`RopeRod`, `lib/rod.ts`) rather than biting the
+  // circle's face and being bolted there at the angle it arrived at. Only a
+  // circle no thicker than the cuff's bore is one (`ROD_MAX_RADIUS`).
+  //
+  // Per SHAPE for the reason `rail` is: a ladder is one body of many rungs,
+  // a crate is one body with a handle. Hook-proof wins where both are set.
+  // Solid for everything else - other chains wrap it, the ball rolls on it.
+  rod = false;
+
   // The CONVEYOR BELT this piece is part of, or null (`lib/belt.ts`): an
   // authored `belt` shape is built into a disc per wheel and a thin quad per
   // run of its band, and all of them hold the same `BeltLoop`, in the body's

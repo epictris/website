@@ -103,6 +103,35 @@ The ring free to tilt follows the pull to within a frame or two, which puts the 
 `cli rails` `rail-rim` pins the law rather than the number: no flip inside the band on either side of square, a flip past it, none from a slack chain.
 Both renderers therefore leave a rail path's end alone and centre the cuff on the chain's own end node (`chain.end.contact.renderGlobalPosition`).
 The editor's `+ Curve` is the camera path's own tool and gestures - a run of clicks, nodes dragged, tangent grips bowed, a midpoint clicked to insert one, Alt+click to remove one - with the bar's `width` in the inspector beside a live piece count, and a freshly drawn curve is a rail (unticking the box makes it a plain curved wall).
-The checkbox is offered on a curve alone and is mutually exclusive with hook-proof.
+The checkbox is offered on a curve (and on a circle, as a rod: see below) and is mutually exclusive with hook-proof.
 `cli rails` (`sim/railCases.ts`) is the coverage: the stroke's arithmetic (the pieces tile the bar exactly, every one convex, the line within tolerance of the cubic, a right angle mitred and a hairpin bevelled), the cone arithmetic, the clamp on a bar and on a peg, the ring resting on the bar's surface a bore's radius from the cuff and hanging square with `tiltMax` at `acos(h/R)`, the cuff pivoting on that point by `R·sin a` while the ring itself does not move, stuck inside the static cone, the frictionless coast, Coulomb's braking, the lid stopping the cuff and bouncing the hook, a ring threaded onto a vertical bar falling at `g` and landing on the block at its foot, a ring driven off an open end coming back as the dangling tip clear of the bar and at speed, the jam (pulled along the bar the tilt stops at `tiltMax`; reversed, it turns by one frame's rate; pulled straight up through the bar, the ring stays on its side of it; pulled along the bar, it does not flip), the catch (a chain going taut arrests the ring rather than launching it), the end of the ring the chain leaves over (holds inside `RIM_FLIP_LEAN` of square, follows a committed pull, ignores slack), the ring running round a bend, and the curve through the format, the build and the editor.
 `RAIL_TEST` (`levels/rail-test.json`) is the sandbox: a slick zipline between two posts, a peg, a sloped bar, and the lantern on a chain with two curved handles.
+
+## Rods: rails through the plane
+
+**A rod is a rail that runs INTO the screen rather than along it** (`lib/rod.ts`, `RopeRod`): a ladder's rung seen end-on, a handle on a crate, a peg stood out of a wall.
+The plane cuts it as a circle, so that is how it is authored: a collision circle with `rail` set, which the build turns into `CollisionShape2D.rod` (2026-11-20, asked for as "a rail perpendicular to the gameplay plane" for ladder runs and handles).
+Only a circle the cuff's bore can close round is one (`ROD_MAX_RADIUS`, the bore's radius, 3.65 cm); a fatter circle is bitten as an ordinary face, and ticking the box in the editor shrinks a circle to fit rather than leaving a flag the build ignores.
+Hook-proof wins, as it does over a rail.
+
+**The cuff closes round it CENTRED and turns freely.**
+It is neither the bite (bolted to a face at the angle it arrived at) nor the in-plane rail ring (resting on a bar it slides along and tilts on): the bar runs away from the cuff into the screen, so there is nowhere along it to slide, and a round bar presents the same face at every angle, so there is nothing to jam on.
+The chain's end node is the rod's AXIS - the circle's centre, a fixed point of the rod's body, whatever point of its surface the hook struck - as the ring's centre is the node on an in-plane rail.
+The cuff is massless on a frictionless bar, so with the chain taut its hinge lies on the line from the axis to the chain's last node and the length to the axis is the length to the hinge plus the hinge's radius at every angle: the length solve needs nothing but the fixed point, and the island sees an ordinary anchor on whatever body the rod belongs to (a static ladder, a crate's handle).
+
+**The hinge is a pure function of the sim's path** (`RopeRod.facing`, `chainEndFacing` from the axis): the cuff carries no state from frame to frame, so there is nothing to flip, latch or hunt between - the disease the rail ring's hang had (see the rim and the pull above).
+Taut, that is exactly the pull.
+Slack, it is the chord the chain hangs across, where a real ring would be led round by the chain's weight off its hinge, which is the drape's own direction there; read from the drape it would be a render-side quantity steering the point the drape is pinned to, so it is not.
+If a slack chain on a rung reads wrong in play, that is the place to look.
+The drape is pinned at the hinge (`rimPoint`), and the renderers draw the hinge from the INTERPOLATED path (`renderRimDir`), so the cuff turns with the drawn chain rather than at 60 Hz.
+
+**It is the one cuff seen face-on** (`ManaclePose.faceOn`): its axis is the rod's, into the screen, so the 2D renderer draws the band as an annulus round the rod with the hinge barrel end-on at the chain and the lock plate opposite, and the 3D cuff is the same model without the quarter turn that stands every other cuff edge-on.
+
+**The cuff is mounted as the disc it is seen as** (`mountCuff` with a circle of `MANACLE_REACH`, hidden and non-wrappable, unless the ball already stands there), so a ball wound up to a rung is stopped by the ring round it rather than by the bar inside it.
+The cuff's DISC on the rod's body is metal the chain is already clear of, by the rail ring's own rule (`cuffEnd` names both, and `RopeRod.covers` is centred on the axis the cuff never leaves): the wrap scan and both self-intersection resolvers ignore corners there, the standing cull drops wraps that come inside it - which includes any wrap left on the rod itself - and the end resolver leaves alone a span ending on the axis inside its own circle.
+The next rung of a ladder stands outside the disc and is wrapped as scenery like anything else.
+`chain-clip` asks the same question: the stretch of the last span inside the cuff's disc on the cuff's own body is inside the ring, not the bar.
+Without that, a ball swung over the top of a rung on a chain gone short (0.37 m, where 24 samples are 1.5 cm apart) put the last sample 3.8 cm into the mounted cuff on every frame of the fall.
+
+`cli rails` `rail-rod` is the coverage: the hook closes round a circle with `rail` set, the chain ending on its axis to a nanometre and the cuff mounted round it; hanging, the hinge points down the chain and is drawn face-on, centred, with the drape pinned a ring radius out; kicked at 9 m/s the ball goes right round the rod (407°) with the hinge following the chain within cos 0.999, the end never off the axis and the rod never wrapped; on a two-rung ladder the hook passes the lower rung, closes on the top one, and a ball swung under the lower rung bends the chain round it; a circle thicker than the bore is bitten, a hook-proof rod is never closed round, and the editor keeps the flag on a circle.
+Unplayed (2026-11-20): how the slack-chain chord facing reads, how the face-on cuff looks round a rung in the 3D game, and the cuff disc's 5.35 cm stopping the ball on a ladder whose rungs are close together.

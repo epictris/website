@@ -374,7 +374,7 @@ export class ChainLayer {
         // The manacle at the far end - the flying hook, the dangling tip, or the
         // anchor - wherever the sim says it is (`BallPlayer.manaclePose`).
         const pose = ball.manaclePose(alpha);
-        if (pose) this.placeManacle(pose.centre, pose.dir, this.anchorDepth, pose.open);
+        if (pose) this.placeManacle(pose.centre, pose.dir, this.anchorDepth, pose.open, pose.faceOn);
       }
     }
 
@@ -408,7 +408,7 @@ export class ChainLayer {
           this.anchorReach = Math.max(CHAIN_LINK_LEN, this.path[0]!.distanceTo(this.path[this.path.length - 1]!));
         }
         this.lay(this.path, this.anchorDepth !== 0);
-        this.placeSnapManacle(cuffs++, half.centre, half.dir, this.anchorDepth);
+        this.placeSnapManacle(cuffs++, half.centre, half.dir, this.anchorDepth, half.faceOn);
       }
       if (snapped.onBall) {
         this.path.length = 0;
@@ -495,16 +495,21 @@ export class ChainLayer {
   //
   // `open` swings its jaws open about the hinge pin, each by that many
   // radians: a cuff round a root thicker than its bore (`ManaclePose.open`).
-  private placeManacle(centre: Vec2, dir: Vec2, z = 0, open = 0): void {
+  //
+  // `faceOn` is a cuff round a ROD, a rail through the plane (`RopeRod`): the
+  // quarter turn is left out, so the ring's axis stays the model's own z - the
+  // camera's depth, the way the rod runs - and the ring is seen face-on,
+  // centred on the rod and turned in the plane to put its hinge at `dir`.
+  private placeManacle(centre: Vec2, dir: Vec2, z = 0, open = 0, faceOn = false): void {
     this.manacle.position.set(centre.x, threeY(centre.y), z);
-    this.manacle.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
+    this.manacle.rotation.set(faceOn ? 0 : Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
     setManacleOpen(this.manacle, open);
     this.manacle.visible = true;
   }
 
   // The `i`th snapped half's cuff, placed as `placeManacle` places the ball's,
   // in the cuff material the ball's chain is drawn in (iron or glass).
-  private placeSnapManacle(i: number, centre: Vec2, dir: Vec2, z: number): void {
+  private placeSnapManacle(i: number, centre: Vec2, dir: Vec2, z: number, faceOn = false): void {
     let cuff = this.snapManacles[i];
     if (cuff === undefined) {
       cuff = this.manacle.clone();
@@ -520,7 +525,7 @@ export class ChainLayer {
     }
     setManacleOpen(cuff, 0);
     cuff.position.set(centre.x, threeY(centre.y), z);
-    cuff.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
+    cuff.rotation.set(faceOn ? 0 : Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
     cuff.visible = true;
   }
 

@@ -65,6 +65,7 @@ import { Mathf } from "../engine/mathf";
 import { bumpTransformEpoch, type VineLink } from "../engine/body";
 import { RopeAttachment, RopeContact, type RopeNode } from "./ropeContact";
 import { RopeClamp, RIM_FLIP_LEAN } from "./rail";
+import { RopeRod } from "./rod";
 import { MANACLE_RADIUS, MANACLE_REACH } from "./manacle";
 
 // What the clamp needs of a vine: the line it runs along - the anchor, the
@@ -102,11 +103,11 @@ function leftNormal(t: Vec2): Vec2 {
   return new Vec2(-t.y, t.x);
 }
 
-// The chain's end as a ring threaded onto something - a rail or a vine - with
-// a rim the chain leaves over, for the drape and the renderers; or null for a
-// bite, a mud embed, a dangling tip or a hook in flight.
-export function ringEnd(end: RopeNode): RopeClamp | RopeVineClamp | null {
-  if (end instanceof RopeClamp || end instanceof RopeVineClamp) return end;
+// The chain's end as a ring threaded onto something - a rail, a rod or a vine
+// - with a rim the chain leaves over, for the drape and the renderers; or null
+// for a bite, a mud embed, a dangling tip or a hook in flight.
+export function ringEnd(end: RopeNode): RopeClamp | RopeRod | RopeVineClamp | null {
+  if (end instanceof RopeClamp || end instanceof RopeRod || end instanceof RopeVineClamp) return end;
   return null;
 }
 

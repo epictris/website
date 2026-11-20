@@ -39,7 +39,9 @@ import {
   RAIL_STATIC_FRICTION,
   RIM_FLIP_LEAN,
 } from "../lib/rail";
-import { MANACLE_BORE, MANACLE_REACH } from "../lib/manacle";
+import { MANACLE_BORE, MANACLE_HINGE, MANACLE_REACH } from "../lib/manacle";
+import { RopeRod } from "../lib/rod";
+import { RopeAttachment } from "../lib/ropeContact";
 import { strokeCurve, STROKE_TOLERANCE } from "../lib/stroke";
 import { cubicAt, pathNodesOf } from "../lib/path";
 import { PX } from "../engine/units";
@@ -1088,6 +1090,162 @@ function caseFormat(): RailResult {
   return ok("rail-format — the flag survives the format, the build and the editor, and hook-proof wins", c.passed(), c.details);
 }
 
+// ---------------------------------------------------------------------------
+// rod - a rail through the plane: a collision circle with `rail` set, which
+// the cuff closes round CENTRED and turns freely about (`lib/rod.ts`). The
+// ladder rung and the handle.
+// ---------------------------------------------------------------------------
+
+// A static body of rods (circles, `r` px, `rail` set) at the given px points.
+function rods(points: { x: number; y: number }[], r = 2, extra: Record<string, unknown> = {}): LevelBodyData {
+  return {
+    kind: "static",
+    x: 0,
+    y: 0,
+    rot: 0,
+    friction: 1,
+    objects: points.map((p) => ({
+      type: "collision",
+      x: p.x,
+      y: p.y,
+      shape: { kind: "circle", r },
+      rail: true,
+      ...extra,
+    })),
+  } as LevelBodyData;
+}
+
+function rodEnd(ball: BallPlayer): RopeRod | null {
+  const end = ball.chain?.end;
+  return end instanceof RopeRod ? end : null;
+}
+
+// Throw at `target` (metres) with the deploy held and the aim on it, for up
+// to `frames`, until the chain ends on something that is not the hook.
+function throwAt(rig: Rig, target: Vec2, frames = 60): void {
+  for (let f = 0; f < frames; f++) {
+    rig.step(target);
+    if (rig.ball.chainAttached) return;
+  }
+}
+
+function caseRod(): RailResult {
+  const c = claims();
+  const at = new Vec2(0, -1.2);
+  const rig = new Rig([rods([{ x: 0, y: -120 }])]);
+  throwAt(rig, at);
+  const rod = rodEnd(rig.ball);
+  c.check("a hook thrown at a circle with `rail` set closes round it as a rod", rod !== null);
+  if (rod) {
+    const body = rod.body;
+    // CENTRED: the chain's end is the rod's axis, not the point of its
+    // surface the hook struck.
+    c.check(
+      `...the chain ending on the rod's axis (${(rod.contact.globalPosition.distanceTo(at) * 1000).toFixed(6)} mm off it)`,
+      rod.contact.globalPosition.distanceTo(at) < 1e-9,
+    );
+    // The cuff is mounted as the disc it is seen as, so a ball wound up to the
+    // rod is stopped by the ring round it.
+    const cuff = body.getShapes().find((s) => s.hidden);
+    c.check(
+      `...with the cuff mounted round it as a disc of the manacle's reach (${cuff?.shape.kind}, ${cuff?.shape.kind === "circle" ? (cuff.shape.radius * 100).toFixed(2) : "-"} cm)`,
+      cuff !== undefined &&
+        cuff.shape.kind === "circle" &&
+        cuff.shape.radius === MANACLE_REACH &&
+        cuff.globalPosition.distanceTo(at) < 1e-9 &&
+        !cuff.wrappable,
+    );
+    c.check("the hook body is out of the world", !rig.level.world.bodies.some((b) => b instanceof BallHook));
+    for (let f = 0; f < 120; f++) rig.step(at);
+    const facing = rig.ball.manacleFacing(1);
+    const down = at.directionTo(rig.ball.globalPosition);
+    c.check(
+      `hanging, the hinge points down the chain at the ball (${facing?.x.toFixed(3)}, ${facing?.y.toFixed(3)})`,
+      facing !== null && facing.dot(down) > 0.999,
+    );
+    const pose = rig.ball.manaclePose(1);
+    c.check(
+      "...drawn face-on, centred on the rod, clamped",
+      pose !== null && pose.faceOn && pose.clamped && pose.centre.distanceTo(at) < 1e-9 && pose.buriedUnder === null,
+    );
+    c.check(
+      `...the drape pinned at the hinge, one ring radius out along it`,
+      facing !== null && rod.rimPoint().distanceTo(at.add(facing.mul(MANACLE_HINGE))) < 1e-9,
+    );
+
+    // FREE TO TURN: kicked hard enough to go right round, the ball orbits the
+    // rod, the cuff's hinge follows the chain all the way, the anchor never
+    // leaves the axis, and the chain never wraps the rod it is closed round.
+    rig.ball.linearVelocity = new Vec2(9, 0);
+    let turned = 0;
+    let prevAngle = dmath.atan2(rig.ball.globalPosition.y - at.y, rig.ball.globalPosition.x - at.x);
+    let worstFollow = 1;
+    let rodWraps = 0;
+    let offAxis = 0;
+    for (let f = 0; f < 150; f++) {
+      rig.step(at);
+      const p = rig.ball.globalPosition;
+      const a = dmath.atan2(p.y - at.y, p.x - at.x);
+      let d = a - prevAngle;
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      turned += d;
+      prevAngle = a;
+      const chain = rig.ball.chain;
+      if (!chain) break;
+      rodWraps += chain.wraps.filter((w) => w.contact.obj === body).length;
+      offAxis = Math.max(offAxis, chain.end.contact.globalPosition.distanceTo(at));
+      // Only while the chain runs straight from the ball to the rod: there
+      // the hinge must point at the chain's own last node.
+      const nodes = chain.path();
+      const prev = nodes[nodes.length - 2]?.contact.globalPosition;
+      const face = rig.ball.manacleFacing(1);
+      if (prev && face && prev.distanceTo(at) > 0.3) worstFollow = Math.min(worstFollow, face.dot(at.directionTo(prev)));
+    }
+    c.check(`kicked, the ball goes right round the rod (${((turned * 180) / Math.PI).toFixed(0)}°)`, Math.abs(turned) > 2 * Math.PI);
+    c.check(`...the hinge following the chain the whole way (worst cos ${worstFollow.toFixed(5)})`, worstFollow > 0.999);
+    c.check(`...the chain's end never off the axis (${(offAxis * 1000).toFixed(6)} mm)`, offAxis < 1e-9);
+    c.check(`...and never wrapped round the rod it is closed on (${rodWraps} wrap-frames)`, rodWraps === 0);
+  }
+  c.check(`no invariant fired (${rig.violations.length}${rig.violations.length ? `: ${rig.violations[0]!.kind}` : ""})`, rig.violations.length === 0);
+
+  // A LADDER: rungs of one body. The chain closed on one rung wraps the next
+  // like any other scenery - the cuff's disc is the only part of the body it
+  // ignores.
+  const ladder = new Rig([rods([{ x: 0, y: -120 }, { x: 0, y: -60 }])], 40);
+  throwAt(ladder, at);
+  const top = rodEnd(ladder.ball);
+  c.check("on a ladder, the hook passes the lower rung and closes round the top one", top !== null && top.contact.globalPosition.distanceTo(at) < 1e-9);
+  let wrapsLower = false;
+  if (top) {
+    ladder.ball.linearVelocity = new Vec2(-4, 0);
+    for (let f = 0; f < 90; f++) {
+      ladder.step(at);
+      if (ladder.ball.chain?.wraps.some((w) => w.contact.obj === top.body && w.contact.shapeIndex === 1)) wrapsLower = true;
+    }
+  }
+  c.check("...and a ball swung under the lower rung bends the chain round it", wrapsLower);
+  c.check(`...no invariant fired (${ladder.violations.length})`, ladder.violations.length === 0);
+
+  // TOO THICK: a circle the bore cannot close round is a face, bitten as one.
+  const fat = new Rig([rods([{ x: 0, y: -120 }], 6)]);
+  throwAt(fat, at);
+  c.check(
+    "a circle thicker than the cuff's bore is bitten as a face, not closed round",
+    fat.ball.chainAttached && rodEnd(fat.ball) === null && fat.ball.chain?.end instanceof RopeAttachment,
+  );
+  // HOOK-PROOF wins, as it does over a rail.
+  const proof = new Rig([rods([{ x: 0, y: -120 }], 2, { impermeable: true })]);
+  throwAt(proof, at);
+  c.check("a hook-proof rod is never closed round", rodEnd(proof.ball) === null);
+
+  // The editor's round trip keeps the flag on a circle.
+  const raw = { player: { x: 0, y: 0, radius: 8 }, bodies: [rods([{ x: 0, y: -120 }])] } as RawLevelData;
+  const rt = modelToDisk(modelFromDisk(raw)).bodies[0]!.objects.filter(isCollisionObject)[0]!;
+  c.check("the editor's modelFromDisk/modelToDisk keeps `rail` on a circle", rt.rail === true && rt.shape.kind === "circle");
+  return ok("rail-rod — a rod through the plane: the cuff closes round it centred and turns freely", c.passed(), c.details);
+}
+
 export function runRailCases(): RailResult[] {
   return [
     caseStroke(),
@@ -1103,6 +1261,7 @@ export function runRailCases(): RailResult[] {
     caseRim(),
     caseBend(),
     caseFormat(),
+    caseRod(),
   ];
 }
 

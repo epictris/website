@@ -64,7 +64,7 @@ import { Mathf } from "../engine/mathf";
 import { PX } from "../engine/units";
 import { CHAIN_LINK_HALF_WIDTH, CHAIN_LINK_LEN } from "../render/chainMetrics";
 import { GRAVITY } from "../engine/world";
-import { shapeExtents } from "../engine/shapes";
+import { shapeExtents, shapeWorldVertices } from "../engine/shapes";
 import { circleOverlapFrom } from "../engine/collision";
 import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import { ringEnd } from "../lib/vineClamp";
@@ -127,6 +127,13 @@ const SAG_BOUND_FACTOR = 1;
 // clear of all of them (see solveCollisions). Two settles a seam; the third
 // is headroom.
 export const SEAM_ROUNDS = 3;
+// How close to a face's plane, inside it, a sag-bound target still counts as
+// outside that face, metres. The target is on the wrap path, which runs along
+// the faces the chain is wrapped round (a lerp between two corners), so it
+// lies on them to rounding error - picometres at level coordinates of tens of
+// metres. A micrometre is far above that and far below anything a face's
+// side could mean.
+const BOUND_ON_FACE = 1e-6;
 // A node may not move faster than this, metres per step. Purely a safety
 // fence around the Verlet integration — the hook itself flies at 12 m/s, i.e.
 // 0.2 m per step, an order of magnitude inside it.
@@ -238,6 +245,127 @@ export function bodyCarried(body: CollisionObject2D, q: Vec2): Vec2 {
   return body.globalPosition.add(q.sub(prevPos).rotated(body.globalRotation - prevRot));
 }
 
+// The segments between nodes `first`..`last` off the corners of the scenery.
+// The node push-out keeps every node clear, and that is not the chain clear:
+// two nodes each clear of a piece on two of its faces hold the segment between
+// them across the corner, and nothing pushes back on a segment. A chain sliding
+// round the end of a thin piece is where that grows: the drape slung over the
+// end of the 20 x 10 cm box on `session-53f` was hauled toward the ball, its
+// nodes on the two faces were dragged along them away from the end (each kept
+// on its own face by the came-from push-out, which is right for each node),
+// and the segment between them cut the corner 8 mm, then 29 mm, then crossed
+// the box through its middle (f25-27). So each segment is held off a piece's
+// vertices as the nodes are held off its faces, by the broad link's
+// half-width: the textbook edge-vertex contact, the vertex's projection on
+// the segment moved clear along the segment's normal and the move shared
+// between the two nodes by where it falls (`1 - t` and `t`, scaled so the
+// point moves the whole way). The side is away from the piece's centre, which
+// is right for any corner cut caught while it is shallow, and every one is: a
+// cut starts at nothing. A cut with no vertex over the segment (a segment
+// across the middle of a piece longer than it) has no corner to come off and
+// is left to the node push-out. The normal velocity is killed as the node
+// push-out kills it. Vertex loops only: a circle has no corner, and the one a
+// drape lies on most is the ball's own rim, whose coil chords sit inside the
+// rim by their sagitta (0.7 mm at 2.8 cm on the 14 cm rim) - held off it, the
+// coil was pushed out on every pass, and a ball pressed against the box the
+// chain is wrapped round pushed the drape off its rim into the box.
+export function pushSegmentsOut(
+  pos: Vec2[],
+  prev: Vec2[],
+  candidates: readonly Candidate[],
+  first: number,
+  last: number,
+  cuff: { body: CollisionObject2D; at: Vec2 } | null,
+): void {
+  for (let j = first; j < last; j++) {
+    // Repeated, as the node push-out is, until the segment ends clear: moving
+    // a segment off one vertex turns it, and can lay it over another.
+    for (let round = 0; round < SEAM_ROUNDS; round++) {
+      const a = pos[j]!;
+      const b = pos[j + 1]!;
+      const ab = b.sub(a);
+      const len = ab.length();
+      if (len < 1e-9) break;
+      const u = ab.div(len);
+      const m = u.orthogonal();
+      const minX = Math.min(a.x, b.x);
+      const maxX = Math.max(a.x, b.x);
+      const minY = Math.min(a.y, b.y);
+      const maxY = Math.max(a.y, b.y);
+      // The deepest vertex over every piece the segment's box reaches.
+      let depth = 0;
+      let t = 0;
+      let dir = Vec2.ZERO;
+      let owner: Candidate | null = null;
+      for (const c of candidates) {
+        if (maxX < c.cx - c.ex || minX > c.cx + c.ex || maxY < c.cy - c.ey || minY > c.cy + c.ey) continue;
+        const verts = shapeWorldVertices(c.shape);
+        if (verts.length === 0) continue;
+        let cx = 0;
+        let cy = 0;
+        for (const v of verts) {
+          cx += v.x;
+          cy += v.y;
+        }
+        // +1 when the piece's centre is on the +m side of the segment.
+        const side = m.dot(new Vec2(cx / verts.length - a.x, cy / verts.length - a.y)) >= 0 ? 1 : -1;
+        // Whether the segment crosses the piece at all, asked only once a
+        // vertex is over it on the far side: such a vertex says the segment
+        // cut the piece only if it did, and on a piece much bigger than the
+        // segment (a level's rock) it can stand metres off a segment lying
+        // nowhere near it, which pushed the segment those metres and threw
+        // the drape about (`session-310f`, 2-7 m segments).
+        let crosses: boolean | null = null;
+        for (const v of verts) {
+          const tv = v.sub(a).dot(u) / len;
+          if (tv <= 0 || tv >= 1) continue;
+          const h = side * m.dot(v.sub(a));
+          const need = NODE_RADIUS - h;
+          if (need <= depth) continue;
+          if (h < 0) {
+            crosses ??= segmentCrossesLoop(a, b, verts);
+            if (!crosses) continue;
+          }
+          if (c.cuffed && cuff !== null && a.add(ab.mul(tv)).distanceTo(cuff.at) < MANACLE_REACH) continue;
+          depth = need;
+          t = tv;
+          dir = m.mul(-side);
+          owner = c;
+        }
+      }
+      if (owner === null) break;
+      const wa = 1 - t;
+      const wb = t;
+      const lambda = depth / (wa * wa + wb * wb);
+      const na = a.add(dir.mul(wa * lambda));
+      const nb = b.add(dir.mul(wb * lambda));
+      pos[j] = na;
+      pos[j + 1] = nb;
+      for (const [i, p] of [[j, na], [j + 1, nb]] as const) {
+        const surfaceStep = owner.moving ? p.sub(bodyWas(owner.owner, p)) : Vec2.ZERO;
+        const rel = p.sub(prev[i]!).sub(surfaceStep);
+        prev[i] = p.sub(surfaceStep.add(rel.sub(dir.mul(rel.dot(dir)))));
+      }
+    }
+  }
+}
+
+// Whether segment ab crosses an edge of the vertex loop `verts`.
+function segmentCrossesLoop(a: Vec2, b: Vec2, verts: readonly Vec2[]): boolean {
+  const ab = b.sub(a);
+  for (let i = 0; i < verts.length; i++) {
+    const p = verts[i]!;
+    const q = verts[(i + 1) % verts.length]!;
+    const pq = q.sub(p);
+    const d1 = ab.cross(p.sub(a));
+    const d2 = ab.cross(q.sub(a));
+    const d3 = pq.cross(a.sub(p));
+    const d4 = pq.cross(b.sub(p));
+    if ((d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0)) return true;
+  }
+  return false;
+}
+
 // Read-only per-step collision telemetry. Repeated constraint/collision passes
 // aggregate into one contact per node and shape; audio never feeds the solver.
 export interface DrapeContact {
@@ -292,10 +420,10 @@ export class SlackChain {
   private pos: Vec2[] = [];
   private prev: Vec2[] = [];
   private renderFrom: Vec2[] = [];
-  // Where the sag bound put each node it moved this step (null where it moved
-  // none): the side such a node is pushed out of the scenery by (see the
-  // bound in `step`).
-  private boundAt: (Vec2 | null)[] = [];
+  // The point on the wrap path the sag bound pulled each node it moved this
+  // step toward (null where it moved none): the side such a node is pushed
+  // out of the scenery by (see the bound in `step`).
+  private boundFrom: (Vec2 | null)[] = [];
   // The chain's length as of the last step - the wrap path plus the slack -
   // which is what a reel starts from (render/chainReel.ts), and what the
   // renderers count the links by (`chainLength`). `lengthFrom` is its value a
@@ -412,18 +540,27 @@ export class SlackChain {
     // the path, so a chain coming tight on a wound ball is drawn round the rim
     // exactly where the solver says the coil is.
     //
-    // A node the bound moves is pushed out of the scenery by the side the
-    // bound put it on, not the side it started the step on. The solver's path
-    // is the chain, so the bound is always moving a node toward the right side
-    // of anything the chain is wrapped round; but a drape whose slack sagged
-    // under a box's corner while the solver's straight span passed over it
-    // started every step on the wrong side, and the came-from push-out handed
-    // each node straight back there. Taut, with the bound at zero, the drape
-    // then ran under a 20 x 10 cm box the chain was wrapped over, for good
-    // (`session-256f`, `session-386f`, `session-276f`: 203, 343 and 228
-    // frames; `scripts/test-chain-drape.ts`).
-    const boundAt: (Vec2 | null)[] = new Array<Vec2 | null>(SEGMENTS + 1).fill(null);
-    this.boundAt = boundAt;
+    // A node the bound moves is pushed out of the scenery by the side of its
+    // TARGET, the point on the wrap path it was pulled toward, not the side it
+    // started the step on. The solver's path is the chain, so its side of
+    // anything the chain is wrapped round is the right one; but a drape whose
+    // slack sagged under a box's corner while the solver's straight span
+    // passed over it started every step on the wrong side, and the came-from
+    // push-out handed each node straight back there. Taut, with the bound at
+    // zero, the drape then ran under a 20 x 10 cm box the chain was wrapped
+    // over, for good (`session-256f`, `session-386f`, `session-276f`: 203, 343
+    // and 228 frames; `scripts/test-chain-drape.ts`).
+    // Not where the bound PUT the node: the bound pulls it straight at its
+    // target, through whatever is between, and a target on the face of the
+    // box the chain is wrapped round put the node inside the box. A side
+    // inside the box is no side, the push-out fell back to the shallowest
+    // face, and neighbours left by opposite faces drew the segment between
+    // them straight through it: 14.5 cm segments across the box the hook flew
+    // round on `session-53f` f36-37, the chain phasing through it. The target
+    // is on the wrapped face itself, so the push-out reads it as outside a
+    // face it lies on (`BOUND_ON_FACE`).
+    const boundFrom: (Vec2 | null)[] = new Array<Vec2 | null>(SEGMENTS + 1).fill(null);
+    this.boundFrom = boundFrom;
     if (pathLen > 1e-9) {
       const bound = SAG_BOUND_FACTOR * Math.sqrt(pathLen * slack);
       const target = SlackChain.sampleByArc(pathPoints, SEGMENTS);
@@ -432,7 +569,7 @@ export class SlackChain {
         const dist = off.length();
         if (dist <= bound) continue;
         this.pos[i] = bound > 0 ? target[i]!.add(off.mul(bound / dist)) : target[i]!;
-        boundAt[i] = this.pos[i]!;
+        boundFrom[i] = target[i]!;
       }
     }
 
@@ -605,11 +742,14 @@ export class SlackChain {
           // the chain it was part of then cut straight through the glass,
           // its two neighbours held 11 cm apart on opposite faces by the
           // push-out (`session-1038f` f858-862). A node the sag bound moved
-          // came from where the bound put it, already in this frame's pose.
-          const from = this.boundAt[i] ?? (c.moving
-            ? bodyCarried(c.owner, this.renderFrom[i]!)
-            : this.renderFrom[i]!);
-          const ov = circleOverlapFrom(p, NODE_RADIUS, c.shape, from);
+          // came from its target on the wrap path, already in this frame's
+          // pose, and lying on the faces the chain is wrapped round.
+          const bound = this.boundFrom[i];
+          const ov = bound !== null && bound !== undefined
+            ? circleOverlapFrom(p, NODE_RADIUS, c.shape, bound, BOUND_ON_FACE)
+            : circleOverlapFrom(p, NODE_RADIUS, c.shape, c.moving
+              ? bodyCarried(c.owner, this.renderFrom[i]!)
+              : this.renderFrom[i]!);
           if (!ov) continue;
           hit = true;
           p = p.add(ov.normal.mul(ov.depth));
@@ -647,6 +787,9 @@ export class SlackChain {
       }
       this.pos[i] = p;
     }
+    // After the nodes, whose push-out is what lays a segment across a corner:
+    // a node still inside the piece is no end to take a segment from.
+    pushSegmentsOut(this.pos, this.prev, candidates, 1, SEGMENTS - 1, cuff);
   }
 
   // The full drawn polyline, loop → anchor: the simulated drape, its two ends

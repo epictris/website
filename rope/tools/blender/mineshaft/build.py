@@ -456,7 +456,7 @@ for s in [-1,1]:
 
 asset('mine-oil-lantern')
 # Hurricane lantern: turned tank, clear chimney, vented hood, crossed guards,
-# wire bail and side arms joining the tank shoulders above a flat stepped foot.
+# small crown loop and side arms joining the tank shoulders above a flat stepped foot.
 def turned(name,profile,mat,segments=24):
     verts=[(r*math.cos(2*math.pi*j/segments),r*math.sin(2*math.pi*j/segments),z) for r,z in profile for j in range(segments)]
     faces=[]
@@ -528,7 +528,6 @@ for side in [-1,1]:
         curved_tube('Thin crossed globe guard',[(direction*-.135,side*.10,.36),(direction*-.125,side*.165,.42),(0,side*.227,.54),(direction*.125,side*.155,.66),(direction*.145,side*.035,.737)],.0095,lampedgemetal)
 for x in [-.29,.29]:
     hinge=cylinder('Carry bail hinge',(x,0,.89),.021,.105,lampedgemetal,12);hinge.rotation_euler.x=math.pi/2
-curved_tube('Tall rounded carry bail',[(-.29,0,.89),(-.35,0,.925),(-.34,0,1.005),(-.285,0,1.07),(-.25,0,1.26),(-.21,0,1.40),(-.13,0,1.49),(0,0,1.525),(.13,0,1.49),(.21,0,1.40),(.25,0,1.26),(.285,0,1.07),(.34,0,1.005),(.35,0,.925),(.29,0,.89)],.012,lampedgemetal)
 for o in current.objects:
     if o.type=='MESH' and lampmetal in list(o.data.materials):
         # Paint loss follows exposed outer rims, not arbitrary spots on the body.
@@ -538,6 +537,7 @@ for o in current.objects:
             value.value=max(0,min(1,(math.hypot(v.co.x,v.co.y)/max(radius,.001)-.88)/.08))
             if o.name.startswith('Side arm'):
                 value.value=max(0,1-abs(v.co.z-.89)/.055)
+    # Preserve the existing library pivot so placed lanterns do not move.
     o.location.z-=1.534
 
 asset('mine-pickaxe')

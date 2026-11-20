@@ -43,6 +43,7 @@ import {
 import { MANACLE_BORE } from "../lib/manacle";
 import { RopeEmbed, creepSpeed } from "../lib/viscous";
 import { RopeVineClamp } from "../lib/vineClamp";
+import { cuffEnd } from "../lib/rod";
 import { RopeRide } from "../lib/belt";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { SolverStats } from "../engine/solverStats";
@@ -1196,8 +1197,9 @@ export class Rope {
     // body inside the cuff's disc is metal the chain is already clear of (see
     // the same rule in `regeneratePath`). Walking the lantern's base from its
     // far corner to the near one, 10 mm from the ring's centre, put a wrap
-    // inside the cuff (`session-154f`).
-    const cuff = toNode instanceof RopeClamp ? toNode : null;
+    // inside the cuff (`session-154f`). A cuff round a rod is the same disc,
+    // centred on the rod's axis (`RopeRod.covers`).
+    const cuff = cuffEnd(toNode);
     const inCuff = (point: Vec2): boolean => cuff !== null && obj === cuff.body && cuff.covers(point);
 
     // The piece of the body this node actually sits on, not merely the body's
@@ -1332,7 +1334,9 @@ export class Rope {
     // around. That is the chain reaching the bar, not the chain having wound
     // around its own anchor (the failure this resolver exists for); the bar is
     // thin and the cuff encircles it, so there is no corner to bend round.
-    if (toNode instanceof RopeClamp) return null;
+    // A cuff round a ROD ends the chain on the rod's own axis, at the centre
+    // of the circle it is clamped round, for the same reason.
+    if (cuffEnd(toNode) !== null) return null;
     if (isPassThrough(obj)) return null;
 
     const toShape = toNode.contact.shape;
@@ -1549,8 +1553,10 @@ export class Rope {
       // (`session-189f`). The CORNER is excluded, not the piece: the far corner
       // of that same lid is what the chain bends round when the ball winds up
       // under the lantern, and excluding the piece sent the chain straight
-      // through the lantern's base (`session-154f`).
-      const cuff = span.to instanceof RopeClamp ? span.to : null;
+      // through the lantern's base (`session-154f`). A cuff round a rod is
+      // the same disc, centred on its axis (`RopeRod.covers`): the next rung
+      // of a ladder stands outside it and is wrapped as scenery.
+      const cuff = cuffEnd(span.to);
       const inCuff = (body: CollisionObject2D, point: Vec2): boolean =>
         cuff !== null && body === cuff.body && cuff.covers(point);
       const notInPlay = (shape: CollisionShape2D): boolean =>
@@ -2059,9 +2065,14 @@ export class Rope {
   // millimetres long has no direction but noise, so the ring hunted a fifth of
   // a radian either way of it at frame rate for the rest of the recording
   // (`session-153f`). Born-and-forgotten is not a rule, it is a race.
+  //
+  // Round a ROD the disc holds the rod itself, so a wrap left on the rod the
+  // cuff now encircles - a chain that had bent round the rung before the hook
+  // closed on it - goes too: the cuff turns on the rod, and the chain leaves
+  // it at the hinge wherever that has turned to.
   private cullNodesInCuff(): void {
-    const cuff = this.end_;
-    if (!(cuff instanceof RopeClamp)) return;
+    const cuff = cuffEnd(this.end_);
+    if (cuff === null) return;
     this.wraps = this.wraps.filter(
       (n) => n.contact.obj !== cuff.body || !cuff.covers(n.contact.globalPosition),
     );

@@ -237,6 +237,8 @@ interface AnchoredHalf {
   centre: Vec2;
   dir: Vec2;
   buriedUnder: Vec2 | null;
+  // Round a rod, seen face-on (`ManaclePose.faceOn`).
+  faceOn: boolean;
 }
 
 // A half left on its anchor as the renderers draw it: hinge first, and its
@@ -246,6 +248,7 @@ export interface AnchoredFrame {
   readonly centre: Vec2;
   readonly dir: Vec2;
   readonly buriedUnder: Vec2 | null;
+  readonly faceOn: boolean;
   readonly body: CollisionObject2D | null;
 }
 
@@ -320,6 +323,7 @@ export class ChainSnap {
         centre: origin.add(a.centre.rotated(rot)),
         dir: a.dir.rotated(rot),
         buriedUnder: a.buriedUnder ? a.buriedUnder.rotated(rot) : null,
+        faceOn: a.faceOn,
         body: a.body,
       };
     });
@@ -371,6 +375,7 @@ export class ChainSnap {
       centre: toLocal(pose.centre),
       dir: turn(pose.dir),
       buriedUnder: pose.buriedUnder ? turn(pose.buriedUnder) : null,
+      faceOn: pose.faceOn,
     });
     if (this.anchored.length > KEPT_HALVES) this.anchored.shift();
     const at = state.pos[BREAK_NODE]!;

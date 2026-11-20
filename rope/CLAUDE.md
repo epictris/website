@@ -115,7 +115,7 @@ Rope geometry and surfaces
 
 - [collision-layers](docs/collision-layers.md) - per-shape layers and masks: the stool whose legs the player walks between, and every path that asks.
 - [hook-surfaces](docs/hook-surfaces.md) - hook-proof and chain-through pieces, hook-only bodies.
-- [rails](docs/rails.md) - authored curves the cuff clamps around and slides along.
+- [rails](docs/rails.md) - authored curves the cuff clamps around and slides along, and rods (a circle with `rail` set: a rung or handle through the plane the cuff closes round centred and turns about).
 - [viscous-surfaces](docs/viscous-surfaces.md) - mud: the cuff sinks, creeps and drops out.
 - [conveyors](docs/conveyors.md) - belts: a static with a surface velocity, the hull of N wheels and its sense, the hollow build, the carry, the ride round the wheels, the tear-out, the band's ring and its scrolling texture.
 - [breakable](docs/breakable.md) - geometry that gives way: the force a hit carries, the hit count, and the debris it leaves.

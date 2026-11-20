@@ -24,6 +24,7 @@ import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import { isSeamVertex, type Rope } from "../classes/rope";
 import type { RopeNode } from "../lib/ropeContact";
 import { RopeRide } from "../lib/belt";
+import { cuffEnd } from "../lib/rod";
 import { shapeCrossesSpan, spanMotionBox, type Pose, type SpanMotion } from "../lib/spanSweep";
 import { WrapDirection } from "../lib/types";
 import { CONTACT_SLOP, GRAVITY, type ContactConstraint, type World } from "../engine/world";
@@ -2232,12 +2233,22 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       (body): body is StaticBody2D => body instanceof StaticBody2D && body.hasShape() && body.isSolid,
     );
     let clip: { depth: number; name: string } | null = null;
+    // The chain's end as a CUFF round a bar (a rail ring, a rod): its last
+    // span runs to the cuff's centre and the chain leaves it at the rim, so
+    // the stretch inside the cuff's disc is inside the ring, not inside the
+    // bar's body - the rule the rope itself wraps by (`cuffEnd`, `inCuff` in
+    // `Rope.regeneratePath`). Round a rod the disc holds the rod and the cuff
+    // mounted round it, so a last span shorter than 24 samples of the disc's
+    // depth put its last sample in both: a ball swung over the top of a rung
+    // on a chain gone short read as 3-4 cm of clip on every frame of the fall.
+    const cuff = cuffEnd(b.chain.end);
     for (let s = 0; s < nodes.length - 1 && !clip; s++) {
       const a = nodes[s]!;
       const d = nodes[s + 1]!.sub(a);
       for (let k = 1; k < CHAIN_CLIP_SAMPLES && !clip; k++) {
         const p = a.add(d.mul(k / CHAIN_CLIP_SAMPLES));
         for (const body of statics) {
+          if (cuff !== null && body === cuff.body && cuff.covers(p)) continue;
           // The whole body, not its primary piece: a compound wall is one body of
           // several convex shapes, and a check that only ever looked at the first
           // could not see a chain buried in any of the others (`session-306f`).

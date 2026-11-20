@@ -74,6 +74,7 @@ import { LAYER_ROPE, MASK_ALL } from "../engine/body";
 import { moveAngleAt } from "../level/movers";
 import { smoothTangents, splitCubicAtHalf } from "../lib/path";
 import { keyValueAt } from "../lib/keyframes";
+import { ROD_MAX_RADIUS } from "../lib/rod";
 
 // The three movement modes as an author reads them (see `MoveMode`). The stored
 // names are camelCase because they are a format's; the picker says the thing.
@@ -4241,6 +4242,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       for (const b of items) {
         b.rail = box.checked;
         if (box.checked) b.impermeable = false;
+        // A CIRCLE is a rod, and the cuff closes round no bar thicker than
+        // its bore: ticked, a circle any fatter is shrunk to it rather than
+        // left a rail the build ignores (`ROD_MAX_RADIUS`).
+        if (box.checked && b.shape.kind === "circle") {
+          b.shape = { kind: "circle", r: Math.min(b.shape.r, ROD_MAX_RADIUS) };
+        }
       }
       markDirty();
       rebuildInspector();
@@ -4249,7 +4256,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     wrap.appendChild(box);
     g.appendChild(wrap);
     describe(wrap,
-      "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, which is the curve itself and where the cuff rides. The cuff stops a half-width in from each end, and where it would meet a piece of the same body that is not part of this bar. Solid for everything else. A bar shorter than it is thick is a peg the ring hangs on without sliding.");
+      items.every((b) => b.shape.kind === "circle")
+        ? `A rod running into the screen - a ladder's rung, a handle. The ball's manacle closes around it centred on its axis and turns freely about it, the chain swinging round it at any angle, instead of biting its face. No thicker than the cuff's bore (${(ROD_MAX_RADIUS * M2PX).toFixed(2)} px radius): ticking the box shrinks the circle to fit, and a fatter circle is bitten as a face. Solid for everything else.`
+        : "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, which is the curve itself and where the cuff rides. The cuff stops a half-width in from each end, and where it would meet a piece of the same body that is not part of this bar. Solid for everything else. A bar shorter than it is thick is a peg the ring hangs on without sliding.");
   }
 
   // Viscosity (see `CollisionObjectData.viscosity`): mud the ball's manacle
@@ -5527,7 +5536,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // writes a field the loader ignores.
       // A ROOT is bitten, never clamped round: it tapers, and a rail rides a
       // bar of one width (docs/roots.md).
-      if (bodies.every((b) => b.shape.kind === "path" && !isRootItem(b))) addRailField(surface, bodies);
+      // A CIRCLE may be one too: a rod, a rail running through the plane,
+      // which the plane cuts as that circle (`lib/rod.ts`). Offered on a
+      // selection of one kind, since the two are different things to tick.
+      if (
+        bodies.every((b) => b.shape.kind === "path" && !isRootItem(b)) ||
+        bodies.every((b) => b.shape.kind === "circle")
+      ) {
+        addRailField(surface, bodies);
+      }
       addMaskFields(surface, bodies);
     }
     // Material and thickness are what a shape WEIGHS.

@@ -23,6 +23,7 @@ import {
 } from "../engine/body";
 import { rectShape, circleShape, polyShapeCentred, type RootRail, type Shape, type ShapeTransform } from "../engine/shapes";
 import { decomposeConvex } from "../lib/polygon";
+import { ROD_MAX_RADIUS } from "../lib/rod";
 import { GRAVITY, World } from "../engine/world";
 import { wrapAngle } from "../engine/mathf";
 import {
@@ -353,6 +354,11 @@ interface Piece {
   // every piece the one curve was stroked into, which is what `attachRails`
   // turns into the `RailCurve` they all carry (see `lib/rail.ts`).
   rail: RailBuild | null;
+  // A ROD (`CollisionObjectData.rail` on a circle no thicker than the cuff's
+  // bore): a rail through the plane, which the cuff closes round centred and
+  // turns freely about (`lib/rod.ts`). Per piece for the reason `rail` is: a
+  // ladder is one body of many rungs.
+  rod: boolean;
   // Viscosity (`CollisionObjectData.viscosity`, 0 = solid), per piece for the
   // same reason once more: a stone wall with one mud patch is one body.
   viscosity: number;
@@ -524,9 +530,17 @@ function makePiece(
     rot: world.rot,
     impermeable: o.impermeable === true,
     mask: maskFromPasses(o.passes),
-    // Filled in by `makePieces` for the pieces of a rail curve; a rail flag on
-    // any other shape kind means nothing (see `CollisionObjectData.rail`).
+    // Filled in by `makePieces` for the pieces of a rail curve. On a CIRCLE
+    // the flag is a rod, a rail through the plane, when the cuff's bore can
+    // close round it; on any other shape kind it means nothing (see
+    // `CollisionObjectData.rail`). Hook-proof wins, as it does over a rail.
     rail: null,
+    rod:
+      o.rail === true &&
+      o.impermeable !== true &&
+      made.shape.kind === "circle" &&
+      // A micron of grace for a radius the editor clamped in pixels.
+      made.shape.radius <= ROD_MAX_RADIUS + 1e-6,
     // Filled in by `makePieces` for the pieces of a belt, likewise.
     belt: null,
     // A viscosity that is not a positive number - absent, zero, a hand-edited
@@ -572,6 +586,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     body.globalRotation = only.rot;
     const shape = body.setShape(only.shape);
     shape.impermeable = only.impermeable;
+    shape.rod = only.rod;
     shape.mask = only.mask;
     shape.viscosity = only.viscosity;
     shape.slipFloor = only.slipFloor;
@@ -585,6 +600,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
   for (const p of pieces) {
     const shape = body.addShape(p.shape, p.pos.sub(centre), p.rot);
     shape.impermeable = p.impermeable;
+    shape.rod = p.rod;
     shape.mask = p.mask;
     shape.viscosity = p.viscosity;
     shape.slipFloor = p.slipFloor;

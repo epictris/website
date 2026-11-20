@@ -12,13 +12,14 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf, wrapAngle } from "../engine/mathf";
 import { LAYER_PLAYER, PhysicsBody2D, RigidBody2D, VineLink, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
-import { circleShape, nearestShapeIndex, type ShapeTransform } from "../engine/shapes";
+import { circleShape, nearestShapeIndex, type Shape, type ShapeTransform } from "../engine/shapes";
 import { outwardDirection } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
 import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import { RopeClamp } from "../lib/rail";
+import { RopeRod } from "../lib/rod";
 import { RopeEmbed } from "../lib/viscous";
 import { RopeRide } from "../lib/belt";
 import { ringEnd, RopeVineClamp, type VineLine } from "../lib/vineClamp";
@@ -38,8 +39,13 @@ export interface ManaclePose {
   // body on the end of the chain.
   clamped: boolean;
   // Clamped around a RAIL: the bar passes through the ring and nothing about
-  // the cuff is buried.
+  // the cuff is buried. True round a rod too.
   onRail: boolean;
+  // Round a ROD, a rail through the plane (`RopeRod`): the ring's axis runs
+  // INTO the screen, so it is seen FACE-ON - the one cuff that is - centred on
+  // the rod and turned in the plane by `dir`. False for every other cuff,
+  // which is a ring seen edge-on.
+  faceOn: boolean;
   // Bitten into a face: the face's outward normal, through the cuff's centre.
   // Everything on the far side of that plane is inside the geometry. Null for
   // a free cuff and around a rail.
@@ -942,6 +948,7 @@ export class BallPlayer extends RigidBody2D {
         dir: Vec2.RIGHT.rotated(free.renderRotation(alpha)),
         clamped: false,
         onRail: false,
+        faceOn: false,
         buriedUnder: null,
         open: 0,
       };
@@ -958,6 +965,7 @@ export class BallPlayer extends RigidBody2D {
         dir,
         clamped: false,
         onRail: false,
+        faceOn: false,
         buriedUnder: null,
         open: 0,
       };
@@ -974,6 +982,9 @@ export class BallPlayer extends RigidBody2D {
         dir,
         clamped: true,
         onRail: true,
+        // Round a rod the ring is centred on the rod's axis, its own axis
+        // through the plane (`RopeRod`).
+        faceOn: ring instanceof RopeRod,
         buriedUnder: null,
         open: opening.angle,
       };
@@ -987,6 +998,7 @@ export class BallPlayer extends RigidBody2D {
       dir,
       clamped: true,
       onRail: false,
+      faceOn: false,
       buriedUnder:
         end instanceof RopeRide
           ? end.renderNormal(alpha)
@@ -1013,7 +1025,7 @@ export class BallPlayer extends RigidBody2D {
 
   // The chain's end as a ring threaded onto something - a rail clamp or a
   // vine clamp - or null for a bite, a dangling tip or a hook still in flight.
-  private get ringClamp(): RopeClamp | RopeVineClamp | null {
+  private get ringClamp(): RopeClamp | RopeRod | RopeVineClamp | null {
     const end = this.chain?.end;
     return end ? ringEnd(end) : null;
   }
@@ -1502,6 +1514,18 @@ export class BallPlayer extends RigidBody2D {
       // struck. No cuff is mounted: a link collides with nothing, so a piece
       // bolted to one would stop nothing either.
       this.chain.end = RopeVineClamp.at(vine, hook.globalPosition, this.globalPosition);
+    } else if (piece?.rod) {
+      // A ROD, a rail through the plane - a ladder's rung, a handle: the cuff
+      // closes round it CENTRED on its axis and turns freely about it, its
+      // hinge wherever the chain leads it (see `lib/rod.ts`). The chain ends
+      // on the axis, a fixed point of the rod's body, which is the jump the
+      // cuff makes from the surface it struck as it shuts. The cuff is
+      // mounted as the disc it is seen as, so a ball wound up to the rod is
+      // stopped by the ring round it rather than by the bar inside it.
+      const chain = this.chain;
+      const rod = RopeRod.at(body, pieceIndex, () => chain.path());
+      chain.end = rod;
+      this.mountCuff(body, rod.contact.globalPosition, Vec2.RIGHT, circleShape(RopeRod.CUFF_RADIUS));
     } else if (piece?.rail) {
       // A RAIL: the cuff closes around the bar rather than biting its face,
       // so the anchor is a clamp on the bar's own authored CURVE, which
@@ -1630,8 +1654,15 @@ export class BallPlayer extends RigidBody2D {
   // face at the ball's own contact, and a cuff appearing inside the ball would
   // be a shove the throw never made. There is nothing there for the ball to be
   // stopped by that it is not already touching.
-  private mountCuff(body: PhysicsBody2D, point: Vec2, normal: Vec2): CollisionShape2D | null {
-    const bar: ShapeTransform = { globalPosition: point, globalRotation: normal.angle(), shape: manacleShape() };
+  //
+  // `shape` is the bar a bitten cuff is; round a rod it is the ring's disc.
+  private mountCuff(
+    body: PhysicsBody2D,
+    point: Vec2,
+    normal: Vec2,
+    shape: Shape = manacleShape(),
+  ): CollisionShape2D | null {
+    const bar: ShapeTransform = { globalPosition: point, globalRotation: normal.angle(), shape };
     for (const own of this.getShapes()) {
       if (shapeContacts(bar, own).length > 0) return null;
     }

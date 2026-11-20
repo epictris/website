@@ -35,7 +35,7 @@ import { CHAIN_LINK_BEND, CHAIN_LINK_LEN, CHAIN_LINK_SIDE, walkChain } from "./c
 import { ballChainLayout } from "./ballChainPath";
 import type { ChainRetract } from "./chainRetract";
 import type { ChainSnap } from "./chainSnap";
-import { MANACLE_HINGE, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
+import { MANACLE_BAND, MANACLE_HINGE, MANACLE_RADIUS, MANACLE_REACH, MANACLE_WIDTH } from "../lib/manacle";
 import { railPolyline } from "../lib/rail";
 import { beltBand, beltRenderTime, beltTreadPhase, beltTreadTicks } from "./beltTread";
 import { drawTrainingGrid } from "./trainingGrid";
@@ -865,17 +865,50 @@ function drawSceneChains(
 // that angle and its two halves are not the two sides of the face. Null for a
 // free cuff, and around a rail, where the bar passes through the ring and
 // nothing is buried.
+//
+// `faceOn` is the cuff round a ROD, a rail through the plane (`RopeRod`): its
+// axis runs into the screen, so the ring is seen as the ring it is - the band
+// from bore to face all the way round, centred on the rod - with the hinge's
+// barrel end-on at `dir`, where the chain is shackled, and the lock plate
+// across the band opposite it. Nothing is buried.
 function drawManacle(
   ctx: CanvasRenderingContext2D,
   center: Vec2,
   dir: Vec2,
   buriedUnder: Vec2 | null,
+  faceOn = false,
 ): void {
   const W = MANACLE_WIDTH; // the band's width: the bar's thickness
   const PROUD = 0.3 * PX; // how far the hinge and the lock stand off the band
   const KNUCKLE = MANACLE_REACH - MANACLE_HINGE; // the hinge barrel's radius
   ctx.save();
   ctx.translate(center.x, center.y);
+  if (faceOn) {
+    ctx.rotate(Math.atan2(dir.y, dir.x)); // +x now points out of the hinge
+    const bore = MANACLE_RADIUS - MANACLE_BAND / 2;
+    const face = MANACLE_REACH - PROUD;
+    // The band: an annulus, bore to face.
+    ctx.fillStyle = MANACLE;
+    ctx.beginPath();
+    ctx.arc(0, 0, face, 0, Math.PI * 2);
+    ctx.arc(0, 0, bore, 0, Math.PI * 2, true);
+    ctx.fill("evenodd");
+    // Lock: the plate over the mouth, standing off the band to the reach,
+    // with the seam where the jaw tips meet under it.
+    ctx.fillStyle = MANACLE_DARK;
+    ctx.fillRect(-MANACLE_REACH, -0.8 * PX, MANACLE_REACH - bore, 1.6 * PX);
+    // Hinge: the pin's barrel end-on, its axis along the ring's, the pin
+    // through the middle of it.
+    ctx.beginPath();
+    ctx.arc(MANACLE_HINGE, 0, KNUCKLE, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = MANACLE;
+    ctx.beginPath();
+    ctx.arc(MANACLE_HINGE, 0, 0.35 * PX, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
   if (buriedUnder) {
     // The half-plane on the outward side of the face, generous enough to hold
     // the whole cuff at any angle.
@@ -1090,7 +1123,7 @@ export function renderBall(
     // the chain instead was a guess about a body whose pose was in hand, and it
     // drifted off that body as the hook turned (session-150f).
     const pose = ball.manaclePose(alpha);
-    if (pose) drawManacle(ctx, pose.centre, pose.dir, pose.buriedUnder);
+    if (pose) drawManacle(ctx, pose.centre, pose.dir, pose.buriedUnder, pose.faceOn);
   }
   // A released chain reeling back in, laid from its reeled end so the links
   // slide home with it, the cuff riding that end (see render/chainRetract.ts).
@@ -1105,7 +1138,7 @@ export function renderBall(
   const snapped = overlayOnly ? null : snap?.resolve(alpha);
   for (const half of snapped?.anchored ?? []) {
     drawChainPolyline(ctx, half.path);
-    drawManacle(ctx, half.centre, half.dir, half.buriedUnder);
+    drawManacle(ctx, half.centre, half.dir, half.buriedUnder, half.faceOn);
   }
   if (snapped?.onBall) drawChainPolyline(ctx, snapped.onBall);
   // A broken glass ball is nothing but its shards.

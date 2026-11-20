@@ -103,29 +103,41 @@ Five mechanisms carry the requirements:
   have come from. Remembering each node's last clear position as its came-from side was
   tried instead and is worse: a node on the taut path touches a surface every step, so
   that memory dates from before the previous taut episode and points the wrong way.
-  **A node the sag bound moved came from where the bound put it.** The solver's path is
-  the chain, so the bound only ever moves a node toward the right side of what the chain
-  is wrapped round. But a drape thrown round a 20 x 10 cm box sags under a corner while the
-  solver's straight span passes over it (honestly: the solver's spans do not sag), and
-  every step after, the bound pulled its nodes onto the solver's side and the came-from
-  push-out, reading the side they started the step on, handed them straight back. Taut,
-  the drape ran under the box while the chain was wrapped over it, for good: 203, 343 and
-  228 frames of `session-256f`, `session-386f` and `session-276f`. Pushed out by the bound's
-  side, the drape is on the solver's side on every taut frame of all three
-  (`scripts/test-chain-drape.ts`, which is red on all three without it). What is left is
-  the few frames of a throw in which the drape's sag is under a corner the solver's
-  straight span is over: 6, 4 and 3 frames.
-  **A swept push-out was built and taken out.** The long-range attachments clamp a node
-  to a straight-line reach of its pin, through whatever the chain is wrapped round: with
-  the ball pulling away at 6 m/s one pass carried a node 16.6 cm from the top face of the
-  box to below its bottom face (`session-256f` f38), where it ended outside the box and the
-  push-out saw nothing. Sweeping each node from where it last stood clear, and sampling
-  spans stretched past 1.5 node radii so a corner could not pass between two nodes, was
-  tried on 2026-11-12. With the bound's side in place it bought 1-3 frames of a throw on
-  those recordings, cost a quarter more drape time, and the test was green without it.
-  A ball resting against the piece the chain is wrapped round leaves a gap the solver's
-  chain, which has no thickness, fits and the drawn one does not; the drape is pressed
-  into the ball there (`session-256f` f173, `session-386f` f368, up to 18 mm).
+  **A node the sag bound moved came from its target on the path.**
+  The solver's path is the chain, so its side of anything the chain is wrapped round is the right one.
+  But a drape thrown round a 20 x 10 cm box sags under a corner while the solver's straight span passes over it (honestly: the solver's spans do not sag), and every step after, the bound pulled its nodes onto the solver's side and the came-from push-out, reading the side they started the step on, handed them straight back.
+  Taut, the drape ran under the box while the chain was wrapped over it, for good: 203, 343 and 228 frames of `session-256f`, `session-386f` and `session-276f`.
+  Pushed out by the bound's side, the drape is on the solver's side on every taut frame of all three (`scripts/test-chain-drape.ts`, which is red on all three without it).
+  The side was first taken from where the bound PUT the node, and that is not always outside: the bound pulls a node straight at its target, through whatever is between, and a target on a face of the box the chain is wrapped round lands the node inside the box.
+  A side inside the box is no side, so `circleOverlapFrom` fell back to the shallowest face and neighbours split out through opposite faces.
+  On `session-53f` the hook flying round the box took up the slack (4.2 cm to 0.85 cm on f36), the bound pulled nodes 45-58 into the box, 46-49 left by one long face and 50-54 by the other, and the chain was drawn through the box on a 14.5 cm segment (f36-37, reported as the slack chain phasing through the rectangle).
+  The side is now the target itself, which lies on the wrapped faces, and the push-out counts a point within a micrometre of a face's plane as outside it (`BOUND_ON_FACE`).
+  The segment push-out below also clears that segment, but by the nearer end of the box: without the target's side, the drape on those frames (and on `session-386f` f38) wound a whole turn the other way round the box from the chain.
+  **Segments are held off corners.**
+  The node push-out keeps every node clear, but two nodes clear of a piece on two of its faces hold the segment between them across the corner, and nothing pushed back on a segment.
+  It grows when a drape slung over the end of a thin piece is hauled: on `session-53f` f25-27 the nodes on the box's two faces were dragged along them away from the end, each kept on its own face by the came-from push-out (right for each node), and the segment between them cut the corner 8 mm, then 29 mm, then crossed the box through its middle.
+  Neither switching off the long-range attachments (the crossings moved but did not go) nor colliding after every constraint pass instead of every fourth cleared it.
+  `pushSegmentsOut` is the textbook edge-vertex contact: after the nodes, each segment between two free nodes is held the broad link's half-width off every vertex that projects onto it, moved along its normal away from the piece's centre, the move shared between its nodes by where the vertex falls (`1 - t`, `t`) so that the point moves the whole way, repeated up to `SEAM_ROUNDS` times.
+  The side is right for any cut caught while it is shallow, and a cut starts at nothing.
+  A vertex over the segment on the far side from the piece's centre counts only if the segment crosses the piece's edges: on a piece much bigger than the segment (the introduction's rocks) such a vertex can stand metres off a segment lying nowhere near it.
+  The first build did not ask, pushed segments those metres, and threw the drape about on its first playtest (`session-310f`: 2-7 m segments, nodes 6 m past the Verlet fence in a step and 2.26 m deep in rock); the drape test's per-step fence statement holds it, red without the crossing test.
+  It handles vertex loops only: a circle has no corner, and the circle a drape lies on most is the ball's rim, where holding the coil's chords off it pushed the coil out 0.7 mm (their sagitta) on every pass and pushed a drape squeezed between the ball and the box into the box.
+  The segment check in `scripts/test-chain-drape.ts` was red on all four recordings before it (5, 10, 2 and 4 frames, up to 50 mm through the box: the throw frames the bound's side left, and the taut frames below) and is green after.
+  It costs 0.01-0.08 ms a step in bun, 16-30% of the drape's step.
+  **A swept push-out was built and taken out.**
+  The long-range attachments clamp a node to a straight-line reach of its pin, through whatever the chain is wrapped round: with the ball pulling away at 6 m/s one pass carried a node 16.6 cm from the top face of the box to below its bottom face (`session-256f` f38), where it ended outside the box and the push-out saw nothing.
+  Sweeping each node from where it last stood clear, and sampling spans stretched past 1.5 node radii so a corner could not pass between two nodes, was tried on 2026-11-12.
+  With the bound's side in place it bought 1-3 frames of a throw on those recordings and cost a quarter more drape time, and the test, which then checked nodes only, was green without it.
+  A ball resting against the piece the chain is wrapped round leaves a gap that the solver's chain, which has no thickness, fits and the drawn one does not; the drape is pressed into the ball there (`session-256f` f173, `session-386f` f368, up to 18 mm), and until the segment push-out its segments also cut the piece's corner by 2-9 mm.
+  **Open: a drape wound the other way round a piece from the chain flips through it as the slack runs out** (`session-58f`, reported 2026-11-20 as the chain phasing through the box and snapping back once taut).
+  The hook flew past the 20 x 10 cm box: the chain touched only its near corner, while the drape, with 6 cm of slack, lay over the box and hung down its far end.
+  Two things then carried the drape under the box (f34-36): a long-range pass, with the ball pulling away at 6.7 m/s, dragged four nodes straight through it in one step, ending clear on the far side where the push-out never saw them; and the sag bound pulled nodes over the box straight at arc-length targets on the near face 33 cm away through it.
+  When the hook bit under the box (f41) the bound hauled the drape back across.
+  Three things were built on 2026-11-20 and taken out, none closing it: a swept push-out (a node whose move crossed a piece stopped where it went in) stopped the tunnelling and moved the flip a frame later; the bound measured round the pieces (the shorter side of the convex hull of node, target and the blocking pieces, the node moved along it) stopped the bound pulling through, but the node then went round the box in one step, which render interpolation still draws as through it; and long-range attachments dropped while a piece stands between node and pin.
+  Together they roughly halved the frames the drape winds the other way from the chain on the six drape recordings, but stretched the drawn chain by up to 1.55x its length (from 1.18x), because a drape held on the far side of a piece the chain does not wrap is longer than the chain.
+  The root is that a slack drape may honestly wind round a piece the solver's straight span does not, and the arc-length targets know nothing of it; the fix is probably in the drape's notion of where each node belongs, not in its collision.
+  The released chain's reel (`render/chainReel.ts`) and a snapped chain's halves (`render/chainSnap.ts`) still collide by node alone.
+  They are stepped by the renderer only, so no recording measures them yet, and they were left as they were.
 - **Taut is the limit of almost-taut.** Sag grows like the square root of slack, so even
   millimetres of slack sag visibly, and a renderer that switched representation at taut
   would show the chain snapping straight in one frame.

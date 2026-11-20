@@ -21,9 +21,18 @@
 //   a gap the solver's chain, which has no thickness, fits and the drawn one
 //   cannot.
 //
-// Each run must still wrap the box while taut for a good stretch, so a change
-// to the sim that stops the recordings reproducing their scene fails here
-// rather than passing on nothing.
+// - Nothing static is across the chain either. No segment between two
+//   interior nodes passes through a wrappable static piece. The node check
+//   above cannot see it: two nodes each clear of a box on opposite faces
+//   hold the segment between them straight through it. Red on `session-53f`
+//   (the drape across the 20 x 10 cm box the hook flew round, f36-37), where
+//   the sag bound pulled nodes into the box toward targets on its faces and
+//   the push-out, with no side for them to have come from, split them out
+//   through the two shallowest faces.
+//
+// Each run must still wrap the box while taut for a stretch, so a change to
+// the sim that stops the recordings reproducing their scene fails here rather
+// than passing on nothing.
 
 import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
@@ -33,6 +42,7 @@ import { levelFromRecording } from "../src/sim/replay";
 import { recordingDeserializer } from "../src/sim/trace";
 import { CHAIN_LINK_HALF_WIDTH } from "../src/render/chainMetrics";
 import { circleOverlap } from "../src/engine/collision";
+import { MAX_STEP } from "../src/classes/slackChain";
 import { StaticBody2D, type CollisionShape2D } from "../src/engine/body";
 import type { Vec2 } from "../src/engine/vec2";
 
@@ -40,7 +50,17 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIR = join(ROOT, "playtests", "drape");
 // Frames each run must spend taut with the solver's path wound at least half
 // a turn round a static piece, for its statements to be about anything.
-const MIN_WRAPPED_TAUT = 60;
+// `session-53f` is the shortest: the hook takes on f38 of 53.
+const MIN_WRAPPED_TAUT = 10;
+// Runs that are about the drape thrown about the real level rather than about
+// a piece it wraps (`session-310f`: slack chain swung over the introduction's
+// rocks, where the segment push-out threw nodes metres). Their guard is that
+// the drape is out for this many frames instead.
+const LOOSE_RUNS = new Set(["session-310f.json"]);
+const MIN_DRAPE_FRAMES = 120;
+// Spacing of the points a segment is tested at, metres: a fifth of the
+// thinnest piece the runs wrap (the box's 10 cm), well under a node's 2.8 cm.
+const SEGMENT_SAMPLE = 0.005;
 const CLEARANCE_SLOP = 0.001;
 
 // Turns `points` winds round `c`.
@@ -65,13 +85,36 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".json")).sort()) {
   let wrappedTaut = 0;
   const mismatched: number[] = [];
   let deepest = { depth: 0, frame: 0, node: 0 };
+  let across = { depth: 0, frame: 0, node: 0 };
+  let acrossFrames = 0;
+  let thrown = { over: 0, frame: 0, node: 0 };
+  let lastDrape: unknown = null;
+  let lastNodes: Vec2[] | null = null;
+  let drapeFrames = 0;
   for (let f = 0; f < rec.frames.length; f++) {
     level.physicsProcess(de(rec.frames[f]), 1 / 60);
     const frame = f + 1;
     const drape = level.ball.chainSlack;
     const chain = level.ball.chain;
-    if (drape === null || chain === null) continue;
+    if (drape === null || chain === null) {
+      lastDrape = null;
+      continue;
+    }
     const nodes = drape.nodePositions();
+    drapeFrames++;
+
+    // No interior node moves further in a step than the Verlet fence allows
+    // beyond what the pins it hangs between moved.
+    if (lastDrape === drape && lastNodes !== null) {
+      const last = nodes.length - 1;
+      const pins = Math.max(nodes[0]!.distanceTo(lastNodes[0]!), nodes[last]!.distanceTo(lastNodes[last]!));
+      for (let i = 1; i < last; i++) {
+        const over = nodes[i]!.distanceTo(lastNodes[i]!) - MAX_STEP - pins;
+        if (over > thrown.over) thrown = { over, frame, node: i };
+      }
+    }
+    lastDrape = drape;
+    lastNodes = nodes.slice();
 
     for (const body of statics) {
       if (body.removed) continue;
@@ -85,6 +128,28 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".json")).sort()) {
         }
       }
     }
+
+    // The segments between interior nodes, as zero-thickness lines: a point
+    // of one inside a piece is the drawn chain through it.
+    let acrossHere = false;
+    for (const body of statics) {
+      if (body.removed) continue;
+      for (const s of body.getShapes()) {
+        if (!s.wrappable) continue;
+        for (let i = 1; i + 2 < nodes.length; i++) {
+          const a = nodes[i]!;
+          const b = nodes[i + 1]!;
+          const k = Math.max(1, Math.ceil(a.distanceTo(b) / SEGMENT_SAMPLE));
+          for (let j = 1; j < k; j++) {
+            const ov = circleOverlap(a.lerp(b, j / k), 0, s);
+            if (ov === null || ov.depth <= CLEARANCE_SLOP) continue;
+            acrossHere = true;
+            if (ov.depth > across.depth) across = { depth: ov.depth, frame, node: i };
+          }
+        }
+      }
+    }
+    if (acrossHere) acrossFrames++;
 
     if (chain.maxRopeLength - chain.getCurrentLength() > 0) continue;
     const path = chain.path();
@@ -107,10 +172,17 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".json")).sort()) {
     lines.push(`  ${ok ? "PASS" : "FAIL"}  ${what}`);
     if (!ok) failed++;
   };
-  check(
-    wrappedTaut >= MIN_WRAPPED_TAUT,
-    `the run still wraps a static piece while taut (${wrappedTaut} frames >= ${MIN_WRAPPED_TAUT})`,
-  );
+  if (LOOSE_RUNS.has(file)) {
+    check(
+      drapeFrames >= MIN_DRAPE_FRAMES,
+      `the run still has the drape out (${drapeFrames} frames >= ${MIN_DRAPE_FRAMES})`,
+    );
+  } else {
+    check(
+      wrappedTaut >= MIN_WRAPPED_TAUT,
+      `the run still wraps a static piece while taut (${wrappedTaut} frames >= ${MIN_WRAPPED_TAUT})`,
+    );
+  }
   check(
     mismatched.length === 0,
     `taut, the drape winds round what the chain wraps (${mismatched.length} frames off` +
@@ -120,6 +192,18 @@ for (const file of readdirSync(DIR).filter((f) => f.endsWith(".json")).sort()) {
     deepest.depth <= CLEARANCE_SLOP,
     `no node inside a static piece's link-width clearance (deepest ${(deepest.depth * 1000).toFixed(1)} mm` +
       (deepest.depth > 0 ? ` at f${deepest.frame} n${deepest.node}` : "") + ")",
+  );
+  check(
+    thrown.over <= 0,
+    `no node thrown further in a step than MAX_STEP past its pins` +
+      (thrown.over > 0 ? ` (${(thrown.over * 100).toFixed(0)} cm over at f${thrown.frame} n${thrown.node})` : ""),
+  );
+  check(
+    acrossFrames === 0,
+    `no segment through a static piece (${acrossFrames} frames` +
+      (acrossFrames > 0
+        ? `, deepest ${(across.depth * 1000).toFixed(1)} mm at f${across.frame} n${across.node}-${across.node + 1}`
+        : "") + ")",
   );
   console.log(`${file}\n${lines.join("\n")}`);
 }

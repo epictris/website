@@ -521,11 +521,16 @@ export function sweepConvex(
 // one it can only have come through, so the push-out is the least penetration
 // among those; a circle that was already inside every face falls back to the
 // shallowest, there being nothing to say which way it came.
+// `onFace` counts a `from` within that distance of a face's plane, inside
+// it, as outside that face: for a side that is a point ON the surface (a
+// zero-thickness rope's path along a face), which the strict test reads as
+// inside every face. Zero is the strict test.
 export function circleOverlapFrom(
   p: Vec2,
   r: number,
   target: ShapeTransform,
   from: Vec2,
+  onFace = 0,
 ): { normal: Vec2; depth: number } | null {
   const s = target.shape;
   if (s.kind === "circle") return circleOverlap(p, r, target);
@@ -540,7 +545,7 @@ export function circleOverlapFrom(
   for (let i = 0; i < verts.length; i++) {
     const n = polyEdgeNormal(verts, i);
     if (n.x === 0 && n.y === 0) continue;
-    if (n.dot(was.sub(verts[i]!)) <= 0) continue;
+    if (n.dot(was.sub(verts[i]!)) <= -onFace) continue;
     const d = n.dot(local.sub(verts[i]!));
     if (d > dist) {
       dist = d;

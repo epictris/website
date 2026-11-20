@@ -535,9 +535,17 @@ export interface CollisionObjectData extends ObjectPlacement {
   // Only a CURVE may be one, and that is the whole of where a rail's centreline
   // comes from: the cuff rides the authored curve (`lib/rail.ts`), which the
   // author drew and can see, and stops where its disc meets a piece of the same
-  // body that is not part of that curve. Set on any other shape kind it is
-  // ignored - a bar is a curve with a width, and the medial axis a box or a
-  // vertex loop used to be asked for was a guess at one.
+  // body that is not part of that curve.
+  //
+  // On a CIRCLE it is a ROD: a rail that runs THROUGH the plane rather than
+  // along it, which the plane cuts as that circle - a ladder's rung seen
+  // end-on, a handle, a peg. The cuff closes round it centred on its axis and
+  // turns freely about it (`lib/rod.ts`). Only a circle the cuff's bore can
+  // close round is one (`ROD_MAX_RADIUS`); a thicker one is bitten as a face.
+  //
+  // Set on any other shape kind it is ignored - a bar is a curve with a
+  // width, and the medial axis a box or a vertex loop used to be asked for was
+  // a guess at one.
   //
   // Per OBJECT for the reason `impermeable` is, and the case it exists for is
   // a body of both: a lantern whose handles are rails and whose lid, bulb and

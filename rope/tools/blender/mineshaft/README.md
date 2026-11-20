@@ -29,6 +29,33 @@ contains the overview floor, lights, camera, hook and extra display lantern only
 | mine-support | Braced mine entrance frame, ground pivot |
 | mine-oil-lantern | Red flaking paint, emissive globe, side arms joined to the tank shoulders and a flat stepped foot; hanging pivot |
 | mine-pickaxe | Tapered iron head, ground pivot |
+| minecart | Open tapered iron hopper, four spoked wheels, steel push grips at both ends; tread-height pivot |
+
+Build the standalone minecart and its two inspection renders:
+
+```sh
+blender -b -noaudio --python rope/tools/blender/mineshaft/build_minecart.py
+cd rope
+bun run model:export minecart
+```
+
+The editable source is `assets-src/models/minecart.blend`; previews are
+`assets-src/studies/mineshaft/minecart.png`, `minecart-side.png`, and
+`minecart-on-rails.png` (using the existing track asset).
+The cart travels along X, with its four wheel treads centred on the kit's
+1.14 m rail gauge. Place the model origin at rail-head height (0.242 m for
+the existing tracks); wheel flanges extend 0.03 m below that origin.
+Both short ends carry raised shopping-cart-style handles with brushed steel
+grips. The hollow bin uses dark iron with subtle desaturated brown oxide washes, fine
+surface grain, and muted rubbed edges. Rust uses a soft two-scale mask;
+the underlying steel has restrained directional grain instead of cloudy colour
+variation. The frame and grips have less oxidation than the bin panels.
+Packed metal/roughness maps on `CartFinishUV` make the rust matte and nearly
+nonmetallic while exposed iron retains its reflection. Colour and shallow
+surface normals remain procedural in the source and use the game export bake.
+Wheels and handles remain separate named meshes; each wheel's local Y axis
+passes through its axle for animation. Collision is authored
+independently in the editor, as for the rest of the model library.
 
 Metres, Z up, -Y front. Rail centres are 1.14 m apart. Rail collections include
 `socket.start` and `socket.end` arrow empties; align a new segment's start to the
@@ -71,7 +98,9 @@ foot flat, as in the reference.
 The current lantern follows the fuller hurricane-lamp reference with chipped red
 enamel exposing cool steel in sparse angular patches along exposed rims and handle
 attachments. Thin folded rims, sharp seams and subtly faceted arms distinguish it
-from clay. Dark iron guards and the carry bail are thickened for small-screen readability.
+from clay. Dark iron guards are thickened for small-screen readability.
+The large outer carry handle is removed; the small crown loop remains. The
+original model pivot is retained so existing level placements stay aligned.
 The stylised opaque globe uses a bright amber core, darker honey edges and matte
 soot at the crown, without glass reflections or transmission. Matte inner sleeves
 keep the vent openings dark. `render_lantern.py` also writes a 160×192 readability
