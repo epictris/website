@@ -114,9 +114,30 @@ Every length is in screen metres (lengths on the gameplay plane) times the stone
 **Packing** (Tris, 2026-10-04: "no floating rocks, and the rocks should pack tightly together - overlapping if necessary to avoid gaps").
 Every build reports, per piece, the stones that overlap no other stone and not the core and do not stand in the water (`floating`), and the finished rock's faces within two voxels of the core carry a `backdrop_core` attribute, so `backdrop_check.py` can tell stone from fissure.
 
-**The same seed, the same rock.** Two things made a rebuild differ: the inside test that places the seeds counted one ray's crossings, and through a triangle edge it crossed one triangle or both, whichever the BVH found (one point in 40 000 flipped and every seed after it moved), and a cell's taper followed the one face nearest its seed, which at an edge was either.
-Now the test takes the majority of three rays and the taper the solid's normal averaged about the point.
-The stones, merges and joints are then the same on every build; Blender's Manifold boolean still returns a vertex more or less now and then (the thickened Cube.001: 1225 or 1226), which the remesh and decimation carry into under 1 % of the final faces.
+**Repeatability.** The old three-ray parity test still counted crossings by
+restarting each ray `1e-5` beyond its previous hit. At cave world coordinates,
+float rounding could leave that origin on the same face: changing the diagonal
+of an eight-vertex box flipped an interior point to outside. A missing seed
+then shifted the shared random stream; in a Cube.005 check it changed the slopes
+of 673 later stones. The inside test now votes on whether each ray's **first**
+hit exits the outward-wound solid, without restarting rays or counting crossings.
+
+Automatic stones also have stable lattice-candidate identities assigned before
+filtering. Separate random streams keyed by recipe seed, candidate identity,
+split branch and operation keep taper and bevel choices local to each stone.
+Their orientations and ridge locations use the **authored guide**, rather than
+face centres produced by the thickening boolean. Those centres varied with its
+triangulation and could change a normal enough to switch the taper's axis.
+The thickened mesh still supplies the construction volume.
+
+`test_stone_repeatability.py` covers the eight-vertex failure, translations,
+cavities, alternate triangulations, filtering, split randomness and guide-based
+orientation. Three complete small builds matched in vertex coordinates,
+topology and facet values; three Cube.005 seed-stage runs matched all positions
+and taper data exactly. This does not establish bit-for-bit identity of every
+large final mesh: Blender's downstream boolean/remesh operations may still vary
+in topology. The new random-stream policy changes newly generated layouts;
+previously accepted saved meshes are preserved and can be restored directly.
 
 Every piece is one object, `backdrop.<id>`, with its own painted slate.
 

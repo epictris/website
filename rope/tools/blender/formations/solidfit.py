@@ -333,25 +333,22 @@ RAYS = ((0.5773, 0.5774, 0.5775), (-0.6131, 0.4402, -0.6561), (0.3021, -0.8460, 
 
 
 def _inside(tree, points):
-    """Which `points` lie inside the closed surface `tree`: the majority of
-    three rays' crossing parities, along skewed directions. One ray alone
-    flipped a point now and then: through an edge it crosses one triangle or
-    both, whichever the BVH finds, and its order is not the same from one run
-    to the next, so a rock rebuilt from the same seed came out different."""
+    """Inside an outward-wound closed surface, the first ray hit is an exit.
+
+    Vote along three skewed rays to avoid a single grazing edge. Counting
+    crossings by restarting 1e-5 past each hit was not robust at world-space
+    float precision: the restart could still be inside the same triangle,
+    count it twice, and reject a seed depending on the triangulation. The
+    first hit's outward normal needs no epsilon or repeated crossings.
+    """
     _, _, _, Vector, _ = _bpy()
     rays = [Vector(d).normalized() for d in RAYS]
     out = np.zeros(len(points), bool)
     for i, p in enumerate(points):
         votes = 0
         for d in rays:
-            o, n = Vector(p), 0
-            for _ in range(64):
-                hit = tree.ray_cast(o, d)[0]
-                if hit is None:
-                    break
-                n += 1
-                o = hit + d * 1e-5
-            votes += n % 2
+            hit, normal, _, _ = tree.ray_cast(Vector(p), d)
+            votes += hit is not None and normal.dot(d) > 0
         out[i] = votes >= 2
     return out
 
@@ -450,12 +447,15 @@ class Cells:
     decided before the cut (which neighbour lies higher decides the joint).
     A cell is an id; `cut` intersects it with the solid, `split` halves it."""
 
-    def __init__(self, solid, surface, camera, p, boulder, rng, report):
+    def __init__(self, solid, surface, camera, p, boulder, rng, report, *, guide=None):
         from mathutils.kdtree import KDTree
         self.camera, self.p, self.boulder, self.rng = camera, p, boulder, rng
-        self.surface = surface
+        # Construction booleans may triangulate the same surface differently.
+        # The authored guide supplies stable nearest points and face-normal
+        # averages for orientation; the thickened solid supplies volume only.
+        self.surface = _tree(guide) if guide is not None else surface
         # The solid's faces by centre, for the smoothed normal (`_normal`).
-        polys = solid.data.polygons
+        polys = (guide if guide is not None else solid).data.polygons
         self.face_n = np.array([q.normal for q in polys]) * np.array([q.area for q in polys])[:, None]
         self.faces = KDTree(len(polys))
         for i, q in enumerate(polys):
@@ -472,8 +472,9 @@ class Cells:
         tree = _tree(solid)
         if p['adaptiveDepth']:
             from .cell_sampling import surface_seeds
-            seeds, candidates = surface_seeds(tree, lo, hi, self.scale, p['stoneSize'],
-                                             CELLS_PER_M3, CELL_METRIC, rng, _inside)
+            seeds, candidates, identities = surface_seeds(tree, lo, hi, self.scale, p['stoneSize'],
+                                             CELLS_PER_M3, CELL_METRIC, rng, _inside, with_ids=True)
+            self.random_keys = [(int(identity), 0) for identity in identities]
             report['seed candidates'] = candidates
         else:
             box = rng.uniform(lo, hi, (40000, 3))
@@ -485,7 +486,7 @@ class Cells:
             pick = farthest(inside, count, np.array(CELL_METRIC), rng, scales)
             seeds = inside[pick]
         self.planes, self.tapers, self.f = [], [], []
-        tapers = [self._taper(s) for s in seeds]
+        tapers = [self._taper(s, self.stone_rng(i, 0)) for i, s in enumerate(seeds)]
         st = seeds @ CELL_T.T
         neighbours = KDTree(len(st))
         for i, point in enumerate(st):
@@ -579,7 +580,14 @@ class Cells:
             return self.camera.scale(y)
         return p["fixedScale"] if p["fixedScale"] > 0 else max(self.camera.scale(y), p["floor"])
 
-    def _taper(self, point):
+    def stone_rng(self, cid, stream):
+        if not self.p['adaptiveDepth']:
+            return self.rng
+        from .cell_sampling import stone_rng
+        identity, branch = self.random_keys[cid]
+        return stone_rng(self.p['seed'], identity, branch, stream)
+
+    def _taper(self, point, rng):
         """A cell's taper: the guide's normal nearest its seed (the shear's
         outward axis), the depth axis in the surface, the nearest ridge, a
         slope each side of it and the influence of how deep the seed lies."""
@@ -592,7 +600,7 @@ class Cells:
         t = along(n)
         spacing = RIDGE_SPACING * d
         return {"n": n, "t": t, "r": spacing * round(float(np.dot(point, t)) / spacing),
-                "slopes": self.rng.uniform(b["taperSlopeMin"], b["taperSlopeMax"], 2),
+                "slopes": rng.uniform(b["taperSlopeMin"], b["taperSlopeMax"], 2),
                 "mean": (b["taperSlopeMin"] + b["taperSlopeMax"]) / 2,
                 "influence": math.exp(-hit[3] / (d * b["taperReach"])), "k": k}
 
@@ -601,7 +609,7 @@ class Cells:
         `at`: the nearest face's alone is whichever of two the BVH happens to
         find at an edge, and the solid's face order (a boolean's output) is
         not the same from one run to the next."""
-        near = [i for _, i, _ in self.faces.find_range(at, reach)]
+        near = sorted(i for _, i, _ in self.faces.find_range(at, reach))
         if not near:
             near = [self.faces.find(at)[1]]
         n = self.face_n[near].sum(0)
@@ -664,6 +672,9 @@ class Cells:
             self.planes.append(self.planes[cid] + [(sign * e, float(sign * e @ centre) - CELL_GAP * f)])
             self.tapers.append(self.tapers[cid])
             self.f.append(depth_scale)
+            if self.p['adaptiveDepth']:
+                identity, branch = self.random_keys[cid]
+                self.random_keys.append((identity, branch*2+(1 if sign==1 else 2)))
             out.append(len(self.planes) - 1)
         return out
 
@@ -1095,6 +1106,7 @@ def build(solid, camera, params, collection, water_z=None):
     adaptive = camera if p['adaptiveDepth'] else None
     boulder, reinforce, limit_edge_bevel = _boulders()
     rng = np.random.default_rng(int(p["seed"]))
+    guide = solid
     solid = thicken(solid, camera, collection)
     bm_solid = bmesh.new()
     bm_solid.from_mesh(solid.data)
@@ -1109,7 +1121,7 @@ def build(solid, camera, params, collection, water_z=None):
         bpy.data.meshes.remove(me)
 
     # The cells' pieces of the solid, those with any of its surface.
-    cells = Cells(solid, surface, camera, p, boulder, rng, report)
+    cells = Cells(solid, surface, camera, p, boulder, rng, report, guide=guide if adaptive else None)
     pieces, curved = [], set()
     todo = cells.ids()
     while todo:
@@ -1175,7 +1187,7 @@ def build(solid, camera, params, collection, water_z=None):
     # Each stone worked as the boulder works a piece on its top.
     stones, scales = [], []
     for cid, ob, f in kept:
-        if work(ob, cells.tapers[cid], surface, boulder, rng, adaptive):
+        if work(ob, cells.tapers[cid], surface, boulder, cells.stone_rng(cid, 1), adaptive):
             stones.append(ob)
             scales.append(f)
         else:

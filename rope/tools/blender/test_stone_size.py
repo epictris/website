@@ -104,6 +104,7 @@ cells = solidfit.Cells.__new__(solidfit.Cells)
 cells.camera = solidfit.Camera((0, -10, 0), 10)
 cells.p = solidfit.resolved({'stoneSize': 2.})
 cells.planes, cells.tapers, cells.f = [[]], [{}], [1.]
+cells.random_keys = [(0, 0)]
 cells.box = lambda _: (np.zeros(3), np.array([.3, 0., .2]))
 assert cells.split(0) is None
 cells.p['stoneSize'] = .25
