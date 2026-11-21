@@ -29,6 +29,9 @@ import { LeafShed } from "./render/leafShed";
 import { VineSlime } from "./render/vineSlime";
 import { GlassShards } from "./render/glassShards";
 import { glassOptionsFrom } from "./render3d/glassMaterial";
+import { ballRimFrom } from "./render3d/ballRim";
+import { ballReflectionFrom } from "./render3d/ballReflection";
+import { backgroundLiftFrom } from "./render3d/backgroundLift";
 import { glassProbeFar, PROBE_FAR } from "./render3d/reflectionProbe";
 import { ChainRetract } from "./render/chainRetract";
 import { ChainSnap } from "./render/chainSnap";
@@ -68,6 +71,9 @@ const q = new URLSearchParams(location.search);
 const use3d = q.get("render") === "3d";
 // The glass ball's A/B switches, as the game reads them (`--query glasstint=...`).
 glassOptionsFrom(q);
+ballRimFrom(q);
+ballReflectionFrom(q);
+backgroundLiftFrom(q);
 
 // The same fixed 16:9 frame the game draws into, so a grab is what the player is
 // shown — a window-shaped canvas would frame the scene differently from the game

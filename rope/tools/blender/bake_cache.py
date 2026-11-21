@@ -99,7 +99,7 @@ EDITOR_ATTRIBUTE = (".select", ".hide")
 # How a mesh attribute's values are read, by data type: (field, width).
 ATTRIBUTE_FIELD = {
     "FLOAT": ("value", 1), "INT": ("value", 1), "BOOLEAN": ("value", 1), "INT8": ("value", 1),
-    "FLOAT_VECTOR": ("vector", 3), "FLOAT2": ("vector", 2), "INT32_2D": ("value", 2),
+    "FLOAT_VECTOR": ("vector", 3), "FLOAT2": ("vector", 2), "INT32_2D": ("value", 2), "INT16_2D": ("value", 2),
     "FLOAT_COLOR": ("color", 4), "BYTE_COLOR": ("color", 4), "QUATERNION": ("value", 4),
     "FLOAT4X4": ("value", 16),
 }
@@ -145,7 +145,7 @@ def attributes_digest(h, attributes):
         try:
             if attr.data_type in ("BOOLEAN",):
                 _array(h, attr.data, field, n, bool)
-            elif attr.data_type in ("INT", "INT8", "INT32_2D"):
+            elif attr.data_type in ("INT", "INT8", "INT32_2D", "INT16_2D"):
                 _array(h, attr.data, field, n, np.int32)
             elif field:
                 _array(h, attr.data, field, n, np.float32)
@@ -347,6 +347,7 @@ def code_digest():
         raise RuntimeError(f"scene_export.py has no {BAKE_ROOT}: bake_cache.BAKE_ROOT names where the bake starts")
     code = [stmt for stmt in tree.body if id(stmt) in reached]
     _put(h, "scene_export.py", [ast.dump(stmt) for stmt in code])
+    _put(h, "surface_subdivision.py", ast.dump(_parse(os.path.join(HERE, "surface_subdivision.py"))))
     modules = set().union(*(_formations_imports(stmt, False) for stmt in code))
     done = set()
     while modules - done:

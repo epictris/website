@@ -23,6 +23,7 @@ import { DOF_MAX_BLUR, FOCUS_BAND } from "../src/render3d/depthOfField";
 import type { SceneCredit, SceneNodeMeta } from "../src/render3d/scenes";
 import { validateBakedField } from "../src/render3d/bakedLighting";
 import { StepProgress } from "./stepProgress";
+import { constantColourMaps } from "./bakedMapValidation";
 
 export const ROOT = resolve(import.meta.dirname, "..");
 
@@ -225,7 +226,15 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       process.exit(130);
     });
     progress.start("open");
-    const run = await stream(
+    const resume = process.env["SCENE_EXPORT_RESUME_DIR"];
+    const run: Run = resume ? (() => {
+      copyFileSync(join(resume, "raw.glb"), raw);
+      copyFileSync(join(resume, "meta.json"), rawMeta);
+      const stdout = readFileSync(join(resume, "blender.log"), "utf8");
+      console.log(`${tag} resuming completed Blender output from ${resume}`);
+      for (const { id } of STEPS.slice(0, 5)) progress.skip(id, "retained bake");
+      return { status: 0, stdout, stderr: "" };
+    })() : await stream(
       opts.blender,
       [
         "-b", opts.blend, "--factory-startup", "--python-exit-code", "1",
@@ -253,6 +262,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
     // says why in Cycles' lines, which went nowhere before.
     mkdirSync(dirname(blenderLog), { recursive: true });
     writeFileSync(blenderLog, `${run.stdout}\n--- stderr ---\n${run.stderr}`);
+    writeFileSync(join(scratch, "blender.log"), run.stdout);
     if (run.error) {
       progress.fail();
       fail(tag, `could not run ${opts.blender}: ${run.error.message} (install Blender 5.2, or name it with --blender or BLENDER_PATH)`);
@@ -319,7 +329,14 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
         const rawHash = new Map(glbImages(raw).map((im) => [im.name, im.sha256]));
         const encodedNames = new Set(glbImages(optimised).filter((im) => im.mimeType === "image/avif").map((im) => im.name));
         const encodedHashes = new Set(expected.filter((map) => encodedNames.has(map)).map((map) => rawHash.get(map)));
-        const missing = expected.filter((map) => !encodedNames.has(map) && !(rawHash.has(map) && encodedHashes.has(rawHash.get(map))));
+        let missing = expected.filter((map) => !encodedNames.has(map) && !(rawHash.has(map) && encodedHashes.has(rawHash.get(map))));
+        if (missing.length) {
+          // A uniformly painted chunk may become a material factor. Verify
+          // every pixel and the factor on the corresponding exported mesh;
+          // accepting a missing name alone would conceal a lost/empty bake.
+          const constants = await constantColourMaps(raw, optimised, missing);
+          missing = missing.filter((map) => !constants.has(map));
+        }
         if (missing.length) {
           fail(tag, `Blender shipped ${baked[1]} colour and ${baked[2]} normal maps (baked or from its cache) but the optimiser encoded ${encoded("colour")} and ${encoded("normal")} as baked maps; not encoded as one: ${missing.join(", ")}. Nothing shipped; Blender's output is in ${relative(ROOT, blenderLog)}`);
         }

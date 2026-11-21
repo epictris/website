@@ -32,13 +32,16 @@ FIELDS = {
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
                  "edgeBevelWidth": "edge_bevel"},
     "solid": {"seed": "seed", "stoneSize": "stone_size", "knub": "knub", "curveTurn": "curve_turn",
-              "floor": "floor", "fixedScale": "fixed_scale"},
+              "adaptiveDepth": "adaptive_depth", "floor": "floor", "fixedScale": "fixed_scale"},
 }
 FITTED = GENERATORS["fitted"]
 SOLID = GENERATORS["solid"]
 
 
 class FormationParams(bpy.types.PropertyGroup):
+    adaptive_depth: BoolProperty(name='Automatic depth detail', default=True,
+        description='Build with local projection and High-DOF budgets, including remesh and core; '
+                    'replaces Fixed LOD and Depth floor. Disable only to reproduce legacy construction')
     loaded: BoolProperty(description="The fields hold this rock's parameters")
     # Fields saved before 2026-10-16 hold a boulder rock's construction depth
     # in `depth`, not its thickness; `load_all` converts them once.
@@ -77,8 +80,8 @@ class FormationParams(bpy.types.PropertyGroup):
     detail: FloatProperty(name="Remesh detail", description="Remesh resolution: finer as it rises",
                           default=DEFAULT_PARAMS["detail"], min=.25, max=4)
     stone_size: FloatProperty(name="Stone size", description="Every stone's size times this (on screen, so the "
-                              "same at any depth), and its steps and bevels with it; stones on a curve still split "
-                              "down to the small sizes", default=SOLID["stoneSize"], min=.25, max=4)
+                              "same at any depth), including its steps, bevels, curvature-split minimum and "
+                              "small-fragment threshold", default=SOLID["stoneSize"], min=.25, max=4)
     knub: FloatProperty(name="Merge small", description="A stone under this share of its kind's median volume "
                         "is joined to its neighbour instead of standing as a knub", default=SOLID["knub"], min=0, max=1)
     curve_turn: FloatProperty(name="Curve split", description="Degrees a cell's surface must turn in gentle bends "
@@ -116,6 +119,8 @@ def draw(layout, settings, solid):
         row.prop_enum(settings, "generator", "fitted", text="Fitted slate")
         row.prop_enum(settings, "generator", "boulders", text="Boulders")
     for field in FIELDS[settings.generator].values():
+        if settings.generator=='solid' and settings.adaptive_depth and field in ('floor','fixed_scale'):
+            continue
         layout.prop(settings, field)
 
 
@@ -179,6 +184,10 @@ def current(ob):
 
 def changed(ob):
     settings = editable(ob)
+    recipe = json.loads(ob['formation_recipe'])
+    if (generator_of(recipe)=='solid' and 'adaptiveDepth' not in recipe['params']
+            and (settings is None or settings.adaptive_depth)):
+        return True  # Old fixed/floor construction has not adopted local budgets yet.
     if settings is None:
         return False
     (want, asked), (had, used) = from_settings(settings), built(ob)

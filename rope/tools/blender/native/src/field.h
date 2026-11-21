@@ -22,6 +22,9 @@ struct Field {
     // TOLERANCE, SIZE), set by rk_field_set_sizing.
     std::vector<double> ways;
     double step = 0.02, tolerance = 0.002, size_lo = 0.04, size_hi = 0.3;
+    // Optional world-depth budget: row xyz, offset, distance, tanHalf,
+    // output height, maxBlur, focusBand, blurSamples, errorPixels, local scale.
+    std::vector<double> depth_budget;
 
     Field(int64_t n, const double* a, const double* b, const double* bow, const double* reach);
     // The offset at p.

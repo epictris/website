@@ -12,13 +12,11 @@
 // altogether reads as a cut-out pasted over a hazy picture. The value is a
 // played one.
 //
-// The avatar reflects the level's own environment, ON PURPOSE. A private sky
-// for it (the level's colours lifted toward white, a sun lobe always on) was
-// built and played on 2026-09-24 and rejected: a ball reflecting a brighter sky
-// than the room it is in looks pasted on. What lights the player is the world
-// itself - see "Waking lights" in docs/lighting-and-surfaces.md. The ball
-// model goes one further and reflects the level's actual geometry around it,
-// through a probe at its centre (see reflectionProbe.ts).
+// The avatar reflects the level's environment; the ball model reflects the
+// actual nearby geometry through its probe (reflectionProbe.ts). The iron ball
+// also wears a restrained silhouette rim and a broad specular softbox for
+// visibility in dark caves (ballRim.ts and ballReflection.ts). Those additions
+// are applied by ballVisual.ts, separately from these shared avatar rules.
 //
 // THE AVATAR IS LIT ROUND THE BACK. A lamp's diffuse light on it keeps going
 // past the terminator (`AVATAR_WRAP`), so a mushroom beside the ball lights

@@ -79,7 +79,9 @@ def build(quiet=False):
                                   "-c", str(src), "-o", str(obj)], capture_output=True, text=True)
             return obj, run
 
-        with ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:
+        # Respect a bounded export/preview's CPU affinity during compilation too.
+        workers = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             done = list(pool.map(compile_unit, units))
         failed = [run.stderr for _, run in done if run.returncode != 0]
         if failed:

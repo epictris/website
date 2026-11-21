@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><title>River rock — offline LOD comparison</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07101a;color:#eef4ff;font:14px system-ui}canvas{display:block;width:100vw;height:100vh;object-fit:contain}
+#panel{position:fixed;left:16px;top:16px;background:#091321ec;border:1px solid #496079;border-radius:9px;padding:12px 16px;max-width:570px}
+button,select{font:inherit;background:#1a2c41;color:inherit;border:1px solid #61758d;border-radius:5px;padding:6px 9px;margin:7px 5px 0 0;cursor:pointer}
+button[aria-pressed=true]{background:#24658a}#status{font-size:12px;color:#bccbdc;line-height:1.5;margin-top:7px}body.capture #panel{display:none}
+</style></head><body><canvas id="scene"></canvas><div id="panel"><strong>River rock · High depth of field</strong>
+<div><button id="original" aria-pressed="true">Original</button><button id="adaptive" disabled>Adaptive + surface bake</button><button id="geometry" disabled>Geometry only</button><button id="bands" disabled>Show chunks</button>
+<select id="view"><option value="opening">Cave bank</option><option value="wall">Cave wall</option><option value="left">Left pan</option><option value="right">Right pan</option></select></div>
+<div id="status">Loading the existing game scene…</div></div><script type="module" src="./viewer.ts"></script></body></html>

@@ -16,7 +16,8 @@ Every run writes the level's start camera and water onto the scene
                             (scripts/ortho-solids.ts) for the pieces the scene
                             does not have yet, or those --only names, and build
     --set NAME key=value,.. a formation's parameters (solidfit.PARAMS: seed,
-                            stoneSize, knub, curveTurn, floor, fixedScale)
+                            stoneSize, knub, curveTurn, adaptiveDepth;
+                            floor/fixedScale only in legacy mode)
     --render NAME key=value,..  its render settings (formations/render.py:
                             detail_scale, export_strips, export_creases,
                             export_chips, export_map_max, export_texels,
@@ -436,9 +437,6 @@ def seed_from_studio(solids_path, opts, eye, distance, tan_half, water_z):
             guide = mesh_object("guide", sink(place(o["verts"], k), water_z, eye, distance), o["tris"], tmp)
             params = {"seed": zlib.crc32(o["id"].encode()) % 100000}
             if o["id"] in EXTEND:
-                # The sweep is cut as the piece was before it (solidfit.cells).
-                ys = sorted(v.co.y for v in guide.data.vertices)
-                params["floor"] = round((ys[len(ys) // 2] - eye[1]) / distance, 4)
                 extend(guide, EXTEND[o["id"]], eye, distance, tan_half)
             replace(PREFIX + o["id"])
             ob = create(PREFIX + o["id"], guide, params)

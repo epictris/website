@@ -10,6 +10,12 @@ extern "C" {
 // library built from other sources.
 const char* rk_source_hash();
 
+// cells.cpp: feasible intersections of every three normalized planes.
+// out holds at most count*(count-1)*(count-2)/6 points.
+int64_t rk_cell_corners(int64_t count, const double* planes, double* out);
+int32_t rk_cell_meets_surface(const void* bvh, int64_t count, const double* planes,
+                             const double* lo, const double* hi);
+
 // bows.cpp: the crease bow field (formations/curve.py).
 void* rk_field_new(int64_t n, const double* a, const double* b, const double* bow, const double* reach);
 void rk_field_free(void* field);
@@ -17,6 +23,7 @@ void rk_field_eval(const void* field, int64_t count, const double* points, doubl
 void rk_field_set_sizing(void* field, int64_t nways, const double* ways, double step, double tolerance,
                          double size_lo, double size_hi);
 void rk_field_sizing(const void* field, int64_t count, const double* points, double* out);
+void rk_field_set_depth_budget(void* field, const double* budget);
 
 // crease.cpp: formations/curve.py `rebuild` on arrays.
 void* rk_crease_rebuild(const void* field, int64_t nverts, const double* co, int64_t nfaces, const int64_t* face_start,

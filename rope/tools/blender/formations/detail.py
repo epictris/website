@@ -97,7 +97,7 @@ CAGE, RAY_DISTANCE = 0.005, 0.08
 
 
 # ================================================================ sub-facets
-def plane_regions(bm):
+def plane_regions(bm, band=None):
     """Faces grouped into visible planes: grown from the largest face out
     across edges whose far face is within PLANE_ANGLE of the region's
     area-weighted normal; a small region bordered by one large one only (a
@@ -115,7 +115,7 @@ def plane_regions(bm):
             f = stack.pop()
             for e in f.edges:
                 for g in e.link_faces:
-                    if g in owner or g is f:
+                    if g in owner or g is f or (band is not None and g[band]!=seed[band]):
                         continue
                     if g.normal.dot(normal.normalized()) < limit:
                         continue
@@ -130,7 +130,8 @@ def plane_regions(bm):
         for i, region in enumerate(regions):
             if not region or sum(f.calc_area() for f in region) >= MIN_AREA:
                 continue
-            around = {owner[g] for f in region for e in f.edges for g in e.link_faces if owner[g] != i}
+            around = {owner[g] for f in region for e in f.edges for g in e.link_faces
+                      if owner[g] != i and (band is None or g[band]==f[band])}
             if len(around) != 1:
                 continue
             j = next(iter(around))
@@ -316,12 +317,15 @@ def grid_points(poly, holes, spacing, rng):
     return points
 
 
-def split_long_edges(bm, spacing):
+def split_long_edges(bm, spacing, smallest=0.0):
     """Cut every edge longer than 1.5 spacings into pieces no longer than a
     spacing, in both faces it borders, so the mesh stays closed and no
     boundary stretch fans into long thin triangles."""
     by_cuts = {}
+    from .depth_lod import threshold
     for e in bm.edges:
+        if threshold(smallest, [v.co for v in e.verts])>spacing:
+            continue
         n = int(e.calc_length() / spacing)
         if e.calc_length() > 1.5 * spacing and n >= 1:
             by_cuts.setdefault(n, []).append(e)
@@ -336,10 +340,12 @@ def crumple(src, rng, smallest=0.0):
     be finer than `smallest` keeps its face."""
     bm = src.copy()
     stats = {"planes": 0, "rebuilt": 0, "points": 0, "skipped": 0, "area": 0.0, "skipped_area": 0.0}
-    stats["split"] = split_long_edges(bm, SPACING)
+    stats["split"] = split_long_edges(bm, SPACING, smallest)
     bm.normal_update()
     jobs = []
-    for region in plane_regions(bm):
+    from .depth_lod import FACE_BAND, threshold
+    band = bm.faces.layers.int.get(FACE_BAND) if callable(smallest) else None
+    for region in plane_regions(bm,band):
         area = sum(f.calc_area() for f in region)
         stats["area"] += area
         if area < MIN_AREA:
@@ -377,7 +383,7 @@ def crumple(src, rng, smallest=0.0):
         poly, holes = polys[0], polys[1:]
         loop = [v for lp in loops for v in lp]
         spacing = max(min(SPACING_MIN, SPACING), min(SPACING, 0.5 * math.sqrt(area)))
-        if spacing < smallest:
+        if spacing < threshold(smallest, [v.co for lp in loops for v in lp]):
             stats["skipped"] += 1
             stats["skipped_area"] += area
             continue
@@ -429,18 +435,31 @@ def crumple(src, rng, smallest=0.0):
                 break
             s = srcs[0]
             verts.append(loop[s] if s < len(boundary) else new_pts[s])
-        new_faces, keys = [], set()
+        new_faces, keys, patch_keys = [], set(), set()
         if ok:
             for face in faces2d:
                 vs = [verts[i] for i in face]
-                if len(set(map(id, vs))) < 3:
+                corner_key = frozenset(map(id, vs))
+                if len(corner_key) < 3:
                     continue
+                # Merged CDT sources can map distinct output triangles to
+                # the same corners, including newly inserted points. Reject
+                # the patch before deleting its original faces.
+                if corner_key in patch_keys:
+                    ok = False
+                    break
+                patch_keys.add(corner_key)
                 existing = [v for v in vs if isinstance(v, bmesh.types.BMVert)]
                 if len(existing) == 3:
                     # As if every plane before were already made again: its
                     # old faces are gone and the triangles it made are there.
-                    old, key = bm.faces.get(existing), frozenset(existing)
-                    if (old is not None and old not in in_region and old not in gone) or key in claimed:
+                    key = frozenset(existing)
+                    # Welding the detail copy can leave coincident source
+                    # triangles. faces.get finds only one; another owner
+                    # outside this patch would survive its deletion.
+                    owners = (f for f in existing[0].link_faces
+                              if len(f.verts) == 3 and all(v in f.verts for v in existing[1:]))
+                    if any(f not in in_region and f not in gone for f in owners) or key in claimed:
                         ok = False
                         break
                     keys.add(key)
@@ -631,7 +650,8 @@ def build_cutters(rock_bm, rng, smallest=0.0):
             n = f1.normal.slerp(f2.normal, t).normalized()
             theta = min(t, 1 - t) * phi
             wide = s * rng.uniform(*WIDE)
-            if wide < smallest:
+            from .depth_lod import threshold
+            if wide < threshold(smallest, [p], max(a1,a2,wide)):
                 continue  # blurred away where the rock stands
             h = wide * math.sin(theta)
             reach = max(a1, a2, wide)

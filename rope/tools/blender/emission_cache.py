@@ -188,12 +188,53 @@ def bake(objects, dynamic_names, directory, log=print):
         log(f'emission cache: reused {len(result[0])} material lightmaps and probes in {time.monotonic()-started:.1f}s')
         return result
     log(f'emission cache: miss (input check {time.monotonic()-started:.1f}s)')
-    result = run(objects, dynamic_names, log, prepare_receiver=ReceiverUVCache(directory))
+    checkpoint = LightmapCheckpoint(directory, key)
+    result = run(objects, dynamic_names, log, prepare_receiver=ReceiverUVCache(directory), checkpoint=checkpoint)
     try:
         save(directory, key, objects, *result)
+        checkpoint.clear()
     except (OSError, RuntimeError) as error:
         log(f'emission cache: could not save: {error}')
     return result
+
+
+class LightmapCheckpoint:
+    """Raw, validated targets keyed by the entire lighting scene, before wiring.
+
+    Receivers stay unlit while other targets bake, including resumed targets.
+    Atomic files preserve completed work if a later bake or export fails.
+    """
+    def __init__(self, directory, key):
+        self.directory = Path(directory) / 'partial' / key
+        self.directory.mkdir(parents=True, exist_ok=True)
+
+    def path(self, image):
+        identity = json.dumps([image.name, list(image.size)])
+        return self.directory / (hashlib.sha256(identity.encode()).hexdigest() + '.npy')
+
+    def restore(self, image):
+        try:
+            values = np.load(self.path(image), allow_pickle=False)
+            if (values.dtype != np.float32 or values.shape != (image.size[1], image.size[0], 4)
+                    or not np.isfinite(values).all() or not np.any(values[:, :, 3] > .5)):
+                return False
+        except (OSError, ValueError, EOFError):
+            return False
+        image.pixels.foreach_set(values.ravel())
+        return True
+
+    def save(self, image, values):
+        destination = self.path(image)
+        with tempfile.NamedTemporaryFile(dir=self.directory, suffix='.npy', delete=False) as temporary:
+            path = Path(temporary.name)
+        try:
+            np.save(path, values)
+            os.replace(path, destination)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def clear(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
 
 
 class ReceiverUVCache:

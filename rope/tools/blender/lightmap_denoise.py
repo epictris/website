@@ -2,18 +2,29 @@
 
 Cycles render denoising does not run on texture bakes. Denoise the linear
 irradiance before HDR scaling/8-bit encoding, never the rock's colour texture.
-API: https://www.openimagedenoise.org/documentation.html#rt
+API: https://www.openimagedenoise.org/documentation.html#rtlightmap
 """
 import ctypes as c
 import ctypes.util
+import hashlib
 from pathlib import Path
 
 import bpy
 import numpy as np
 
+WEIGHTS = Path(__file__).parent / "third_party/oidn_weights/rtlightmap_hdr.tza"
+WEIGHTS_SHA256 = "5f9757cb6a3d6c966cbd50dcd0cbffef88fe78f80cb7bf45ca99bcbd4ff1292d"
+
 
 class LightmapDenoiser:
     def __init__(self):
+        data = WEIGHTS.read_bytes()
+        if hashlib.sha256(data).hexdigest() != WEIGHTS_SHA256:
+            raise RuntimeError(f"Lightmap denoiser weights are corrupt: {WEIGHTS}")
+        # Blender includes the filter implementation but omits its trained
+        # weights. Keep the pinned lightmap model alive for every filter call.
+        self.weights = c.create_string_buffer(data)
+        self.weights_size = len(data)
         root = Path(bpy.app.binary_path).parent
         paths = [*root.glob("lib/libOpenImageDenoise.so*"),
                  *root.glob("OpenImageDenoise.dll"),
@@ -33,6 +44,7 @@ class LightmapDenoiser:
                                                 c.c_size_t, c.c_size_t, c.c_size_t, c.c_size_t, c.c_size_t]),
             "oidnSetFilterInt": (None, [c.c_void_p, c.c_char_p, c.c_int]),
             "oidnSetFilterBool": (None, [c.c_void_p, c.c_char_p, c.c_bool]),
+            "oidnSetSharedFilterData": (None, [c.c_void_p, c.c_char_p, c.c_void_p, c.c_size_t]),
             "oidnCommitFilter": (None, [c.c_void_p]),
             "oidnExecuteFilter": (None, [c.c_void_p]),
             "oidnReleaseFilter": (None, [c.c_void_p]),
@@ -59,15 +71,16 @@ class LightmapDenoiser:
         if not pixels[:, :, :3].any():
             return  # A truly unlit surface remains exactly black.
         height, width = pixels.shape[:2]
-        # Blender bundles the RT weights, but not RTLightmap's optional model.
-        filt = self.lib.oidnNewFilter(self.device, b"RT")
+        # The camera-image RT model leaves low-frequency blotches in dim
+        # irradiance. RTLightmap is trained for this signal and its HDR range.
+        filt = self.lib.oidnNewFilter(self.device, b"RTLightmap")
         self.check()
         try:
+            self.lib.oidnSetSharedFilterData(filt, b"weights", self.weights, self.weights_size)
             for name in (b"color", b"output"):
                 self.lib.oidnSetSharedFilterImage(filt, name, pixels.ctypes.data, 3,
                                                  width, height, 0, 16, width * 16)
             self.lib.oidnSetFilterInt(filt, b"maxMemoryMB", 512)
-            self.lib.oidnSetFilterBool(filt, b"hdr", True)
             self.lib.oidnCommitFilter(filt)
             self.check()
             self.lib.oidnExecuteFilter(filt)

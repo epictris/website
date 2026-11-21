@@ -108,6 +108,47 @@ Skipped objects that share a reason are counted on one line (an excluded collect
 The dev server serves `/scenes/` itself, uncached (`src/server/scenes.ts`), because vite's public handler knows only the files its watcher saw at startup and the directory is off the watcher; a refresh shows the new export.
 The Level panel shows the export's summary and the body panel offers the exported object names in the `name` field and says whether the name is dressed.
 
+If optimization or validation fails after Blender finishes, the exporter keeps
+the completed `raw.glb`, `meta.json`, and `blender.log` and prints their folder.
+`SCENE_EXPORT_RESUME_DIR=<folder> just scene <level>` runs that retained bake
+through optimization, encoding, and validation again. It uses the retained
+export's inputs; it does not incorporate later Blender edits or rebake anything.
+
+## Automatic surface chunks
+
+Large procedurally baked meshes now export as spatial child meshes, one per
+colour/normal atlas. The authored object name remains their parent, so body
+bindings and attached plants keep their transforms. Oversized source polygons are first cut into smaller faces, preserving their
+rendered surface and interpolating shader attributes, so even a single large
+plane can occupy multiple atlases. Empty atlas slots are removed before bake
+workers are dispatched. Splitting into child objects happens after surface
+baking and deformation but before emission baking; every child gets
+an independent lightmap. The source `.blend` is not changed.
+
+The Render panel's **Most maps = 0** automatically allocates enough atlases
+for the requested surface density, without the old eight-map limit (or the
+single-map limit for distant objects). Positive values remain explicit quality
+caps. Map dimensions and depth-based detail settings still apply. More surface
+therefore costs more textures and draw calls rather than continually reducing
+the density of a single texture. Existing per-section lighting overrides are
+transferred to the corresponding child.
+
+The exporter defaults to two bake workers and at most four simultaneous UV
+packs per mesh to bound the memory used by large atlas sets.
+`SCENE_EXPORT_WORKERS` still allows an explicit concurrency override.
+
+Emission baking joins temporary copies of sibling chunks within each batch,
+preserving their separate target images while sharing Cycles scene setup.
+The exported meshes remain separate. Each completed batch is validated and
+checkpointed under the full lighting-scene cache key. Interrupted exports can
+resume those raw targets without letting them illuminate subsequent bakes.
+An unwritten target is retried on CPU immediately; a failed retry stops export.
+
+Re-export the scene to regenerate its assets. This addresses texture budget
+loss from large meshes; sampling noise or UV defects still require their own
+fixes. `tools/blender/test_mesh_chunks.py` checks geometry, shading normals,
+UVs, transforms, binding inheritance and independent receiver lightmaps.
+
 ## Emissive lighting
 
 Use **Game → Preview Emission (Cycles)** as the authoring reference. The
@@ -141,7 +182,10 @@ Unbaked background is extended from the baked island edges for filtering;
 actual shadow samples remain untouched. The map contains received white diffuse radiance, including direct
 emission and diffuse bounce. Cycles' render denoising does not process texture
 bakes, so these maps explicitly run through Blender's bundled Open Image
-Denoise in HDR mode before encoding. This removes Monte Carlo speckles from
+Denoise `RTLightmap` filter before encoding. Its pinned HDR model is vendored
+under `tools/blender/third_party/oidn_weights` because Blender omits those
+weights. The camera-image `RT` model leaves visible mottling in dim irradiance,
+even after increasing the bake sample count. This removes Monte Carlo speckles from
 received lighting without filtering the rock's colour or normal texture.
 New HDR maps use logarithmic encoding before sRGB storage and lossless
 compression: `log(1 + 16 * radiance) / log(1 + 16 * range)`. The material
@@ -213,11 +257,18 @@ Optional Blender scene custom properties:
 | --- | --- | --- |
 | `game_bake_emission` | true | Enable the emission bake on scene exports |
 | `game_light_samples` | 64 | Cycles bake samples |
+| `game_light_noise_threshold` | 0.001 | Bake-specific adaptive convergence; 0 traces every requested sample |
 | `game_lightmap_size` | automatic | Optional fixed map side: 128, 256, 512, 1024, 2048, 4096 or 8192; otherwise sized by surface area |
 | `game_probe_spacing` | 2 | Desired probe spacing in metres |
 | `game_probe_min`, `game_probe_max` | automatic | Three-component bounds in **game** coordinates (x, up, toward camera) |
 
 Meshes may override `game_lightmap_size` and `game_light_samples` individually.
+The sample count is a maximum when adaptive convergence is enabled. Lighting
+bakes use their own noise threshold rather than inheriting the camera render's
+threshold: the latter can stop dim texels too early, leaving blotches after
+denoising even when the maximum sample count is raised. Render time limits and
+view-layer sample overrides are temporarily disabled; all render settings are
+restored after the bake, including on failure.
 For terrain with multiple surface atlases, `game_lightmap_section_size` assigns
 that resolution to each section, automatically following the exported atlas count.
 `game_lightmap_chunk_sizes` takes precedence when individual section sizes are needed.
@@ -450,6 +501,87 @@ So a new texture in a scene is one line in the table; `CREDITS.md` stays generat
 
 ### Cave texture quality
 
+#### Residual mottling after chunking: Terrace.014 (2026-11-21)
+
+The four-shelf cluster on `Terrace.014.mushrooms` still showed mottled green
+illumination after its rock was split into six meshes with independent
+textures. Chunking improved texel density, but did not resolve this separate
+lighting problem. The fix below mostly solved the reported view; it is not a
+claim that every remaining patch, or every receiver in the scene, is fixed.
+
+**Diagnosis.** In the game renderer, replacing the rock's colour with a flat
+colour and disabling runtime normals left the pattern visible. Disabling its
+lightmap removed it. Targeted Cycles bakes kept the full scene's geometry and
+emitters present, changing only the six receiver maps. Increasing the maximum
+from 128 to 1024 or 4096 samples helped, but adaptive sampling stopped early.
+A fixed 1024-sample bake still left fine mottling after denoising. A matched
+bake with receiver normal inputs disconnected also retained the pattern, so
+removing the rock's normal detail was not the solution.
+
+**Implemented fix.** `tools/blender/lightmap_denoise.py` now uses OIDN's
+`RTLightmap` filter instead of its camera-image `RT` filter. Supply the pinned
+HDR weights in `tools/blender/third_party/oidn_weights/rtlightmap_hdr.tza`;
+Blender's bundled library implements the filter but omits those weights.
+The directory records the upstream revision, SHA-256 and Apache-2.0 licence;
+the loader verifies the checksum. Do not silently fall back to `RT` if the
+model is missing. Denoising operates on linear HDR irradiance after island
+background filling and before logarithmic/sRGB encoding. It does not filter
+the colour or normal textures.
+
+`tools/blender/emission_bake.py` also sets a dedicated
+`game_light_noise_threshold = 0.001` by default, rather than inheriting the
+camera render's 0.01 threshold. Zero disables adaptive early stopping for
+diagnosis. Render time limits and view-layer sample overrides are temporarily
+cleared, and the original settings are restored on success or failure.
+`game_light_samples` remains the maximum sample count when adaptive sampling
+is enabled. The dedicated denoiser substantially reduced the visible mottling
+at the river's existing **128-sample** budget; a blanket increase to 1024 was
+not needed for this fix.
+
+**What was actually updated and checked.** The locally served river scene
+received six newly baked `Terrace.014` lightmaps. Those maps were inserted into
+the retained complete raw scene, then the whole scene passed the normal
+optimisation, texture encoding and export validation. Other receivers'
+lightmaps and the probe field were retained. The rock still has 437,950
+triangles and the same colour/normal textures. A fresh browser capture of the
+exported asset on port 3100 verified the improvement without diagnostic texture
+substitutions. The verified GLB SHA-256 was
+`91ca0954fdc7764c08e8c54d0e84f041254222e220f231d895e7e3784a48b6e0`.
+
+**Applying it more broadly later:**
+
+1. Run `just scene ball` from the repository root with
+   `SCENE_EXPORT_RESUME_DIR` unset. The implementation applies to all freshly
+   baked static lightmaps; the lighting cache fingerprints the changed Python
+   code, so a normal export invalidates the older lighting result while still
+   allowing surface-cache reuse. Re-encoding retained old Blender output does
+   **not** run the new denoiser. Use other levels' normal scene exports to
+   update their receivers as well.
+2. Verify the original close-up at `--at 48.72,1.31 --orbit 0,0 --zoom 5.2`
+   with `--query 'dof=off&scale=2&contactshadow=0'`, then check the normal game
+   view with its usual DOF. Inspect other mushroom/rock clusters separately;
+   a clean neighbouring receiver does not validate this one. Compare at the
+   same camera, zoom, drawing-buffer resolution and lighting settings.
+3. For residual cases, isolate colour, normals and lightmap again before
+   choosing a remedy. Compare the raw linear bake with its denoised result.
+   If more samples are needed, override `game_light_samples` on the affected
+   receiver and compare with early stopping disabled. If edges remain angular
+   or smeared despite clean sampling, check UV overlap, local texel density,
+   geometry intersections and plant contact. The denoiser does not repair
+   those problems, and chunking alone does not guarantee noise-free lighting.
+4. Run `blender -b --factory-startup -noaudio --python-exit-code 1 --python
+   rope/tools/blender/test_emission_bake.py` from the repository root. This
+   checks HDR denoising, unlit-map preservation, UV handling, encoding and
+   sampling-setting restoration. It complements visual checks; its synthetic
+   denoising test alone did not distinguish the two filters in the real cave.
+
+Diagnostic bakes, comparisons and the final served screenshot were retained
+under `rope/.cache/mottle-diagnostics/` (`served-after.png`,
+`sample-baseline.png`, and the variant directories). These are ignored local
+artifacts, not a dependency of future exports or a permanent test fixture.
+
+#### Earlier cave texture investigations
+
 The river chamber (`Cube.002`) uses `export_map_max = 4096`,
 `export_maps = 2`, and `export_texels = 400`. The map count is a hard
 memory budget, not a guarantee of the requested texel density. The two
@@ -558,3 +690,88 @@ are unchanged; point-light filtering remains separate.
 Export scratch, including Blender worker snapshots and Cycles tile buffers,
 lives under `.cache/export-tmp` on the project drive. Large lightmaps can
 exhaust a RAM-backed `/tmp`; this keeps those intermediate files off it.
+
+## Offline depth budgets
+
+Automatic solid formations also repair small folded crease fragments during
+surface preparation (`formations/crease_cleanup.py`). The repair uses nearby
+large facets that are sufficiently planar, bounds vertex movement to under
+5 cm in world space, and adds no geometry. It runs after the broad crease bows
+are chosen and before retessellation and baking, so a local repair does not
+reshuffle the curves elsewhere. Warped faces and unsupported regions are left
+alone. The existing sliver cleanup then handles the narrowed bevel strips.
+For Stone size below one, repair distances and support areas shrink with the
+stone size; larger settings retain the same 5 cm maximum movement.
+This changes only the export copy; legacy uniform solids retain their finish.
+The saved roof's repair took about two seconds on two low-priority CPU cores.
+`test_crease_cleanup.py` checks the small folded-crease case, attributes, mesh
+health and scaled frames; `test_depth_lod_export.py` checks the bake and cache
+path, including that cached geometry is not repaired a second time.
+The detail normal pass rejects replacement patches with duplicate triangles,
+including coincident source faces left by welding, before deleting the old
+surface (`test_detail_duplicate_patch.py`).
+
+Formations now budget their surface detail by **world depth within the rock**
+(`formations/depth_lod.py`), using the saved gameplay camera and High DOF.
+Camera panning parallel to the gameplay plane does not change the budget.
+The policy assumes 2160 output lines and the authored fixed lens/distance;
+a substantially closer zoom or weaker DOF needs a new quality assessment.
+The thresholds remain conservative starting values, not a proved perceptual bound.
+
+This is enabled by default on objects carrying `formation_recipe` when the
+scene has `backdrop_camera`. The Render panel's **Offline depth detail** switch
+(`export_depth_lod = false`) restores the uniform path. An explicit
+`detail_scale` or positive `export_maps` also retains that path. Explicit
+strips/creases/chips toggles override feature pruning for that pass;
+`export_texels` sets the base density and `export_map_max` caps each atlas.
+Solid-guide construction also has automatic depth budgets for stone construction,
+the core and voxel finishing. These take effect on regeneration; see
+[automatic construction](blender-backdrop.md#automatic-construction-detail).
+
+The work happens before expensive detail generation:
+
+- Bows, strips and chip candidates use the nearest depth of their whole support.
+  Blurred-away features are omitted before triangulation or cutter construction.
+  Surviving bows use depth-dependent native tessellation tolerance, never tighter
+  than the existing foreground setting; their displacement field is unchanged.
+- The connected surface is cut at power-of-two depth transitions, without caps.
+  Regions prevent a long foreground plane from forcing fine sub-facets throughout
+  its distant extent. New cut boundaries share vertices and interpolate attributes.
+- Each region allocates its own texture density before unwrap/bake. Density halves
+  at each successive band; physical slate feature sizes remain constant. UV charts
+  cannot cross budget bands. If chart padding cannot fit a small distant atlas,
+  only that atlas grows, up to its configured cap. Collapsed unwrap slivers receive
+  point UVs in their own band instead of reconnecting unrelated charts.
+- The existing final material split creates separately budgeted child draw meshes,
+  preserving the source object's binding parent. There is no runtime LOD switch.
+  Camera policy and implementation are included in the bake cache key; panning
+  alone does not invalidate that policy.
+
+Measured on **Cube.005**, all 210,872 authored faces, two low-priority CPU cores:
+
+| Generation/planning measurement | Uniform foreground | Adaptive |
+| --- | ---: | ---: |
+| Surface faces before final triangulation | 321,586 | 222,737 |
+| Detail high-poly triangles | 277,932 | 228,524 |
+| Generated chip cutters | 853 | 253 |
+| Planned colour texels | 318.8 million | 235.1 million |
+| Geometry preparation + atlas planning | 12.13 s | 11.48 s |
+
+The adaptive total includes 1.82 s of partition/subdivision. These single-run
+numbers exclude coarse formation construction, UV packing, baking, image encoding
+and the remainder of scene export. Padding can increase final atlas sizes. A
+12,000-face sample took 0.54 s adaptive versus 0.45 s uniform: small workloads
+can cost slightly more to partition. The all-foreground detail control produces
+identical high-poly geometry. Do not interpret texel reduction as a measured
+full-export speedup.
+
+Reproduce with `tools/blender/benchmark_depth_lod.py` under Blender, passing
+`-- <river.blend> <report.json> 250000`; pin to two CPU cores and set both Blender
+and OpenMP to two threads. `test_depth_lod.py` checks transformed cuts, closed
+boundaries, atlas separation, cache policy and tessellation. The small CPU-only
+`test_depth_lod_export.py` covers a cold bake, cached reload, crease deformation
+and final child meshes. Existing subdivision and chunk tests cover their shared
+paths. The [in-game comparison tools](../tools/blender/lod_prototype/README.md)
+render the actual cave geometry through Scene3D with High DOF and frozen lighting;
+their one-sample, reduced-density surface bake is a visual check rather than a
+full production export.

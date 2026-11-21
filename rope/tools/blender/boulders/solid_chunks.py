@@ -9,10 +9,10 @@ def reinforce_chunks(pieces, parts, spec):
     retained=[]
     removed=backed=0
     from params import param
-    depth=spec['depth']
-    minimum=depth*param(spec,'backingDepth')
     sliver_volume=param(spec,'sliverVolume'); sliver_thickness=param(spec,'sliverThickness')
     for obj,part in zip(pieces,parts):
+        depth=part.get('construction_depth',spec['depth'])
+        minimum=depth*param(spec,'backingDepth')
         if part['name'].startswith('buried_'):
             retained.append(obj)
             continue
@@ -23,6 +23,14 @@ def reinforce_chunks(pieces, parts, spec):
         if not area or volume<depth**3*sliver_volume or 2*volume/area<depth*sliver_thickness:
             bm.free(); bpy.data.objects.remove(obj,do_unlink=True)
             removed+=1
+            continue
+        if part.get('preserve_concavity', False):
+            # A guide-fitted stone can wrap a concave surface or contain
+            # several disconnected patches. A hull across all its vertices
+            # bridges the recess and buries neighbouring stones. These pieces
+            # already have a separate recessed core behind them.
+            bm.free()
+            retained.append(obj)
             continue
         tree=BVHTree.FromBMesh(bm)
         points=[v.co.copy() for v in bm.verts]

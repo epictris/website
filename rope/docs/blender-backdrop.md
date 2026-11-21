@@ -107,6 +107,7 @@ Every length is in screen metres (lengths on the gameplay plane) times the stone
      The boulder's plates reach about 1.1 m from its ridge; ridges 2.6 m apart left a strip of bare core between them that the plates around it framed like the rim of a hollow shell (Tris, 2026-11-13: "why does it look hollow?").
      **Without the roof**: the boulder's taper also sinks every piece by its slope, so its top falls away from the gameplay plane as a whole; on a solid that would repeat at every ridge and leave a groove at each valley, so the mean slope is taken off each stone's (`solidfit.sink`): the steps between stones are the boulder's, the roof is gone.
 4. **The boulder's cleanup** (`solidfit.clean`): `solid_chunks.reinforce_chunks` drops slivers and backs shallow wedges, and every convex edge sharper than the boulder's thin-edge angle is bevelled.
+   Automatic guide-fitted stones skip the convex-hull backing: a stone may wrap a concave guide or contain separated patches, and a hull bridges those recesses and covers neighbouring stones with a broad flat face. Their separate recessed core supplies the backing. Sliver removal and acute-edge bevels remain; foreground outline slabs retain their original wedge backing. `test_solid_concavity.py` checks both a concave recess and separated patches, plus the unchanged foreground backing.
 5. **Core**: the solid itself, rounded and shrunk 0.2 inside in five steps with a remesh after each, opened, and faceted by a 0.15 remesh and the planar dissolve, so a fissure shows recessed stone and never the sky.
 6. **The boulder's finish** (`blender_build.assemble_rock`): the core and the stones in one Manifold union, the voxel remesh (1.2 cm times the depth scale), smoothing, the decimation to the boulder's face budget, the rock cut back inside the solid grown by the most a step can rise (`guard`), and the boulder's edge bevel (`limit_edge_bevel`).
 
@@ -118,6 +119,101 @@ Now the test takes the majority of three rays and the taper the solid's normal a
 The stones, merges and joints are then the same on every build; Blender's Manifold boolean still returns a vertex more or less now and then (the thickened Cube.001: 1225 or 1226), which the remesh and decimation carry into under 1 % of the final faces.
 
 Every piece is one object, `backdrop.<id>`, with its own painted slate.
+
+## Automatic construction detail
+
+Solid-guide formations now default to `adaptiveDepth = true`. This replaces
+the need to set **Fixed LOD** or **Depth floor**: they are hidden and ignored
+in automatic mode. They remain stored for legacy reproduction with automatic
+construction disabled. Imports no longer put a depth floor on the extended roof.
+
+The layout still uses **Stone size**, the seed and curve settings. Each stone
+uses its own perspective scale; curvature splitting considers its near extent.
+Automatic construction samples a jittered, depth-scaled lattice near the
+surface (`cell_sampling.py`), with spacing set by **Stone size**. It has no
+fixed candidate-count cap. Deep interior candidates are omitted, since the
+core fills that volume. Curvature-split minima, joint widths and fragment
+cleanup thresholds scale with Stone size too; the DOF sampling budget remains
+independent. Smaller stones require more actual stone construction work.
+Cell completion uses a spatial search with a conservative radius, followed by
+the existing exact plane test. The native corner solver checks the same plane
+intersections and tolerances as the exhaustive Python solver; regression tests
+compare their results (`test_stone_size.py`).
+Before each boolean, a BVH and triangle-clipping test skips cells containing
+no guide surface. Completed pieces stay outside the live scene until their
+union, and fragment merging reuses updated bounding boxes. These avoid
+repeated scene evaluation and interior stone work at fine size settings.
+A roof previously forced to scale 3 will have more, smaller stones near the
+gameplay plane after regeneration. This is a construction change, not merely
+a different triangulation of the old stones.
+
+The shared core and final voxel finish no longer take their sampling resolution
+from the rock's median stone depth. `construction_lod.py` temporarily maps the
+connected surface into projective coordinates, applies the existing voxel,
+smoothing and decimation operations there, and maps it back. Straight edges
+and planar faces remain straight/planar under this transform, so it does not
+need a dense preliminary subdivision or independently capped depth slabs.
+Voxel size in world space increases toward the background. Planning bounds
+the largest inverse-Jacobian stretch across the whole mesh width at every
+depth interval, and keeps the uniform near-quality grid when compression would
+cost more. Its resolution allowance follows projection or eight samples across
+the High-DOF blur diameter, whichever is coarser. This bounds sampling density;
+it is not a proof of the complete smoothing/decimation error or perceptual equivalence.
+
+Core insets and opening radii also follow local depth. Offsets use bulk vertex
+arrays; intermediate remeshes simplify planar regions before the next volume
+conversion. Step counts follow the offset/voxel ratio instead of rebuilding
+the volume repeatedly for moves smaller than one voxel. Thin-stone backing and
+cleanup use each stone's scale. Bevels hidden entirely by the nearest DOF blur
+are omitted. Automatic solids then use the existing slate's nine-degree planar
+finish before facet colours are assigned. This keeps the remesh sampling grid
+from appearing as many unrelated triangular colour patches on a broad face.
+The planar finish merges faces before simplifying crease vertices. Its guarded
+vertex pass leaves at least three corners per face and never joins corners
+that already share an edge, including edges another removal in the same batch
+would create. This prevents the intermittent three/four-face edges observed
+when regenerating Cube.005; worker watertightness validation remains unchanged.
+`test_facet_topology.py` covers competing crease paths and ordinary planar
+simplification. Legacy solids keep their previous finish.
+The final export still applies crease smoothing, strips and chip normals.
+
+The existing final manifold/non-degenerate mesh validation still
+runs before a generated result can replace a formation.
+
+Existing scene meshes are not silently rewritten. Older solid recipes become
+pending for regeneration; **Reload Scripts** or restart Blender to load the new
+panel, then regenerate. New recipes record `adaptiveDepth`, and the generator
+fingerprint includes the construction budget code. Export-time depth budgets
+continue to handle fine surface details and texture atlases after construction.
+
+`test_construction_lod.py` checks the projective inverse, exact planarity,
+resolution bounds, camera-pan invariance, ignored legacy controls and a closed
+remesh. `test_construction_build.py` runs a complete small solid build and checks
+that its geometry is finite, closed and non-degenerate. Run checks with two
+CPU cores and `OMP_NUM_THREADS=2` when another export is active.
+
+The complete river roof (`Cube.006`, previously Depth floor 3) was rebuilt in
+an isolated worker at 150.9 seconds on two low-priority CPU cores. It produced
+320,878 triangles in one connected component, with no boundary or non-manifold
+edges, and passed the normal worker validation. This restores foreground
+construction detail: its old coarse export had 98,220 triangles, so the new
+total is larger. It is not a claim that restoring near detail is free compared
+with the old floor override. `benchmark_construction_build.py` reproduces a
+bounded full build and records stage timings without saving the source scene.
+Those counts describe the initial remeshed surface, before the later broad-plane
+finish: that cleanup took 2.2 seconds on the saved roof, retained one closed
+component and reduced it to 105,340 polygons (including n-gons).
+
+On identical roof input, increasing native remesh adaptivity from .06 to the
+chosen .15 reduced finish time from 41.2 to 24.4 seconds. Foreground samples
+(world Y below 3 m) compared in both directions had 95th-percentile distances
+of 4.1 and 1.8 mm, maxima 17.5 and 8.8 mm; these are sampled differences, not
+guaranteed surface bounds. The more aggressive .3 candidate was not selected.
+The [in-game comparison tools](../tools/blender/lod_prototype/README.md) show
+the regenerated roof with the full production surface finish and approximate
+projected reference illumination. A full scene export must rebake its lighting.
+
+### Legacy uniform construction and rendering
 
 **Depth scale** (`formation_depth_scale` on the rock, measured by its build, and `slate_scale` on its material): the piece's median stone depth over the plane's, 1.5 to 4; it is the rock's `detail_scale` unless that is set by hand (Render, [blender-formations](blender-formations.md#formations)).
 The export divides its texel density by it, and its largest map too (4096 over the scale, down to a power of two: the far wall 512, most pieces 1024; capped at 4096 alone, every backdrop rock took 4096 and the river scene 19.4 MB), and the slate shader multiplies every length in its graph by it (the noises' periods, the occlusion reaches, the bevels), so the far wall's stone and edge line are as big on screen as the Terrace's.

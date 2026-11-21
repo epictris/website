@@ -191,10 +191,22 @@ print('EMISSION_LOG_ENCODING_OK dim colours and gradients survive 8-bit HDR tran
 # enabled. The limit is temporary input residency, not an export quality cap.
 scene.render.use_simplify = False
 scene.cycles.texture_limit_render = 'OFF'
+scene.cycles.use_adaptive_sampling = False
+scene.cycles.adaptive_threshold = .05
+scene.cycles.adaptive_min_samples = 7
+scene.cycles.time_limit = 2
+scene.view_layers[0].samples = 3
+sampling_before = (scene.cycles.use_adaptive_sampling, scene.cycles.adaptive_threshold,
+                   scene.cycles.adaptive_min_samples, scene.cycles.time_limit,
+                   scene.view_layers[0].samples)
 original_field_bake = emission_bake.bake_field
 def interrupted_field(objects, scene):
     assert scene.render.use_simplify
     assert scene.cycles.texture_limit_render == '2048'
+    assert scene.cycles.use_adaptive_sampling
+    assert abs(scene.cycles.adaptive_threshold - .001) < 1e-7
+    assert scene.cycles.adaptive_min_samples == 0
+    assert scene.cycles.time_limit == 0 and scene.view_layers[0].samples == 0
     raise RuntimeError('interrupted field test')
 emission_bake.bake_field = interrupted_field
 try:
@@ -205,6 +217,32 @@ try:
         assert str(error) == 'interrupted field test'
     assert not scene.render.use_simplify
     assert scene.cycles.texture_limit_render == 'OFF'
+    assert sampling_before == (scene.cycles.use_adaptive_sampling, scene.cycles.adaptive_threshold,
+                               scene.cycles.adaptive_min_samples, scene.cycles.time_limit,
+                               scene.view_layers[0].samples)
 finally:
     emission_bake.bake_field = original_field_bake
 print('EMISSION_INPUT_LIMIT_OK restored after interrupted bake')
+
+def fixed_field(objects, scene):
+    assert not scene.cycles.use_adaptive_sampling
+    return None
+emission_bake.bake_field = fixed_field
+scene['game_light_noise_threshold'] = 0
+try:
+    maps, field = emission_bake.bake([emitter], set())
+    assert maps == {} and field is None
+    assert sampling_before == (scene.cycles.use_adaptive_sampling, scene.cycles.adaptive_threshold,
+                               scene.cycles.adaptive_min_samples, scene.cycles.time_limit,
+                               scene.view_layers[0].samples)
+    for invalid in (-1, 2, float('nan')):
+        scene['game_light_noise_threshold'] = invalid
+        try:
+            emission_bake.bake([emitter], set())
+            raise AssertionError('invalid noise threshold accepted')
+        except ValueError as error:
+            assert 'game_light_noise_threshold' in str(error)
+finally:
+    emission_bake.bake_field = original_field_bake
+    del scene['game_light_noise_threshold']
+print('EMISSION_SAMPLING_OK dedicated convergence, fixed-sample override, validation and state restoration')

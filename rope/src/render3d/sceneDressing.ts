@@ -22,6 +22,7 @@ import { wearIvyLeaves } from "./ivyLeaves";
 import { isGlowFlora, reattachGlowFloraDepth, wearGlowFlora } from "./glowFlora";
 import { isDepthStandIn, isPicture, joinDepthPrepass, joinPictureDepth } from "./depthPrepass";
 import { isPrintedMoss, wearMossMound } from "./mossMound";
+import { wearBackgroundLift } from "./backgroundLift";
 import { threeRotation, threeY } from "./space";
 import { MODEL_ASSETS, modelFile } from "./models";
 import { nodeNameOf, SCENE_ASSETS, sceneFile } from "./scenes";
@@ -333,6 +334,12 @@ function loadExportFile(file: string, bytes: number, label: string): Promise<THR
         });
         const pictures = prepass.filter(joinPictureDepth).length;
         const depthFirst = prepass.filter((m) => !isPicture(m) && joinDepthPrepass(m)).length;
+        // This changes only colour, so keep the eligible meshes' existing
+        // depth prepass before adding the fragment shader hook.
+        for (const mesh of prepass) {
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          for (const mat of mats) wearBackgroundLift(mat);
+        }
         if (depthFirst > 0) console.log(`[render3d] ${label}: ${depthFirst} meshes lay their depth first`);
         if (pictures > 0) console.log(`[render3d] ${label}: ${pictures} pictures lay their depth after them`);
         if (ivyMeshes > 0) console.log(`[render3d] ${label}: ${ivyMeshes} ivy meshes cast and receive leaf shadows`);

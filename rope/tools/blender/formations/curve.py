@@ -128,6 +128,13 @@ def segment_distance(p, a, b):
     return (p - (a + ab * t)).length, t
 
 
+class BowList(list):
+    """Retain the spatial budget through rebuild and final bend."""
+    def __init__(self, smallest=0.0):
+        super().__init__()
+        self.depth_budget = smallest if callable(smallest) else None
+
+
 def find_bows(mesh, seed, smallest=0.0):
     """The bows for `mesh`'s long straight creases, drawn from `seed`: a list
     of (start, end, offset at the middle, reach). A bow under `smallest`
@@ -138,7 +145,7 @@ def find_bows(mesh, seed, smallest=0.0):
     bm.from_mesh(mesh)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=WELD)
     bm.normal_update()
-    bows = []
+    bows = BowList(smallest)
     for chain, edges in crease_runs(bm):
         a, b = chain[0].co.copy(), chain[-1].co.copy()
         chord = (b - a).length
@@ -153,7 +160,8 @@ def find_bows(mesh, seed, smallest=0.0):
         u = (b - a) / chord
         out = (out - u * out.dot(u)).normalized()
         amount = min(MAX_BOW, rng.uniform(*BOW) * chord) * rng.choice((-1.0, 1.0))
-        if abs(amount) < smallest:
+        from .depth_lod import threshold
+        if abs(amount) < threshold(smallest, [a,b], max(MIN_REACH,REACH*chord)):
             continue
         bows.append((a, b, out * amount, max(MIN_REACH, REACH * chord)))
     bm.free()
@@ -173,7 +181,8 @@ class Bows:
         b = np.array([b for _, b, _, _ in bows], dtype=float).reshape(-1, 3)
         bow = np.array([bow for _, _, bow, _ in bows], dtype=float).reshape(-1, 3)
         reach = np.array([r for _, _, _, r in bows], dtype=float)
-        self.native = native.BowField(a, b, bow, reach, WAYS, SIZING_STEP, TOLERANCE, SIZE)
+        self.native = native.BowField(a, b, bow, reach, WAYS, SIZING_STEP, TOLERANCE, SIZE,
+                                     getattr(bows, 'depth_budget', None))
 
     def __len__(self):
         return self.native.count

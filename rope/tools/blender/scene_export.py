@@ -241,7 +241,9 @@ BAKE_SAMPLES = 8
 # Each holds the whole scene and its own Cycles session on the one GPU, and
 # Blender handles a bake's every texel on one thread, so the bakes scale with
 # the workers until the GPU is busy.
-WORKERS = int(os.environ.get("SCENE_EXPORT_WORKERS", "0")) or 8
+# Uncapped spatial atlases increase each worker's prepared-mesh footprint.
+# Keep the default bounded; larger machines may explicitly opt into more.
+WORKERS = int(os.environ.get("SCENE_EXPORT_WORKERS", "0")) or 2
 # How many of them may hold a Cycles session at once (SCENE_EXPORT_GPU_SLOTS
 # overrides it): each holds the whole scene on the card, about 1.2 GB on the
 # river, and eight at once took the 4070 SUPER to 11.6 of its 12.3 GB beside
@@ -376,6 +378,13 @@ def bake_maps(mesh, ob, seen):
     """The sides of `ob`'s colour maps, baked on `mesh`, whose faces the
     camera can see where `seen` holds (formations/render.py)."""
     from formations import render
+    from formations import depth_lod
+    plan = depth_lod.map_plan(mesh, ob, seen)
+    if plan is not None:
+        sides, bands = plan
+        ob['formation_lod_map_bands'] = bands
+        return sides
+    ob.pop('formation_lod_map_bands', None)
     area = np.empty(len(mesh.polygons))
     mesh.polygons.foreach_get("area", area)
     return render.colour_maps(ob, float(area[seen].sum() + render.HIDDEN_DENSITY ** 2 * area[~seen].sum()))
@@ -533,6 +542,13 @@ def unwrap(ob, seen, sides, gap_sides):
     ob.data.polygons.foreach_get("loop_start", o_start)
     # Each welded face is the face its first corner came from.
     w_seen = seen[np.searchsorted(o_start, origin[w_start], side="right") - 1]
+    from formations import depth_lod
+    map_bands = ob.get('formation_lod_map_bands')
+    w_band = None
+    if map_bands is not None:
+        source_band = np.empty(len(ob.data.polygons), np.int32)
+        ob.data.attributes[depth_lod.FACE_BAND].data.foreach_get('value', source_band)
+        w_band = source_band[np.searchsorted(o_start, origin[w_start], side='right') - 1]
     w_area = np.empty(len(welded.polygons))
     welded.polygons.foreach_get("area", w_area)
 
@@ -586,6 +602,10 @@ def unwrap(ob, seen, sides, gap_sides):
         # Metres of the surface, times its density.
         scale = density * math.sqrt(w_area[faces].sum() / max(face_uv_area(part, w_start, w_total)[faces].sum(), 1e-30))
         uv[mine] = part[mine] * scale
+    if w_band is not None:
+        # Selection above uses geometric indices; packing below uses chart
+        # connectivity separated at depth transitions without splitting verts.
+        w_vert = np.unique(np.column_stack([w_vert,w_band[corner_face]]),axis=0,return_inverse=True)[1].astype(np.int32)
     # No island longer than ISLAND_SHARE of the largest map's side, which
     # holds its share of the surface (side squared over all the sides'), at
     # UV_COVERAGE.
@@ -596,7 +616,19 @@ def unwrap(ob, seen, sides, gap_sides):
     put(uv)
     if cut:
         log(f"unwrap {ob.name}: {cut} islands over {longest:.2f} m cut")
-    if len(sides) == 1:
+    if w_band is not None:
+        islands = uv_islands(w_vert,uv,w_start,w_total,corner_face)
+        # The nearest/farthest bands may be disjoint in X/Z; use a spatial
+        # ordering within each band, never an object-wide atlas cap.
+        local_co = np.empty((len(welded.vertices),3),np.float64)
+        welded.vertices.foreach_get('co',local_co.ravel())
+        actual_vertex = np.empty(n,np.int32)
+        welded.loops.foreach_get('vertex_index',actual_vertex)
+        axis = int(np.argmax(np.ptp(local_co,axis=0)))
+        positions = np.add.reduceat(local_co[actual_vertex,axis],w_start)/w_total
+        image = depth_lod.assign_maps(uv,islands,w_band,map_bands,sides,positions,
+                                      face_uv_area(uv,w_start,w_total))
+    elif len(sides) == 1:
         image = np.zeros(len(welded.polygons), dtype=np.int32)
     else:
         image = deal_islands(welded, uv, uv_islands(w_vert, uv, w_start, w_total, corner_face),
@@ -625,12 +657,22 @@ def unwrap(ob, seen, sides, gap_sides):
             return mine, None, 0.0
         local = np.full(n, -1, np.int64)
         local[mine] = np.arange(len(mine))
-        grid = min(PACK_GRID, gap_sides[k])
-        gap = max(1, math.ceil(PACK_GAP_PX * grid / gap_sides[k]))
-        out, share = native.pack_islands(uv[mine], w_vert[mine], local[lt[faces[lt_face]]], grid, gap)
-        return mine, out, share
+        while True:
+            grid = min(PACK_GRID, gap_sides[k])
+            gap = max(1, math.ceil(PACK_GAP_PX * grid / gap_sides[k]))
+            out, share = native.pack_islands(uv[mine], w_vert[mine], local[lt[faces[lt_face]]], grid, gap)
+            # A far region can need fewer texels than its independent charts
+            # need padding slots. Grow only that atlas to the first fit; never
+            # drop charts or let unrelated faces share bake pixels.
+            cap = int(ob.get('export_map_max',0)) or 4096
+            if share >= 0 or w_band is None or sides[k] >= cap:
+                return mine, out, share
+            ratio = gap_sides[k]/sides[k]
+            sides[k] = min(cap,sides[k]*2)
+            gap_sides[k] = max(1,round(sides[k]*ratio))
+            log(f"depth {ob.name}: atlas {k} raised to {sides[k]} for chart padding capacity")
 
-    with ThreadPoolExecutor(max_workers=len(sides)) as pool:
+    with ThreadPoolExecutor(max_workers=min(4, len(sides))) as pool:
         packed = list(pool.map(pack, range(len(sides))))
     shares = []
     for k, (mine, out, share) in enumerate(packed):
@@ -656,7 +698,7 @@ def unwrap(ob, seen, sides, gap_sides):
     welded.polygons.foreach_get("select", overlap)
     if overlap.any():
         separate = np.flatnonzero(overlap[corner_face])
-        w_vert[separate] = len(welded.vertices) + np.arange(len(separate))
+        w_vert[separate] = int(w_vert.max()) + 1 + np.arange(len(separate))
         # Give affected faces independent charts; the original mesh and its
         # split normals are still transferred back unchanged below.
         for k in np.unique(image[overlap]):
@@ -678,6 +720,7 @@ def unwrap(ob, seen, sides, gap_sides):
     corner_image = image[corner_face]
     bpy.data.objects.remove(tmp)
     bpy.data.meshes.remove(welded)
+    bpy.context.view_layer.update()
 
     uvs_out = np.full((len(ob.data.loops), 2), np.nan, dtype=np.float32)
     uvs_out[origin] = uv_welded.reshape(-1, 2)
@@ -711,11 +754,37 @@ def unwrap(ob, seen, sides, gap_sides):
     found = np.ones(len(uvs_out), bool)
     found[lost] = False
     split = np.maximum.reduceat(loop_image, start) != np.minimum.reduceat(loop_image, start)
-    for f in np.flatnonzero((area < DEGENERATE_AREA) | split):
+    # A face collapsed by the unwrap weld must not reconnect nearest corners
+    # from unrelated charts. Its microscopic geometry remains in the export,
+    # but a point UV prevents it painting a dark triangle over another face.
+    incomplete = ~np.logical_and.reduceat(found, start)
+    for f in np.flatnonzero((area < DEGENERATE_AREA) | split | incomplete):
         corners = range(start[f], start[f] + total[f])
         keep = next((c for c in corners if found[c]), start[f])
         uvs_out[list(corners)] = uvs_out[keep]
         loop_image[list(corners)] = loop_image[keep]
+    if w_band is not None:
+        map_levels = np.asarray(map_bands)
+        wrong = map_levels[loop_image[start]] != source_band
+        if np.any(wrong & ~(incomplete | split | (area < DEGENERATE_AREA))):
+            raise ValueError(f'{ob.name}: intact UV face changed depth budget')
+        # A collapsed sliver at a cut may find the nearer vertex on the other
+        # side. Keep its point UV in its own depth atlas so output submeshes
+        # and their budgets remain homogeneous even at that exact boundary.
+        for level in np.unique(source_band[wrong]):
+            candidates = np.flatnonzero(map_levels[corner_image] == level)
+            if not len(candidates):
+                raise ValueError(f'{ob.name}: depth band {level} lost every UV face')
+            tree = kdtree.KDTree(len(candidates))
+            for j in candidates:
+                tree.insert(corner_co[j],int(j))
+            tree.balance()
+            for f in np.flatnonzero(wrong & (source_band == level)):
+                loops = list(range(start[f],start[f]+total[f]))
+                vertex = ob.data.loops[start[f]].vertex_index
+                nearest = tree.find(ob.data.vertices[vertex].co)[1]
+                uvs_out[loops] = uv_welded.reshape(-1,2)[nearest]
+                loop_image[loops] = corner_image[nearest]
     uv_map = ob.data.uv_layers.new(name=BAKE_UV)
     uv_map.data.foreach_set("uv", uvs_out.ravel())
     return loop_image[start]
@@ -899,8 +968,11 @@ def preparation(ob):
     size) and the narrowest detail each pass keeps there (the depth of
     field's blur), as the bake cache keys it."""
     from formations import render
+    from formations import depth_lod
+    policy = depth_lod.signature(ob)
     return seed_for(ob), [(name, render.setting(ob, name)) for name in render.SETTINGS], \
-        [(name, round(render.smallest_detail(ob, name), 5)) for name in render.PASSES], ALL_SEEN
+        [(name, 'spatial' if callable(render.smallest_detail(ob,name)) else round(render.smallest_detail(ob,name),5))
+         for name in render.PASSES], ALL_SEEN, policy
 
 
 def bake_material_slots(ob, depsgraph):
@@ -931,7 +1003,7 @@ def export_materials(ob, materials):
     out = []
     for mat in materials:
         copy = mat.copy() if mat is not None else None
-        if copy is not None and is_slate(mat) and detail_scale(ob) != 1.0:
+        if copy is not None and is_slate(mat):
             from formations import slate
             copy[slate.SCALE_PROP] = detail_scale(ob)
             slate.paint(copy)
@@ -1272,7 +1344,27 @@ def worker_main(argv):
         suffix = f".map{WORKER_MAP}" if WORKER_MAP is not None else ""
         with open(os.path.join(WORKER_OUT, entry_name(name)) + suffix + ".warnings.json", "w") as f:
             json.dump(warnings, f)
+        # Loading a prepared mesh for every atlas leaves the previous one
+        # orphaned. Blender retains these datablocks until explicitly removed;
+        # uncapped atlas counts otherwise accumulate gigabytes per worker.
+        release_worker_data()
         print(f"[scene_worker] done {task}", flush=True)
+
+
+def release_worker_data():
+    """Release completed task data while preserving source shader references."""
+    pristine = {mat for materials in PRISTINE.values() for mat in materials if mat}
+    for mesh in list(bpy.data.meshes):
+        if mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
+    for mat in list(bpy.data.materials):
+        if mat.users == 0 and mat not in pristine:
+            bpy.data.materials.remove(mat)
+    for im in list(bpy.data.images):
+        if im.users == 0 and im.get("generated_by") == "tools/blender/scene_export.py":
+            bpy.data.images.remove(im)
+    import gc
+    gc.collect()
 
 
 def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, stale_occlusion=False):
@@ -1432,7 +1524,19 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             # detail high poly matches exactly, and the rock is bent after.
             from formations import curve
             bows[ob] = curve.find_bows(mesh, seed_for(ob), smallest_detail(ob, "export_creases"))
+            from formations import crease_cleanup
+            if crease_cleanup.applies(ob):
+                log(f"crease cleanup {ob.name}: {crease_cleanup.repair(mesh, ob.matrix_world, crease_cleanup.stone_scale(ob))}")
             log(f"curve {ob.name}: {curve.rebuild_mesh(mesh, bows[ob], seed_for(ob), smooth=True)}")
+        if slate_rock:
+            from formations import depth_lod
+            added = depth_lod.partition(mesh, ob)
+            if added:
+                log(f"depth {ob.name}: {added} faces added at offline detail transitions")
+        from surface_subdivision import split_large_faces
+        added = split_large_faces(mesh, ob)
+        if added:
+            log(f"subdivide {ob.name}: {added} faces added for spatial texture chunks")
         if slate_rock and render_setting(ob, "export_chips"):
             straight[ob] = mesh.copy()
         if len(mesh.materials) != len(materials[ob]):
@@ -1443,6 +1547,12 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
         sizes[ob] = bake_maps(mesh, ob, seen)
         bumps = any(procedural_normals(m) for m in mesh.materials)
         in_map = unwrap(ob, seen, sizes[ob], [map_size(side, "baked normal") if bumps else side for side in sizes[ob]])
+        # Degenerate faces or uneven island sizes can leave an atlas empty.
+        # Do not schedule workers/images for atlas slots containing no faces.
+        used, in_map = np.unique(in_map, return_inverse=True)
+        sizes[ob] = [sizes[ob][int(i)] for i in used]
+        if 'formation_lod_map_bands' in ob:
+            ob['formation_lod_map_bands'] = [ob['formation_lod_map_bands'][int(i)] for i in used]
         if len(sizes[ob]) > 1:
             # Each map's faces on their own copies of the materials.
             slots = len(materials[ob])
@@ -2204,6 +2314,8 @@ def main():
         for ob in plants:
             ob.hide_render = False
     bend_growths(kept, warnings)
+    from mesh_chunks import split_surface_chunks
+    split_surface_chunks(kept, log)
     view_layer.update()
     lighting_maps, lighting_field = {}, None
     if os.environ.get("SCENE_EXPORT_EMISSION") == "1":

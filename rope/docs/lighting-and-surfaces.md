@@ -1,5 +1,38 @@
 # Light, air and surfaces
 
+## Iron ball visibility
+
+The iron ball and its loop have two small, camera-relative shading additions
+for dark caves. `render3d/ballRim.ts` adds a soft silver-blue silhouette rim,
+strongest above and faint below, before tone mapping and fog.
+`render3d/ballReflection.ts` adds a broad upper-left virtual softbox to specular
+radiance, shaped by the steel's existing normal map, roughness and metal colour.
+Both apply to the model and its loading fallback; they illuminate no scenery.
+
+For playtesting, `?ballrim=0` disables the rim and `?ballfill=0` disables the
+softbox independently. Both default to `1`; fractional values reduce their
+strength and values up to `3` increase it. The screenshot runner accepts the
+same switches through `--query`. Use `ballfill=0` to compare with the rim-only
+version. For the original look before these visibility changes, use
+`ballrim=0&ballfill=0&backlift=0`.
+
+Keep the steel's authored dark base colour: lifting its dark texture values
+was playtested and rejected because it changed the ball's appearance too much.
+Readability comes from the rim, reflection and background separation instead.
+
+## Dark background separation
+
+`render3d/backgroundLift.ts` lifts dark imported scenery toward a muted
+blue-grey, fading in from 1.5 to 6 metres behind the gameplay plane. It applies
+before tone mapping and fog, retains texture variation and leaves brighter
+surfaces alone. This is art-directed separation by world depth, independent of
+the authored fog regions; it also applies to dark distant outdoor scenery.
+It changes no vertex positions, so scenery keeps its depth prepass.
+
+`?backlift=0` disables it for comparison with the ball-only visibility changes;
+`backlift=1` is the default and `backlift=0.5` halves its strength. Both the game
+and screenshot runner read the switch.
+
 ## Light and air
 
 `LevelData.environment` is an optional per-level block: sun direction and colour, hemisphere fill, how much generated environment is let in, and background.

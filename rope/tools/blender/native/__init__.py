@@ -43,6 +43,10 @@ def lib():
 
 
 def _declare(L):
+    L.rk_cell_corners.restype = _i64
+    L.rk_cell_corners.argtypes = [_i64, _f64, _f64]
+    L.rk_cell_meets_surface.restype = ctypes.c_int32
+    L.rk_cell_meets_surface.argtypes = [_ptr, _i64, _f64, _f64, _f64]
     L.rk_field_new.restype = _ptr
     L.rk_field_new.argtypes = [_i64, _f64, _f64, _f64, _f64]
     L.rk_field_free.argtypes = [_ptr]
@@ -50,6 +54,7 @@ def _declare(L):
     _d = ctypes.c_double
     L.rk_field_set_sizing.argtypes = [_ptr, _i64, _f64, _d, _d, _d, _d]
     L.rk_field_sizing.argtypes = [_ptr, _i64, _f64, _f64]
+    L.rk_field_set_depth_budget.argtypes = [_ptr, _f64]
     L.rk_crease_rebuild.restype = _ptr
     L.rk_crease_rebuild.argtypes = [_ptr, _i64, _f64, _i64, _i64p, _i32p, ctypes.c_uint64, _f64]
     L.rk_crease_result_sizes.argtypes = [_ptr, _i64p]
@@ -75,13 +80,21 @@ def _points(points):
     return np.ascontiguousarray(np.asarray(points, dtype=np.float64).reshape(-1, 3))
 
 
+def cell_corners(normals, offsets):
+    planes = np.ascontiguousarray(np.column_stack((normals, offsets)), dtype=np.float64)
+    n = len(planes)
+    out = np.empty((n*(n-1)*(n-2)//6, 3), dtype=np.float64)
+    count = lib().rk_cell_corners(n, planes, out)
+    return out[:count].copy()
+
+
 class BowField:
     """formations/curve.py's bow field, built once per rock: `eval` gives
     each point's offset, `sizing` the triangle size there (the longest edge
     the field bends by under `tolerance` in its middle, measured by its
     second difference over `step` along `ways`, clamped to `size`)."""
 
-    def __init__(self, a, b, bow, reach, ways, step, tolerance, size):
+    def __init__(self, a, b, bow, reach, ways, step, tolerance, size, depth_budget=None):
         a, b, bow = _points(a), _points(b), _points(bow)
         reach = np.ascontiguousarray(reach, dtype=np.float64).ravel()
         self._lib = lib()
@@ -90,6 +103,13 @@ class BowField:
         self._lib.rk_field_set_sizing(self._handle, len(w), w, float(step), float(tolerance),
                                       float(size[0]), float(size[1]))
         self.count = len(reach)
+        if depth_budget is not None:
+            d = depth_budget
+            b = d.budget
+            values = np.ascontiguousarray([*d.row, d.offset, b.distance, b.tan_half, b.height,
+                                           b.max_blur, b.focus_band, b.blur_samples,
+                                           b.sharp_error_pixels, d.scale], dtype=np.float64)
+            self._lib.rk_field_set_depth_budget(self._handle, values)
 
     def __del__(self):
         if getattr(self, "_handle", None):
@@ -153,6 +173,11 @@ class Bvh:
         tris = np.ascontiguousarray(tris, dtype=np.int32).reshape(-1, 3)
         self._lib = lib()
         self._handle = self._lib.rk_bvh_new(len(co), co, len(tris), tris)
+
+    def cell_meets_surface(self, planes, lo, hi):
+        values = np.ascontiguousarray([(*n, b) for n, b in planes], dtype=np.float64).reshape(-1, 4)
+        return bool(self._lib.rk_cell_meets_surface(self._handle, len(values), values,
+                    np.ascontiguousarray(lo, dtype=np.float64), np.ascontiguousarray(hi, dtype=np.float64)))
 
     def __del__(self):
         if getattr(self, "_handle", None):

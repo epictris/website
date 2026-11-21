@@ -125,7 +125,21 @@ double Field::size(const double* p) const {
         bend = std::max(bend, std::sqrt(s) / (step * step));
     }
     // An edge of length L bends by about bend x L^2 / 8 in its middle.
-    double size = std::sqrt(8 * tolerance / std::max(bend, 1e-9));
+    double error = tolerance;
+    if (!depth_budget.empty()) {
+        const auto& d = depth_budget;
+        // Evaluate at the nearest possible end of an edge, keeping the
+        // existing maximum edge length. A far midpoint must not coarsen a
+        // foreground endpoint. This changes tessellation, never the bow.
+        double row_length = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+        double y = p[0]*d[0] + p[1]*d[1] + p[2]*d[2] + d[3] - size_hi*row_length;
+        double plane_pixel = 2*d[4]*d[5]/d[6];
+        double footprint = std::max(2*std::max(1e-6, d[4]+y)*d[5]/d[6],
+                                    4*d[7]*d[5]*std::max(0.0,y-d[8])/d[9]);
+        double level = std::floor(std::log2(footprint/plane_pixel) + 1e-12);
+        error = std::max(error, plane_pixel*d[10]*std::exp2(level)/d[11]);
+    }
+    double size = std::sqrt(8 * error / std::max(bend, 1e-9));
     return std::min(size_hi, std::max(size_lo, size));
 }
 
@@ -140,6 +154,10 @@ void* rk_field_new(int64_t n, const double* a, const double* b, const double* bo
 }
 
 void rk_field_free(void* f) { delete static_cast<Field*>(f); }
+
+void rk_field_set_depth_budget(void* handle, const double* budget) {
+    static_cast<Field*>(handle)->depth_budget.assign(budget, budget + 12);
+}
 
 void rk_field_set_sizing(void* handle, int64_t nways, const double* ways, double step, double tolerance,
                          double size_lo, double size_hi) {

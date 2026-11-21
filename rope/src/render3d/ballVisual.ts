@@ -31,6 +31,8 @@ import * as THREE from "three";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BALL_MESH, BALL_MESH_RADIUS, IRON_SURFACE, loadMesh, surfaceFor } from "./assets";
 import { standardMaterialsOf, wearAvatar } from "./avatarSurface";
+import { wearBallRim } from "./ballRim";
+import { wearBallReflection } from "./ballReflection";
 import { setProbe, wearProbe } from "./reflectionProbe";
 import { HOLLOW_GLASS_ORDER, hollowGlassMaterial, solidGlassMaterial } from "./glassMaterial";
 import { glassBallSolid, glassWall } from "./glassWall";
@@ -160,6 +162,8 @@ function shine(obj: THREE.Object3D): void {
     // Lit from the reflection probe's cube rather than an envMap (see
     // reflectionProbe.ts `wearProbe`).
     wearProbe(std);
+    wearBallRim(std);
+    wearBallReflection(std);
     if (std.userData.shined) continue;
     std.userData.shined = true;
     std.roughness = MODEL_ROUGHNESS;
@@ -176,7 +180,7 @@ export class BallVisual {
   // scene rebuilds the visual when the two disagree.
   readonly glass: boolean;
   // Materials this visual made for itself and must free: the glass ball's
-  // (the iron ones are cached and shared, see `forgedMetal`).
+  // and the iron fallback's private rimmed copies.
   private readonly ownedMaterials: THREE.Material[] = [];
   // The primitives standing in until the model lands, as one group so the swap
   // is a remove rather than a search. Null once it has happened.
@@ -203,9 +207,21 @@ export class BallVisual {
       return;
     }
     const stand = this.stand as THREE.Group;
+    const standMaterial = (tileScale?: number) => {
+      const source = forgedMetal(tileScale);
+      const mat = source.clone();
+      // Material.clone does not copy shader hooks. Preserve the avatar patch
+      // while keeping this rim off the chain's shared forged-metal material.
+      mat.onBeforeCompile = source.onBeforeCompile;
+      mat.customProgramCacheKey = source.customProgramCacheKey;
+      wearBallRim(mat);
+      wearBallReflection(mat);
+      this.ownedMaterials.push(mat);
+      return mat;
+    };
     const sphere = new THREE.SphereGeometry(ball.radius, 32, 24);
     this.owned.push(sphere);
-    const body = new THREE.Mesh(sphere, forgedMetal());
+    const body = new THREE.Mesh(sphere, standMaterial());
     body.castShadow = true;
     body.receiveShadow = true;
     stand.add(body);
@@ -218,7 +234,7 @@ export class BallVisual {
     const loopTube = ((BALL_LOOP_OUTER - BALL_LOOP_INNER) / 2) * ball.radius;
     const torus = new THREE.TorusGeometry(BALL_LOOP_INNER * ball.radius + loopTube, loopTube, 10, 20);
     this.owned.push(torus);
-    const loop = new THREE.Mesh(torus, forgedMetal(FORGED_SMALL));
+    const loop = new THREE.Mesh(torus, standMaterial(FORGED_SMALL));
     loop.castShadow = true;
     loop.position.set(0, threeY(-BALL_LOOP_CENTRE * ball.radius), 0);
     stand.add(loop);

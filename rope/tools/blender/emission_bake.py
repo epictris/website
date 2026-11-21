@@ -114,10 +114,52 @@ def target(mat, image, uv=UV):
 
 
 def diffuse_bake(objects):
-    select(objects)
-    bpy.ops.object.bake(type="DIFFUSE", pass_filter={"DIRECT", "INDIRECT"},
-                        target="IMAGE_TEXTURES", uv_layer=UV, margin=0, use_clear=False,
-                        use_selected_to_active=False)
+    # Cycles rebuilds/synchronizes the scene for each selected object. Sibling
+    # surface chunks can share that work: join temporary copies, retaining
+    # each material's independent target image and the existing corner UVs.
+    groups, singles = {}, []
+    for ob in objects:
+        parent = ob.parent
+        if (parent is not None and parent.type == "EMPTY" and not ob.modifiers
+                and ob.name.startswith(parent.name + " chunk ")):
+            groups.setdefault(parent, []).append(ob)
+        else:
+            singles.append(ob)
+    hidden, duplicates, meshes = {}, [], []
+    try:
+        for group in groups.values():
+            if len(group) == 1:
+                singles.extend(group)
+                continue
+            copies = []
+            for ob in group:
+                duplicate = ob.copy()
+                duplicate.data = ob.data.copy()
+                duplicate.name = 'game.lightmap-batch'
+                bpy.context.scene.collection.objects.link(duplicate)
+                copies.append(duplicate)
+                duplicates.append(duplicate.name)
+                meshes.append(duplicate.data)
+                hidden[ob] = ob.hide_render
+                ob.hide_render = True
+            select(copies)
+            active = bpy.context.view_layer.objects.active
+            bpy.ops.object.join()
+            singles.append(active)
+        select(singles)
+        bpy.ops.object.bake(type="DIFFUSE", pass_filter={"DIRECT", "INDIRECT"},
+                            target="IMAGE_TEXTURES", uv_layer=UV, margin=0, use_clear=False,
+                            use_selected_to_active=False)
+    finally:
+        for ob, visibility in hidden.items():
+            ob.hide_render = visibility
+        for name in duplicates:
+            ob = bpy.data.objects.get(name)
+            if ob is not None:
+                bpy.data.objects.remove(ob, do_unlink=True)
+        for mesh in meshes:
+            if mesh.users == 0:
+                bpy.data.meshes.remove(mesh)
 
 
 def unwrap_receiver(ob, scene, log=print):
@@ -379,12 +421,15 @@ def bake_field(objects, scene):
         bpy.data.images.remove(image)
 
 
-def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_receiver=None):
+def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_receiver=None, checkpoint=None):
     scene = bpy.context.scene
     sources = [ob for ob in objects if not mobile(ob, dynamic_names)
                and any(emits(m) for m in getattr(ob.data, "materials", []))]
     if not sources or not scene.get("game_bake_emission", True):
         return {}, None
+    noise_threshold = float(scene.get("game_light_noise_threshold", .001))
+    if not math.isfinite(noise_threshold) or not 0 <= noise_threshold <= 1:
+        raise ValueError("game_light_noise_threshold must be between 0 and 1 (0 disables early stopping)")
     log(f"emission lighting: {len(sources)} emissive meshes")
     saved_world, saved_engine = scene.world, scene.render.engine
     hidden = {ob: ob.hide_render for ob in scene.objects
@@ -395,7 +440,10 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_recei
     dark.node_tree.nodes.get("Background").inputs["Strength"].default_value = 0
     scene.world = dark
     scene.render.engine = "CYCLES"
-    samples = scene.cycles.samples
+    samples, saved_device = scene.cycles.samples, scene.cycles.device
+    sampling_keys = ("use_adaptive_sampling", "adaptive_threshold", "adaptive_min_samples", "time_limit")
+    saved_sampling = {key: getattr(scene.cycles, key) for key in sampling_keys}
+    saved_layer_samples = [(layer, layer.samples) for layer in scene.view_layers]
     saved_clamps = (scene.cycles.sample_clamp_direct, scene.cycles.sample_clamp_indirect, scene.cycles.use_fast_gi)
     saved_simplify = (scene.render.use_simplify, scene.cycles.texture_limit_render)
     # The irradiance bake needs the normal maps and broad surface colours,
@@ -412,6 +460,17 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_recei
     boosted = []
     denoiser = None
     try:
+        # Camera-render convergence is too loose for irradiance textures that
+        # are magnified and brightened by the game. Raising the maximum alone
+        # still lets Cycles stop early and the denoiser leaves broad blotches.
+        scene.cycles.use_adaptive_sampling = noise_threshold > 0
+        if noise_threshold > 0:
+            scene.cycles.adaptive_threshold = noise_threshold
+        scene.cycles.adaptive_min_samples = 0
+        scene.cycles.time_limit = 0
+        for layer, _ in saved_layer_samples:
+            layer.samples = 0
+        log(f"emission lighting: noise threshold {noise_threshold:g} (0 = fixed samples)")
         if EMISSION_GAIN != 1:
             log(f"emission lighting: Cycles source strength x{EMISSION_GAIN:g}")
             for mat in {m for ob in sources for m in ob.data.materials if m and m.node_tree}:
@@ -466,19 +525,64 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_recei
             receivers.append(ob)
         log(f"emission timing: UV preparation {time.monotonic()-started:.1f}s")
         if receivers:
+            targets = {}
+            for ob, image, _ in images:
+                targets.setdefault(ob, []).append(image)
+            resumed = set()
+            if checkpoint is not None:
+                for ob, targets_for_object in targets.items():
+                    if all([checkpoint.restore(image) for image in targets_for_object]):
+                        resumed.add(ob)
+                log(f"emission checkpoint: reused {len(resumed)}/{len(receivers)} receivers")
             # A prominent receiver can need cleaner lighting without making
             # every distant rock and the probe field pay for its sample count.
             groups = {}
             for ob in receivers:
+                if ob in resumed:
+                    continue
                 count = int(ob.get("game_light_samples", scene.get("game_light_samples", 64)))
                 if count < 1:
                     raise ValueError(f"{ob.name}: game_light_samples must be positive")
                 groups.setdefault(count, []).append(ob)
             for count, group in sorted(groups.items()):
+                # Keep sibling chunks adjacent so each batch shares a bake.
+                group.sort(key=lambda ob: ob.name)
                 scene.cycles.samples = count
                 log(f"emission lighting: baking {len(group)} receivers at {count} samples")
                 started = time.monotonic()
-                diffuse_bake(group)
+                # Bound the active bake targets as spatial chunks multiply.
+                # All scene geometry stays visible to rays; only the selected
+                # receivers change between batches. This also exposes progress
+                # instead of one silent operation over hundreds of receivers.
+                from scene_export import bake_device
+                device = bake_device()
+                scene.cycles.device = "CPU" if device == "CPU" else "GPU"
+                log(f"emission lighting: surface device {device}")
+                for first in range(0, len(group), 8):
+                    batch = group[first:first + 8]
+                    diffuse_bake(batch)
+                    for ob in batch:
+                        # Cycles can report FINISHED without writing a target.
+                        # Detect that here, before spending time on later maps.
+                        values = [lightmap_pixels(image) for image in targets[ob]]
+                        if any(not np.any(px[:, :, 3] > .5) for px in values):
+                            log(f"emission lighting: {ob.name}: unwritten target; retrying on CPU")
+                            previous_device = scene.cycles.device
+                            try:
+                                scene.cycles.device = "CPU"
+                                diffuse_bake([ob])
+                            finally:
+                                scene.cycles.device = previous_device
+                            values = [lightmap_pixels(image) for image in targets[ob]]
+                        for image, px in zip(targets[ob], values):
+                            if not np.any(px[:, :, 3] > .5):
+                                raise ValueError(f"empty lightmap bake after CPU retry: {ob.name}")
+                            if not np.isfinite(px).all():
+                                raise ValueError(f"non-finite lightmap: {ob.name}")
+                            if checkpoint is not None:
+                                checkpoint.save(image, px)
+                    log(f"emission lighting: {min(first + 8, len(group))}/{len(group)} receivers "
+                        f"at {count} samples, {time.monotonic()-started:.1f}s")
                 log(f"emission timing: {count}-sample bake {time.monotonic()-started:.1f}s")
             from lightmap_denoise import LightmapDenoiser
             denoiser = LightmapDenoiser()
@@ -538,6 +642,11 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_recei
                 nt.links.new(original,socket)
                 nt.nodes.remove(scale)
         scene.world, scene.render.engine, scene.cycles.samples = saved_world, saved_engine, samples
+        scene.cycles.device = saved_device
+        for key, value in saved_sampling.items():
+            setattr(scene.cycles, key, value)
+        for layer, count in saved_layer_samples:
+            layer.samples = count
         scene.cycles.sample_clamp_direct, scene.cycles.sample_clamp_indirect, scene.cycles.use_fast_gi = saved_clamps
         scene.render.use_simplify, scene.cycles.texture_limit_render = saved_simplify
         for ob, state in hidden.items():
@@ -545,6 +654,12 @@ def bake(objects, dynamic_names, log=print, *, surface_only=False, prepare_recei
         bpy.data.worlds.remove(dark)
         if objects:
             select(objects)
+
+
+def lightmap_pixels(image):
+    values = np.empty(image.size[1] * image.size[0] * 4, dtype=np.float32)
+    image.pixels.foreach_get(values)
+    return values.reshape(image.size[1], image.size[0], 4)
 
 
 def embed(path, maps, field):

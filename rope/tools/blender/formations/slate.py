@@ -176,7 +176,8 @@ def mark_strips(mesh, smallest=0.0):
         length, width = np.ptp(along), np.ptp(across)
         # A sliver chain the dissolve left can run a long way at no width:
         # it fills a few percent of its extent, a wedge about half.
-        if width < max(STRIP_MIN, smallest) or length < STRIP_LENGTH or area < STRIP_FILL * length * width:
+        from .depth_lod import threshold
+        if width < max(STRIP_MIN, threshold(smallest, pts)) or length < STRIP_LENGTH or area < STRIP_FILL * length * width:
             continue
         if REPORT is not None:
             REPORT.append((round(width * 100, 1), round(length, 2), round(area / (length * width), 2)))

@@ -24,6 +24,9 @@ import { NO_ORBIT } from "./render3d/space";
 import type { ViewCapture } from "./render3d/viewCapture";
 import { waterShimmer } from "./render3d/water";
 import { glassOptionsFrom } from "./render3d/glassMaterial";
+import { ballRimFrom } from "./render3d/ballRim";
+import { ballReflectionFrom } from "./render3d/ballReflection";
+import { backgroundLiftFrom } from "./render3d/backgroundLift";
 import { DEFAULT_LEVEL, LEVELS, listedLevels } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
@@ -194,6 +197,9 @@ if (params.get("shimmer") === "0") waterShimmer.value = 0;
 // TEMPORARY `?glasstint=R,G,B` tints the glass, for an A/B
 // (render3d/glassMaterial.ts `glassOptionsFrom`).
 glassOptionsFrom(params);
+ballRimFrom(params);
+ballReflectionFrom(params);
+backgroundLiftFrom(params);
 
 // `?dpr=N` draws the frame at a device pixel ratio this display does not have,
 // so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see

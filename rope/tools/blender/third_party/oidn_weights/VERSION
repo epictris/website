@@ -1,0 +1,10 @@
+Intel Open Image Denoise: RTLightmap HDR weights
+Source: https://github.com/RenderKit/oidn-weights
+Revision: 28883d1769d5930e13cf7f1676dd852bd81ed9e7
+File: rtlightmap_hdr.tza
+SHA256: 5f9757cb6a3d6c966cbd50dcd0cbffef88fe78f80cb7bf45ca99bcbd4ff1292d
+Size: 1830792 bytes
+License: Apache-2.0 (LICENSE.txt, from RenderKit/oidn v2.5.1)
+
+The weights are data for Blender's bundled OIDN RTLightmap filter. The
+camera-image RT model is not an equivalent fallback for irradiance textures.

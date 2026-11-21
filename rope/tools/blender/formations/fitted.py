@@ -431,7 +431,40 @@ def _relief(ob, seed, scale=1.0):
     bm.free()
 
 
-def _facets(ob, target, angle=None):
+def _dissolve_crease_vertices(bm):
+    """Remove degree-two corners without joining an edge already in use.
+
+    The planar modifier's boundary-vertex pass can join two corners that
+    already share another edge, leaving three/four faces on that edge.
+    Batch independent corners and leave at least three vertices per face.
+    """
+    bmesh, *_ = _bpy()
+    total = 0
+    while True:
+        batch, touched, pairs, removed = [], set(), set(), {}
+        for vertex in bm.verts:
+            if len(vertex.link_edges) != 2 or len(vertex.link_faces) != 2:
+                continue
+            a, b = [e.other_vert(vertex) for e in vertex.link_edges]
+            if {vertex, a, b} & touched:
+                continue
+            pair = frozenset((a, b))
+            if pair in pairs or any(e.other_vert(a) is b for e in a.link_edges):
+                continue
+            if any(len(f.verts) - removed.get(f, 0) <= 3 for f in vertex.link_faces):
+                continue
+            batch.append(vertex)
+            touched.update((vertex, a, b))
+            pairs.add(pair)
+            for face in vertex.link_faces:
+                removed[face] = removed.get(face, 0) + 1
+        if not batch:
+            return total
+        bmesh.ops.dissolve_verts(bm, verts=batch, use_face_split=False, use_boundary_tear=False)
+        total += len(batch)
+
+
+def _facets(ob, target, angle=None, *, preserve_topology=False):
     ob.data.calc_loop_triangles()
     ratio = min(1.0, target / max(len(ob.data.loop_triangles), 1))
     if ratio < 1.0:
@@ -439,20 +472,29 @@ def _facets(ob, target, angle=None):
         d1.decimate_type = "COLLAPSE"
         d1.ratio = ratio
         d1.use_collapse_triangulate = True
-    d2 = ob.modifiers.new("planar", "DECIMATE")
-    d2.decimate_type = "DISSOLVE"
-    d2.angle_limit = math.radians(ANGLE if angle is None else angle)
-    d2.use_dissolve_boundaries = True
+    limit = math.radians(ANGLE if angle is None else angle)
+    if not preserve_topology:
+        d2 = ob.modifiers.new("planar", "DECIMATE")
+        d2.decimate_type = "DISSOLVE"
+        d2.angle_limit = limit
+        d2.use_dissolve_boundaries = True
     _apply_modifiers(ob)
     # The planar dissolve can leave a loose edge behind (1 stone in 27 on
     # dark-rock-4): no face uses it, but the rock is not watertight with it.
     bmesh, *_ = _bpy()
     bm = bmesh.new()
     bm.from_mesh(ob.data)
+    if preserve_topology:
+        # Merge the shallow faces first, retaining their crease corners.
+        # Simplify those corners separately with the edge/face guards above.
+        bmesh.ops.dissolve_limit(bm, angle_limit=limit, verts=[], edges=bm.edges[:],
+                                use_dissolve_boundaries=False)
+        _dissolve_crease_vertices(bm)
     loose = [e for e in bm.edges if not e.link_faces]
     if loose:
         bmesh.ops.delete(bm, geom=loose, context="EDGES")
         bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+    if loose or preserve_topology:
         bm.to_mesh(ob.data)
     bm.free()
     for p in ob.data.polygons:
