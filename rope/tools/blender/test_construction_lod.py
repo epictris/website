@@ -24,11 +24,11 @@ assert warp.voxel*warp.stretch(30)>2*warp.voxel*warp.stretch(0)
 panned=Camera((100,-10,200),10,12/70)
 other=Warp.plan(co,panned,.012)
 assert other.slope==warp.slope and other.voxel==warp.voxel
-# Legacy controls no longer influence automatic stone construction.
+# Retired controls no longer influence full-detail stone construction.
 cells=Cells.__new__(Cells);cells.camera=camera;cells.p={**PARAMS,'floor':5.,'fixedScale':8.}
-assert cells.scale(0)==1 and cells.scale(30)==4
+assert cells.scale(0)==1 and cells.scale(30)==1
 cells.p['adaptiveDepth']=False
-assert cells.scale(0)==8
+assert cells.scale(0)==1
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 mesh=bpy.data.meshes.new('roof beam')

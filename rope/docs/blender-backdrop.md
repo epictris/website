@@ -1,5 +1,7 @@
 # The backdrop
 
+**Current workflow (2026-11-21):** solid formations now build full-detail masters without camera-dependent stone sizes, depth floors or construction LOD. Assemble them in the authoring scene and use [Build Export Scene](blender-formations.md#asset-masters-and-export-scenes) to derive simpler geometry or baked wall surfaces. The depth-budget sections below record the previous implementation. Existing meshes remain as authored until explicitly regenerated.
+
 Since 2026-10-04 a level's Blender scene can hold a **backdrop**: the far scenery the player sees behind the gameplay, stones cut from closed guide meshes kept in the scene itself.
 Since 2026-10-05 each piece is a **solid formation** ([blender-formations](blender-formations.md), generator `solid`): the Formations panel shows its guide, edits its parameters and render settings, and regenerates it, exactly as for an outline's formation.
 The river's (`ball` level, `river.blend`) was seeded from the grotto painting through an [Orthographic Studio](../../3d/CLAUDE.md) scene (`ssikuq5cgFgGC20KvbbM_g`: the far wall, the ceiling and its stem, the arch, the waterfall cliff, the ledges and the three boulders in the pool), and is what the level opens on.
@@ -14,7 +16,7 @@ It is scenery like everything else in the scene: `just scene ball` exports it, a
 - Edit a guide like any mesh; the rock turns pending, and Regenerate (or **Rebuild Changed**) builds it again in a separate Blender, the scene editable meanwhile.
 - **Build Formation from Mesh**, offered when a closed mesh is selected, makes a new piece from it.
 
-**Headless**, for a script or an LLM (`tools/blender/backdrop.py`; every run also records the level's start camera and water on the scene, `backdrop_camera`, which every build reads):
+**Headless**, for a script or an LLM (`tools/blender/backdrop.py`; every run also records the level's start camera and water on the scene, `backdrop_camera`, which the game preview uses):
 
 ```sh
 cd rope

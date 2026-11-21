@@ -1,4 +1,4 @@
-"""Small CPU bake/cache/child-mesh regression through the production exporter."""
+"""Full-detail CPU bake/cache regression through the production exporter."""
 import json
 from pathlib import Path
 import sys
@@ -16,7 +16,7 @@ bpy.ops.mesh.primitive_cube_add(size=2)
 ob=bpy.context.object;ob.name='LOD cache smoke'
 ob['formation_recipe']='{"generator":"solid","params":{"seed":31,"adaptiveDepth":true}}'
 ob['export_map_max']=128;ob['export_texels']=8.
-ob.scale=(.6,10,.6);ob.location=(0,10,0)
+ob.scale=(.6,1,.6);ob.location=(0,10,0)
 bpy.ops.object.transform_apply(location=True,rotation=True,scale=True)
 while ob.data.uv_layers:
     ob.data.uv_layers.remove(ob.data.uv_layers[0])
@@ -37,8 +37,8 @@ with tempfile.TemporaryDirectory(prefix='depth-lod-cache-') as cache:
     assert len(repair_calls)==1
     first=ob.data
     first_vertices=np.array([tuple(v.co) for v in first.vertices])
-    assert depth_lod.FACE_BAND in first.attributes
-    assert len(first.materials)>1
+    assert depth_lod.FACE_BAND not in first.attributes
+    assert len(first.materials)>=1
     assert all(np.isfinite(v.co).all() for v in first.vertices)
     entries=list(Path(cache).glob('*/meta.json'))
     assert len(entries)==1
@@ -53,10 +53,5 @@ with tempfile.TemporaryDirectory(prefix='depth-lod-cache-') as cache:
     assert len(repair_calls)==1, 'Cached geometry was repaired again'
     export.unwrap=real_unwrap
     assert np.allclose(first_vertices,[tuple(v.co) for v in ob.data.vertices])
-    kept=[ob];split_surface_chunks(kept)
-    parts=[o for o in kept if o.type=='MESH']
-    assert len(parts)>1 and all(p.parent and p.parent.name=='LOD cache smoke' for p in parts)
-    for part in parts:
-        values={v.value for v in part.data.attributes[depth_lod.FACE_BAND].data}
-        assert len(values)==1,values
-    print('DEPTH_LOD_EXPORT_OK baked, cached, bent and split into',len(parts),'independently budgeted draw meshes',flush=True)
+    assert depth_lod.FACE_BAND not in ob.data.attributes
+    print('FULL_DETAIL_EXPORT_CACHE_OK',flush=True)

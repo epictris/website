@@ -23,6 +23,31 @@ The add-on is the **Formations** tab in the 3D viewport's sidebar (N).
 `tools/blender/addon_install.py` links the package into Blender's `user_default` extension repository, as it does the ivy and moss add-ons.
 The scene exporter imports the package from the repo itself and needs none of this.
 
+## Asset masters and export scenes
+
+Since 2026-11-21, formations are reusable **full-detail masters**. Solid generation uses the guide's local coordinates and physical stone sizes. It needs no game camera, never changes quality with placement, and no longer offers Depth floor, Fixed LOD or Automatic depth detail. Existing meshes stay untouched until you explicitly regenerate them; old recipes' depth controls are ignored on that rebuild. Apply a guide's object scale before generation when its local units should match world metres.
+
+Work in one authoring file, such as `river.blend`. Generate and arrange masters there, or keep several reusable models together in a library such as `rocks.blend`. A separate file per asset is optional.
+
+1. **Add Formation** opens a `.blend` library, then lets you choose one model. It appends the full-detail mesh at the 3D cursor as an independent asset master. Imported geometry does not regenerate from the library's guide. You can edit its mesh or import an updated master. **Mark as Formation Asset** also makes a model available through Blender's native Asset Browser once its file is saved. Native links/collection instances remain an option; use Blender library overrides when editing linked asset settings.
+2. Select a master and open **Export Representation**. **Full geometry** keeps its evaluated mesh. **Reduced geometry** selects a fraction of its triangles to retain and a texture size. **Baked wall surface** projects it onto two triangles, with a local viewing direction and texture size. The sidebar's reduced triangle count is a target estimate; modifiers and decimation determine the actual result.
+3. **Build Export Scene** writes a separate file, by default `river-export.blend`. It snapshots the current authoring state (including unsaved edits), processes a background copy, and leaves the open authoring file and all its meshes unchanged. It refuses to overwrite the authoring file or a linked library. Esc cancels the worker; a failed build leaves a previously completed output intact. Continue editing the authoring file and rebuild whenever placement, masters or export settings change.
+4. Inspect the generated file, then export it explicitly from `rope/`:
+
+   ```sh
+   bun run scene:export ball --source assets-src/scenes/river-export.blend
+   ```
+
+   The level's scene name and node bindings stay the same. Omitting `--source` retains the existing direct-from-authoring export path; it never silently picks up a possibly stale generated file.
+
+Reduction always starts with the evaluated master, including its modifiers, not a guide or a previous reduction. The generated copy retains each object's placement, parenting and name. Native collection instances are realized in the output copy. Render-hidden library collections are not processed. Non-formation scene objects remain in the output.
+
+Reduced meshes receive new UVs and colour, tangent-space normal, roughness and ambient-occlusion maps baked from the master. Baked walls additionally carry silhouette/hole coverage in their colour alpha. The normal map supplies lighting relief, not parallax, new silhouettes from other directions, or physical overhangs: choose geometry where those matter. Wall projection covers the whole master bounding box; it does not create a seamless tiling material or a height map. Use an opaque rock material as the master; the wall coverage pass measures geometry coverage.
+
+Variants and their PNG maps live in `.formation-cache/<content hash>/` beside the export file. Geometry, shader inputs, image pixels, representation settings and Blender version participate in cache keys; repeated instances share a result. Each derived `.blend` packs its baked images, so the export file remains usable without this cache. The separate PNG files can also be used on manually authored surfaces. AO is supplied separately; the baked slate colour already contains the slate shader's crevice shading. A `<name>.formations.json` report records source/output triangle counts and cache reuse.
+
+These are **offline, artist-selected representations**, not runtime distance-switching LODs. Changing a representation changes only the next generated export. Generator-time depth budgets and export-time automatic depth-detail controls are retired. The older **Render (export)** panel still controls the direct export's surface passes and map limits; generated variants disable those geometry passes so a subsequent game export cannot bend or add chips to an already baked result.
+
 ## The panel
 
 The panel shows what the clicked object offers and little else (2026-10-08, Tris: "only contextually-relevant buttons/properties should be visible"); the active object counts only while it is selected, so after Alt+A the panel is back to its empty state.
@@ -102,11 +127,10 @@ The dialog's **Generator** picks how (the recipe's `generator`; a recipe without
   A needle whose longest edge Blender will not turn (the new diagonal is an edge already) has its shortest edge collapsed instead: left, it failed "must have nonzero volume and faces".
   Reproduced by saving the rock just before its final union and replaying the finish, which is deterministic from there (`scratchpad/finish/` of the session).
   Tris also saw it at 18 mm and 3 mm on Terrace.003: at 3 mm the strip doubles the edge line, at 18 mm it is a flat band, and either costs about twice the triangles of no bevel.
-- **Solid guide** (`solid`, since 2026-10-05, `formations/solidfit.py`): stones cut from a closed **guide mesh** instead of an outline, each worked as the boulder generator works the top of its rock (since 2026-11-13; recipe F's stones before), sized and worked by their depth from the game's start camera; the backdrop is made of these ([blender-backdrop](blender-backdrop.md#the-rocks)).
-  **Build Formation from Mesh**, with a closed mesh selected, makes one: the mesh becomes the rock's guide, in world space, and the rock stands at the world origin, since its stones are sized by their depth from the eye.
-  Its recipe holds the guide's geometry, the start camera and water (`backdrop_camera` on the scene, which `tools/blender/backdrop.py` writes from the level: a scene without it cannot build one) and the rock's world frame; moving the guide, editing its mesh, moving the rock or changing the start camera makes it pending.
-  The start camera is the generator's one input from the level, and it comes as data on the scene: this add-on reads it and never asks the level for it.
-  Its fields: **Seed**, **Stone size** (times every stone's on-screen size, and its steps and bevels with it; stones on a curve still split down to the small sizes), **Merge small** (the knub share), **Curve split** (degrees of gentle turning before a cell splits), and **Automatic depth detail** (on by default). Automatic construction sizes stones by their own depth and budgets core/finish resolution locally using projection and High DOF. It replaces **Depth floor** and **Fixed LOD**, which appear only when automatic construction is disabled for legacy reproduction. See [automatic construction](blender-backdrop.md#automatic-construction-detail).
+- **Solid guide** (`solid`, since 2026-10-05, `formations/solidfit.py`): stones cut from a closed **guide mesh** instead of an outline, each worked as the boulder generator works the top of its rock (since 2026-11-13; recipe F's stones before), sized and worked in the asset's local coordinates; the backdrop is made of these ([blender-backdrop](blender-backdrop.md#the-rocks)).
+  **Build Formation from Mesh**, with a closed mesh selected, makes one: the mesh becomes the rock's local guide, and its placement preserves the source object's transform.
+  Its recipe holds the guide geometry in the asset's local frame. Editing that guide or the generator parameters makes it pending; moving the formation or changing the camera does not.
+  Its fields: **Seed**, **Stone size** (a multiplier on physical stone dimensions, steps and bevels), **Merge small** (the knub share), and **Curve split** (degrees of gentle turning before a cell splits). Construction always uses the finest ordinary sampling, independent of depth. Lower-detail output is derived from the resulting master through **Export Representation**.
   A rock built before 2026-11-13 keeps its recipe F mesh until it is regenerated: its recipe's Facets, Chisel and Facet falloff are no longer read, and changing the generator does not make a rock pending.
   A guide formation stays one: its generator cannot be switched to an outline's, nor an outline's to it.
 
@@ -176,10 +200,9 @@ X, Y or Z pressed during the move constrain as usual; any curve that is not 2D (
 A move started another way (the Tweak tool's drag, the Move tool's gizmo) is unconstrained, so it stays on the plane but can drift from the cursor in an oblique view.
 Points are added and removed with Blender's own tools too (Subdivide between two selected neighbours, **X** > Vertices; replacing Edit Guides' Add Point and Remove Points); the guide must stay one closed polygon of at least three points, and a rock with an edited guide shows as pending.
 
-**Render (export)**, a sub-panel of the formation's (`formations/render.py`): how the scene export draws the rock, each an ID property on it that overrides what its depth would decide, so a change needs an export and no rebuild.
-**Detail scale** (its texel density and largest map divided by it, the slate's lengths multiplied by it; unset, the depth scale a solid formation's build measured, `formation_depth_scale`, else 1), **Chamfer strips**, **Curved creases** and **Chips and sub-facets** (the export's three finer passes; unset, each adds only the detail the game's High depth of field leaves distinguishable where the rock stands by its detail scale, and is off once it leaves none: [blender-backdrop](blender-backdrop.md#the-rocks)), **Largest map** and **Texels per metre** (0: 4096 and 512 over the detail scale).
-A field shows what the export will do; setting one makes it the rock's own, and **Passes and Maps From Depth** forgets them all.
-The bake cache keys on the three passes too, since the chips change the normal map without changing the mesh.
+**Render (export)** (`formations/render.py`) controls the direct game-export path's surface finishing and texture budgets. **Detail scale** is an explicit artistic/material scale, defaulting to 1; saved construction depth scales no longer set it. **Chamfer strips**, **Curved creases** and **Chips and sub-facets** default to full detail regardless of camera distance. **Largest map**, **Texels per metre** and the map limit control baking. **Reset Surface Settings** removes explicit overrides. These settings do not regenerate the master mesh.
+
+For the master-to-export-file workflow, use **Export Representation** instead. The result is already derived and baked; its geometry passes are disabled for the subsequent game export.
 
 Each formation has an **Attachment**, which decides what grows on it, and a **Moisture** (how much).
 

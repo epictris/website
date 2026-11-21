@@ -136,7 +136,7 @@ if generator == "solid":
     dst.objects.link(obj)
     # Its lengths times its depth over the gameplay plane's, so it is worked
     # as finely on screen as a rock on the plane (scene_export.detail_scale).
-    slate[slate_module.SCALE_PROP] = 1. if recipe['params'].get('adaptiveDepth',True) else scale
+    slate[slate_module.SCALE_PROP] = 1.0
     slate_module.paint(slate)
     obj[render.DEPTH_SCALE] = round(scale, 4)
 elif generator == "fitted":
@@ -165,7 +165,7 @@ try:
     obj.data.update()
 finally:
     bm.free()
-if generator == 'solid' and recipe['params'].get('adaptiveDepth', True):
+if generator == 'solid':
     # The adaptive remesh supplies a sampling grid, not the painted facets.
     # Join shallow folds into the existing slate's broad planes before tone
     # assignment, so arbitrary remesh triangles do not become colour patches.

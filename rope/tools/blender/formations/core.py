@@ -13,9 +13,8 @@ A SOLID formation (generator `solid`, a backdrop rock: docs/blender-backdrop.md)
 has a GUIDE instead of an outline: a closed mesh, parented to the rock, that
 its stones are cut from (solidfit.py). It takes the outline's place
 (`formation_outline` names it), so backups, copies and removal carry it the
-same way; its recipe holds the guide's geometry, the game's start camera
-(`scene[CAMERA]`, written by tools/blender/backdrop.py from the level) and the
-rock's world frame, because a stone's size goes with its depth from that eye.
+same way; its recipe holds the guide geometry in the asset's local frame.
+Scene placement and the game camera never change its construction.
 
 An outline formation's outline is its GUIDE too, and the guide is its only
 source. A guide curve is a native 2D curve: its points lie in its own local
@@ -634,8 +633,9 @@ def recipe_for(ob):
         return recipe
     if recipe.get("generator") == "solid":
         recipe["guide"] = guide_geometry(ob)
-        recipe["camera"] = scene_camera()
-        recipe["frame"] = [list(r) for r in authored_world(ob)]
+        recipe.pop("camera", None)
+        recipe.pop("frame", None)
+        recipe["construction"] = "ASSET"
         recipe.pop("generatorHash", None)
     else:
         recipe["outline"] = outline_points(ob)
@@ -659,14 +659,12 @@ def write_outline(ob, outline):
 
 
 def pending(ob):
-    """Whether the outline (or guide, camera and frame) or the parameters
+    """Whether the outline or local guide geometry or the parameters
     differ from the ones the mesh was built from."""
     if is_solid(ob):
         built = json.loads(ob["formation_recipe"])
         now = recipe_for(ob)
-        same = (now["guide"] == built["guide"] and now["camera"] == built["camera"]
-                and all(math.isclose(a, b, abs_tol=1e-5) for ra, rb in zip(now["frame"], built["frame"])
-                        for a, b in zip(ra, rb)))
+        same = now["guide"] == built["guide"]
         return bool(ob.get("formation_new")) or not same or params.changed(ob)
     current = outline_points(ob)
     built = json.loads(ob["formation_recipe"])["outline"]

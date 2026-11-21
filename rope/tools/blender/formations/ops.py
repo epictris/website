@@ -88,14 +88,12 @@ def active_formation(context):
 
 def guide_of_mesh(ob):
     """The guide a new solid formation takes from a selected closed mesh, in
-    world space (the rock stands at the world origin: its stones are sized by
-    their depth from the game's eye)."""
+    its own local space. Placement is preserved separately from construction."""
     if not ob or ob.type != "MESH" or core.is_formation(ob):
         raise ValueError("Select a closed mesh that is not a formation")
     if core.is_reference(ob):
         raise ValueError(ob.name + " is linked from another file, a reference only; model a mesh of your own")
-    world = core.authored_world(ob)
-    return {"verts": [[round(c, 6) for c in world @ v.co] for v in ob.data.vertices],
+    return {"verts": [[round(c, 6) for c in v.co] for v in ob.data.vertices],
             "faces": [list(p.vertices) for p in ob.data.polygons]}
 
 
@@ -193,9 +191,8 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
                     self._target_name = self._target.name
                 elif self.use_guide:
                     recipe["guide"] = guide_of_mesh(self._target)
-                    recipe["camera"] = core.scene_camera(context.scene)
-                    recipe["frame"] = [list(r) for r in Matrix.Identity(4)]
-                    self._frame = Matrix.Identity(4)
+                    recipe["construction"] = "ASSET"
+                    self._frame = core.authored_world(self._target)
                     self._target_name = self._target.name
             else:
                 recipe = core.recipe_for(self._target)
@@ -230,6 +227,7 @@ class FORMATIONS_OT_generate(bpy.types.Operator):
                     self.settings.generator, self.preset.title())
                 ob = core.append_rock(self._out / "rock.blend", name)
                 if self.use_guide:
+                    ob.parent.matrix_world = self._frame
                     # The mesh is now the rock's guide (a copy of it, in the
                     # rock's frame): the original goes.
                     source = bpy.data.objects.get(self._target_name)

@@ -30,7 +30,7 @@ def mesh_source(ob):
     the scene's own that is no part of a formation or of something grown on
     a rock."""
     return (ob is not None and ob.type == "MESH" and ob.parent is None and not core.is_reference(ob)
-            and "formation_recipe" not in ob and core.formation_of(ob) is None)
+            and "formation_recipe" not in ob and not ob.get("formation_asset") and core.formation_of(ob) is None)
 
 
 def is_pending(ob):
@@ -60,10 +60,18 @@ class FORMATIONS_PT_main(bpy.types.Panel):
         layout.enabled = not core.busy()
         if core.busy():
             layout.label(text=core.rebuild_progress, icon="TIME")
+        if context.scene.get("formation_export_build"):
+            layout.label(text="Generated export — edit the authoring file", icon="INFO")
+            layout.label(text="Rebuild from the authoring scene to change detail")
+            return
+        layout.operator("formations.add_asset", icon="APPEND_BLEND")
+        layout.operator("formations.build_export", icon="EXPORT")
         active = selected_active(context)
         ob = core.formation_of(active)
         if ob is not None:
             self.draw_formation(layout, ob, active)
+        elif active is not None and active.get("formation_asset"):
+            layout.label(text=active.name + ": asset master", icon="MESH_DATA")
         elif core.is_free_guide(active):
             layout.label(text=active.name, icon="CURVE_DATA")
             op = layout.operator("formations.generate", text="Build Formation from Guide", icon="ADD")
@@ -165,7 +173,7 @@ class FORMATIONS_PT_render(FormationSubpanel, bpy.types.Panel):
             else:
                 col.prop(ob, field)
         if render.explicit(ob):
-            layout.operator("formations.action", text="Passes and Maps From Depth").action = "RESET_RENDER"
+            layout.operator("formations.action", text="Reset Surface Settings").action = "RESET_RENDER"
 
 
 class FORMATIONS_PT_mesh(FormationSubpanel, bpy.types.Panel):

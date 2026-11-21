@@ -16,17 +16,9 @@ VERSION = 1
 
 
 def policy(ob):
-    from . import render
-    if (not ob.get(SETTING, True) or 'formation_recipe' not in ob
-            or render.DETAIL_SCALE in ob or int(ob.get('export_maps', 0)) > 0):
-        return None
-    try:
-        camera = json.loads(render.scene_of(ob)[render.CAMERA])
-    except (KeyError, TypeError, ValueError):
-        return None  # No known fixed lens: preserve the existing path.
-    return Budget(float(camera['distance']), float(camera['tanHalf']),
-                  render.DOF_MAX_BLUR, render.DOF_FOCUS_BAND,
-                  base_texels=float(ob.get('export_texels', 0)) or render.TEXELS_PER_METRE)
+    # Retained as a compatibility hook for the scene exporter. Source masters
+    # are always finished at full detail; asset_export owns all reductions.
+    return None
 
 
 class Field:

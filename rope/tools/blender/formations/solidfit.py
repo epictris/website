@@ -38,10 +38,9 @@ swept through a plane:
   camera). Its plates reach about 1.1 m from a ridge, so ridges 2 m apart
   (at the plane's scale) leave no bare core between them.
 
-Everything is sized in SCREEN metres - lengths on the gameplay plane
-`distance` in front of the eye - and multiplied by a stone's depth over that
-distance, so a far stone is as big and as finely worked on screen as a near
-one. The guide comes in world space, already where it stands.
+Everything is sized in asset-local metres. The full-detail master is independent
+of camera, scene depth, water and placement. Legacy depth parameters are ignored;
+asset_export.py derives simpler representations from the finished mesh.
 """
 
 import math
@@ -50,8 +49,8 @@ import numpy as np
 
 from . import fitted
 
-# The partition: CELLS_PER_M3 cells in a cubic screen metre (times 1 /
-# stoneSize^3), sampled in jittered depth-scaled strata near the surface,
+# The partition: CELLS_PER_M3 cells in a cubic asset metre (times 1 /
+# stoneSize^3), sampled in jittered uniform strata near the surface,
 # each a Voronoi cell in its anisotropic space (chunk_geometry:
 # the broad side chunks). Three a cubic metre is about a metre across; 1.5
 # left Cube.001 sixteen stones with big plain faces (2026-11-13).
@@ -133,22 +132,16 @@ UNFOLD_MAX, UNFOLD_KEEP = 60, 0.95
 # - stoneSize: every stone's size times this (CELLS_PER_M3 / stoneSize^3);
 # - knub: KNUB;
 # - curveTurn: CURVE_TURN, degrees;
-# - adaptiveDepth: local construction/remesh budgets, on by default. Replaces
-#   the two legacy controls below; they remain readable for reproducibility.
-# - floor: in legacy mode, the least depth scale a stone is cut at (`Cells`);
-# - fixedScale: when over 0, the depth scale EVERY stone is cut and worked
-#   at, instead of its own depth over the plane's: the level of detail set by
-#   hand rather than by distance from the camera.
-PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0,
-          "adaptiveDepth": True, "floor": 0.0, "fixedScale": 0.0}
+PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0}
 
 
 def resolved(params):
-    """`params` over PARAMS, refused when a key is not one of them."""
-    unknown = set(params) - set(PARAMS) - {"core"}
+    """Read old recipes without letting their camera/LOD settings alter a master."""
+    retired = {"adaptiveDepth", "floor", "fixedScale"}
+    unknown = set(params) - set(PARAMS) - retired - {"core"}
     if unknown:
         raise ValueError(f"unknown solid parameters: {', '.join(sorted(unknown))}")
-    return {**PARAMS, **params}
+    return {**PARAMS, **{k: v for k, v in params.items() if k not in retired}}
 
 
 def _bpy():
@@ -463,28 +456,17 @@ class Cells:
         self.faces.balance()
         co = np.array([v.co for v in solid.data.vertices])
         self.surface_cells = None
-        if p['adaptiveDepth']:
-            from native import Bvh
-            solid.data.calc_loop_triangles()
-            self.surface_cells = Bvh(co, [t.vertices[:] for t in solid.data.loop_triangles])
+        from native import Bvh
+        solid.data.calc_loop_triangles()
+        self.surface_cells = Bvh(co, [t.vertices[:] for t in solid.data.loop_triangles])
         lo, hi = co.min(0), co.max(0)
         self.lo, self.hi = lo - 1.0, hi + 1.0
         tree = _tree(solid)
-        if p['adaptiveDepth']:
-            from .cell_sampling import surface_seeds
-            seeds, candidates, identities = surface_seeds(tree, lo, hi, self.scale, p['stoneSize'],
-                                             CELLS_PER_M3, CELL_METRIC, rng, _inside, with_ids=True)
-            self.random_keys = [(int(identity), 0) for identity in identities]
-            report['seed candidates'] = candidates
-        else:
-            box = rng.uniform(lo, hi, (40000, 3))
-            inside = box[_inside(tree, box)]
-            scales = np.array([self.scale(y) for y in inside[:, 1]])
-            volume = float(np.prod(hi - lo))
-            count = int(round(volume / len(box) * float(np.sum(CELLS_PER_M3 / (scales * p["stoneSize"]) ** 3))))
-            count = max(4, min(count, len(inside) // 20))
-            pick = farthest(inside, count, np.array(CELL_METRIC), rng, scales)
-            seeds = inside[pick]
+        from .cell_sampling import surface_seeds
+        seeds, candidates, identities = surface_seeds(tree, lo, hi, self.scale, p['stoneSize'],
+                                         CELLS_PER_M3, CELL_METRIC, rng, _inside, with_ids=True)
+        self.random_keys = [(int(identity), 0) for identity in identities]
+        report['seed candidates'] = candidates
         self.planes, self.tapers, self.f = [], [], []
         tapers = [self._taper(s, self.stone_rng(i, 0)) for i, s in enumerate(seeds)]
         st = seeds @ CELL_T.T
@@ -510,10 +492,8 @@ class Cells:
 
         for i, s in enumerate(st):
             depth_scale = self.scale(seeds[i][1])
-            f = depth_scale * (p['stoneSize'] if p['adaptiveDepth'] else 1.)
+            f = depth_scale * p['stoneSize']
             near = [j for _, j, _ in neighbours.find_n(s, min(len(st), CELL_NEIGHBOURS+1)) if j != i]
-            if not p['adaptiveDepth']:
-                near = np.argsort(np.linalg.norm(st-s, axis=1))[1:CELL_NEIGHBOURS+1]
             planes, have = [], set()
             for j in near:
                 plane, over = joint(i, int(j), f)
@@ -532,7 +512,7 @@ class Cells:
             # the box are cut by nearly every seed, and `halfspaces` grows as
             # the cube of its planes (all at once took 36 GB).
             while len(planes) < COMPLETE_MAX:
-                v = halfspaces(planes, self.lo, self.hi, fast=p['adaptiveDepth'])
+                v = halfspaces(planes, self.lo, self.hi, fast=True)
                 if len(v) == 0:
                     break
                 # A seed beyond twice the corner radius cannot bisect this
@@ -542,8 +522,6 @@ class Cells:
                             + CELL_GAP*f*metric_norm) + 1e-5
                 ids = np.array(sorted(j for _, j, _ in neighbours.find_range(s, radius)
                                       if j != i and j not in have), dtype=int)
-                if not p['adaptiveDepth']:
-                    ids = np.array([j for j in range(len(st)) if j != i and j not in have], dtype=int)
                 if not len(ids):
                     break
                 nt_all = st[ids] - s
@@ -575,14 +553,9 @@ class Cells:
         report["joints overlapped"] = overlapped
 
     def scale(self, y):
-        p = self.p
-        if p['adaptiveDepth']:
-            return self.camera.scale(y)
-        return p["fixedScale"] if p["fixedScale"] > 0 else max(self.camera.scale(y), p["floor"])
+        return 1.0
 
     def stone_rng(self, cid, stream):
-        if not self.p['adaptiveDepth']:
-            return self.rng
         from .cell_sampling import stone_rng
         identity, branch = self.random_keys[cid]
         return stone_rng(self.p['seed'], identity, branch, stream)
@@ -621,7 +594,7 @@ class Cells:
     def box(self, cid):
         """The cell's bounding box: centre and half extents, or None when it
         is empty."""
-        v = halfspaces(self.planes[cid], self.lo, self.hi, fast=self.p['adaptiveDepth'])
+        v = halfspaces(self.planes[cid], self.lo, self.hi, fast=True)
         if len(v) < 4:
             return None
         return (v.min(0) + v.max(0)) / 2, (v.max(0) - v.min(0)) / 2
@@ -630,7 +603,7 @@ class Cells:
         """The solid within cell `cid`, as a new object (unlinked), or None
         when nothing is left."""
         _, bpy, *_ = _bpy()
-        v = halfspaces(self.planes[cid], self.lo, self.hi, fast=self.p['adaptiveDepth'])
+        v = halfspaces(self.planes[cid], self.lo, self.hi, fast=True)
         if len(v) >= 4 and self.surface_cells is not None:
             if not self.surface_cells.cell_meets_surface(self.planes[cid], v.min(0), v.max(0)):
                 return None
@@ -661,8 +634,8 @@ class Cells:
         if box is None:
             return None
         centre, half = box
-        depth_scale = self.scale(centre[1]-half[1]) if self.p['adaptiveDepth'] else self.f[cid]
-        f = depth_scale * (self.p['stoneSize'] if self.p['adaptiveDepth'] else 1.)
+        depth_scale = 1.0
+        f = depth_scale * self.p['stoneSize']
         wide, tall = half[0] / (SMALL_WIDTH * f), half[2] / (SMALL_HEIGHT * f)
         if max(wide, tall) < 1:
             return None
@@ -672,9 +645,8 @@ class Cells:
             self.planes.append(self.planes[cid] + [(sign * e, float(sign * e @ centre) - CELL_GAP * f)])
             self.tapers.append(self.tapers[cid])
             self.f.append(depth_scale)
-            if self.p['adaptiveDepth']:
-                identity, branch = self.random_keys[cid]
-                self.random_keys.append((identity, branch*2+(1 if sign==1 else 2)))
+            identity, branch = self.random_keys[cid]
+            self.random_keys.append((identity, branch*2+(1 if sign==1 else 2)))
             out.append(len(self.planes) - 1)
         return out
 
@@ -1103,11 +1075,12 @@ def build(solid, camera, params, collection, water_z=None):
     stones' median depth over the plane's). `params`: PARAMS (`resolved`)."""
     bmesh, bpy, Matrix, Vector, BVHTree = _bpy()
     p = resolved(params)
-    adaptive = camera if p['adaptiveDepth'] else None
+    # Asset geometry is independent of the camera, water and scene placement.
     boulder, reinforce, limit_edge_bevel = _boulders()
     rng = np.random.default_rng(int(p["seed"]))
     guide = solid
-    solid = thicken(solid, camera, collection)
+    solid = bpy.data.objects.new("Construction guide", guide.data.copy())
+    collection.objects.link(solid)
     bm_solid = bmesh.new()
     bm_solid.from_mesh(solid.data)
     surface = BVHTree.FromBMesh(bm_solid)
@@ -1121,7 +1094,7 @@ def build(solid, camera, params, collection, water_z=None):
         bpy.data.meshes.remove(me)
 
     # The cells' pieces of the solid, those with any of its surface.
-    cells = Cells(solid, surface, camera, p, boulder, rng, report, guide=guide if adaptive else None)
+    cells = Cells(solid, surface, camera, p, boulder, rng, report, guide=guide)
     pieces, curved = [], set()
     todo = cells.ids()
     while todo:
@@ -1130,10 +1103,8 @@ def build(solid, camera, params, collection, water_z=None):
         if box is None:
             continue
         centre, half = box
-        if adaptive and surface.find_nearest(Vector(centre))[3] > float(np.linalg.norm(half)) + ON_SURFACE:
+        if surface.find_nearest(Vector(centre))[3] > float(np.linalg.norm(half)) + ON_SURFACE:
             continue  # wholly inside/outside: no surface stone to cut
-        if water_z is not None and centre[2] + max(half) < water_z:
-            continue  # under the pool
         ob = cells.cut(bm_solid, cid)
         if ob is None:
             continue
@@ -1147,8 +1118,6 @@ def build(solid, camera, params, collection, water_z=None):
             todo[:0] = halves
             report["split"] += 1
             continue
-        if not adaptive:
-            collection.objects.link(ob)
         ob.name = f"Stone {cid}"
         if bends:
             curved.add(ob.name)
@@ -1165,7 +1134,7 @@ def build(solid, camera, params, collection, water_z=None):
         if own:
             least = p["knub"] * float(np.median([v for _, v in own]))
             tiny |= {id(q) for q, v in own if v < least}
-    size_factor = p['stoneSize'] if adaptive else 1.
+    size_factor = p['stoneSize']
     small = [q for q in pieces if id(q) in tiny or _small(q[1], q[2]*size_factor)]
     kept = [q for q in pieces if id(q) not in tiny and not _small(q[1], q[2]*size_factor)]
     hosts = [q[1] for q in kept]
@@ -1187,36 +1156,33 @@ def build(solid, camera, params, collection, water_z=None):
     # Each stone worked as the boulder works a piece on its top.
     stones, scales = [], []
     for cid, ob, f in kept:
-        if work(ob, cells.tapers[cid], surface, boulder, cells.stone_rng(cid, 1), adaptive):
+        if work(ob, cells.tapers[cid], surface, boulder, cells.stone_rng(cid, 1)):
             stones.append(ob)
             scales.append(f)
         else:
             drop(ob)
-    scale = float(np.median(scales)) if scales else camera.scale(float(np.mean([v.co.y for v in bm_solid.verts])))
-    k = scale * p["stoneSize"]
-    if adaptive:
-        stones = clean(stones,DEPTH/2.6*k,k,boulder,reinforce,
-                       {ob:f*p['stoneSize'] for ob,f in zip(stones,scales)})
-    else:
-        stones = clean(stones, DEPTH / 2.6 * k, k, boulder, reinforce)
+    scale = 1.0
+    k = p["stoneSize"]
+    stones = clean(stones, DEPTH/2.6*k, k, boulder, reinforce,
+                   {ob: p['stoneSize'] for ob in stones})
     report["stones"] = len(stones)
-
-    core = build_core(bm_solid, scale, collection, report, adaptive)
-    report["floating"] = len(floating(stones, core, water_z))
+    core = build_core(bm_solid, scale, collection, report)
+    report["floating"] = len(floating(stones, core, None))
     core_tree = _tree(core) if len(core.data.polygons) else None
 
     # The guard: the solid grown by the most a step can rise above it, the
     # half of a ridge spacing at the steepest share of the mean slope.
     rise = (RIDGE_SPACING * DEPTH / 2.6 * k / 2 * (cells.tapers[0]["mean"] - boulder["taperSlopeMin"])
             + CELL_OVERLAP * scale * size_factor) if cells.tapers else 0.0
-    guard = grown(solid, rise/scale if adaptive else rise, 0.05 if adaptive else 0.05*scale,
-                  collection, "Guard", adaptive)
+    guard = grown(solid, rise, 0.05, collection, "Guard")
 
     # One rock: the core and the stones, then the boulder's finish
     # (blender_build.assemble_rock): remesh, smooth, decimate to its face
     # budget, back inside the guard, the edge bevel.
     # Where the solid is thinner than twice the core's inset there is no
     # core: the stones are the whole piece.
+    if not len(core.data.polygons) and not stones:
+        raise ValueError("Guide is too thin to form a rock at this stone size")
     base = core if len(core.data.polygons) else stones[0]
     rock = bpy.data.objects.new("BackdropRock", base.data.copy())
     collection.objects.link(rock)
@@ -1229,38 +1195,21 @@ def build(solid, camera, params, collection, water_z=None):
     _boolean(rock, union, "UNION", collection=True)
     keep_main_body(rock)
     voxel = min(0.04 * 0.30, boulder["voxelCap"])
-    if adaptive:
-        from .construction_lod import finish, FINISH_ADAPTIVITY
-        report['adaptive finish'] = finish(rock,camera,voxel,
-            iterations=int(boulder['smoothIterations']),smooth=boulder['smoothFactor'],
-            adaptivity=max(FINISH_ADAPTIVITY,boulder['remeshAdaptivity']),density=boulder['faceBudget']/30.)
-        keep_main_body(rock)
-    else:
-        voxel *= scale
-        _modifier(rock, "REMESH", mode="VOXEL", voxel_size=voxel, adaptivity=boulder["remeshAdaptivity"])
-        keep_main_body(rock)
-        _modifier(rock, "SMOOTH", factor=boulder["smoothFactor"], iterations=int(boulder["smoothIterations"]))
-        area = sum(q.area for q in rock.data.polygons)
-        budget = boulder["faceBudget"] * area / 30.0 / scale ** 2
-        _modifier(rock, "DECIMATE", ratio=min(1.0, budget / max(1, len(rock.data.polygons))))
+    _modifier(rock, "REMESH", mode="VOXEL", voxel_size=voxel, adaptivity=boulder["remeshAdaptivity"])
+    keep_main_body(rock)
+    _modifier(rock, "SMOOTH", factor=boulder["smoothFactor"], iterations=int(boulder["smoothIterations"]))
+    area = sum(q.area for q in rock.data.polygons)
+    budget = boulder["faceBudget"] * area / 30.0
+    _modifier(rock, "DECIMATE", ratio=min(1.0, budget / max(1, len(rock.data.polygons))))
     _boolean(rock, guard, "INTERSECT")
     keep_main_body(rock)
     bpy.context.view_layer.objects.active = rock
     bevel = rock.modifiers.new("edge", "BEVEL")
-    bevel.width, bevel.segments = boulder["edgeBevelWidth"] * (1. if adaptive else scale), int(boulder["edgeBevelSegments"])
+    bevel.width, bevel.segments = boulder["edgeBevelWidth"], int(boulder["edgeBevelSegments"])
     rock.data.materials.append(bpy.data.materials.new("rock"))
     rock.data.materials.append(bpy.data.materials.new("worn"))
     bevel.material = 1
     limit_edge_bevel(rock, bevel, math.radians(boulder["edgeBevelAngle"]))
-    if adaptive:
-        # The validated bevel weights can only shrink: don't spend geometry
-        # on an edge strip completely below its nearest High-DOF blur.
-        weights = rock.data.attributes.get('bevel_weight_edge')
-        if weights:
-            for edge, weight in zip(rock.data.edges,weights.data):
-                near = min(rock.data.vertices[i].co.y for i in edge.vertices)
-                if camera.budget.blur(near-camera.eye[1]-camera.distance) > bevel.width:
-                    weight.value = 0.
     fitted._apply_modifiers(rock)
     bm = bmesh.new()
     bm.from_mesh(rock.data)
@@ -1274,7 +1223,7 @@ def build(solid, camera, params, collection, water_z=None):
     # from stone (docs/blender-backdrop.md, measuring the packing).
     marks = [0] * len(rock.data.polygons)
     if core_tree is not None:
-        marks = [int(core_tree.find_nearest(q.center)[3] < 2 * voxel * (camera.scale(q.center.y) if adaptive else 1.))
+        marks = [int(core_tree.find_nearest(q.center)[3] < 2 * voxel)
                  for q in rock.data.polygons]
     attr = rock.data.attributes.new(CORE_ATTRIBUTE, "INT", "FACE")
     attr.data.foreach_set("value", marks)
@@ -1293,20 +1242,15 @@ def build(solid, camera, params, collection, water_z=None):
 
 
 def build_from_recipe(recipe, collection):
-    """A solid formation's rock from its recipe (formations/worker.py): the
-    guide (rock-local `verts` and `faces`) taken to the world by `frame`,
-    cut and worked there, and brought back into the rock's frame. Returns
-    the rock and its depth scale."""
+    """Build in the guide's local frame, without camera or scene dependencies."""
     bmesh, bpy, Matrix, Vector, _ = _bpy()
     from . import worker
     given = worker.GENERATORS["solid"]
     if set(given) != set(PARAMS) or any(not math.isclose(given[k], v, abs_tol=1e-9) for k, v in PARAMS.items()):
         raise RuntimeError("worker.GENERATORS['solid'] and solidfit.PARAMS differ")
-    frame = Matrix(recipe["frame"])
     guide = recipe["guide"]
     me = bpy.data.meshes.new("Guide")
     me.from_pydata([tuple(v) for v in guide["verts"]], [], [tuple(f) for f in guide["faces"]])
-    me.transform(frame)
     bm = bmesh.new()
     bm.from_mesh(me)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
@@ -1320,15 +1264,9 @@ def build_from_recipe(recipe, collection):
         raise ValueError(f"the guide is not a closed mesh ({open_edges} non-manifold edges)")
     solid = bpy.data.objects.new("Guide", me)
     collection.objects.link(solid)
-    cam = recipe["camera"]
-    camera = Camera(cam["eye"], cam["distance"],cam.get('tanHalf',12/70))
-    piece, parts, scale, report = build(solid, camera, recipe["params"], collection, cam.get("waterZ"))
+    piece, parts, scale, report = build(solid, None, recipe["params"], collection)
     collection.objects.unlink(solid)
     bpy.data.objects.remove(solid)
     bpy.data.meshes.remove(me)
     print("SOLID_REPORT", report, flush=True)
-    back = frame.inverted()
-    piece.data.transform(back)
-    for part in parts:
-        part.data.transform(back)
     return piece, scale

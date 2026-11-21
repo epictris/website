@@ -54,3 +54,7 @@ tools/audio/.local/
 tools/audio/out/
 tools/audio/sources/
 tools/audio/layer-uploads/
+
+# Derived formation meshes and baked maps beside generated export files.
+.formation-cache/
+.formation-export-*/

@@ -31,17 +31,13 @@ FIELDS = {
                  "slabLength": "slab_length", "weathering": "weathering",
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
                  "edgeBevelWidth": "edge_bevel"},
-    "solid": {"seed": "seed", "stoneSize": "stone_size", "knub": "knub", "curveTurn": "curve_turn",
-              "adaptiveDepth": "adaptive_depth", "floor": "floor", "fixedScale": "fixed_scale"},
+    "solid": {"seed": "seed", "stoneSize": "stone_size", "knub": "knub", "curveTurn": "curve_turn"},
 }
 FITTED = GENERATORS["fitted"]
 SOLID = GENERATORS["solid"]
 
 
 class FormationParams(bpy.types.PropertyGroup):
-    adaptive_depth: BoolProperty(name='Automatic depth detail', default=True,
-        description='Build with local projection and High-DOF budgets, including remesh and core; '
-                    'replaces Fixed LOD and Depth floor. Disable only to reproduce legacy construction')
     loaded: BoolProperty(description="The fields hold this rock's parameters")
     # Fields saved before 2026-10-16 hold a boulder rock's construction depth
     # in `depth`, not its thickness; `load_all` converts them once.
@@ -54,7 +50,7 @@ class FormationParams(bpy.types.PropertyGroup):
                                    "the cave look (docs/cave-look.md)"),
         ("boulders", "Boulder generator", "The fork's slab generator, cut to the outline"),
         ("solid", "Solid guide", "Stones cut from a closed guide mesh, each worked as the boulder generator works "
-                                 "its top, sized by their depth from the game's start camera "
+                                 "its top, at full detail in the asset's local coordinates "
                                  "(docs/blender-backdrop.md)"),
     ])
     seed: IntProperty(name="Seed", default=FITTED["seed"], min=0)
@@ -79,21 +75,14 @@ class FormationParams(bpy.types.PropertyGroup):
                              default=DEFAULT_PARAMS["faceBudget"], min=200, max=100000, soft_max=10000)
     detail: FloatProperty(name="Remesh detail", description="Remesh resolution: finer as it rises",
                           default=DEFAULT_PARAMS["detail"], min=.25, max=4)
-    stone_size: FloatProperty(name="Stone size", description="Every stone's size times this (on screen, so the "
-                              "same at any depth), including its steps, bevels, curvature-split minimum and "
+    stone_size: FloatProperty(name="Stone size", description="Every stone's physical size times this, "
+                              "including its steps, bevels, curvature-split minimum and "
                               "small-fragment threshold", default=SOLID["stoneSize"], min=.25, max=4)
     knub: FloatProperty(name="Merge small", description="A stone under this share of its kind's median volume "
                         "is joined to its neighbour instead of standing as a knub", default=SOLID["knub"], min=0, max=1)
     curve_turn: FloatProperty(name="Curve split", description="Degrees a cell's surface must turn in gentle bends "
                               "before it splits into smaller stones; lower keeps more curves round",
                               default=SOLID["curveTurn"], min=5, max=1000)
-    floor: FloatProperty(name="Depth floor", description="The least depth scale a stone is cut at: 0 sizes every "
-                         "stone by its own depth; above it, a part near the gameplay plane is cut as if this far "
-                         "back (the roof's ceiling, run forward to the level)", default=SOLID["floor"], min=0, max=20)
-    fixed_scale: FloatProperty(name="Fixed LOD", description="When over 0, every stone is cut and worked as if it "
-                               "stood this many times the gameplay plane's distance from the eye, "
-                               "whatever its depth: the level of detail set by hand (0: from each stone's depth)",
-                               default=SOLID["fixedScale"], min=0, max=20)
     voxel_cap: FloatProperty(name="Voxel cap", description="Largest remesh voxel, whatever the outline",
                              default=DEFAULT_PARAMS["voxelCap"], min=.002, max=.1, precision=3, subtype="DISTANCE")
     edge_bevel: FloatProperty(name="Edge bevel", description="Width of the bevel on every sharp edge: well under a "
@@ -119,8 +108,6 @@ def draw(layout, settings, solid):
         row.prop_enum(settings, "generator", "fitted", text="Fitted slate")
         row.prop_enum(settings, "generator", "boulders", text="Boulders")
     for field in FIELDS[settings.generator].values():
-        if settings.generator=='solid' and settings.adaptive_depth and field in ('floor','fixed_scale'):
-            continue
         layout.prop(settings, field)
 
 
@@ -185,9 +172,6 @@ def current(ob):
 def changed(ob):
     settings = editable(ob)
     recipe = json.loads(ob['formation_recipe'])
-    if (generator_of(recipe)=='solid' and 'adaptiveDepth' not in recipe['params']
-            and (settings is None or settings.adaptive_depth)):
-        return True  # Old fixed/floor construction has not adopted local budgets yet.
     if settings is None:
         return False
     (want, asked), (had, used) = from_settings(settings), built(ob)

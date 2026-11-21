@@ -1,13 +1,12 @@
 """A level's backdrop: SOLID formations (formations/core.py, generator `solid`),
-stones cut from closed guide meshes, sized by their depth from where
-the level opens. This is their headless front end, for a script or an LLM; the
+full-detail stones cut from closed guide meshes. This is their headless front end, for a script or an LLM; the
 Formations panel does the same in Blender (docs/blender-backdrop.md).
 
     blender -b assets-src/scenes/river.blend --python-exit-code 1 \\
         --python tools/blender/backdrop.py -- levels/ball.json [COMMANDS] [--save]
 
 Every run writes the level's start camera and water onto the scene
-(`backdrop_camera`, which the panel's builds read), then, in this order:
+(`backdrop_camera`, used by the game preview), then, in this order:
 
     --adopt                 turn the meshes in `Backdrop sources` (the backdrop
                             before 2026-10-05) into solid formations, replacing
@@ -16,8 +15,7 @@ Every run writes the level's start camera and water onto the scene
                             (scripts/ortho-solids.ts) for the pieces the scene
                             does not have yet, or those --only names, and build
     --set NAME key=value,.. a formation's parameters (solidfit.PARAMS: seed,
-                            stoneSize, knub, curveTurn, adaptiveDepth;
-                            floor/fixedScale only in legacy mode)
+                            stoneSize, knub, curveTurn)
     --render NAME key=value,..  its render settings (formations/render.py:
                             detail_scale, export_strips, export_creases,
                             export_chips, export_map_max, export_texels,
@@ -368,8 +366,7 @@ def create(name, guide_ob, params):
     built now. The mesh itself is left as it was."""
     world = core.authored_world(guide_ob)
     settings = {**worker.GENERATORS["solid"], **params}
-    recipe = {"generator": "solid", "params": settings, "camera": core.scene_camera(),
-              "frame": [list(r) for r in Matrix.Identity(4)],
+    recipe = {"generator": "solid", "params": settings, "construction": "ASSET",
               "guide": {"verts": [[round(c, 6) for c in world @ v.co] for v in guide_ob.data.vertices],
                         "faces": [list(p.vertices) for p in guide_ob.data.polygons]}}
     t0 = time.time()

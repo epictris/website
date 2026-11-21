@@ -13,9 +13,9 @@ editor: that is the Game add-on (tools/blender/game)."""
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty
 
-from . import core, growth, ops, params, render, ui
+from . import assets, core, growth, ops, params, render, ui
 
-CLASSES = ops.CLASSES + ui.CLASSES
+CLASSES = ops.CLASSES + assets.OPERATORS + ui.CLASSES + assets.PANELS
 
 
 def register():
@@ -39,6 +39,7 @@ def register():
         update=lambda self, _: core.rocks_wire(self, self.formations_rocks_wire),
         description="Draw the solid formations' rocks as wireframe, so their guides show through")
     render.register()
+    assets.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
     ops.register_keys()
@@ -58,6 +59,7 @@ def unregister():
     ops.unregister_keys()
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
+    assets.unregister()
     render.unregister()
     del bpy.types.Scene.formations_rocks_wire
     del bpy.types.Scene.formations_show_guides

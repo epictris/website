@@ -3,7 +3,8 @@
 Environment lighting, shelters and [fog regions](lighting-and-surfaces.md#regional-fog) are authored and previewed in the level editor without a Blender export. Blender's Fog preview does not reproduce regional masks; judge those transitions in the level editor.
 
 A level is **dressed in Blender**: one `.blend` holds the level's whole look, and one recipe puts it in the game.
-The loop is: edit the scene in Blender, `just scene <level>`, refresh the browser.
+The direct loop is: edit the scene in Blender, `just scene <level>`, refresh the browser.
+For full-detail formation masters, use **Formations → Build Export Scene** and then `bun run scene:export <level> --source assets-src/scenes/<scene>-export.blend` from `rope/`. The generated file applies each master's chosen geometry reduction or baked wall representation while preserving the authoring scene; see [asset masters and export scenes](blender-formations.md#asset-masters-and-export-scenes).
 This page is what a scene is, how it binds to the level, how the files move, and what Blender cannot carry.
 The plans are [plans/blender-scenes.md](../plans/blender-scenes.md) (2026-09-27, the pipeline) and [plans/blender-owns-appearance.md](../plans/blender-owns-appearance.md) (2026-09-29, the ownership below).
 

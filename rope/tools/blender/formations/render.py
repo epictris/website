@@ -1,50 +1,9 @@
-"""An object's render settings: how the scene export draws it (scene_export.py).
+"""Explicit surface-finishing and map settings for full-detail formations.
 
-Each is an ID property on the object, set in the Formations panel (Render) or
-by hand, and overrides what the object's depth would decide (Tris, 2026-10-04:
-configurable, not automatic from the distance to the camera). Unset, formations
-with a known gameplay camera use spatial budgets within the object:
-
-- export_depth_lod: automatic High-DOF surface geometry and texture budgets
-  (default on for formations). World depth, the fixed lens and 2160 output
-  lines determine conservative power-of-two bands. Physical slate sizes stay
-  fixed. An explicit detail_scale or positive export_maps selects the uniform
-  path; disabling this setting restores the old median-depth default;
-
-- detail_scale: how many times further back than the gameplay plane the
-  object is drawn as if it stood: its texel density is divided by it, its
-  largest map too, and its painted slate's lengths are multiplied by it
-  (unset: 1 for adaptive formations; otherwise the depth scale a solid
-  formation's build measured, DEPTH_SCALE, or 1);
-- export_strips: the slate's chamfer strips painted as edge line;
-- export_creases: long straight creases bent into curves (curve.py);
-- export_chips: the chips and sub-facets baked into the normal map (detail.py);
-- export_map_max: the largest colour map side (0: 4096 over the detail scale,
-  to a power of two);
-- export_texels: texels per metre (0: 512 over the detail scale, 400 split
-  over several maps);
-- export_maps: an explicit colour atlas limit (0: automatically allocate
-  enough spatial chunks to maintain the requested density).
-
-The three passes add no detail the game's depth of field would blur away
-(Tris, 2026-11-13: "if the depth of field blur would make a particular detail
-indistinguishable, don't bother adding the detail at that distance"; the
-High setting). The blur behind the focus is a disc whose diameter in the
-world grows straight with the depth past it (`detail_blur`). Adaptive features
-use the nearest depth of their whole support; uniform rocks use their LOD
-scale (its detail scale less one, times the start camera's plane distance).
-A detail narrower than the disc there
-is left out: each pass skips the features under it (a chip, a sub-facet
-plane, a bow, a strip) and is off altogether once its LARGEST is. Until then
-they ran only on the plane (a detail scale of 1) and a solid formation never
-had the creases and chips, a cost of the recipe F meshes (the river's Cube:
-2714 creases and 1630 chips, 747 s of a 1330 s export).
-
-Plain Python on the object's ID properties: the export runs without the
-add-on registered.
+Generation and export defaults no longer infer quality from camera depth.
+Lower-detail representations are derived from evaluated masters by asset_export.
 """
 
-import json
 import math
 
 from .slate import OBJECT_SCALE_PROP as DETAIL_SCALE
@@ -57,10 +16,7 @@ SETTINGS = (DETAIL_SCALE, *PASSES, *LIMITS, 'export_depth_lod')
 
 
 def detail_scale(ob):
-    from .depth_lod import policy
-    if policy(ob) is not None:
-        return 1.0  # Automatic depth budgets change sampling, not stone scale.
-    return float(ob.get(DETAIL_SCALE, ob.get(DEPTH_SCALE, 1.0)))
+    return float(ob.get(DETAIL_SCALE, 1.0))
 
 
 def far_back(ob):
@@ -83,14 +39,13 @@ CAMERA = "backdrop_camera"
 
 
 def setting(ob, name):
-    """`ob`'s render setting `name`: its own, else what its depth (and, for a
-    solid formation's creases and chips, its kind) decides."""
+    """Explicit surface settings, otherwise full-detail defaults."""
+    if name == 'export_depth_lod':
+        return False
     if name in ob:
         return ob[name]
     if name == DETAIL_SCALE:
         return detail_scale(ob)
-    if name == 'export_depth_lod':
-        return True
     if name in PASSES:
         return detail_blur(ob) < LARGEST[name]
     if name == "export_maps":
@@ -105,35 +60,13 @@ def scene_of(ob):
 
 
 def detail_blur(ob):
-    """The diameter (metres, on the rock) of the game's High depth of field
-    blur where `ob` stands by its LOD scale. A thin lens focused at s blurs a
-    point at depth d into a circle of DOF_MAX_BLUR x (1 - s / d) of the
-    frame's height as a radius; the frame is 2 d tanHalf tall there, so the
-    disc is 4 DOF_MAX_BLUR tanHalf (d - s) across: straight with the depth
-    past the focus. Without a start camera on the scene a rock on the plane
-    is sharp and any other wholly blurred."""
-    from .depth_lod import field
-    adaptive = field(ob)
-    if adaptive is not None:
-        return adaptive(ob.bound_box)
-    scene = scene_of(ob)
-    scale = detail_scale(ob)
-    try:
-        camera = json.loads(scene[CAMERA])
-        distance, tan_half = float(camera["distance"]), float(camera["tanHalf"])
-    except (KeyError, TypeError, ValueError):
-        return 0.0 if scale <= 1.0 else math.inf
-    behind = (scale - 1.0) * distance - DOF_FOCUS_BAND
-    return 4 * DOF_MAX_BLUR * tan_half * max(0.0, behind)
+    """Compatibility hook: master surface features are never skipped by depth."""
+    return 0.0
 
 
 def smallest_detail(ob, name):
-    """The narrowest feature pass `name` keeps on `ob`: the blur there, or
-    nothing when the rock sets the pass itself."""
-    if name in ob:
-        return 0.0
-    from .depth_lod import field
-    return field(ob) or detail_blur(ob)
+    """Keep all authored surface features at every placement."""
+    return 0.0
 
 
 def check_dof(given):
@@ -275,7 +208,7 @@ def map_size(size, kind):
 FIELDS = {DETAIL_SCALE: "formation_detail_scale", "export_strips": "formation_export_strips",
           "export_creases": "formation_export_creases", "export_chips": "formation_export_chips",
           "export_map_max": "formation_export_map_max", "export_texels": "formation_export_texels",
-          "export_maps": "formation_export_maps", 'export_depth_lod':'formation_export_depth_lod'}
+          "export_maps": "formation_export_maps"}
 
 
 def _getter(name, kind):
@@ -310,7 +243,7 @@ def repaint_scale(ob):
 
 
 def reset(ob):
-    """Forget `ob`'s own render settings: each is what its depth decides."""
+    """Restore the full-detail surface defaults."""
     for name in explicit(ob):
         del ob[name]
     repaint_scale(ob)
@@ -320,10 +253,6 @@ def register():
     import bpy
     from bpy.props import BoolProperty, FloatProperty, IntProperty
     O = bpy.types.Object
-    O.formation_export_depth_lod = BoolProperty(
-        name='Offline depth detail', get=_getter('export_depth_lod',bool), set=_setter('export_depth_lod'),
-        description='Budget generated surface detail and textures by world depth using High DOF; '
-                    'manual detail scale or a positive map-count cap keeps the uniform path')
     O.formation_detail_scale = FloatProperty(
         name="Detail scale", min=.1, max=20, get=_getter(DETAIL_SCALE, float), set=_setter(DETAIL_SCALE),
         description="Drawn as if it stood this many times further back than the gameplay plane: texel "

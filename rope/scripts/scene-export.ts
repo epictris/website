@@ -45,8 +45,18 @@ function fail(msg: string): never {
   return failWith(TAG, msg);
 }
 
-const usage = "usage: bun run scene:export <level> [--blender PATH] [--raw] [--no-cache] [--stale-occlusion]";
-const args = exportArgs(process.argv.slice(2), TAG, usage);
+const usage = "usage: bun run scene:export <level> [--blender PATH] [--raw] [--no-cache] [--stale-occlusion] [--source FILE.blend]";
+// An explicit generated source avoids silently exporting a stale sibling file.
+const argv = process.argv.slice(2);
+const sourceIndex = argv.indexOf("--source");
+let sourceBlend: string | undefined;
+if (sourceIndex >= 0) {
+  const value = argv[sourceIndex + 1];
+  if (!value || value.startsWith("--")) fail("--source needs a .blend file path");
+  sourceBlend = resolve(value);
+  argv.splice(sourceIndex, 2);
+}
+const args = exportArgs(argv, TAG, usage);
 const levelArg = args.positional ?? fail(usage);
 const levelPath = levelArg.endsWith(".json") ? resolve(levelArg) : join(ROOT, "levels", `${levelArg}.json`);
 if (!existsSync(levelPath)) fail(`no level at ${levelPath}`);
@@ -61,7 +71,7 @@ const scene = level.scene;
 if (!scene) fail(`${levelName} names no scene: set one in the editor's Level panel (\`scene\`), then \`just scene-guide ${levelName}\``);
 if (!isSceneName(scene)) fail(`"${scene}" is not a scene name (lower-case letters, digits and dashes)`);
 
-const blend = join(SCENES_SRC, `${scene}.blend`);
+const blend = sourceBlend ?? join(SCENES_SRC, `${scene}.blend`);
 if (!existsSync(blend)) {
   fail(`no ${relative(ROOT, blend)}; \`just scene-guide ${levelName}\` creates it with the level's collision linked as a guide`);
 }

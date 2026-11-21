@@ -80,8 +80,7 @@ GENERATORS = {
     # here because this runs outside Blender. A recipe from before
     # 2026-11-13 also carries recipe F's facets, chisel and facetFalloff,
     # which `prepare` drops.
-    "solid": {"seed": 0, "stoneSize": 1.0, "knub": 0.3, "curveTurn": 60.0,
-              "adaptiveDepth": True, "floor": 0.0, "fixedScale": 0.0},
+    "solid": {"seed": 0, "stoneSize": 1.0, "knub": 0.3, "curveTurn": 60.0},
 }
 
 
@@ -97,7 +96,7 @@ def fingerprint():
     """What built the rock: this adapter and the generators, byte for byte."""
     h = hashlib.sha256()
     for p in [Path(__file__), HERE / "assemble.py", HERE / "fitted.py", HERE / "solidfit.py", HERE / "slate.py",
-              HERE / 'construction_lod.py', HERE / 'depth_budget.py', HERE / 'cell_sampling.py', HERE / 'render.py',
+              HERE / 'cell_sampling.py', HERE / 'render.py',
               HERE.parent / 'native' / 'src' / 'cells.cpp', HERE.parent / 'native' / '__init__.py',
               *sorted(GENERATOR.glob("*.py")), GENERATOR / "params.json"]:
         h.update(p.name.encode())
@@ -110,7 +109,7 @@ def prepare(recipe, output):
         # All Blender, from the recipe's own guide, camera and frame.
         given = {k: v for k, v in recipe.get("params", {}).items() if k in GENERATORS["solid"]}
         resolved = {"version": RECIPE_VERSION, "generator": "solid", "guide": recipe["guide"],
-                    "camera": recipe["camera"], "frame": recipe["frame"], "params": {**GENERATORS["solid"], **given},
+                    "construction": "ASSET", "params": {**GENERATORS["solid"], **given},
                     "generatorHash": fingerprint()}
         (output / "recipe.json").write_text(json.dumps(resolved, separators=(",", ":")))
         return

@@ -17,8 +17,7 @@ def applies(ob):
         recipe = json.loads(ob.get('formation_recipe', '{}'))
     except (TypeError, ValueError):
         return False
-    return (recipe.get('generator') == 'solid'
-            and recipe.get('params', {}).get('adaptiveDepth', True))
+    return recipe.get('generator') == 'solid'
 
 
 def stone_scale(ob):
