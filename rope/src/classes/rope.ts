@@ -307,6 +307,16 @@ export class Rope {
   // corner the sample refuses into a wrap on the body's far side
   // (`session-391f`, docs/wrap-detection.md).
   static readonly WRAP_START_GATE = 5 * PX;
+  // How deep a span leaving a node on a circle may cut back into that circle
+  // before the self-intersection resolvers wrap it at the tangent, however
+  // close the tangent is (`circleCut`), metres. The resolvers' own gate is a
+  // distance, 5 cm from the node, which on the 12 cm ball is 24 degrees of
+  // its rim, and on a 3.65 cm ladder rung is 78: every span leaving a rung's
+  // wrap was let cut up to R(1 - cos 78) into it, 33 mm of the rung's 36.5
+  // on `session-259f` (f51), the chain drawn through the bar. Both answers
+  // stand: a tangent past the 5 cm still wraps, and one inside it wraps once
+  // the span cuts deeper than this.
+  static readonly CIRCLE_CUT = 0.001;
   // The baseline the sweep measures from - the path as the last regeneration
   // left it. Nodes are placed by ROLE rather than by identity, because the
   // node objects at the rope's two ends are not stable: the coil re-derives its
@@ -1225,7 +1235,10 @@ export class Rope {
         span.end,
         GenerationDirection.Reversed,
       );
-      if (tangentPoint.distanceTo(span.start) > 5 * PX && !inCuff(tangentPoint)) {
+      if (
+        (tangentPoint.distanceTo(span.start) > 5 * PX || Rope.circleCut(fromShape, span) > Rope.CIRCLE_CUT) &&
+        !inCuff(tangentPoint)
+      ) {
         return new RopeWrap(
           new RopeContact(obj, tangentPoint.sub(obj.globalPosition), shapeIndex),
           wrapDir,
@@ -1253,6 +1266,18 @@ export class Rope {
       }
     }
     return null;
+  }
+
+  // How deep `span` runs into the circle `shape`: its radius less the span's
+  // closest approach to the centre (negative for a span that stays clear).
+  // See `CIRCLE_CUT`.
+  private static circleCut(shape: CollisionShape2D, span: Segment): number {
+    if (shape.shape.kind !== "circle") return 0;
+    const c = shape.globalPosition;
+    const d = span.end.sub(span.start);
+    const dd = d.dot(d);
+    const t = dd < 1e-18 ? 0 : Mathf.clamp(c.sub(span.start).dot(d) / dd, 0, 1);
+    return shape.shape.radius - span.start.add(d.mul(t)).distanceTo(c);
   }
 
   // Which corner of its OWN shape a node's span bends round, for the
@@ -1357,7 +1382,7 @@ export class Rope {
         span.start,
         GenerationDirection.Forward,
       );
-      if (tangentPoint.distanceTo(span.end) > 5 * PX) {
+      if (tangentPoint.distanceTo(span.end) > 5 * PX || Rope.circleCut(toShape, span) > Rope.CIRCLE_CUT) {
         return new RopeWrap(
           new RopeContact(obj, tangentPoint.sub(obj.globalPosition), shapeIndex),
           wrapDir,
@@ -2082,6 +2107,7 @@ export class Rope {
     const newNodes: RopeWrap[] = [];
     let previousNode: RopeWrap | null = null;
     let previousNodePosition = this.start.contact.globalPosition;
+    let previousShape = this.start.contact.shape;
     for (const node of this.wraps) {
       const shape = node.contact.shape;
       // Coincident duplicate: the same corner of the same body wrapped twice
@@ -2098,13 +2124,22 @@ export class Rope {
       ) {
         continue;
       }
+      // A node on a circle within a centimetre of the node before it ON THE
+      // SAME CIRCLE is that circle sampled twice (a coil's rim, a wrap the
+      // resolvers re-derived). On another body it is a corner of its own: a
+      // ball wound against a ladder rung leaves its coil a few millimetres from
+      // the rung's first wrap, and dropping that wrap as a duplicate of the
+      // coil's end ran the span on through the rung, 3-7 mm, on every other
+      // frame as the resolvers put it back (`session-259f` f235-259).
       if (
         shape.shape.kind !== "circle" ||
+        shape !== previousShape ||
         node.contact.globalPosition.distanceTo(previousNodePosition) > PX
       ) {
         newNodes.push(node);
         previousNode = node;
         previousNodePosition = node.contact.globalPosition;
+        previousShape = shape;
       }
     }
     this.wraps = newNodes;

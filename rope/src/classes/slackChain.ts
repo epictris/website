@@ -69,6 +69,7 @@ import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engi
 import { ringEnd } from "../lib/vineClamp";
 import { MANACLE_REACH } from "../lib/manacle";
 import { Rope } from "./rope";
+import { RopeWrap } from "../lib/ropeContact";
 
 // Fixed particle count. Fixed rather than derived from the chain's length so
 // the node array never resamples (a resample is a pop), and the rest spacing
@@ -200,6 +201,12 @@ export interface Candidate {
   // it (`WorldLoop`); null for a circle. Bodies do not move during a drape
   // step, which runs on the frame's final transforms.
   readonly loop: WorldLoop | null;
+  // For a circle the segments and the sweeps answer to (a ladder's rung, a
+  // round boulder), its radius; 0 for anything else. Not the circle the chain
+  // is coiled on (`coilBody` in `drapeCandidates`), whose rim the solver's
+  // coil samples lie along and the drape with them: held off it, the coil's
+  // chords were pushed out by their sagitta on every pass.
+  readonly bar: number;
 }
 
 // Every wrappable shape of every SOLID body near `points` this step. Both
@@ -217,6 +224,7 @@ export function drapeCandidates(
   bodies: readonly PhysicsBody2D[],
   exclude: readonly CollisionObject2D[],
   cuffBody: CollisionObject2D | null,
+  coilBody: CollisionObject2D | null = null,
 ): Candidate[] {
   let minX = Infinity;
   let minY = Infinity;
@@ -260,6 +268,7 @@ export function drapeCandidates(
         moving,
         cuffed: body === cuffBody,
         loop: worldLoop(s),
+        bar: s.shape.kind === "circle" && body !== coilBody ? s.shape.radius : 0,
       });
     }
   }
@@ -309,15 +318,28 @@ export function bodyCarried(body: CollisionObject2D, q: Vec2): Vec2 {
 // across it when the step began; it is put out on the side away from the
 // piece's centre, which is right for a cut while it is shallow.
 //
+// Except at a corner the solver's chain is wrapped round (`WrapCorner`), whose
+// side is known outright: the outside, the drape going round it as the chain
+// does. There the came-from is wrong in a way the sag bound makes - it lays
+// nodes on their targets along the wrapped faces, the chord between targets
+// either side of the corner cuts it, the node pass pushes both ends out, and
+// the corner reads as having crossed - and it put a segment 46 mm into a rock
+// on `session-256f-jumps` f187, from which the across rule threw the drape
+// 5.4 m off a 1.6 m sliver of it the next step.
+//
 // The move is the textbook edge-vertex contact: the vertex's projection on the
 // segment moved clear along the segment's normal, shared between the two nodes
 // by where it falls (`1 - t` and `t`, scaled so the point moves the whole way),
-// and the normal velocity killed as the node push-out kills it. Vertex loops
-// only: a circle has no corner, and the one a drape lies on most is the ball's
+// and the normal velocity killed as the node push-out kills it. Not the
+// circle the chain is coiled on: the one a drape lies on most is the ball's
 // own rim, whose coil chords sit inside the rim by their sagitta (0.7 mm at
 // 2.8 cm on the 14 cm rim) - held off it, the coil was pushed out on every
 // pass, and a ball pressed against the box the chain is wrapped round pushed
-// the drape off its rim into the box.
+// the drape off its rim into the box. Any other circle is a bar (`bar`):
+// left out too, a ladder's rung had a drawn segment 10.7 cm long across it,
+// the drape squeezed out of the gap the solver's chain passes through
+// between the rung and the ball pressed against it (`session-259f` f141-196,
+// up to 13 mm into a 36.5 mm rung).
 export function pushSegmentsOut(
   pos: Vec2[],
   prev: Vec2[],
@@ -327,6 +349,8 @@ export function pushSegmentsOut(
   first: number,
   last: number,
   cuff: { body: CollisionObject2D; at: Vec2 } | null,
+  pitch: number,
+  wraps: readonly WrapCorner[] = [],
 ): void {
   for (let j = first; j < last; j++) {
     // Repeated, as the node push-out is, until the segment ends clear: moving
@@ -354,7 +378,42 @@ export function pushSegmentsOut(
       let owner: Candidate | null = null;
       for (const c of candidates) {
         if (maxX < c.cx - c.ex || minX > c.cx + c.ex || maxY < c.cy - c.ey || minY > c.cy + c.ey) continue;
-        if (c.loop === null) continue;
+        if (c.loop === null) {
+          // A bar (see `Candidate.bar`): its centre is the one vertex, held
+          // off by the bar's radius as well as the link's - but only as far
+          // as a segment of the chain's own pitch reaches when both its nodes
+          // lie on that clearance circle, so a drape wound round the bar at
+          // its pitch is never pushed, and its chords' sagitta (1.7 mm at
+          // 2.8 cm round a 3.65 cm rung) is not read as a cut. Side by the
+          // same came-from: a centre that crossed the segment this step goes
+          // back to the side it started on.
+          if (c.bar === 0) continue;
+          const wx = c.cx - a.x;
+          const wy = c.cy - a.y;
+          const tv = (wx * ux + wy * uy) / len;
+          if (tv <= 0 || tv >= 1) continue;
+          const now = mx * wx + my * wy;
+          const clear = c.bar + NODE_RADIUS;
+          const hold = Math.sqrt(Math.max(0, clear * clear - 0.25 * pitch * pitch));
+          let side = now >= 0 ? 1 : -1;
+          const a0 = c.moving && carry[j] ? bodyCarried(c.owner, from[j]!) : from[j]!;
+          const b0 = c.moving && carry[j + 1] ? bodyCarried(c.owner, from[j + 1]!) : from[j + 1]!;
+          const centre = new Vec2(c.cx, c.cy);
+          if (vertexCrossed(a0, b0, a, b, centre)) {
+            const was = (b0.x - a0.x) * (c.cy - a0.y) - (b0.y - a0.y) * (c.cx - a0.x);
+            if (was !== 0) side = was > 0 ? 1 : -1;
+          }
+          const need = hold - side * now;
+          if (need <= depth) continue;
+          if (c.cuffed && cuff !== null && new Vec2(a.x + abx * tv, a.y + aby * tv).distanceTo(cuff.at) < MANACLE_REACH) {
+            continue;
+          }
+          depth = need;
+          t = tv;
+          dir = new Vec2(mx * -side, my * -side);
+          owner = c;
+          continue;
+        }
         const verts = c.loop.verts;
         // The segment's ends where they were last clear, and the box the
         // segment swept from there, read when the first vertex projecting
@@ -372,7 +431,8 @@ export function pushSegmentsOut(
         // is put back on, the segment going out away from the centre.
         let across: boolean | null = null;
         let centreSide = 0;
-        for (const v of verts) {
+        for (let k = 0; k < verts.length; k++) {
+          const v = verts[k]!;
           // In plain numbers, as in `sweptEntry`.
           const wx = v.x - a.x;
           const wy = v.y - a.y;
@@ -392,6 +452,15 @@ export function pushSegmentsOut(
           if (swept && vertexCrossed(a0, b0, a, b, v)) {
             const was = b0.sub(a0).cross(v.sub(a0));
             if (was !== 0) side = was > 0 ? 1 : -1;
+            // A corner the chain is wrapped round has its outside known: the
+            // drape goes round it as the chain does, never across it.
+            if (isWrapped(c.shape, v, wraps)) {
+              const p = k === 0 ? verts.length - 1 : k - 1;
+              const ox = c.loop.nx[p]! + c.loop.nx[k]!;
+              const oy = c.loop.ny[p]! + c.loop.ny[k]!;
+              const out = mx * ox + my * oy;
+              if (out !== 0) side = out > 0 ? -1 : 1;
+            }
           } else {
             across ??= segmentCrossesLoop(a, b, verts);
             if (across) {
@@ -434,6 +503,28 @@ export function pushSegmentsOut(
       }
     }
   }
+}
+
+// A corner of a piece the solver's chain is wrapped round this step: its wrap
+// node's shape and where it is. The solver puts the node on the vertex itself,
+// so a vertex is matched to it by position (`WRAP_CORNER_MATCH`).
+export interface WrapCorner {
+  readonly shape: CollisionShape2D;
+  readonly at: Vec2;
+}
+
+// The wrap node and the loop's vertex are the same point computed twice from
+// the same transform, so equal to rounding; a tenth of a millimetre is no
+// other vertex.
+const WRAP_CORNER_MATCH = 1e-4;
+
+function isWrapped(shape: CollisionShape2D, v: Vec2, wraps: readonly WrapCorner[]): boolean {
+  for (const w of wraps) {
+    if (w.shape === shape && Math.abs(w.at.x - v.x) < WRAP_CORNER_MATCH && Math.abs(w.at.y - v.y) < WRAP_CORNER_MATCH) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Whether the point `v` lay on the segment at some moment of its linear move
@@ -492,13 +583,50 @@ function onSegmentAt(
 // now at `to` first went into a piece's vertex loop on the way, or `to` if
 // the straight move crossed none. Each piece is asked in its own frame: for a
 // body that moved, `from` is carried with it, as the push-out's came-from is.
-// Circles are left to the push-out, as the segment push-out leaves them.
-export function sweptEntry(from: Vec2, carry: boolean, to: Vec2, candidates: readonly Candidate[]): Vec2 {
+// A bar (`Candidate.bar`) is swept as its circle; any other circle is left to
+// the push-out, as the segment push-out leaves it. Not the stretch of a bar
+// inside the cuff's disc, which the push-out does not answer for either.
+export function sweptEntry(
+  from: Vec2,
+  carry: boolean,
+  to: Vec2,
+  candidates: readonly Candidate[],
+  cuff: { body: CollisionObject2D; at: Vec2 } | null = null,
+): Vec2 {
   let best = 1;
   let at = to;
   for (const c of candidates) {
-    if (c.loop === null) continue;
+    if (c.loop === null && c.bar === 0) continue;
     const a = c.moving && carry ? bodyCarried(c.owner, from) : from;
+    if (c.loop === null) {
+      if (c.cuffed && cuff !== null && to.distanceTo(cuff.at) < MANACLE_REACH) continue;
+      // The move's first point on the circle: a start inside it says nothing
+      // about the way it came, and a start on it (where the bound lays a
+      // node, `BOUND_ON_FACE`) moving inward goes in at once, as on a face.
+      const fx = a.x - c.cx;
+      const fy = a.y - c.cy;
+      const dx = to.x - a.x;
+      const dy = to.y - a.y;
+      const qa = dx * dx + dy * dy;
+      if (qa < 1e-24) continue;
+      const qb = 2 * (fx * dx + fy * dy);
+      const r0 = Math.sqrt(fx * fx + fy * fy);
+      let s: number;
+      if (r0 < c.bar - BOUND_ON_FACE) continue;
+      if (r0 <= c.bar + BOUND_ON_FACE) {
+        if (qb >= 0) continue;
+        s = 0;
+      } else {
+        const disc = qb * qb - 4 * qa * (fx * fx + fy * fy - c.bar * c.bar);
+        if (disc < 0) continue;
+        s = (-qb - Math.sqrt(disc)) / (2 * qa);
+        if (s < 0 || s > 1) continue;
+      }
+      if (s >= best) continue;
+      best = s;
+      at = s > 0 ? new Vec2(a.x + dx * s, a.y + dy * s) : a;
+      continue;
+    }
     // Against the piece's own box, not the one grown by the node's radius:
     // a move that stays outside it crosses no edge of the piece.
     const ex = c.ex - NODE_RADIUS;
@@ -554,6 +682,10 @@ interface RouteLoop {
   readonly minY: number;
   readonly maxX: number;
   readonly maxY: number;
+  // The mean of `verts`: a point inside the piece, which a loop winds round
+  // when it winds round the piece.
+  readonly cx: number;
+  readonly cy: number;
 }
 // Metres. Far below anything a drawn chain could show, and ten times below
 // `BOUND_ON_FACE`, so a node the route lays along a face reads as outside it.
@@ -582,6 +714,8 @@ function routeLoops(candidates: readonly Candidate[]): RouteLoop[] {
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
+    let sx = 0;
+    let sy = 0;
     const verts = world.map((v) => {
       const to = centre.sub(v);
       const d = to.length();
@@ -590,9 +724,11 @@ function routeLoops(candidates: readonly Candidate[]): RouteLoop[] {
       if (w.y < minY) minY = w.y;
       if (w.x > maxX) maxX = w.x;
       if (w.y > maxY) maxY = w.y;
+      sx += w.x;
+      sy += w.y;
       return w;
     });
-    out.push({ verts, minX, minY, maxX, maxY });
+    out.push({ verts, minX, minY, maxX, maxY, cx: sx / verts.length, cy: sy / verts.length });
   }
   return out;
 }
@@ -657,34 +793,78 @@ function polylineLength(route: readonly Vec2[]): number {
 // by, not the shorter: on `session-58f` the shorter way from a node at the
 // box's top corner to its target on the far face was under the box, while the
 // drape and the chain both went over it, and the bound laid the drape under
-// it (f37). `pathTo` is the path from the loop to the target (the targets up
-// to this node), `drapeTo` the drape from the loop to this node. Returns:
-// - null when the straight line is clear, or when the node is inside a piece
-//   or the hull does not have both ends on it: the caller's straight bound;
+// it (f37).
+//
+// Which way the drape is wound is asked of the node and the one before it
+// (`windsRound`), and asked even when the straight line is clear: a node
+// whose straight line to its target runs clear under a box can still be the
+// wrong way round it, when the node before it went over. On `session-256f`
+// f41 a drape thrown over the 20 x 10 cm box hung down its far end and back
+// under it; the bound routed node 31 back over the top, while node 32, under
+// the box with its target on the near face in reach along the clear straight
+// line beneath, was left where it was, and the segment between them lay 49 mm
+// through the box. The nodes after it, asked against that drape, were routed
+// under the box, and the drape came round it the other way from the chain for
+// three frames (f41-43; f51 of `session-276f` the same).
+//
+// And asked of the drape as it stood before the bound moved any node, not as
+// the bound has left it so far: a node moved on its way leaves the segment to
+// the next one, not yet moved, across whatever it went round, and the way
+// round read through that segment is the wrong one.
+//
+// `prev` is the way the node before went (`BoundWay`), from the drape before
+// the bound. Returns how this node goes, `at` being:
+// - null when the straight line is clear and the right way round, or when the
+//   node is inside a piece or the hull does not have both ends on it: the
+//   caller's straight bound;
 // - `p` itself when the way round is within the bound;
 // - otherwise the point on the way round at the bound from the target.
+export interface BoundWay {
+  readonly at: Vec2 | null;
+  // Node -> target: [p, t] for the straight line.
+  readonly route: readonly Vec2[];
+  // Whether `route` says which way round the pieces the drape goes here: not
+  // for a node inside a piece, nor for a straight line through one or the
+  // wrong way round one that the bound fell back to. The next node is asked
+  // against the last node whose way did (`windsRound`): on `session-58f` f36
+  // the Verlet step left node 31 7 mm inside the box, its straight line to its
+  // target went through it, and asked against that, every node after it was
+  // routed under the box the drape hung over.
+  readonly sided: boolean;
+}
+
 export function boundRoute(
   p: Vec2,
   t: Vec2,
   bound: number,
   loops: readonly RouteLoop[],
-  pathTo: readonly Vec2[],
-  drapeTo: readonly Vec2[],
-): Vec2 | null {
+  prev: BoundWay,
+): BoundWay {
+  const straight: BoundWay = { at: null, route: [p, t], sided: true };
+  const blind: BoundWay = { at: null, route: [p, t], sided: false };
   const blocking: RouteLoop[] = [];
   for (const l of loops) {
-    if (loopContains(l, p)) return null;
+    if (loopContains(l, p)) return blind;
     if (segmentMayHit(p, t, l) && segmentCrossesLoop(p, t, l.verts)) blocking.push(l);
   }
-  if (blocking.length === 0) return null;
+  // The straight line clear, it is still the wrong way round any piece the
+  // node and the one before it wind round with it.
+  const clear = blocking.length === 0;
+  if (clear) {
+    for (const l of loops) if (windsRound(prev, straight.route, l)) blocking.push(l);
+    if (blocking.length === 0) return straight;
+  }
   let route: Vec2[] = [];
+  // Whether the side was chosen by how the drape is wound rather than as the
+  // shorter of two that both wind the wrong way.
+  let sided = true;
   for (let round = 0; round < ROUTE_ROUNDS; round++) {
     const pts: Vec2[] = [p, t];
     for (const l of blocking) pts.push(...l.verts);
     const hull = hullOf(pts);
     const ip = hull.indexOf(0);
     const it = hull.indexOf(1);
-    if (ip < 0 || it < 0) return null;
+    if (ip < 0 || it < 0) return blind;
     const n = hull.length;
     const forward: Vec2[] = [];
     for (let k = ip; ; k = (k + 1) % n) {
@@ -696,11 +876,14 @@ export function boundRoute(
       backward.push(pts[hull[k]!]!);
       if (k === it) break;
     }
-    // The way round the drape is wound: the side whose loop with the path
-    // and the drape (see `encloses`) holds none of the pieces. The shorter
-    // only when both or neither do.
-    const fwdBad = blocking.some((l) => encloses(pathTo, forward, drapeTo, l));
-    const bwdBad = blocking.some((l) => encloses(pathTo, backward, drapeTo, l));
+    // The way round the drape is wound: the side that winds round none of
+    // the pieces with the node before (see `windsRound`). The shorter only
+    // when both or neither do - unless the straight line was clear, which is
+    // then as good as either.
+    const fwdBad = blocking.some((l) => windsRound(prev, forward, l));
+    const bwdBad = blocking.some((l) => windsRound(prev, backward, l));
+    if (clear && fwdBad === bwdBad) return blind;
+    sided = !(fwdBad && bwdBad);
     route = fwdBad !== bwdBad
       ? (fwdBad ? backward : forward)
       : polylineLength(forward) <= polylineLength(backward) ? forward : backward;
@@ -718,41 +901,52 @@ export function boundRoute(
     if (!grew) break;
   }
   const total = polylineLength(route);
-  if (total <= bound) return p;
+  if (total <= bound) return { at: p, route, sided };
   // Walk from the node along the way round until the rest of it is `bound`.
   let walk = total - bound;
   for (let k = 1; k < route.length; k++) {
     const a = route[k - 1]!;
     const b = route[k]!;
     const leg = a.distanceTo(b);
-    if (walk <= leg) return leg > 0 ? a.lerp(b, walk / leg) : b;
+    if (walk <= leg) return { at: leg > 0 ? a.lerp(b, walk / leg) : b, route, sided };
     walk -= leg;
   }
-  return t;
+  return { at: t, route, sided };
 }
 
-// Whether the closed loop made of `pathTo` (loop -> target), `route`
-// reversed (target -> node) and `drapeTo` reversed (node -> loop) winds round
-// the piece `l`, tested at its first vertex drawn a little further in (a point
-// inside the piece). The drape and the chain are wound round every piece the
-// same way when that loop holds none of them; a side of the hull that makes it
-// hold one is the way round the drape is not.
-function encloses(
-  pathTo: readonly Vec2[],
-  route: readonly Vec2[],
-  drapeTo: readonly Vec2[],
-  l: RouteLoop,
-): boolean {
-  const loop: Vec2[] = [...pathTo];
-  for (let k = route.length - 2; k >= 1; k--) loop.push(route[k]!);
-  for (let k = drapeTo.length - 1; k >= 0; k--) loop.push(drapeTo[k]!);
-  let cx = 0;
-  let cy = 0;
-  for (const v of l.verts) {
-    cx += v.x;
-    cy += v.y;
+// Whether a node's way to its target (`route`, node -> target) and the way the
+// node before it went (`prev`) wind round the piece `l`: the closed loop of
+// the path's span between their targets, `route` back from the target to the
+// node, the drape's segment back to the node before, and that node's way to
+// its own target. The drape and the chain are wound round a piece the same
+// way up to this node when they were up to the one before and this loop holds
+// none of it; a way that makes it hold one is the way round the drape is not.
+// Asked of this one stretch, not of the whole path and drape from the loop:
+// a drape honestly sagging round a rock the chain passes clear of differs
+// from the path round that rock for every node after it, and asked of the
+// whole, every node's way to its target was the wrong way round that rock
+// unless it went round it.
+function windsRound(prev: BoundWay, route: readonly Vec2[], l: RouteLoop): boolean {
+  const back = prev.route;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const w of [back, route]) {
+    for (const v of w) {
+      if (v.x < minX) minX = v.x;
+      if (v.y < minY) minY = v.y;
+      if (v.x > maxX) maxX = v.x;
+      if (v.y > maxY) maxY = v.y;
+    }
   }
-  return windingNumber(loop, new Vec2(cx / l.verts.length, cy / l.verts.length)) !== 0;
+  if (l.cx < minX || l.cx > maxX || l.cy < minY || l.cy > maxY) return false;
+  // Previous target -> this target -> (route reversed) -> this node -> the
+  // previous node -> (its way) -> the previous target.
+  const loop: Vec2[] = [];
+  for (let k = route.length - 1; k >= 0; k--) loop.push(route[k]!);
+  for (let k = 0; k < back.length; k++) loop.push(back[k]!);
+  return windingNumber(loop, new Vec2(l.cx, l.cy)) !== 0;
 }
 
 // The winding number of the closed polygon `poly` about `c`, by signed
@@ -867,6 +1061,11 @@ export class SlackChain {
   // end (B) holds this step: its straight line to the pin is clear of the
   // pieces the bound routes round (see `solveLongRange`).
   private reachA: boolean[] = [];
+  // This step's rest length of a segment, the chain's pitch as the drape
+  // draws it (see the bars in `pushSegmentsOut`).
+  private pitch = 0;
+  // The corners the solver's chain is wrapped round this step (`WrapCorner`).
+  private wraps: WrapCorner[] = [];
   private reachB: boolean[] = [];
   // The chain's length as of the last step - the wrap path plus the slack -
   // which is what a reel starts from (render/chainReel.ts), and what the
@@ -1023,15 +1222,34 @@ export class SlackChain {
     const cuff = clamp !== null ? { body: clamp.contact.obj, at: clamp.contact.globalPosition } : null;
     // Read before the bound, which routes round them, and over the path as
     // well as the nodes, since the bound moves nodes toward the path.
-    const candidates = drapeCandidates(this.pos.concat(pathPoints), bodies, [this.tipBody], cuff?.body ?? null);
+    const candidates = drapeCandidates(
+      this.pos.concat(pathPoints),
+      bodies,
+      [this.tipBody],
+      cuff?.body ?? null,
+      this.chain.start.contact.obj,
+    );
+    this.pitch = restLen;
+    this.wraps = [];
+    for (const n of this.chain.path()) {
+      if (n instanceof RopeWrap && n.contact.shape.shape.kind !== "circle") {
+        this.wraps.push({ shape: n.contact.shape, at: n.contact.globalPosition });
+      }
+    }
     const boundFrom: (Vec2 | null)[] = new Array<Vec2 | null>(SEGMENTS + 1).fill(null);
     this.boundFrom = boundFrom;
     const loops = routeLoops(candidates);
     if (pathLen > 1e-9) {
       const bound = SAG_BOUND_FACTOR * Math.sqrt(pathLen * slack);
       const target = SlackChain.sampleByArc(pathPoints, SEGMENTS);
+      // The way the node before went, from where it was before the bound
+      // moved it (see `boundRoute`): the loop's own pin to its target, which
+      // is itself.
+      let prev: BoundWay = { at: null, route: [this.pos[0]!, target[0]!], sided: true };
       for (let i = 1; i < SEGMENTS; i++) {
-        const routed = boundRoute(this.pos[i]!, target[i]!, bound, loops, target.slice(0, i + 1), this.pos.slice(0, i + 1));
+        const way = boundRoute(this.pos[i]!, target[i]!, bound, loops, prev);
+        if (way.sided) prev = way;
+        const routed = way.at;
         if (routed !== null) {
           if (routed === this.pos[i]) continue;
           this.pos[i] = routed;
@@ -1225,7 +1443,7 @@ export class SlackChain {
     // on three of the drape recordings), and a second segment pass, or
     // sweeping the segments until none moved, pushed nodes 20-30 mm into the
     // pieces with nothing after to put them out.
-    pushSegmentsOut(this.pos, this.prev, this.clear, this.clearCarry, candidates, 1, SEGMENTS - 1, cuff);
+    pushSegmentsOut(this.pos, this.prev, this.clear, this.clearCarry, candidates, 1, SEGMENTS - 1, cuff, this.pitch, this.wraps);
   }
 
   // `keep` is the share of a contacting node's tangential velocity the pass
@@ -1247,7 +1465,7 @@ export class SlackChain {
       // box through it to hang underneath (`session-58f` f34-35, four nodes
       // in one step). A node the bound moved is swept from where the bound
       // put it, which it reached round the pieces, not through them.
-      p = sweptEntry(this.clear[i]!, this.clearCarry[i]!, p, candidates);
+      p = sweptEntry(this.clear[i]!, this.clearCarry[i]!, p, candidates, cuff);
       // Repeated until the node ends clear of every shape. A compound body's
       // pieces overlap at their seams (the lantern's handle-top piece stands
       // inside its glass), so a push out of one piece can land inside the

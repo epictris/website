@@ -908,6 +908,13 @@ const CHAIN_LEASE_HELD_FRAMES_TOLERANCE = 120;
 // through the scene. Same 3 cm slack as the embed check.
 const CHAIN_CLIP_TOLERANCE = 0.03;
 const CHAIN_CLIP_SAMPLES = 24;
+// How deep a span may cut into a circle it is wrapped round
+// (`chain-cuts-circle`), metres. A span leaving a wrap on a circle leaves along
+// the tangent, so the cut is how far the wrap lags the tangent: the rope keeps
+// it under `Rope.CIRCLE_CUT` at every regeneration, and the solve after it
+// moves the bodies a frame's worth more. `chain-clip`'s 3 cm is most of a
+// rung's 3.65 cm radius, which is how a span cut 33 mm into one unseen.
+const CHAIN_CIRCLE_CUT_TOLERANCE = 0.003;
 
 // ---- energy invariant ------------------------------------------------------
 // The solver may not invent energy.
@@ -2265,6 +2272,47 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         frame,
         kind: "chain-clip",
         detail: `chain span ${clip.depth.toFixed(2)}m inside ${clip.name}`,
+      });
+    }
+    // Chain-cuts-circle: no span may cut into a circle one of its ends is
+    // wrapped on, static or not - a ladder's rungs swing on a rigid body,
+    // which `chain-clip` does not look at, and its 3 cm is most of a rung.
+    // The span's closest approach to the circle's centre, exactly, rather than
+    // samples. Not a span between two nodes on the same circle, which is the
+    // arc the rope lies along there (`Rope.spanLength`), not the chord; not the
+    // ball's own coil, which is the ball's; not the stretch of the last span
+    // inside a cuff's disc (as `chain-clip`). Red on `session-259f` before the
+    // circle gate was a depth: spans cut up to 33 mm into the ladder's rungs
+    // (f23-243).
+    let cut: { depth: number; span: number } | null = null;
+    const path = b.chain.path();
+    for (let s = 0; s + 1 < path.length; s++) {
+      const n0 = path[s]!;
+      const n1 = path[s + 1]!;
+      if (n0.contact.shape === n1.contact.shape) continue;
+      for (const node of [n0, n1]) {
+        // Wraps only, the path's interior: its ends are what the chain is
+        // attached to, and a ring threaded on a vine ends it inside the link
+        // it rides by construction.
+        if (node === path[0] || node === path[path.length - 1]) continue;
+        const shape = node.contact.shape;
+        if (shape.shape.kind !== "circle" || node.contact.obj === b) continue;
+        const a = n0.contact.globalPosition;
+        const d = n1.contact.globalPosition.sub(a);
+        const c = shape.globalPosition;
+        const dd = d.dot(d);
+        const t = dd < 1e-18 ? 0 : Math.max(0, Math.min(1, c.sub(a).dot(d) / dd));
+        const near = a.add(d.mul(t));
+        if (cuff !== null && node.contact.obj === cuff.body && cuff.covers(near)) continue;
+        const depth = shape.shape.radius - near.distanceTo(c);
+        if (depth > CHAIN_CIRCLE_CUT_TOLERANCE && depth > (cut?.depth ?? 0)) cut = { depth, span: s };
+      }
+    }
+    if (cut) {
+      out.push({
+        frame,
+        kind: "chain-cuts-circle",
+        detail: `span ${cut.span} cuts ${(cut.depth * 1000).toFixed(1)} mm into a circle it is wrapped on`,
       });
     }
     // Chain-body-embedded: no rigid body the chain runs over - its anchor, or

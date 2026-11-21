@@ -110,7 +110,9 @@ Ball runs add: `rope-anchor-kick` (the solve added speed on the frame the chain
 anchored — an anchor born over its length), `rope-solve-kick` (the solve added
 more than 4 m/s in **any** single frame), `rope-credit-unearned` (the chain phase
 took more along its own pull than the constraint was opening at), `chain-clip`
-(a span's interior deep inside static geometry), `chain-body-embedded` (a
+(a span's interior deep inside static geometry), `chain-cuts-circle` (a span
+cutting more than 3 mm into a circle one of its wraps is on, on any body - a
+ladder's rungs, see [**Rods**](rails.md)), `chain-body-embedded` (a
 rigid body the chain runs over - its anchor, or anything it wraps - deep inside
 static geometry; the chain solve is the one thing that hauls those into the
 scenery, and `session-133f`'s plank tunnelled through a post HEALTHY without it)
