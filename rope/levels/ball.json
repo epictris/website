@@ -289,7 +289,7 @@
     "skyColor": "#7ab8e0",
     "groundColor": "#2a3f56",
     "fillIntensity": 3,
-    "envIntensity": 0.5,
+    "envIntensity": 0.55,
     "backgroundColor": "#1c3856",
     "fogColor": "#2a5075",
     "fogAmount": 0.52
@@ -5802,7 +5802,7 @@
         {
           "type": "collision",
           "x": 44.780654264799516,
-          "y": 135.87528167454062,
+          "y": 135.87528167454064,
           "rot": -0.5235987755982983,
           "shape": {
             "kind": "curve",
@@ -9618,10 +9618,10 @@
         "x": -1039.6339416503906,
         "y": -733.9149951934814,
         "generator": "solid",
-        "variant": "cliff",
+        "variant": "stones",
         "params": {
           "seed": 95585,
-          "stoneSize": 0.5,
+          "stoneSize": 1,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -9638,9 +9638,9 @@
           }
         },
         "built": {
-          "hash": "151b5755d8609b1af785ee665abf2e404edefc5c71a5415b3df7342462789a9c",
-          "front": -12.2609,
-          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "hash": "13fe59e65f0bd2d95990fcd75fd2bdbb86fbaeb6d3c9542dfab698743df87adc",
+          "front": -13.1094,
+          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
           "recipeVersion": 2,
           "tiers": []
         }
@@ -10380,10 +10380,10 @@
         "x": -923.799991607666,
         "y": -857.4089050292969,
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "stones",
         "params": {
           "seed": 6501,
-          "stoneSize": 0.5,
+          "stoneSize": 1,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10400,9 +10400,9 @@
           }
         },
         "built": {
-          "hash": "ad609200ed9d64247c622531e685145484238ba08acea665eeab9bf2fe279d20",
-          "front": -11.4357,
-          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "hash": "e41897ab1162da8680f0af19d4ed1a7a090500cc889e3bcbf94a688112d8d627",
+          "front": -11.7935,
+          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
           "recipeVersion": 2,
           "tiers": []
         }
@@ -10425,6 +10425,7 @@
               0.5807353619776624
             ]
           },
+          "lost": true,
           "settings": {
             "kind": "TEXTURE",
             "seed": 0,
@@ -10512,10 +10513,10 @@
         "x": -1530.3685188293457,
         "y": -864.6749496459961,
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "stones",
         "params": {
           "seed": 87265,
-          "stoneSize": 0.5,
+          "stoneSize": 1,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10532,9 +10533,9 @@
           }
         },
         "built": {
-          "hash": "9141734b9b6811210bf962141db06fa748df33e1f7baeba422bc0645ac4bcce5",
-          "front": -12.0673,
-          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "hash": "7660b2f2723381669f42bc71f434d256b180592a1015b2b014894bbb5e53e926",
+          "front": -12.1505,
+          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
           "recipeVersion": 2,
           "tiers": []
         }
@@ -10557,6 +10558,7 @@
               -0.040038521797936676
             ]
           },
+          "lost": true,
           "settings": {
             "kind": "TEXTURE",
             "seed": 0,
@@ -10642,10 +10644,10 @@
       "formation": {
         "id": "2739fnil",
         "generator": "solid",
-        "variant": "cliff",
+        "variant": "stones",
         "params": {
           "seed": 53208,
-          "stoneSize": 0.5,
+          "stoneSize": 1,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10662,9 +10664,9 @@
           }
         },
         "built": {
-          "hash": "63b6f04b9f256379df21d2ca6adda22e1079827f138f5d7686eda0b97fc798b6",
-          "front": -9.2621,
-          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "hash": "3c747d2dc0a7a25eaeb892353683a7653167ba9976250ab25094a952da1c2746",
+          "front": -9.329,
+          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
           "recipeVersion": 2,
           "tiers": []
         }

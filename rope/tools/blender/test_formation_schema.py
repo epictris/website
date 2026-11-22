@@ -6,7 +6,8 @@ Holds `src/level/formationSchema.json` (written by
 `formations/schema_export.py`) to:
 
 - the worker: every recipe key of `worker.GENERATORS` is in it with the same
-  default (the solid's `jointed` and `wall` are the variant, not fields);
+  default (the solid's `jointed`, `wall` and `stones` are the variant, not
+  fields);
 - the panel: for each generator and solid variant, the fields the schema shows
   are exactly those `params.draw` lays out, in the same order, with the same
   labels where `draw` gives one of its own;
@@ -69,6 +70,7 @@ class Settings:
         self.generator = generator
         self.jointed = variant == "cliff"
         self.wall = variant == "wall"
+        self.stones = variant == "stones"
 
 
 key_of = {g: {prop: key for key, prop in fields.items()} for g, fields in params.FIELDS.items()}

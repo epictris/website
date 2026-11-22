@@ -161,7 +161,7 @@ for (const f of dump.formations) {
     // original boulder surface; the worker's default for a missing flag is
     // now Cliff, which would rebuild it as a different rock. The river's 25
     // solids are all such recipes.
-    const variant: SolidVariant = (r.variant as SolidVariant | undefined) ?? (params["wall"] ? "wall" : params["jointed"] === true ? "cliff" : "boulder");
+    const variant: SolidVariant = (r.variant as SolidVariant | undefined) ?? (params["stones"] ? "stones" : params["wall"] ? "wall" : params["jointed"] === true ? "cliff" : "boulder");
     const formation: FormationData = { id, generator: "solid", variant, params: { ...params }, guide: { kind: "solid", tree: { prim: "mesh", file: name } } };
     // A 3D body (`LevelBodyData.space`): a backdrop holds nothing that
     // collides, so it carries the full 3D gizmo in the editor.

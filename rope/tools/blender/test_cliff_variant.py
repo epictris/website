@@ -40,6 +40,11 @@ assert params.changed(rock) and core.pending(rock)
 asked = core.recipe_for(rock)
 assert asked['variant'] == 'wall' and asked['params']['wall'] and not asked['params']['jointed']
 assert core.mesh_hash(rock.data) == before
+rock.formation_params.variant = 'stones'
+assert params.changed(rock) and core.pending(rock)
+asked = core.recipe_for(rock)
+assert asked['variant'] == 'stones' and asked['params']['stones']
+assert not asked['params']['wall'] and not asked['params']['jointed']
 
 with tempfile.TemporaryDirectory(prefix='cliff-variant-test-') as folder:
     folder = Path(folder)
@@ -69,10 +74,18 @@ with tempfile.TemporaryDirectory(prefix='cliff-variant-test-') as folder:
     assert rock.formation_params.variant == 'wall' and not params.changed(rock)
     rock.formation_params.variant = 'cliff'
     assert core.recipe_for(rock)['variant'] == 'cliff' and not rock.formation_params.wall
+    named = dict(recipe, variant='stones', params=dict(settings, jointed=True, wall=True))
+    worker.prepare(named, folder)
+    built = json.loads((folder/'recipe.json').read_text())
+    assert built['variant'] == 'stones' and built['params']['stones']
+    assert not built['params']['wall'] and not built['params']['jointed']
+    rock['formation_recipe'] = json.dumps(built)
+    params.load(rock)
+    assert rock.formation_params.variant == 'stones' and not params.changed(rock)
     try:
         worker.prepare(dict(recipe, variant='unknown'), folder)
     except ValueError:
         pass
     else:
         raise AssertionError('Unknown variant was silently accepted')
-print('SOLID_VARIANTS_OK: Boulder/Cliff/Wall UI, legacy compatibility, named recipes, unchanged geometry', flush=True)
+print('SOLID_VARIANTS_OK: Boulder/Cliff/Wall/Stones UI, legacy compatibility, named recipes, unchanged geometry', flush=True)

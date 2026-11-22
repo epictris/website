@@ -30,11 +30,13 @@ from formations import params  # noqa: E402
 from formations.worker import GENERATORS, RECIPE_VERSION, SOLID_VARIANTS  # noqa: E402
 
 # Fields `params.draw` never shows as themselves: the solid variant sets them.
-VARIANT_FIELDS = {"jointed", "wall"}
+VARIANT_FIELDS = params.VARIANT_FIELDS
 
-# `params.draw`'s rules for which solid fields show, by variant, and the label
-# one takes under a variant. Checked against `draw` by the Blender test.
-HIDDEN = {"wall": {"knub", "curveTurn"}, "boulder": {"jointAspect"}}
+# `params.draw`'s rules for which solid fields show, by variant, as recipe
+# keys, and the label one takes under a variant. Checked against `draw` by
+# the Blender test.
+_KEY = {field: key for key, field in params.FIELDS["solid"].items()}
+HIDDEN = {variant: {_KEY[field] for field in fields} for variant, fields in params.HIDDEN.items()}
 LABELS = {"wall": {"jointAspect": "Slab height / width"}}
 
 

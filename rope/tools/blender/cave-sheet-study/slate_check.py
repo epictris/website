@@ -152,6 +152,7 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--rock", help="a formation object in the open file; omitted = the study scene as saved")
     p.add_argument("--views", default="3q")
+    p.add_argument("--light", default="v6", choices=("v6", "study"), help="with --rock: the v6 rig (warm key, the study's pick) or the study's own stage (near-white key, blue fill and rim), where the slate reads grey-blue")
     p.add_argument("--samples", type=int, default=64)
     p.add_argument("--size", type=int, default=640)
     p.add_argument("--tag", default="")
@@ -208,7 +209,8 @@ def main():
         bm.free()
         sc = bpy.context.scene
         cam = cf.build_stage()
-        rock_study.light_v6()
+        if a.light == "v6":
+            rock_study.light_v6()
         if a.strips:
             print(f"[slate_check] strips: {slate.mark_strips(me)} chamfer strips painted as edge line")
         # The detail is built from the straight rock and bent after (curve.py).

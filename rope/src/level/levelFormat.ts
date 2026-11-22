@@ -1076,7 +1076,7 @@ export interface FormationData extends ObjectPlacement {
 }
 
 export type FormationGenerator = "boulders" | "fitted" | "solid";
-export type SolidVariant = "boulder" | "cliff" | "wall";
+export type SolidVariant = "boulder" | "cliff" | "wall" | "stones";
 
 // What the store holds for a formation, as the store says it: in metres
 // whatever the file's units, like `params` (it is a record of the build, not

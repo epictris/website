@@ -237,6 +237,18 @@
           "labels": {
             "jointAspect": "Slab height / width"
           }
+        },
+        {
+          "id": "stones",
+          "label": "Stones",
+          "description": "Whole stones packed into the guide, each a corner-cut, pillowed, chiselled box: recipe F, the cave sheets' rock-b (docs/cave-look.md)",
+          "hidden": [
+            "curveTurn",
+            "jointAspect",
+            "knub",
+            "surfaceRelief"
+          ],
+          "labels": {}
         }
       ]
     }

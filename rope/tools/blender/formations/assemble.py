@@ -6,7 +6,8 @@ Reads OUT_DIR/geometry.json and recipe.json (written by worker.py), assembles
 the rock with the boulder generator's own `assemble_rock` - or, for the
 `fitted` generator, builds recipe F's rocks fitted to the outline and fuses
 them (fitted.py), or for the `solid` generator cuts stones from the recipe's
-guide mesh and works each as the boulder generator works its top (solidfit.py) -
+guide mesh and works each as the boulder generator works its top (solidfit.py;
+its Stones variant packs whole recipe F stones into the guide, stones.py) -
 gives it the painted slate (slate.py), removes the
 microscopic faces its bevel and remesh can leave, validates it exactly as the
 Formations panel will before swapping it in, and saves OUT_DIR/rock.blend
@@ -176,7 +177,9 @@ def clean(obj):
 
 
 clean(obj)
-if generator == 'solid':
+# A Stones rock (stones.py) is already faceted stone by stone, as the study
+# faceted rock-b; a second dissolve over the whole would only blur that.
+if generator == 'solid' and not recipe['params'].get('stones'):
     # The adaptive remesh supplies a sampling grid, not the painted facets.
     # Join shallow folds into the existing slate's broad planes before tone
     # assignment, so arbitrary remesh triangles do not become colour patches.

@@ -306,8 +306,14 @@ async function bakeTiers(): Promise<FormationTier[]> {
   times["tiers"] = Math.round(performance.now() - t) / 1000;
   const tiers = JSON.parse(line.slice("TIERS ".length)) as FormationTier[];
   // Tiers first, the meta that lists them last: a reader that sees a tier in
-  // the meta finds its file.
-  tiers.forEach((_, k) => renameSync(join(scratch, tierFileName(k)), join(dir, tierFileName(k))));
+  // the meta finds its file. Each is copied in beside its name and renamed
+  // there: the scratch folder is under rope/.cache, and a store on another
+  // file system (--store) cannot be renamed into (EXDEV).
+  tiers.forEach((_, k) => {
+    const target = join(dir, tierFileName(k));
+    cpSync(join(scratch, tierFileName(k)), `${target}.partial`);
+    renameSync(`${target}.partial`, target);
+  });
   const meta = JSON.parse(readFileSync(metaPath, "utf8")) as FormationMeta;
   meta.tiers = tiers;
   meta.times = { ...meta.times, ...times };

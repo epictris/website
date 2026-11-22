@@ -58,6 +58,8 @@ Then, per stone:
 
 Rock-b ends at 6 objects, 678 faces, 1566 triangles.
 
+Since 2026-11-23 this is a formation kind: a solid guide's **Stones** variant (`formations/stones.py`, [blender-formations](blender-formations.md)) packs recipe F stones into any 3D guide in place of the hand-placed `LAYOUT`, the treatment to the number at Stone size 1, the surface the shared grey-blue slate.
+
 ### Surface, the painted slate shader and the v6 rig
 
 `painted_slate` in `formations/slate.py` is the study's v6 itself since 2026-10-03 (Tris: "follow the process documented" in this report), all on Object coordinates:
