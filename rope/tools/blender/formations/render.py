@@ -39,14 +39,25 @@ LARGEST = {"export_strips": 0.08, "export_creases": 0.2, "export_chips": 0.2}
 CAMERA = "backdrop_camera"
 
 
+def source_recipe(ob):
+    """A generated formation or an imported master's original recipe."""
+    return json.loads(ob.get('formation_recipe', ob.get('formation_source_recipe', '{}')))
+
+
 def setting(ob, name):
     """Explicit surface settings, otherwise full-detail defaults."""
     if name == 'export_depth_lod':
         return False
     # The master owns these finishing decisions. In particular, jointed
     # rock deliberately keeps straight fractures instead of export bows.
-    if name in PASSES and name in json.loads(ob.get('formation_recipe', '{}')).get('surfaceFinish', []):
-        return False
+    if name in PASSES:
+        recipe = source_recipe(ob)
+        # Early Wall studies recorded the Cliff crease exemption. Wall uses
+        # the same strip/bow/chip finish as foreground rocks, including those
+        # already saved or imported before that policy was corrected.
+        wall = recipe.get('variant') == 'wall' or recipe.get('params', {}).get('wall', False)
+        if not wall and name in recipe.get('surfaceFinish', []):
+            return False
     if name in ob:
         return ob[name]
     if name == DETAIL_SCALE:

@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import sharp from "sharp";
+import { readGltf, type GltfJson } from "./gltfFile";
 
-interface Document {
-  images: { name?: string; mimeType?: string; bufferView: number }[];
-  bufferViews: { byteOffset?: number; byteLength: number }[];
+interface Document extends GltfJson {
   textures: { source?: number }[];
   materials: { pbrMetallicRoughness?: {
     baseColorTexture?: { index: number };
@@ -14,12 +12,6 @@ interface Document {
   nodes: { name?: string; mesh?: number }[];
 }
 
-function read(path: string): { doc: Document; bin: Buffer } {
-  const bytes = readFileSync(path);
-  const length = bytes.readUInt32LE(12);
-  return { doc: JSON.parse(bytes.subarray(20, 20 + length).toString()), bin: bytes.subarray(28 + length) };
-}
-
 const linear = (v: number): number => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
 
 /** Prove a removed colour image became the same constant on its actual mesh.
@@ -27,17 +19,17 @@ const linear = (v: number): number => v <= .04045 ? v / 12.92 : ((v + .055) / 1.
  * nonuniform images, missing bindings and images merely resized or re-encoded.
  */
 export async function constantColourMaps(raw: string, encoded: string, candidates: string[]): Promise<Set<string>> {
-  const { doc: source, bin } = read(raw);
-  const { doc: output } = read(encoded);
+  const { doc: source, imageBytes } = readGltf<Document>(raw);
+  const { doc: output } = readGltf<Document>(encoded);
   const accepted = new Set<string>();
   const colours = new Map<string, Promise<number[] | null>>();
   for (const name of candidates) {
     if (!name.endsWith(" baked colour")) continue;
-    const imageIndex = source.images.findIndex((image) => image.name === name);
-    const image = source.images[imageIndex];
-    if (!image || image.mimeType !== "image/png") continue;
-    const view = source.bufferViews[image.bufferView]!;
-    const bytes = bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
+    const imageIndex = (source.images ?? []).findIndex((image) => image.name === name);
+    const image = source.images?.[imageIndex];
+    // A `.gltf` beside its images names the type by the file, not `mimeType`.
+    if (!image || !(image.mimeType === "image/png" || /\.png$/i.test(image.uri ?? ""))) continue;
+    const bytes = imageBytes(imageIndex);
     const hash = createHash("sha256").update(bytes).digest("hex");
     if (!colours.has(hash)) colours.set(hash, (async () => {
       const { channels } = await sharp(bytes).stats();

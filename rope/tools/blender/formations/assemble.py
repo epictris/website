@@ -177,7 +177,7 @@ if generator == 'solid':
     # Jointed faces intentionally meet at shallow cleavage angles. The
     # old 9-degree dissolve erased these into wide featureless panels.
     fitted._facets(obj, len(obj.data.loop_triangles),
-                   angle=3. if recipe['params'].get('jointed') else None,
+                   angle=3. if (recipe['params'].get('jointed') or recipe['params'].get('wall')) else None,
                    preserve_topology=True)
 tone_facets(obj, recipe["params"]["seed"])
 if generator == 'solid' and recipe['params'].get('jointed'):

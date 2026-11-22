@@ -1,7 +1,9 @@
 """Export a level's Blender scene as the game's dressing.
 
     blender -b assets-src/scenes/<scene>.blend --factory-startup --python-exit-code 1 \
-        --python tools/blender/scene_export.py -- out.glb meta.json [--cache DIR [--stale-occlusion]]
+        --python tools/blender/scene_export.py -- out.gltf meta.json [--cache DIR [--stale-occlusion]]
+
+`out.gltf` goes out beside its `.bin` and its images; `out.glb` is one file.
 
 Run by `scripts/scene-export.ts` (`just scene <level>`), which optimises the
 result and finishes the meta; see docs/blender-scenes.md.
@@ -47,6 +49,7 @@ import re
 import shutil
 import sys
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
@@ -956,9 +959,53 @@ def seed_for(ob):
     """The detail's seed: the formation's own, else a hash of the name, so
     the same rock gets the same chips on every export."""
     try:
-        return int(json.loads(ob["formation_recipe"])["params"]["seed"])
+        from formations.render import source_recipe
+        return int(source_recipe(ob)["params"]["seed"])
     except (KeyError, TypeError, ValueError):
         return sum(ord(c) for c in ob.name)
+
+
+def remove_unused_uvs(mesh):
+    """Drop unused authoring UVs on the export copy before retessellation.
+
+    The procedural slate reads positions and face attributes, and receives
+    a fresh SceneBake unwrap afterwards. A primitive's leftover UVMap is
+    not an input to that bake. Preserve maps any shader might actually read,
+    including implicit image coordinates and references inside node groups.
+    """
+    used, seen = set(), set()
+    defaults = {uv.name for uv in mesh.uv_layers if uv.active_render}
+    if mesh.uv_layers.active:
+        defaults.add(mesh.uv_layers.active.name)
+
+    def scan(tree):
+        if tree is None or tree in seen:
+            return
+        seen.add(tree)
+        for node in tree.nodes:
+            if node.type == 'GROUP':
+                scan(node.node_tree)
+            elif node.type == 'SCRIPT':
+                used.update(mesh.uv_layers.keys())
+            elif node.type == 'UVMAP':
+                used.update({node.uv_map} if node.uv_map else defaults)
+            elif node.type == 'ATTRIBUTE':
+                used.add(node.attribute_name)
+            elif node.type == 'TEX_COORD' and node.outputs['UV'].is_linked:
+                used.update(defaults)
+            elif node.type == 'TEX_IMAGE' and not node.inputs['Vector'].is_linked:
+                used.update(defaults)
+            elif ((node.type == 'NORMAL_MAP' and node.space == 'TANGENT') or
+                  (node.type == 'TANGENT' and node.direction_type == 'UV_MAP')):
+                used.update({node.uv_map} if node.uv_map else defaults)
+
+    for material in mesh.materials:
+        if material and material.use_nodes:
+            scan(material.node_tree)
+    removed = [uv.name for uv in mesh.uv_layers if uv.name not in used]
+    for name in removed:
+        mesh.uv_layers.remove(mesh.uv_layers[name])
+    return removed
 
 
 def preparation(ob):
@@ -1523,6 +1570,9 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             # the unwrap; every map is baked on the straight rock, which the
             # detail high poly matches exactly, and the rock is bent after.
             from formations import curve
+            removed_uvs = remove_unused_uvs(mesh)
+            if removed_uvs:
+                log(f"curve {ob.name}: discarded unused authoring UVs {', '.join(removed_uvs)} on export copy")
             bows[ob] = curve.find_bows(mesh, seed_for(ob), smallest_detail(ob, "export_creases"))
             from formations import crease_cleanup
             if crease_cleanup.applies(ob):
@@ -2211,12 +2261,27 @@ def repaint_slate():
         log(f"repainted {n} painted slate material{'s' if n != 1 else ''} to the add-on's shader")
 
 
+def exported_bytes(path):
+    """What the export at `path` weighs: a `.glb` is its own size, a `.gltf`
+    is that of its JSON, its buffers and its images."""
+    total = os.path.getsize(path)
+    if not path.lower().endswith(".gltf"):
+        return total
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    for part in doc.get("buffers", []) + doc.get("images", []):
+        uri = part.get("uri")
+        if uri and not uri.startswith("data:"):
+            total += os.path.getsize(os.path.join(os.path.dirname(path), urllib.parse.unquote(uri)))
+    return total
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :]
     if "--worker" in argv:
         worker_main(argv)
         return
-    usage = "usage: scene_export.py -- out.glb meta.json [--all-seen] [--cache DIR [--stale-occlusion]]"
+    usage = "usage: scene_export.py -- out.gltf|out.glb meta.json [--all-seen] [--cache DIR [--stale-occlusion]]"
     global ALL_SEEN
     ALL_SEEN = "--all-seen" in argv
     if ALL_SEEN:
@@ -2360,9 +2425,16 @@ def main():
             }
         )
 
+    # A `.gltf` goes out beside its `.bin` and one file per image (in
+    # `textures/`): a scene's baked maps are gigabytes of PNG (the river's 683
+    # were 2.45 GB, 2026-11-22), and one `.glb` of them is a file the optimiser
+    # cannot read (Node reads at most 2 GiB at once). scripts/blendExport.ts
+    # asks for a `.glb` only to ship it as it is (`--raw`).
+    separate = out_glb.lower().endswith(".gltf")
     kwargs = dict(
         filepath=out_glb,
-        export_format="GLB",
+        export_format="GLTF_SEPARATE" if separate else "GLB",
+        export_texture_dir="textures" if separate else "",
         use_selection=True,
         use_active_scene=True,
         export_apply=True,
@@ -2408,7 +2480,7 @@ def main():
         json.dump(meta, f, indent=2)
 
     tris = sum(n["triangles"] for n in nodes)
-    log(f"wrote {out_glb} ({os.path.getsize(out_glb) / 1024:.0f} KB raw): {len(nodes)} objects, {tris} triangles, "
+    log(f"wrote {out_glb} ({exported_bytes(out_glb) / 1024:.0f} KB raw): {len(nodes)} objects, {tris} triangles, "
         f"{pictures} pictures, {len(skipped)} skipped, {len(warnings)} warnings, {time.time() - t0:.1f}s")
 
 

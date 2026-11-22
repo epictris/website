@@ -18,8 +18,10 @@ ob['formation_recipe']='{"generator":"solid","params":{"seed":31,"adaptiveDepth"
 ob['export_map_max']=128;ob['export_texels']=8.
 ob.scale=(.6,1,.6);ob.location=(0,10,0)
 bpy.ops.object.transform_apply(location=True,rotation=True,scale=True)
-while ob.data.uv_layers:
-    ob.data.uv_layers.remove(ob.data.uv_layers[0])
+# Retain the cube's unused authoring UVMap: this used to fail before baking
+# with "the crease rebuild cannot carry CORNER attribute 'UVMap'".
+assert 'UVMap' in ob.data.uv_layers
+original_uvs = np.array([tuple(v.uv) for v in ob.data.uv_layers['UVMap'].data])
 ob.data.materials.append(slate.painted_slate())
 slate.tone_facets(ob,31)
 original=ob.data.copy()
@@ -35,6 +37,9 @@ crease_cleanup.repair=tracked_repair
 with tempfile.TemporaryDirectory(prefix='depth-lod-cache-') as cache:
     export.bake_procedural_textures([ob],cache)
     assert len(repair_calls)==1
+    assert 'UVMap' in original.uv_layers
+    assert np.array_equal(original_uvs, [tuple(v.uv) for v in original.uv_layers['UVMap'].data])
+    assert 'UVMap' not in ob.data.uv_layers and export.BAKE_UV in ob.data.uv_layers
     first=ob.data
     first_vertices=np.array([tuple(v.co) for v in first.vertices])
     assert depth_lod.FACE_BAND not in first.attributes

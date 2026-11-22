@@ -14,6 +14,11 @@
 // prepared nor baked again, and a map whose encode is in the encode cache is
 // not encoded again; `noCache` does every one afresh and leaves both caches
 // alone (each one's key is in its file).
+//
+// Blender's own file is a `.gltf` beside its `.bin` and one file per image,
+// never one `.glb`: nothing here or in the optimiser reads a file over 2 GiB
+// whole, and the river's raw export is 2.85 GB (683 baked PNGs, 2026-11-22).
+// Only `--raw` asks Blender for a `.glb`, which is copied and never read.
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -24,6 +29,7 @@ import type { SceneCredit, SceneNodeMeta } from "../src/render3d/scenes";
 import { validateBakedField } from "../src/render3d/bakedLighting";
 import { StepProgress } from "./stepProgress";
 import { constantColourMaps } from "./bakedMapValidation";
+import { readGltf } from "./gltfFile";
 
 export const ROOT = resolve(import.meta.dirname, "..");
 
@@ -59,6 +65,10 @@ export interface BlendExport {
   staleOcclusion: boolean;
   blender: string;
 }
+
+// Blender's own file in an export's scratch directory, beside `raw.bin` and
+// `textures/`.
+const RAW_NAME = "raw.gltf";
 
 export function fail(tag: string, msg: string): never {
   console.error(`${tag} ${msg}`);
@@ -102,30 +112,25 @@ function stream(cmd: string, argv: string[], onLine: (line: string) => void, env
 interface GlbImage {
   name?: string;
   mimeType?: string;
-  // The sha256 of its bytes in the binary chunk.
+  // The sha256 of its bytes.
   sha256: string;
 }
 
-/** Every image in the GLB at `path`: its name, its type and its bytes' hash. */
+/** Every image in the glTF at `path`: its name, its type and its bytes' hash. */
 function glbImages(path: string): GlbImage[] {
-  const glb = readFileSync(path);
-  const length = glb.readUInt32LE(12);
-  const json = JSON.parse(glb.subarray(20, 20 + length).toString("utf8")) as {
-    images?: { name?: string; mimeType?: string; bufferView?: number }[];
-    bufferViews?: { byteOffset?: number; byteLength: number }[];
-  };
-  const bin = glb.subarray(28 + length);
-  return (json.images ?? []).map((im) => {
-    const view = im.bufferView !== undefined ? json.bufferViews?.[im.bufferView] : undefined;
-    const bytes = view ? bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength) : new Uint8Array();
-    return { name: im.name, mimeType: im.mimeType, sha256: createHash("sha256").update(bytes).digest("hex") };
-  });
+  const { doc, imageBytes } = readGltf(path);
+  return (doc.images ?? []).map((im, i) => (
+    { name: im.name, mimeType: im.mimeType, sha256: createHash("sha256").update(imageBytes(i)).digest("hex") }
+  ));
 }
 
 function checkLighting(path: string, expected: BlenderMeta["lighting"]): void {
   if (!expected || (!expected.lightmaps && !expected.probes)) return;
-  const bytes = readFileSync(path);
-  const doc = JSON.parse(bytes.subarray(20, 20+bytes.readUInt32LE(12)).toString("utf8"));
+  const doc = readGltf(path).doc as {
+    scene?: number;
+    scenes?: { extras?: { gameBakedLighting?: unknown } }[];
+    materials?: { extras?: { gameBakedLighting?: unknown } }[];
+  };
   if (expected.probes) {
     const field = validateBakedField(doc.scenes?.[doc.scene ?? 0]?.extras?.gameBakedLighting);
     if (field.size.reduce((a,b)=>a*b,1) !== expected.probes) throw new Error("Baked probe count changed during export");
@@ -192,7 +197,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
   const cleanup = (): void => {
     if (cleaned) return;
     cleaned = true;
-    if (!shipped && existsSync(join(scratch, "raw.glb"))) {
+    if (!shipped && existsSync(join(scratch, RAW_NAME))) {
       console.error(`${tag} retained baked scene for recovery: ${scratch}`);
     } else {
       rmSync(scratch, { recursive: true, force: true });
@@ -204,8 +209,16 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
   process.on("exit", cleanup);
   try {
     mkdirSync(dirname(opts.shipped), { recursive: true });
-    const raw = join(scratch, "raw.glb");
-    const rawMeta = join(scratch, "meta.json");
+    const resume = process.env["SCENE_EXPORT_RESUME_DIR"];
+    if (resume && opts.raw) fail(tag, "--raw ships Blender's own .glb, which a retained bake does not have; export without SCENE_EXPORT_RESUME_DIR");
+    if (resume && !existsSync(join(resume, RAW_NAME))) {
+      fail(tag, `${resume} holds no ${RAW_NAME}${existsSync(join(resume, "raw.glb")) ? " (its raw.glb is from before 2026-11-22; that export has to be run again)" : ""}`);
+    }
+    // A retained bake is read where it lies (gigabytes, not worth a copy) and
+    // left there, whatever comes of this run.
+    const rawDir = resume ?? scratch;
+    const raw = join(rawDir, opts.raw ? "raw.glb" : RAW_NAME);
+    const rawMeta = join(rawDir, "meta.json");
     // The optimiser's file, shipped only once every check below has passed.
     const optimised = join(scratch, "export.glb");
     const blenderLog = join(ROOT, ".cache", `${opts.kind}-export`, `${name}.blender.log`);
@@ -226,10 +239,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       process.exit(130);
     });
     progress.start("open");
-    const resume = process.env["SCENE_EXPORT_RESUME_DIR"];
     const run: Run = resume ? (() => {
-      copyFileSync(join(resume, "raw.glb"), raw);
-      copyFileSync(join(resume, "meta.json"), rawMeta);
       const stdout = readFileSync(join(resume, "blender.log"), "utf8");
       console.log(`${tag} resuming completed Blender output from ${resume}`);
       for (const { id } of STEPS.slice(0, 5)) progress.skip(id, "retained bake");
@@ -262,7 +272,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
     // says why in Cycles' lines, which went nowhere before.
     mkdirSync(dirname(blenderLog), { recursive: true });
     writeFileSync(blenderLog, `${run.stdout}\n--- stderr ---\n${run.stderr}`);
-    writeFileSync(join(scratch, "blender.log"), run.stdout);
+    if (!resume) writeFileSync(join(scratch, "blender.log"), run.stdout);
     if (run.error) {
       progress.fail();
       fail(tag, `could not run ${opts.blender}: ${run.error.message} (install Blender 5.2, or name it with --blender or BLENDER_PATH)`);
@@ -283,7 +293,7 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       progress.skip("optimise", "--raw");
       progress.skip("encode", "--raw");
       progress.finish();
-      writeFileSync(opts.shipped, readFileSync(raw));
+      copyFileSync(raw, opts.shipped);
       console.log(`${tag} --raw: shipped Blender's own file, unoptimised`);
     } else {
       progress.start("optimise");

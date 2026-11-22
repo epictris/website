@@ -20,6 +20,7 @@ import numpy as np
 import shapely
 from shapely import Polygon, Point, MultiPoint, LineString
 from shapely.geometry.polygon import orient
+from slab_geometry import Mesh
 
 
 def polygons(geometry):
@@ -158,28 +159,6 @@ def read_specs(path):
     if not specs:
         raise ValueError("Input must contain at least one rock.")
     return specs
-
-
-class Mesh:
-    def __init__(self, name, material=0):
-        self.name, self.material = name, material
-        self.vertices, self.faces = [], []
-        self.lookup = {}
-
-    def vertex(self, p):
-        key = tuple(round(float(x), 9) for x in p)
-        if key not in self.lookup:
-            self.lookup[key] = len(self.vertices)
-            self.vertices.append(list(key))
-        return self.lookup[key]
-
-    def face(self, points):
-        indices = [self.vertex(p) for p in points]
-        if len(set(indices)) >= 3:
-            self.faces.append(indices)
-
-    def dump(self):
-        return dict(name=self.name, material=self.material, vertices=self.vertices, faces=self.faces)
 
 
 def triangulate_cap(mesh, p, height, reverse=False):

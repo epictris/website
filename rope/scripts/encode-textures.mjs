@@ -1,6 +1,7 @@
-// Encode a glTF's textures in place, each by the first rule that claims it.
+// Encode a glTF's textures, each by the first rule that claims it: in place,
+// or into the file `--out` names.
 //
-//   node scripts/encode-textures.mjs <file.glb> [--lossless-normals] [--baked-maps] [--cache DIR]
+//   node scripts/encode-textures.mjs <file.glb|gltf> [--out FILE] [--lossless-normals] [--baked-maps] [--cache DIR]
 //
 // With `--cache`, a map whose encode is in DIR is taken from there instead of
 // encoded: keyed on the source image's bytes, its mime type and colour space,
@@ -39,11 +40,17 @@ import sharp from "sharp";
 const argv = process.argv.slice(2);
 const cacheAt = argv.indexOf("--cache");
 const cacheDir = cacheAt === -1 ? null : argv[cacheAt + 1];
-// Guarded on the flag being there: an absent one is index -1, and skipping
+// Where the encoded file goes: the file itself unless `--out` names another.
+// optimize-asset.ts reads a `.gltf` beside its maps (a scene's are gigabytes
+// before they are encoded, more than one `.glb` can be read back) and writes
+// the `.glb` that ships.
+const outAt = argv.indexOf("--out");
+const outFile = outAt === -1 ? null : argv[outAt + 1];
+// Guarded on each flag being there: an absent one is index -1, and skipping
 // `cacheAt + 1` would skip the file (optimize-asset.ts met that once).
-const file = argv.find((a, i) => !a.startsWith("--") && (cacheAt === -1 || i !== cacheAt + 1));
-if (!file || (cacheAt !== -1 && !cacheDir)) {
-  console.error("usage: node scripts/encode-textures.mjs <file.glb> [--lossless-normals] [--baked-maps] [--cache DIR]");
+const file = argv.find((a, i) => !a.startsWith("--") && (cacheAt === -1 || i !== cacheAt + 1) && (outAt === -1 || i !== outAt + 1));
+if (!file || (cacheAt !== -1 && !cacheDir) || (outAt !== -1 && !outFile)) {
+  console.error("usage: node scripts/encode-textures.mjs <file.glb|gltf> [--out FILE] [--lossless-normals] [--baked-maps] [--cache DIR]");
   process.exit(2);
 }
 
@@ -235,4 +242,4 @@ if (cacheDir) {
   for (const name of readdirSync(cacheDir)) if (!used.has(name)) unlinkSync(join(cacheDir, name));
   console.log(`[assets] ${plan.length - fresh.length} of ${plan.length} maps from the encode cache`);
 }
-await io.write(file, doc);
+await io.write(outFile ?? file, doc);

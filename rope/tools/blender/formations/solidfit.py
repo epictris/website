@@ -149,7 +149,7 @@ UNFOLD_MAX, UNFOLD_KEEP = 60, 0.95
 # - jointed: hierarchical cleavage instead of the earlier polygon cells;
 # - jointAspect: primary vertical fracture length relative to its width;
 PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0, "surfaceRelief": 0.5,
-          "jointed": True, "jointAspect": 2.8}
+          "jointed": True, "jointAspect": 2.8, "wall": False}
 
 
 def resolved(params):
@@ -1365,7 +1365,12 @@ def build_from_recipe(recipe, collection):
         raise ValueError(f"the guide is not a closed mesh ({open_edges} non-manifold edges)")
     solid = bpy.data.objects.new("Guide", me)
     collection.objects.link(solid)
-    piece, parts, scale, report = build(solid, None, worker.solid_parameters(recipe), collection)
+    parameters = worker.solid_parameters(recipe)
+    if parameters.get('wall'):
+        from .wall import build as build_wall
+        piece, parts, scale, report = build_wall(solid, None, parameters, collection)
+    else:
+        piece, parts, scale, report = build(solid, None, parameters, collection)
     collection.objects.unlink(solid)
     bpy.data.objects.remove(solid)
     bpy.data.meshes.remove(me)

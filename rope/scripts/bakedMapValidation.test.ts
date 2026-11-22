@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
 import { constantColourMaps } from "./bakedMapValidation";
+import { readGltf } from "./gltfFile";
 
 const folders: string[] = [];
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true }); });
@@ -43,6 +44,16 @@ async function fixture(factor = colour, nonuniform = false, missingNode = false)
 
 test("constant textures may become matching factors on every bound mesh", async () => {
   expect(await constantColourMaps(...await fixture(), [name])).toEqual(new Set([name]));
+});
+test("a raw export beside its images (a .gltf) is read as the .glb is", async () => {
+  const [raw, encoded] = await fixture();
+  const { doc, imageBytes } = readGltf(raw);
+  const folder = join(raw, "..");
+  mkdirSync(join(folder, "textures"));
+  writeFileSync(join(folder, "textures", `${name}.png`), imageBytes(0));
+  const separate = join(folder, "raw.gltf");
+  writeFileSync(separate, JSON.stringify({ ...doc, images: [{ name, uri: `textures/${encodeURIComponent(`${name}.png`)}` }], bufferViews: [] }));
+  expect(await constantColourMaps(separate, encoded, [name])).toEqual(new Set([name]));
 });
 test("wrong colour and missing mesh bindings are rejected", async () => {
   expect((await constantColourMaps(...await fixture([0, 0, 0, 1]), [name])).size).toBe(0);

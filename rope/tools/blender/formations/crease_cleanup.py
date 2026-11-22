@@ -4,17 +4,17 @@ Run on the export copy, after choosing the broad crease bows and before
 retessellation and baking. Choosing bows after this repair reshuffles their
 random sequence and changes unrelated parts of the formation.
 """
-import json
 import math
 
 import bmesh
 import numpy as np
 from mathutils import Matrix, Vector
+from .render import source_recipe
 
 
 def applies(ob):
     try:
-        recipe = json.loads(ob.get('formation_recipe', '{}'))
+        recipe = source_recipe(ob)
     except (TypeError, ValueError):
         return False
     return recipe.get('generator') == 'solid'
@@ -22,7 +22,7 @@ def applies(ob):
 
 def stone_scale(ob):
     """Small authored stones need proportionally smaller repair tolerances."""
-    recipe = json.loads(ob.get('formation_recipe', '{}'))
+    recipe = source_recipe(ob)
     return min(1., max(.01, float(recipe.get('params', {}).get('stoneSize', 1.))))
 
 

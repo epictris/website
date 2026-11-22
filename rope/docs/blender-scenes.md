@@ -110,10 +110,19 @@ The dev server serves `/scenes/` itself, uncached (`src/server/scenes.ts`), beca
 The Level panel shows the export's summary and the body panel offers the exported object names in the `name` field and says whether the name is dressed.
 
 If optimization or validation fails after Blender finishes, the exporter keeps
-the completed `raw.glb`, `meta.json`, and `blender.log` and prints their folder.
+the completed raw export (`raw.gltf`, `raw.bin`, `textures/`), `meta.json`, and `blender.log` and prints their folder.
 `SCENE_EXPORT_RESUME_DIR=<folder> just scene <level>` runs that retained bake
 through optimization, encoding, and validation again. It uses the retained
 export's inputs; it does not incorporate later Blender edits or rebake anything.
+The retained bake is read where it lies and is never deleted by a resume, so remove the folder once the scene has shipped.
+
+Blender's own file is a `.gltf` beside its `.bin` and one file per image, not one `.glb`, since 2026-11-22.
+The river's raw export reached 2.85 GB that day (683 baked PNGs were 2.45 GB of it), and Node reads at most 2 GiB in one read: `gltf-transform optimize` died on it in 0.3 s, after a 48 minute bake.
+The same limit sat between the optimiser and the encoder, since the maps leave `optimize` unencoded, so `optimize-asset.ts` stages a `.gltf` there too and `encode-textures.mjs` writes the `.glb` that ships (`--out`).
+The export's own checks read either layout by position, one image at a time (`scripts/gltfFile.ts`).
+A lantern exported both ways came out the same file, byte for byte.
+What still grows with the scene is the memory: both gltf-transform passes hold every map at once.
+`--raw` is the one path that asks Blender for a `.glb`, which is copied and never read.
 
 ## Automatic surface chunks
 
@@ -347,7 +356,7 @@ On a miss it names the maps the optimised file lacks (Blender's meta lists them,
 The optimiser writes into the export's scratch directory and the file is copied into `public/scenes/<scene>/` only once every check has passed, so a failed export leaves the last good scene in place; until 2026-10-18 the checks ran on the shipped file, and a failed export left its broken file in the game.
 
 Packaging runs the installed glTF Transform CLI under Node, without a `bunx`
-package lookup. If an export fails after Blender wrote `raw.glb`, its scratch
+package lookup. If an export fails after Blender wrote `raw.gltf`, its scratch
 directory (including the raw scene and metadata) is retained and printed for
 recovery. Successful exports still clean their scratch directory. This avoids
 losing a long lighting bake to a later optimizer or encoding failure.

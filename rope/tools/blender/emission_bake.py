@@ -662,19 +662,31 @@ def lightmap_pixels(image):
     return values.reshape(image.size[1], image.size[0], 4)
 
 
-def embed(path, maps, field):
-    """Keep only our metadata, without exporting all Blender custom properties."""
-    if not maps and field is None:
-        return
-    with open(path, "rb") as f:
-        data = f.read()
-    length = struct.unpack_from("<I", data, 12)[0]
-    doc = json.loads(data[20:20+length])
+def _mark(doc, maps, field):
     for mat in doc.get("materials", []):
         if mat.get("name") in maps:
             mat.setdefault("extras", {})[KEY] = maps[mat["name"]]
     if field:
         doc["scenes"][doc.get("scene", 0)].setdefault("extras", {})[KEY] = field
+
+
+def embed(path, maps, field):
+    """Keep only our metadata, without exporting all Blender custom properties."""
+    if not maps and field is None:
+        return
+    if path.lower().endswith(".gltf"):
+        # Beside its buffer and images (scene_export.py): the JSON is the file.
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        _mark(doc, maps, field)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, separators=(",", ":"))
+        return
+    with open(path, "rb") as f:
+        data = f.read()
+    length = struct.unpack_from("<I", data, 12)[0]
+    doc = json.loads(data[20:20+length])
+    _mark(doc, maps, field)
     raw = json.dumps(doc, separators=(",", ":")).encode()
     raw += b" " * (-len(raw) % 4)
     tail = data[20+length:]

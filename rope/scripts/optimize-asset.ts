@@ -179,13 +179,25 @@ if (tmp) {
   }
 }
 
+// With its own encoding the maps leave `optimize` as large as they came, and
+// a scene's are gigabytes of PNG (the river: 2.45 GB in 683 maps, 2026-11-22).
+// One `.glb` of that is a file nothing in Node reads back (2 GiB a read), so
+// `optimize` writes a `.gltf` beside its buffer and one file per map, and the
+// encoder turns that into the output. Beside the output rather than in the
+// system's temp directory, which may be RAM.
+const stage = ownEncoding ? mkdtempSync(join(dirname(resolve(output)), ".optimise-")) : null;
+const optimised = stage ? join(stage, "optimised.gltf") : resolve(output);
+process.on("exit", () => {
+  if (stage) rmSync(stage, { recursive: true, force: true });
+});
+
 const r = spawnSync(
   "node",
   [
     GLTF_CLI,
     "optimize",
     resolve(optimizeInput),
-    resolve(output),
+    optimised,
     "--compress",
     "meshopt",
     "--texture-compress",
@@ -242,13 +254,15 @@ if (r.status !== 0) {
 }
 
 if (ownEncoding) {
-  // In place on the output, in Node (see the script for why neither the `webp`
-  // command nor Bun): the flagged maps by their rules, every other map lossy
-  // at 1k as `optimize` would have encoded it.
+  // From the staged file into the output, in Node (see the script for why
+  // neither the `webp` command nor Bun): the flagged maps by their rules, every
+  // other map lossy at 1k as `optimize` would have encoded it.
   const w = spawnSync(
     "node",
     [
       join(import.meta.dir, "encode-textures.mjs"),
+      optimised,
+      "--out",
       resolve(output),
       ...(losslessNormals ? ["--lossless-normals"] : []),
       ...(bakedMaps ? ["--baked-maps"] : []),

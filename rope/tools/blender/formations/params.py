@@ -32,18 +32,21 @@ FIELDS = {
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
                  "edgeBevelWidth": "edge_bevel"},
     "solid": {"seed": "seed", "stoneSize": "stone_size", "surfaceRelief": "surface_relief",
-              "jointed": "jointed", "jointAspect": "joint_aspect", "knub": "knub", "curveTurn": "curve_turn"},
+              "jointed": "jointed", "wall": "wall", "jointAspect": "joint_aspect", "knub": "knub", "curveTurn": "curve_turn"},
 }
 FITTED = GENERATORS["fitted"]
 SOLID = GENERATORS["solid"]
 
 
 def _variant_get(settings):
+    if settings.wall:
+        return 2
     return 1 if settings.jointed else 0
 
 
 def _variant_set(settings, value):
     settings.jointed = value == 1
+    settings.wall = value == 2
 
 
 class FormationParams(bpy.types.PropertyGroup):
@@ -94,6 +97,7 @@ class FormationParams(bpy.types.PropertyGroup):
                                   default=SOLID["surfaceRelief"], min=0, max=1.5)
     jointed: BoolProperty(name="Jointed rock", default=SOLID['jointed'],
                          description="Long primary fractures and clustered secondary breaks in one rock mass")
+    wall: BoolProperty(default=False, description="Build overlapping vertical slabs on the guide")
     variant: EnumProperty(name="Variant", items=SOLID_VARIANTS,
                           get=_variant_get, set=_variant_set,
                           description="Rock generation style; existing size and relief settings are retained")
@@ -129,11 +133,16 @@ def draw(layout, settings, solid):
     else:
         layout.prop(settings, 'variant')
     for field in FIELDS[settings.generator].values():
-        if field == 'jointed':
+        if field in {'jointed', 'wall'}:
             continue
-        if field == 'joint_aspect' and not settings.jointed:
+        if settings.wall and field in {'knub', 'curve_turn'}:
             continue
-        layout.prop(settings, field)
+        if field == 'joint_aspect' and not (settings.jointed or settings.wall):
+            continue
+        if field == 'joint_aspect' and settings.wall:
+            layout.prop(settings, field, text='Slab height / width')
+        else:
+            layout.prop(settings, field)
 
 
 def from_settings(settings):

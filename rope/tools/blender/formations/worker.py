@@ -81,7 +81,7 @@ GENERATORS = {
     # 2026-11-13 also carries recipe F's facets, chisel and facetFalloff,
     # which `prepare` drops.
     "solid": {"seed": 0, "stoneSize": 1.0, "knub": 0.3, "curveTurn": 60.0, "surfaceRelief": 0.5,
-              "jointed": True, "jointAspect": 2.8},
+              "jointed": True, "jointAspect": 2.8, "wall": False},
 }
 
 
@@ -96,10 +96,13 @@ LEGACY_THICKNESS = 2.6
 SOLID_VARIANTS = (
     ('boulder', 'Boulder', 'Irregular polygon cells with the original boulder surface'),
     ('cliff', 'Cliff', 'Directional fractures, anchored stones and crisp broad cleavage planes'),
+    ('wall', 'Wall', 'Overlapping vertical slabs fused over the guide into one continuous rock face'),
 )
 
 
 def solid_variant(parameters):
+    if parameters.get('wall', False):
+        return 'wall'
     return 'cliff' if parameters.get('jointed', GENERATORS['solid']['jointed']) else 'boulder'
 
 
@@ -111,6 +114,7 @@ def solid_parameters(recipe):
         if variant not in {item[0] for item in SOLID_VARIANTS}:
             raise ValueError(f'Unknown solid variant {variant!r}')
         parameters['jointed'] = variant == 'cliff'
+        parameters['wall'] = variant == 'wall'
     return parameters
 
 
@@ -118,7 +122,7 @@ def fingerprint():
     """What built the rock: this adapter and the generators, byte for byte."""
     h = hashlib.sha256()
     for p in [Path(__file__), HERE / "assemble.py", HERE / "fitted.py", HERE / "solidfit.py", HERE / "slate.py",
-              HERE / 'cell_sampling.py', HERE / 'jointed.py', HERE / 'render.py',
+              HERE / 'cell_sampling.py', HERE / 'jointed.py', HERE / 'wall.py', HERE / 'render.py',
               HERE / 'curve.py', HERE / 'detail.py',
               HERE.parent / 'native' / 'src' / 'cells.cpp', HERE.parent / 'native' / '__init__.py',
               *sorted(GENERATOR.glob("*.py")), GENERATOR / "params.json"]:

@@ -39,6 +39,10 @@ def main():
     centre = sum(corners, Vector()) / 8
     width = max(p.x for p in corners) - min(p.x for p in corners)
     unit = width / 54.
+    rock_corners = [rock.matrix_world @ Vector(p) for p in rock.bound_box]
+    rock_width = max(p.x for p in rock_corners) - min(p.x for p in rock_corners)
+    rock_height = max(p.z for p in rock_corners) - min(p.z for p in rock_corners)
+    full_scale = max(66*unit, rock_width*1.1, rock_height*(1400/800)*1.1)
 
     old = bpy.data.collections.get('Rock wall study rig')
     if old:
@@ -71,6 +75,8 @@ def main():
     ]:
         data = bpy.data.cameras.new('Wall ' + name)
         data.type, data.ortho_scale = 'ORTHO', scale*unit
+        if name != 'detail':
+            data.ortho_scale = full_scale
         ob = bpy.data.objects.new('Wall ' + name, data)
         rig.objects.link(ob)
         ob.location = centre + Vector(pos)*unit

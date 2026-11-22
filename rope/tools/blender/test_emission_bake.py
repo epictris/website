@@ -246,3 +246,44 @@ finally:
     emission_bake.bake_field = original_field_bake
     del scene['game_light_noise_threshold']
 print('EMISSION_SAMPLING_OK dedicated convergence, fixed-sample override, validation and state restoration')
+
+# The export's metadata goes into either file the export writes: one `.glb`,
+# or a `.gltf` beside its buffer and images (scene_export.py), whose buffer
+# must be left as it was.
+import json
+import struct
+import tempfile
+
+marks = {'rock': {'version': 1, 'encoding': 'log1p', 'range': 3.5}}
+field_mark = {'size': [2, 1, 1]}
+source = {'asset': {'version': '2.0'}, 'scene': 0, 'scenes': [{'nodes': []}],
+          'materials': [{'name': 'rock'}, {'name': 'moss'}], 'buffers': [{'byteLength': 8}]}
+
+
+def marked(doc):
+    assert doc['materials'][0]['extras'] == {emission_bake.KEY: marks['rock']}, doc['materials']
+    assert 'extras' not in doc['materials'][1], doc['materials']
+    assert doc['scenes'][0]['extras'] == {emission_bake.KEY: field_mark}, doc['scenes']
+
+
+with tempfile.TemporaryDirectory() as folder:
+    payload = bytes(range(8))
+    separate = Path(folder) / 'raw.gltf'
+    separate.write_text(json.dumps({**source, 'buffers': [{'byteLength': 8, 'uri': 'raw.bin'}]}))
+    (Path(folder) / 'raw.bin').write_bytes(payload)
+    emission_bake.embed(str(separate), marks, field_mark)
+    marked(json.loads(separate.read_text()))
+    assert (Path(folder) / 'raw.bin').read_bytes() == payload
+
+    text = json.dumps(source).encode()
+    text += b' ' * (-len(text) % 4)
+    binary = Path(folder) / 'raw.glb'
+    binary.write_bytes(struct.pack('<III', 0x46546c67, 2, 28 + len(text) + 8) + struct.pack('<II', len(text), 0x4e4f534a)
+                       + text + struct.pack('<II', 8, 0x004e4942) + payload)
+    emission_bake.embed(str(binary), marks, field_mark)
+    data = binary.read_bytes()
+    length = struct.unpack_from('<I', data, 12)[0]
+    assert struct.unpack_from('<I', data, 8)[0] == len(data)
+    marked(json.loads(data[20:20 + length]))
+    assert data[20 + length:] == struct.pack('<II', 8, 0x004e4942) + payload
+print('EMISSION_EMBED_OK metadata lands in a .glb and in a .gltf beside its buffer')
