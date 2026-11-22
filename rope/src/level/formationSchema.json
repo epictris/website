@@ -1,0 +1,251 @@
+{
+  "version": 2,
+  "generators": {
+    "fitted": {
+      "label": "Fitted slate",
+      "fields": [
+        {
+          "key": "seed",
+          "label": "Seed",
+          "description": "",
+          "type": "int",
+          "min": 0,
+          "default": 31
+        },
+        {
+          "key": "depth",
+          "label": "Thickness",
+          "description": "The rock's thickness through the gameplay plane, front to back",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.02,
+          "max": 50,
+          "default": 1.05
+        },
+        {
+          "key": "smallestRock",
+          "label": "Smallest rock",
+          "description": "A rock's smallest long half-length",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.05,
+          "max": 10,
+          "default": 0.25
+        },
+        {
+          "key": "largestRock",
+          "label": "Largest rock",
+          "description": "A rock's largest long half-length",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.1,
+          "max": 50,
+          "default": 3.0
+        }
+      ]
+    },
+    "boulders": {
+      "label": "Boulder generator",
+      "fields": [
+        {
+          "key": "seed",
+          "label": "Seed",
+          "description": "",
+          "type": "int",
+          "min": 0,
+          "default": 31
+        },
+        {
+          "key": "depth",
+          "label": "Thickness",
+          "description": "The rock's thickness through the gameplay plane, front to back",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.02,
+          "max": 50,
+          "default": 1.05
+        },
+        {
+          "key": "slabsPerArea",
+          "label": "Fractures",
+          "description": "Slabs per square metre of outline (at least 2): how densely they overlap",
+          "type": "float",
+          "min": 0.5,
+          "max": 100,
+          "default": 10
+        },
+        {
+          "key": "slabWidth",
+          "label": "Slab width",
+          "description": "A slab's width across the outline, about its middle (75 to 125 %): the same at any outline size",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.05,
+          "max": 20,
+          "default": 1.5015
+        },
+        {
+          "key": "slabLength",
+          "label": "Slab length",
+          "description": "A slab's length up the outline, about its middle (61 to 139 %): the same at any outline size",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.05,
+          "max": 20,
+          "default": 0.434
+        },
+        {
+          "key": "weathering",
+          "label": "Weathering",
+          "description": "How irregular each slab's corners and long edges are",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.38
+        },
+        {
+          "key": "faceBudget",
+          "label": "Face budget",
+          "description": "Faces kept per 30 m\u00b2 of rock surface",
+          "type": "int",
+          "min": 200,
+          "max": 100000,
+          "softmax": 10000,
+          "default": 3000
+        },
+        {
+          "key": "detail",
+          "label": "Remesh detail",
+          "description": "Remesh resolution: finer as it rises",
+          "type": "float",
+          "min": 0.25,
+          "max": 4,
+          "default": 1
+        },
+        {
+          "key": "voxelCap",
+          "label": "Voxel cap",
+          "description": "Largest remesh voxel, whatever the outline",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.002,
+          "max": 0.1,
+          "default": 0.012
+        },
+        {
+          "key": "edgeBevelWidth",
+          "label": "Edge bevel",
+          "description": "Width of the bevel on every sharp edge: well under a millimetre it draws a fine highlight along each crease; 0 leaves the edges sharp",
+          "type": "float",
+          "unit": "m",
+          "precision": 5,
+          "min": 0,
+          "max": 0.05,
+          "default": 0.0002
+        }
+      ]
+    },
+    "solid": {
+      "label": "Solid guide",
+      "fields": [
+        {
+          "key": "seed",
+          "label": "Seed",
+          "description": "",
+          "type": "int",
+          "min": 0,
+          "default": 0
+        },
+        {
+          "key": "stoneSize",
+          "label": "Stone size",
+          "description": "Every stone's physical size times this, including its steps, bevels, curvature-split minimum and small-fragment threshold",
+          "type": "float",
+          "min": 0.25,
+          "max": 4,
+          "default": 1.0
+        },
+        {
+          "key": "surfaceRelief",
+          "label": "Surface relief",
+          "description": "Depth of projecting cleavage planes and offset folds, as a share of Stone size; zero keeps the shallow roof taper",
+          "type": "float",
+          "min": 0,
+          "max": 1.5,
+          "default": 0.5
+        },
+        {
+          "key": "jointAspect",
+          "label": "Joint length",
+          "description": "Primary fracture length along local Z, relative to stone width",
+          "type": "float",
+          "min": 1,
+          "max": 6,
+          "default": 2.8
+        },
+        {
+          "key": "knub",
+          "label": "Merge small",
+          "description": "A stone under this share of its kind's median volume is joined to its neighbour instead of standing as a knub",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.3
+        },
+        {
+          "key": "curveTurn",
+          "label": "Curve split",
+          "description": "Degrees a cell's surface must turn in gentle bends before it splits into smaller stones; lower keeps more curves round",
+          "type": "float",
+          "min": 5,
+          "max": 1000,
+          "default": 60.0
+        }
+      ],
+      "variants": [
+        {
+          "id": "boulder",
+          "label": "Boulder",
+          "description": "Irregular polygon cells with the original boulder surface",
+          "hidden": [
+            "jointAspect"
+          ],
+          "labels": {}
+        },
+        {
+          "id": "cliff",
+          "label": "Cliff",
+          "description": "Directional fractures, anchored stones and crisp broad cleavage planes",
+          "hidden": [],
+          "labels": {}
+        },
+        {
+          "id": "wall",
+          "label": "Wall",
+          "description": "Overlapping vertical slabs fused over the guide into one continuous rock face",
+          "hidden": [
+            "curveTurn",
+            "knub"
+          ],
+          "labels": {
+            "jointAspect": "Slab height / width"
+          }
+        }
+      ]
+    }
+  },
+  "outline": [
+    "fitted",
+    "boulders"
+  ],
+  "solid": [
+    "solid"
+  ]
+}

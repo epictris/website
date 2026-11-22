@@ -59,6 +59,8 @@ import { PX } from "../engine/units";
 import { rootMeshKey } from "../render3d/rootKey";
 import ROOT_BAKES from "../render3d/rootBakes.json";
 import { assetName, levelsModelNames, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
+import { levelRegions, pinnedBundles } from "../../scripts/formationBundles";
+import { levelFormationFiles } from "../render3d/levelAssets";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 import { SOUND_ASSETS } from "../audio/library";
 import { SOUND_BANK, assignedSounds } from "../audio/slots";
@@ -266,6 +268,36 @@ export function runAssetChecks(): AssetCheck[] {
         : `${models.size} model(s) published`,
   });
 
+  // ...and every built formation a level draws is in a pinned bundle and in
+  // the local store (docs/formations.md, "Publishing"): a formation missing
+  // from the bundles is a rock that deploys as nothing, and one missing here
+  // is one this tree's build cannot ship. A pinned region no level has any
+  // more is bytes nothing reads.
+  const pinnedFormations = pinnedBundles();
+  const pinnedHashes = new Set(Object.values(pinnedFormations).flatMap((r) => Object.values(r).flatMap((p) => p.hashes)));
+  const regions = levelRegions();
+  const formationProblems: string[] = [];
+  let formationCount = 0;
+  for (const [level, byRegion] of regions) {
+    for (const [region, { hashes }] of byRegion) {
+      for (const hash of hashes) {
+        formationCount++;
+        if (!pinnedHashes.has(hash)) formationProblems.push(`${level} region ${region}: ${hash.slice(0, 12)} not published - run \`just publish\``);
+        else if (!existsSync(join(PUBLIC_DIR, "generated", hash, "meta.json"))) formationProblems.push(`${level}: ${hash.slice(0, 12)} not in public/generated - run \`bun run assets:fetch\``);
+      }
+    }
+  }
+  for (const [level, byRegion] of Object.entries(pinnedFormations)) {
+    for (const region of Object.keys(byRegion)) {
+      if (!regions.get(level)?.has(Number(region))) formationProblems.push(`${level} region ${region} pinned but holds no formation any level draws - run \`just publish\``);
+    }
+  }
+  checks.push({
+    name: "assets: the store holds exactly the formations the levels draw",
+    pass: formationProblems.length === 0,
+    detail: formationProblems.length ? formationProblems.join(", ") : `${formationCount} formation(s) published`,
+  });
+
   // Every level's roots are baked as they now are: a level whose roots were
   // edited since its bake still plays, but grows the edited bodies at load,
   // which is the stall the bake exists to remove. And a bake holds no body
@@ -443,7 +475,15 @@ export function runAssetChecks(): AssetCheck[] {
   }
 
   const sizes = files.map((f) => ({ file: relative(ROOT, f), bytes: statSync(f).size }));
-  const total = sizes.reduce((a, s) => a + s.bytes, 0);
+  // ...and what the build ships of the formations: each one's drawn file
+  // (`levelFormationFiles`), which answers to the total as a scene does - a
+  // formation is a piece of a level's look, held down by its tier, not by a
+  // prop's per-file bar.
+  const formationSizes = [...new Set(Object.values(LEVELS).flatMap((spec) => levelFormationFiles(spec.data).map((f) => f.file)))]
+    .map((f) => join(PUBLIC_DIR, f.slice(1)))
+    .filter((p) => existsSync(p))
+    .map((p) => statSync(p).size);
+  const total = sizes.reduce((a, s) => a + s.bytes, 0) + formationSizes.reduce((a, b) => a + b, 0);
 
   // The per-file bar is a prop's. A level's Blender scene is the whole level
   // in one file (Tris, 2026-10-04: "that was intended for single props, not

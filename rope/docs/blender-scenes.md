@@ -1,5 +1,8 @@
 # Blender scenes
 
+Being retired since 2026-11-22: a level's rock and its moss, ivy and plants are made in the level editor now ([formations](formations.md)), and a level's scene is migrated into it with `bun run scene:migrate <level>` ([formations](formations.md#migrating-a-scene)).
+What follows describes the scenes still in use until then.
+
 Environment lighting, shelters and [fog regions](lighting-and-surfaces.md#regional-fog) are authored and previewed in the level editor without a Blender export. Blender's Fog preview does not reproduce regional masks; judge those transitions in the level editor.
 
 A level is **dressed in Blender**: one `.blend` holds the level's whole look, and one recipe puts it in the game.

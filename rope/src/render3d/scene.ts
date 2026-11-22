@@ -677,6 +677,16 @@ export class Scene3D {
     return changed;
   }
 
+  // Carry the bodies' decorations to where `bodies` has them, in place
+  // (`BodyVisual.moveDecorations`): a decoration dragged along its rock moves
+  // what is mounted rather than rebuilding the level (the editor's
+  // `sceneKeyOf` leaves where they stand out of what rebuilds).
+  moveDecorations(bodies: readonly LevelBodyData[]): void {
+    const authored = this.current?.authored ?? [];
+    if (bodies.length !== authored.length) return;
+    bodies.forEach((data, i) => authored[i]!.moveDecorations(data));
+  }
+
   // The waking lights' levels, in authored order, for a probe.
   glowLevels(): number[] {
     return this.current?.lights.glowLevels() ?? [];
@@ -1251,6 +1261,39 @@ export class Scene3D {
     this.highlight = tags;
   }
 
+  // WHAT IS HIDDEN (the editor's H, editor-only): every drawn object whose
+  // pick tag is in `tags` is not drawn. Applied on the next rendered frame,
+  // as the highlight is, so a model that loads later is hidden too, and put
+  // back as soon as its tag leaves the set.
+  setHidden(tags: ReadonlySet<unknown>): void {
+    this.hiddenTags = tags;
+  }
+  private hiddenTags: ReadonlySet<unknown> = new Set();
+  private readonly hiddenObjects = new Set<THREE.Object3D>();
+  private syncHidden(): void {
+    const want = new Set<THREE.Object3D>();
+    if (this.hiddenTags.size) {
+      for (const child of this.scene.children) {
+        if (child === this.editorLayer) continue;
+        // The object that CARRIES the tag: hiding it hides what is under it.
+        child.traverse((o) => {
+          const tag = o.userData["pickTag"] as unknown;
+          if (tag !== undefined && tag !== null && this.hiddenTags.has(tag)) want.add(o);
+        });
+      }
+    }
+    for (const o of this.hiddenObjects) {
+      if (want.has(o)) continue;
+      o.visible = true;
+      this.hiddenObjects.delete(o);
+    }
+    for (const o of want) {
+      if (this.hiddenObjects.has(o)) continue;
+      o.visible = false;
+      this.hiddenObjects.add(o);
+    }
+  }
+
   private syncHighlight(): void {
     const want = new Map<THREE.Mesh, string>();
     if (this.highlight.size) {
@@ -1495,6 +1538,7 @@ export class Scene3D {
     // a material swap on meshes the reconciliation above may have only just
     // created, and it costs a traverse only while something is selected.
     this.syncHighlight();
+    this.syncHidden();
     this.env.follow(this.camera);
 
     useBakedLighting(this.scene, slot.dressing?.field ?? null,
@@ -1512,9 +1556,9 @@ export class Scene3D {
     // Before the ball's probe, so the pool the ball sees carries its mirror.
     this.mirrorPool();
     this.captureReflection(level);
-    // Depth of field reads the whole frame, so never in the editor's
-    // letterboxed sub-rect (which never asks for it anyway).
-    const blurred = this.depthOfField.active && !rect && this.depthOfField.faces(this.camera);
+    // Depth of field reads the whole frame, which is the picture alone even
+    // in the editor's letterboxed ▶ Test (see frameTarget.ts).
+    const blurred = this.depthOfField.active && this.depthOfField.faces(this.camera);
     const frame = this.frame.begin(rect, blurred || shafts);
     // What the hollow glass ball copies what is behind it out of.
     frameSource.target = frame;

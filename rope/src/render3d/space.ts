@@ -119,6 +119,23 @@ export function orientTo(obj: THREE.Object3D, rot: number): void {
   obj.rotation.z = threeRotation(rot);
 }
 
+// A 3D BODY's frame (`LevelBodyData.space`): its depth toward the camera, and
+// its tilt about three's x then y applied before its turn in the plane (Euler
+// order ZYX: R = Rz(rot) Ry(tilt y) Rx(tilt x)), on top of its place in the
+// plane. The one statement of it, for the game's body and the editor's guides.
+export function placeBody3d(obj: THREE.Object3D, body: { x: number; y: number; rot: number; z?: number; tilt?: [number, number] }): void {
+  obj.position.set(body.x, threeY(body.y), body.z ?? 0);
+  obj.rotation.set(body.tilt?.[0] ?? 0, body.tilt?.[1] ?? 0, threeRotation(body.rot), "ZYX");
+}
+
+// ...and that frame as a matrix.
+export function body3dMatrix(body: { x: number; y: number; rot: number; z?: number; tilt?: [number, number] }): THREE.Matrix4 {
+  const o = new THREE.Object3D();
+  placeBody3d(o, body);
+  o.updateMatrix();
+  return o.matrix.clone();
+}
+
 // How much world is on screen vertically, in metres. This is the 2D renderer's
 // transform read backwards: it draws a metre as `zoom * PIXELS_PER_METER` pixels
 // into a viewport `camera.viewportHeight` tall.

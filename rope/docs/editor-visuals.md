@@ -1,5 +1,9 @@
 # The Visuals workspace
 
+**Merged into the one 3D view on 2026-11-22** ([editor](editor.md#the-3d-view-since-2026-11-22), [plans/editor-ux-pass.md](../plans/editor-ux-pass.md)).
+There is no longer a second workspace: its free camera (the pose, the gestures in `editor/visuals/viewControls.ts`, `frameBox`) is the editor's only camera, its guides are not drawn (the overlay is projected through the view instead), and W is gone.
+What follows is the workspace as it was, kept for its reasoning; the pose, the gestures and the boxes **F** frames are current, the guides and the Visuals-only press routing are not.
+
 Fog regions have cyan outer guides and dashed inner guides marking full fog strength; selected guides are orange. They can be picked and edited in either workspace. Their guides have no opaque fill, so the scene itself shows the fog transition. Fog regions are projected from the gameplay plane, so judge the transition from the game view rather than an edge-on free camera.
 
 Status: implemented on the `visuals-workspace` branch, 2026-09-25 ([plans/visuals-workspace.md](../plans/visuals-workspace.md), whose Delivery section lists what shipped, what deviated and what is unverified).

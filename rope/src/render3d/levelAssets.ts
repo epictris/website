@@ -28,6 +28,7 @@ import rootBakes from "./rootBakes.json";
 import { SCENE_ASSETS, sceneFile } from "./scenes";
 import { modelMeta, sceneMeta } from "./sceneMeta";
 import { MODEL_ASSETS, modelFile } from "./models";
+import { formationServedFile } from "../formation/bundle";
 import {
   BALL_MESH,
   HDRI_ASSETS,
@@ -70,6 +71,17 @@ function modelStoredFile(model: string): StoredFile {
     console.warn(`[levelAssets] model "${model}" is not in the store and has no meta.json; preloading ${modelFile(model)} unweighted`);
   }
   return { file: modelFile(model), bytes: bytes ?? 0 };
+}
+
+// The file each of the level's built formations draws (`formationServedFile`),
+// each once.
+export function levelFormationFiles(raw: RawLevelData): StoredFile[] {
+  const out = new Map<string, StoredFile>();
+  for (const body of normalizeLevelData(raw).bodies) {
+    const served = body.formation ? formationServedFile(body.formation) : null;
+    if (served) out.set(served.path, { file: served.path, bytes: served.bytes });
+  }
+  return [...out.values()];
 }
 
 // Every model the level's bodies carry, by name, each once, in authored order.
@@ -128,6 +140,10 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
   if (data.scene) add(sceneStoredFile(data.scene));
   // ...and the models its bodies carry are the rest of its look.
   for (const model of levelModelNames(raw)) add(modelStoredFile(model));
+  // ...and its generated formations, each the one file it draws
+  // (docs/formations.md): a baked tier weighs what its bake recorded, an
+  // unbaked rock's iteration mesh is unweighed.
+  for (const f of levelFormationFiles(raw)) add(f);
 
   // The level's roots, grown ahead of time (`rootBake.ts`): the bake that
   // holds any of its bodies. A body it does not hold is grown at load.

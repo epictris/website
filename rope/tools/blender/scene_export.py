@@ -1008,6 +1008,24 @@ def remove_unused_uvs(mesh):
     return removed
 
 
+def straight_creases(ob, mesh):
+    """Long straight creases (formations/curve.py): split now, before the
+    unwrap, and return the bows to bend them by. Every map is baked on the
+    straight rock, which the detail high poly matches exactly, and the rock is
+    bent after (`curve.bend`). A formation's geometry stage
+    (formation_export.py) runs this and bends at once, so the editor draws and
+    fits to the shape the bake will ship."""
+    from formations import crease_cleanup, curve
+    removed_uvs = remove_unused_uvs(mesh)
+    if removed_uvs:
+        log(f"curve {ob.name}: discarded unused authoring UVs {', '.join(removed_uvs)} on export copy")
+    bows = curve.find_bows(mesh, seed_for(ob), smallest_detail(ob, "export_creases"))
+    if crease_cleanup.applies(ob):
+        log(f"crease cleanup {ob.name}: {crease_cleanup.repair(mesh, ob.matrix_world, crease_cleanup.stone_scale(ob))}")
+    log(f"curve {ob.name}: {curve.rebuild_mesh(mesh, bows, seed_for(ob), smooth=True)}")
+    return bows
+
+
 def preparation(ob):
     """Everything besides its mesh and materials that decides how `ob` is
     prepared and baked: its detail seed, every render setting
@@ -1566,18 +1584,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             log(f"strips {ob.name}: {slate.mark_strips(mesh, smallest_detail(ob, 'export_strips'))} chamfer strips "
                 "painted as edge line")
         if slate_rock and render_setting(ob, "export_creases"):
-            # Long straight creases (formations/curve.py): split now, before
-            # the unwrap; every map is baked on the straight rock, which the
-            # detail high poly matches exactly, and the rock is bent after.
-            from formations import curve
-            removed_uvs = remove_unused_uvs(mesh)
-            if removed_uvs:
-                log(f"curve {ob.name}: discarded unused authoring UVs {', '.join(removed_uvs)} on export copy")
-            bows[ob] = curve.find_bows(mesh, seed_for(ob), smallest_detail(ob, "export_creases"))
-            from formations import crease_cleanup
-            if crease_cleanup.applies(ob):
-                log(f"crease cleanup {ob.name}: {crease_cleanup.repair(mesh, ob.matrix_world, crease_cleanup.stone_scale(ob))}")
-            log(f"curve {ob.name}: {curve.rebuild_mesh(mesh, bows[ob], seed_for(ob), smooth=True)}")
+            bows[ob] = straight_creases(ob, mesh)
         if slate_rock:
             from formations import depth_lod
             added = depth_lod.partition(mesh, ob)
@@ -2191,7 +2198,18 @@ def grow_painted(scene, warnings):
             continue
         if s.status:
             warnings.append(f"{ob.name}: {s.status}")
-        if what == "texture":
+        if what == "texture" and os.environ.get("SCENE_EXPORT_MOSS_SHELL") == "1":
+            # A decoration of the level editor's (scripts/decoration-build.ts,
+            # docs/formations.md): its rock is not in this export, so there is
+            # no colour map to paint into, and the decal ships as what it is -
+            # a thin shell 3 mm off the rock wearing the moss's own print,
+            # grown here (the plan only grows what goes into a map).
+            if moss.ops.rebuild(ob) is None:
+                warnings.append(f"{ob.name}: {s.status}; not exported")
+                drop(ob)
+                continue
+            log(f"moss {ob.name} on {on}: texture only, shipped as a thin shell over the rock ({s.triangles} triangles)")
+        elif what == "texture":
             # Its decal is Blender's preview: never shipped, and out of the
             # bake's rays (3 mm off the rock, it would shade the rock's own
             # occlusion and bevel). The dabs go into the rock's colour map.
@@ -2320,7 +2338,8 @@ def main():
     grow_painted(scene, warnings)
     step("bake")
     import moss
-    paints = moss.texture_paints(scene)
+    # A shell (SCENE_EXPORT_MOSS_SHELL, `grow_painted`) paints nothing into a rock.
+    paints = [] if os.environ.get("SCENE_EXPORT_MOSS_SHELL") == "1" else moss.texture_paints(scene)
     formation_warnings(scene, warnings)
     repaint_slate()
     for ob in scene.objects:

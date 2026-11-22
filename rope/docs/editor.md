@@ -409,14 +409,34 @@ The **Sounds** button beside the file controls opens the menu that assigns sound
 It is not part of any level: what it writes is `src/audio/soundBank.json` and the sound library, and a change is heard straight away in ▶ Test and in a game open in another tab.
 See [sound](sound.md#the-sounds-menu).
 
-## Workspaces: Level and Visuals
+## The 3D view (since 2026-11-22)
 
-The toolbar opens with a switcher, **Level** and **Visuals** (**W** toggles).
-Everything in this document is the **Level** workspace: the editor driven by the 2D camera, with the overlay on top.
-The **Visuals** workspace ([editor-visuals](editor-visuals.md)) is the same editor - the model, undo, the selection, the layer, the tool and the inspector carry across a switch - driven by a free 3D camera navigated Blender's way (middle drag orbits, Shift + middle or right drag pans, the wheel dollies toward what is under the pointer, **F** frames, **Home** faces the plane), with the overlay's marks drawn into the scene as guides instead: collision outlines, light icons and rings, the spawn, regions, paths, notes, the selected polygon's handles and tool drafts, each carrying a guide tag that `Scene3D.pick` returns beside the models.
-It is what the turned view's missing overlay became: where a turned Level view only selects and moves, Visuals edits corners, draws with the plane tools and drops lights on surfaces, from any angle.
-Each workspace keeps its own view, and `▶ Test` returns to the one it left.
-**+ Chain** and **+ Vine** are Level-only.
+The editor has one view: a free 3D camera, navigated as 3D editors are, with the overlay drawn through it at any angle ([plans/editor-ux-pass.md](../plans/editor-ux-pass.md)).
+The Level and Visuals workspaces it replaced, and **W**, are gone; the tabs at the top are **Level** and **Assets**, which is what is being edited rather than how it is seen.
+
+| Gesture or key | Does |
+|---|---|
+| middle drag | orbit about the view's target |
+| Shift + middle drag, right drag | pan |
+| wheel | dolly toward what is under the pointer |
+| left drag on empty space | the selection band, at any angle |
+| left drag on something not selected | pan (selected first, moved second, as ever) |
+| **F**, Numpad . | frame the selection and orbit about it (a solid guide by its own 3D box) |
+| **Home** | frame everything |
+| **Numpad 1**, `Align camera to plane` | the gameplay plane head on, where the view is looking |
+| **Numpad 0**, `Game camera` | the game's camera where the view is looking |
+| `Overlays` | the overlay over the scene, or the scene alone |
+| **H**, Shift+H, Alt+H, the outliner's eye | hide the selected bodies, hide every other one, show them all; a body's eye toggles it |
+
+**Hiding** is Blender's viewport hide: a hidden body is not drawn (not in the overlay, the scene - `Scene3D.setHidden` - or the solid guides) and not picked, and is deselected as it goes. It is a view setting of the session, never in the level, and ▶ Test plays the level whole.
+
+**The overlay is projected** (`editor/projectedCanvas.ts`).
+It draws in world metres through a canvas transform, which is affine and so can only draw the plane head on; turned, a `ProjectedContext` stands in for the 2D context and carries every point through the scene's camera (`ViewProjector`), clipping each path in homogeneous coordinates to the eye and a guard band four screens wide before it reaches the canvas (a canvas clip region does not survive coordinates in the millions).
+Line widths, dashes and fonts stay in head-on pixels, and a glyph - a circle or square a few pixels across, which is every handle and icon - is drawn screen-sized at its projected centre, as a 3D editor draws its overlays.
+The 2D `Camera` carries the same projection while the view is turned (`Camera.project`/`unproject`), so `worldToScreen` and `screenToWorld`, and with them every handle, hit test, drag and tool, work at any angle.
+It is drawn projected whenever there is a scene, head on too: the plane is the same picture either way (`cli render3d` holds the two to 1e-6 px, `visuals: head on, the projected overlay is the 2D camera's mapping`), but a mark at a depth - a decoration at its point on its rock, a model at its `z` - lands where it is drawn only through the camera.
+A formation on a solid guide has no mark on the plane: its guide is drawn and picked in the scene.
+The camera is the `VisualsWorkspace` pose (its guides are not drawn); the 2D camera is read off it every frame (`cameraFromPose`).
 A chain knotted through bodies (a rope bridge, `ChainData.through`; see [scene-chains](scene-chains.md#tied-chains)) is strung out with the same tool: **Shift-release** on a body ties the chain there and keeps the draft going past the release, each further **Shift-click** on a body ties another knot, a plain click on a body ends the chain there and **Esc** drops it - so a bridge is one gesture, post, each slat's two ends, ..., post, and it starts with 3% slack.
 It is drawn with small filled rings at its knots, and its panel lists the knots with a `×` each and carries `slack`, `substeps` and a length per segment in place of the one length.
 
@@ -544,6 +564,9 @@ A test is a spot-check of the thing being edited - press it, see whether the led
 It is dropped from the data the test is built from rather than skipped by the driver, so the bundle a test exports describes the run that was actually played.
 To see the opening itself, play the level (`?level=NAME`), which is where an opening is worth judging anyway - the editor's canvas is not the screen it will be read on.
 Starting a test also **detaches the 3D gizmo**: it lives in the scene rather than on the overlay, so a selection left the editing arrows hanging in the middle of the level being played - `gizmoSpec` had always answered "none in test mode" and nothing asked it, the sync running on the edit loop and a test having its own.
+
+**A test is the game's picture** (since 2026-11-22): the depth of field at the level the player's settings panel left (`readSettings().depthOfField`; the editor's own view is drawn without it), and nothing of the editor's in it - `Scene3D.editorLayer` (the paint coverage, the solid guides) is hidden for the test.
+The depth of field reads the whole frame, so the frame target is the picture's own size rather than the canvas's with the picture in a corner (`render3d/frameTarget.ts`); the letterboxed test is then blurred exactly as the game is, and a game frame is byte-identical to before the change.
 
 **Going in and coming back out are seamless** (2026-10-17).
 Until then each cost about a second on `ball`: a ~1030 ms frame on the press and ~950 ms over three frames on Esc, measured headless on the RTX 4070.

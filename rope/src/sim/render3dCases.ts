@@ -20,7 +20,8 @@
 import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
-import { BALL_ZOOM, type Camera } from "../render/camera";
+import { BALL_ZOOM, worldToScreen, type Camera } from "../render/camera";
+import { beginWorld, ProjectedContext, ViewProjector } from "../editor/projectedCanvas";
 import { buildCameraRules, restingCameraZoom } from "../render/cameraController";
 import { GAME_FOG_CAMERA, setGameFogCamera } from "../render3d/editorFog";
 import { fogRegionCases } from "./fogRegionCases";
@@ -779,6 +780,94 @@ function visualsView(): CaseResult[] {
     pass: mismatches.length === 0 && compared === 5 * 3 * 2 * 2 + 5 * 2,
     detail: mismatches.length ? mismatches.slice(0, 3).join("; ") : `${compared} cameras identical in every number`,
   });
+
+  // THE PROJECTED OVERLAY (editor/projectedCanvas.ts): head on, the 3D view
+  // maps the plane exactly as the 2D camera does, both ways, so the overlay
+  // drawn through it is the overlay drawn through the plain transform, and a
+  // line drawn through the projecting context keeps its pixels and weight.
+  {
+    let worst = 0;
+    let worstBack = 0;
+    let lineWorst = 0;
+    for (const { cam } of placements) {
+      for (const ortho of [false, true]) {
+        const lens = placements[0]!.lens;
+        const view = newViewCamera(ortho);
+        applyPose(view, headOn(cam, lens), cam.viewportWidth / cam.viewportHeight);
+        const projector = new ViewProjector();
+        projector.update(view, cam.viewportWidth, cam.viewportHeight);
+        const plain = { ...cam };
+        const pts = [-3, 0, 2.5].flatMap((dx) => [-1.5, 0.7].map((dy) => cam.position.add(new Vec2(dx, dy))));
+        for (const p of pts) {
+          const want = worldToScreen(plain, p);
+          const got = projector.project(p)!;
+          worst = Math.max(worst, got.distanceTo(want));
+          worstBack = Math.max(worstBack, projector.unproject(want.x, want.y)!.distanceTo(p));
+        }
+        // A stroke through the projecting context, recorded.
+        const calls: Array<[string, number, number]> = [];
+        const stub = {
+          lineWidth: 0,
+          beginPath() {},
+          moveTo(x: number, y: number) { calls.push(["m", x, y]); },
+          lineTo(x: number, y: number) { calls.push(["l", x, y]); },
+          setLineDash() {},
+          stroke() { calls.push(["s", stub.lineWidth, 0]); },
+          save() {},
+          restore() {},
+        };
+        const pc = new ProjectedContext(stub as unknown as CanvasRenderingContext2D, projector);
+        pc.save();
+        beginWorld(pc, cam, cam.viewportWidth, cam.viewportHeight);
+        const worldLine = 1 / (cam.zoom * PIXELS_PER_METER);
+        pc.beginPath();
+        pc.moveTo(pts[0]!.x, pts[0]!.y);
+        pc.lineTo(pts[3]!.x, pts[3]!.y);
+        pc.lineWidth = 2 * worldLine;
+        pc.stroke();
+        pc.restore();
+        const a = worldToScreen(plain, pts[0]!);
+        const b = worldToScreen(plain, pts[3]!);
+        const [m, l, s] = calls;
+        lineWorst = Math.max(lineWorst, Math.hypot(m![1] - a.x, m![2] - a.y), Math.hypot(l![1] - b.x, l![2] - b.y), Math.abs(s![1] - 2));
+      }
+    }
+    // Turned 60 degrees, a 200 m square about the view (a compound outline's
+    // padded clip box is this kind of thing) passes behind the eye. Every
+    // coordinate drawn must stay within the guard band - a canvas clip region
+    // built from millions of pixels dropped every stroke it should have kept.
+    {
+      const { cam, lens } = placements[0]!;
+      const view = newViewCamera(false);
+      applyPose(view, { ...headOn(cam, lens), yaw: 1.05, pitch: 0.3 }, cam.viewportWidth / cam.viewportHeight);
+      const projector = new ViewProjector();
+      projector.update(view, cam.viewportWidth, cam.viewportHeight);
+      let far = 0;
+      let drawn = 0;
+      const note = (x: number, y: number) => {
+        drawn++;
+        far = Math.max(far, Math.abs(x - cam.viewportWidth / 2) / cam.viewportWidth, Math.abs(y - cam.viewportHeight / 2) / cam.viewportHeight);
+      };
+      const stub = { beginPath() {}, moveTo: note, lineTo: note, closePath() {}, fill() {}, clip() {}, save() {}, restore() {} };
+      const pc = new ProjectedContext(stub as unknown as CanvasRenderingContext2D, projector);
+      pc.save();
+      beginWorld(pc, cam, cam.viewportWidth, cam.viewportHeight);
+      pc.beginPath();
+      pc.rect(cam.position.x - 100, cam.position.y - 100, 200, 200);
+      pc.clip("evenodd");
+      pc.restore();
+      out.push({
+        name: "visuals: turned, what the projected overlay draws is clipped to the guard band (a 200 m clip box past the eye)",
+        pass: drawn >= 3 && far <= 4 / 2 + 1e-6,
+        detail: `${drawn} points, the farthest ${far.toFixed(2)} screens from the centre (the band is 2)`,
+      });
+    }
+    out.push({
+      name: "visuals: head on, the projected overlay is the 2D camera's mapping (both lenses, both ways, a stroke's pixels and weight)",
+      pass: worst < 1e-6 && worstBack < 1e-9 && lineWorst < 1e-6,
+      detail: `${worst.toExponential(2)} px forward, ${worstBack.toExponential(2)} m back, ${lineWorst.toExponential(2)} on the stroke`,
+    });
+  }
 
   const aspect = VIEW_WIDTH / VIEW_HEIGHT;
   const ndc = (c: ViewCamera, p: { x: number; y: number; z: number }): THREE.Vector3 =>

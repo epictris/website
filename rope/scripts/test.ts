@@ -68,6 +68,7 @@ const steps: Step[] = [
   { name: "speed wind", cmd: ["bun", "run", "scripts/test-speed-wind.ts"] },
   { name: "rolling texture", cmd: ["bun", "run", "scripts/test-rolling-texture.ts"] },
   { name: "sound layer projects", cmd: ["bun", "run", "scripts/test-layer-project.ts"] },
+  { name: "formations", cmd: ["bun", "run", "scripts/test-formations.ts"] },
   { name: "assets", cmd: ["bun", "run", CLI, "assets"] },
   { name: "levels", cmd: ["bun", "run", CLI, "levels"] },
   { name: "playtest", cmd: ["bun", "run", CLI, "playtest"] },

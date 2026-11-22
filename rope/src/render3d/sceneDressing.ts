@@ -256,9 +256,10 @@ export function seedDecodedFile(file: string, loaded: THREE.Object3D | null): vo
   files.set(file, Promise.resolve(loaded));
 }
 
-// Load one export of `scene_export.py` (a scene or a model) and prepare its
-// meshes for the game. `label` names it in the log.
-function loadExportFile(file: string, bytes: number, label: string): Promise<THREE.Object3D | null> {
+// Load one export of `scene_export.py` (a scene, a model, or a formation's
+// baked tier, `formations.ts`) and prepare its meshes for the game. `label`
+// names it in the log.
+export function loadExportFile(file: string, bytes: number, label: string): Promise<THREE.Object3D | null> {
   const cached = files.get(file);
   if (cached) return cached;
   const loading = gltfLoader();

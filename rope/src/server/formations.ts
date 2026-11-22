@@ -1,0 +1,585 @@
+// The formation store and the job runner, in dev (docs/formations.md, "The
+// job runner").
+//
+//   GET    /generated/<hash>/<file>       the store, `no-store` (a bake adds
+//                                         tiers and rewrites meta.json under
+//                                         one hash)
+//   POST   /api/jobs                      {kind, formation, label?} -> {id}
+//   GET    /api/jobs?client=<id>          server-sent events: a snapshot of
+//                                         every job, then each change
+//   DELETE /api/jobs/<id>                 cancel
+//   POST   /api/jobs/hold                 {client, held}: an editor in ▶ Test
+//                                         holds the bakes back (the game is on
+//                                         the same card); released when its
+//                                         event stream closes
+//   GET    /api/formations/fingerprint    the generators' code fingerprint now
+//
+// A job is the build script (`scripts/formation-build.ts`) run as a child,
+// keyed by the hash it will produce: asking for one that is queued or running
+// joins it, and one whose result the store holds is answered done at once.
+// Geometry jobs run GEOMETRY_SLOTS at a time; a bake runs alone, on the GPU,
+// and none starts while a ▶ Test holds them. The progress is the build's own
+// `<tag> step i/n: label (note)` lines; a failure carries the last lines of
+// the output and the path of the whole of it.
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Plugin } from "vite";
+import { canonical, formationHash } from "../formation/recipe";
+import { decorationHash, type DecorationRequest } from "../formation/decoration";
+import { sha256Hex } from "../formation/sha256";
+import type { StoredMesh } from "../formation/solid";
+import { FORMATION_HASH, FORMATION_STORE, GEOMETRY_FILE, MESHES, MESHES_API, META_FILE, PAINT_API, ROCK_FILE, tierFileName, type FormationMeta } from "../formation/store";
+import type { FormationData, FormationTier } from "../level/levelFormat";
+import { MODEL_NAME } from "../render3d/models";
+
+// Where the Assets tab keeps its documents, relative to rope/, and the API.
+export const FORMATION_ASSETS_DIR = "formation-assets";
+export const FORMATION_ASSETS_API = "/api/formation-assets";
+
+// "asset" accepts an asset of the Assets tab into the model library
+// (scripts/formation-asset.ts): its key is the asset's name, not a hash.
+// "decoration" grows one decoration on a formation's rock
+// (scripts/decoration-build.ts): its key is the request's hash.
+export type JobKind = "geometry" | "bake" | "asset" | "decoration";
+export type JobStateName = "queued" | "running" | "done" | "failed" | "cancelled";
+
+// What a finished job hands the editor: a level's `formation.built`.
+export interface JobResult {
+  hash: string;
+  front: number;
+  generatorHash: string;
+  recipeVersion: number;
+  tiers: FormationTier[];
+  // What the build noticed (`FormationMeta.warnings`), for the panel.
+  warnings: string[];
+  // An asset job's: the library model it exported.
+  model?: string;
+}
+
+export interface JobState {
+  id: string;
+  kind: JobKind;
+  hash: string;
+  label: string;
+  state: JobStateName;
+  // 0..1 where the build says how far it is.
+  progress?: number;
+  step?: string;
+  error?: string;
+  // The whole output, relative to rope/.
+  log: string;
+  result?: JobResult;
+  queuedAt: number;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+export type JobEvent = { type: "snapshot"; jobs: JobState[] } | { type: "job"; job: JobState };
+
+// How many geometry builds run at once: each is a Python process and a
+// headless Blender, a few seconds of a few cores.
+const GEOMETRY_SLOTS = 3;
+// Finished jobs kept for the panel.
+const KEEP_FINISHED = 40;
+
+const STORE_FILES = /^(geometry\.glb|meta\.json|tier-\d+\.glb|decoration\.glb)$/;
+
+export function formationService(): Plugin {
+  return {
+    name: "formation-service",
+    apply: "serve",
+    configureServer(server) {
+      const root = server.config.root;
+      const store = join(root, "public", FORMATION_STORE.slice(1));
+      const assets = join(root, FORMATION_ASSETS_DIR);
+      const runner = new JobRunner(root, store);
+
+      // The Assets tab's documents (docs/formations.md, "The Assets tab"): one
+      // level-format file per asset, `formation-assets/<name>.json`, the name
+      // the library model's.
+      server.middlewares.use(FORMATION_ASSETS_API, (req, res, next) => {
+        const name = decodeURIComponent((req.url ?? "/").split("?")[0]!.replace(/^\//, ""));
+        if (!name) {
+          if (req.method !== "GET") return next();
+          const names = existsSync(assets) ? readdirSync(assets).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort() : [];
+          return json(res, 200, { names });
+        }
+        if (!MODEL_NAME.test(name)) return json(res, 400, { error: `"${name}" is not a model name (lower-case letters, digits and dashes)` });
+        const path = join(assets, `${name}.json`);
+        if (req.method === "GET") {
+          if (!existsSync(path)) return json(res, 404, { error: `no asset "${name}"` });
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-store");
+          return res.end(readFileSync(path));
+        }
+        if (req.method === "PUT") {
+          return readJson(req).then(
+            (body) => {
+              mkdirSync(assets, { recursive: true });
+              writeFileSync(path, JSON.stringify(body, null, 2) + "\n");
+              json(res, 200, { ok: true, name });
+            },
+            (e: Error) => json(res, 400, { error: e.message }),
+          );
+        }
+        next();
+      });
+
+      server.middlewares.use(FORMATION_STORE, (req, res, next) => {
+        const [hash, file, ...rest] = (req.url ?? "").split("?")[0]!.replace(/^\//, "").split("/");
+        const mesh = hash === MESHES && !!file && /^[0-9a-f]{64}\.json$/.test(file);
+        if (!hash || !file || rest.length || (!mesh && (!FORMATION_HASH.test(hash) || !STORE_FILES.test(file)))) return next();
+        if (req.method !== "GET" && req.method !== "HEAD") return next();
+        const path = join(store, hash, file);
+        stat(path).then(
+          (info) => {
+            res.setHeader("Content-Type", file.endsWith(".json") ? "application/json" : "model/gltf-binary");
+            res.setHeader("Content-Length", info.size);
+            res.setHeader("Cache-Control", "no-store");
+            if (req.method === "HEAD") res.end();
+            else createReadStream(path).on("error", () => res.destroy()).pipe(res);
+          },
+          () => {
+            res.statusCode = 404;
+            res.end(`formation ${hash.slice(0, 12)} has no ${file} here; generate it in the editor`);
+          },
+        );
+      });
+
+      // A level's paint (docs/formations.md, "Decorations"): its painted
+      // decorations' strokes by decoration id, beside the level and not in it,
+      // in `levels/paint/<level>.json` (a folder of its own: a second `.json`
+      // beside each level would be offered as a level).
+      const paintDir = join(root, "levels", "paint");
+      server.middlewares.use(PAINT_API, (req, res, next) => {
+        const name = decodeURIComponent((req.url ?? "/").split("?")[0]!.replace(/^\//, ""));
+        if (!/^[A-Za-z0-9_-]+$/.test(name)) return next();
+        const path = join(paintDir, `${name}.json`);
+        if (req.method === "GET") {
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-store");
+          return res.end(existsSync(path) ? readFileSync(path) : "{}");
+        }
+        if (req.method === "PUT") {
+          return readJson(req).then(
+            (body) => {
+              const strokes = body as Record<string, unknown>;
+              const empty = !Object.keys(strokes).length;
+              if (empty && !existsSync(path)) return json(res, 200, { ok: true });
+              mkdirSync(paintDir, { recursive: true });
+              // One stroke a line: text a diff can read.
+              const text = `{\n${Object.keys(strokes).sort().map((id) => `  ${JSON.stringify(id)}: [\n${(strokes[id] as unknown[]).map((s) => `    ${JSON.stringify(s)}`).join(",\n")}\n  ]`).join(",\n")}\n}\n`;
+              writeFileSync(path, text);
+              json(res, 200, { ok: true });
+            },
+            (e: Error) => json(res, 400, { error: e.message }),
+          );
+        }
+        next();
+      });
+
+      // An imported mesh for a solid guide: kept once, by its content.
+      server.middlewares.use(MESHES_API, (req, res, next) => {
+        if (req.method !== "POST") return next();
+        readJson(req).then(
+          (body) => {
+            const m = body as Partial<StoredMesh>;
+            const bad = !Array.isArray(m.verts) || !Array.isArray(m.faces) || !m.faces.length ||
+              m.verts.some((v) => !Array.isArray(v) || v.length !== 3 || v.some((c) => !Number.isFinite(c))) ||
+              m.faces.some((f) => !Array.isArray(f) || f.length < 3 || f.some((i) => !Number.isInteger(i) || i < 0 || i >= m.verts!.length));
+            if (bad) return json(res, 400, { error: "a mesh is {verts: [[x, y, z], ...], faces: [[i, j, k, ...], ...]}" });
+            const text = JSON.stringify(canonical({ verts: m.verts, faces: m.faces }));
+            const name = sha256Hex(text);
+            const dir = join(store, MESHES);
+            mkdirSync(dir, { recursive: true });
+            const path = join(dir, `${name}.json`);
+            if (!existsSync(path)) writeFileSync(path, text);
+            json(res, 200, { name });
+          },
+          (e: Error) => json(res, 400, { error: e.message }),
+        );
+      });
+
+      server.middlewares.use("/api/formations/fingerprint", (req, res, next) => {
+        if (req.method !== "GET") return next();
+        runner.fingerprint().then(
+          (fingerprint) => json(res, 200, { fingerprint }),
+          (e: Error) => json(res, 500, { error: e.message }),
+        );
+      });
+
+      server.middlewares.use("/api/jobs", (req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://x");
+        const path = url.pathname.replace(/\/+$/, "");
+        if (req.method === "GET" && path === "") return runner.subscribe(req, res, url.searchParams.get("client") ?? "");
+        if (req.method === "POST" && path === "") {
+          return readJson(req).then(
+            (body) => {
+              const b = body as { kind?: JobKind; formation?: FormationData; label?: string; asset?: string; request?: DecorationRequest };
+              if (b.kind === "decoration") {
+                if (!b.request?.host || !b.request.kind) return json(res, 400, { error: "a decoration job is {kind: decoration, request: {host, kind, ...}}" });
+                return json(res, 200, { id: runner.askDecoration(b.request, b.label ?? b.request.kind).id });
+              }
+              if (b.kind === "asset") {
+                if (!b.asset || !MODEL_NAME.test(b.asset) || !existsSync(join(assets, `${b.asset}.json`))) {
+                  return json(res, 400, { error: `no asset "${b.asset}" in formation-assets/` });
+                }
+                return json(res, 200, { id: runner.ask("asset", null, b.label ?? b.asset, b.asset).id });
+              }
+              if ((b.kind !== "geometry" && b.kind !== "bake") || !b.formation?.guide || !b.formation.generator) {
+                return json(res, 400, { error: "a job is {kind: geometry|bake, formation: {generator, params, guide}} or {kind: asset, asset}" });
+              }
+              json(res, 200, { id: runner.ask(b.kind, b.formation, b.label ?? b.formation.id ?? "formation").id });
+            },
+            (e: Error) => json(res, 400, { error: e.message }),
+          );
+        }
+        if (req.method === "POST" && path === "/hold") {
+          return readJson(req).then(
+            (body) => {
+              const b = body as { client?: string; held?: boolean };
+              runner.hold(b.client ?? "", b.held === true);
+              json(res, 200, { ok: true });
+            },
+            (e: Error) => json(res, 400, { error: e.message }),
+          );
+        }
+        if (req.method === "DELETE" && /^\/[\w-]+$/.test(path)) {
+          return json(res, runner.cancel(path.slice(1)) ? 200 : 404, {});
+        }
+        const log = /^\/([\w-]+)\/log$/.exec(path);
+        if (req.method === "GET" && log) {
+          const text = runner.logOf(log[1]!);
+          res.statusCode = text === null ? 404 : 200;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          return res.end(text ?? "no such job, or it has not started");
+        }
+        next();
+      });
+    },
+  };
+}
+
+function json(res: ServerResponse, status: number, body: unknown): void {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(JSON.stringify(body));
+}
+
+function readJson(req: IncomingMessage): Promise<unknown> {
+  return new Promise((done, fail) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (c: string) => (body += c));
+    req.on("end", () => {
+      try {
+        done(JSON.parse(body || "{}"));
+      } catch (e) {
+        fail(e as Error);
+      }
+    });
+    req.on("error", fail);
+  });
+}
+
+interface Job {
+  state: JobState;
+  // Null for an asset job, which reads its asset's document itself, and for a
+  // decoration's, which is its `request`.
+  formation: FormationData | null;
+  request?: DecorationRequest;
+  child?: ChildProcess;
+  output: string;
+}
+
+// The `<tag> step i/n: label (note)` lines of the build and the exporter, as
+// a share of the whole job: a geometry build is its three steps; a bake is
+// the exporter's seven steps, its encode's "k of n maps", and the tiers last.
+function progressOf(kind: JobKind, line: string): { progress: number; step: string } | null {
+  const m = /^\[(formation|formation-bake|model|decoration|decoration-export)\] step (\d+)\/(\d+): (.*)$/.exec(line);
+  if (m) {
+    const [, tag, i, n, label] = m;
+    const share = (Number(i) - 1) / Number(n);
+    const maps = /\((\d+) of (\d+) maps\)$/.exec(label!);
+    const inner = maps ? Number(maps[1]) / Math.max(1, Number(maps[2])) / Number(n) : 0;
+    // A decoration: its preparation, then the exporter's growth and export.
+    if (kind === "decoration") return tag === "decoration" ? { progress: 0.05 * share, step: label! } : { progress: 0.05 + 0.95 * (share + inner), step: label! };
+    if (kind === "geometry") return { progress: tag === "formation" ? share : 0, step: label! };
+    // An asset builds its geometry if it must, then is exported as a model.
+    if (kind === "asset") return tag === "formation" ? { progress: 0.15 * share, step: label! } : { progress: 0.15 + 0.85 * (share + inner), step: label! };
+    // A bake whose geometry was missing builds it first: the first tenth.
+    return tag === "formation" ? { progress: 0.1 * share, step: label! } : { progress: 0.1 + 0.85 * (share + inner), step: label! };
+  }
+  if (kind === "bake" && line.startsWith("[formation] deriving lower tiers")) return { progress: 0.95, step: "derive lower tiers" };
+  return null;
+}
+
+class JobRunner {
+  private readonly jobs = new Map<string, Job>();
+  private readonly clients = new Map<ServerResponse, string>();
+  private readonly holds = new Set<string>();
+  private next = 1;
+
+  constructor(
+    private readonly root: string,
+    private readonly store: string,
+  ) {}
+
+  // Grow a decoration, or join the job already growing it, or answer at once
+  // from the store.
+  askDecoration(request: DecorationRequest, label: string): JobState {
+    const hash = decorationHash(request);
+    for (const j of this.jobs.values()) {
+      if (j.state.hash === hash && (j.state.state === "queued" || j.state.state === "running")) return j.state;
+    }
+    const id = `j${Date.now().toString(36)}${(this.next++).toString(36)}`;
+    const state: JobState = { id, kind: "decoration", hash, label, state: "queued", log: "", queuedAt: Date.now() };
+    const job: Job = { state, formation: null, request, output: "" };
+    this.jobs.set(id, job);
+    const done = this.result(hash, "decoration");
+    if (done) {
+      state.state = "done";
+      state.progress = 1;
+      state.step = "in the store";
+      state.result = done;
+      state.endedAt = Date.now();
+    }
+    this.publish(job);
+    this.pump();
+    return state;
+  }
+
+  private result(hash: string, kind: JobKind): JobResult | null {
+    // An asset is accepted afresh every time it is asked: nothing answers
+    // for it in advance.
+    if (kind === "asset") return null;
+    if (kind === "decoration") {
+      return existsSync(join(this.store, hash, "decoration.glb"))
+        ? { hash, front: 0, generatorHash: "", recipeVersion: 0, tiers: [], warnings: [] }
+        : null;
+    }
+    const dir = join(this.store, hash);
+    const have = [GEOMETRY_FILE, META_FILE, ROCK_FILE].every((f) => existsSync(join(dir, f)));
+    if (!have) return null;
+    try {
+      const meta = JSON.parse(readFileSync(join(dir, META_FILE), "utf8")) as FormationMeta;
+      if (kind === "bake" && (!meta.tiers.length || !existsSync(join(dir, tierFileName(0))))) return null;
+      return {
+        hash,
+        front: meta.bounds.max[2],
+        generatorHash: meta.generatorHash,
+        recipeVersion: meta.recipeVersion,
+        tiers: meta.tiers,
+        warnings: meta.warnings ?? [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  ask(kind: JobKind, formation: FormationData | null, label: string, asset?: string): JobState {
+    const hash = kind === "asset" ? `asset:${asset}` : formationHash(formation!);
+    for (const j of this.jobs.values()) {
+      if (j.state.hash === hash && j.state.kind === kind && (j.state.state === "queued" || j.state.state === "running")) return j.state;
+    }
+    const id = `j${Date.now().toString(36)}${(this.next++).toString(36)}`;
+    const state: JobState = { id, kind, hash, label, state: "queued", log: "", queuedAt: Date.now() };
+    const job: Job = { state, formation, output: "" };
+    this.jobs.set(id, job);
+    const done = this.result(hash, kind);
+    if (done) {
+      state.state = "done";
+      state.progress = 1;
+      state.step = "in the store";
+      state.result = done;
+      state.endedAt = Date.now();
+    }
+    this.publish(job);
+    this.pump();
+    return state;
+  }
+
+  cancel(id: string): boolean {
+    const job = this.jobs.get(id);
+    if (!job) return false;
+    if (job.state.state === "queued") {
+      this.finish(job, "cancelled");
+    } else if (job.state.state === "running" && job.child?.pid) {
+      job.state.step = "cancelling";
+      try {
+        process.kill(-job.child.pid, "SIGTERM");
+      } catch {
+        job.child.kill("SIGTERM");
+      }
+      (job as Job & { cancelled?: boolean }).cancelled = true;
+    }
+    return true;
+  }
+
+  // A job's whole output: as far as it has got while it runs, the log after.
+  logOf(id: string): string | null {
+    const job = this.jobs.get(id);
+    if (!job || !job.state.log) return null;
+    if (job.child || !existsSync(join(this.root, job.state.log))) return job.output;
+    return readFileSync(join(this.root, job.state.log), "utf8");
+  }
+
+  hold(client: string, held: boolean): void {
+    if (held) this.holds.add(client);
+    else this.holds.delete(client);
+    this.pump();
+  }
+
+  fingerprint(): Promise<string> {
+    return new Promise((done, fail) => {
+      const child = spawn(join(this.root, ".venv", "bin", "python"), ["-c", "import worker; print(worker.fingerprint())"], {
+        cwd: join(this.root, "tools", "blender", "formations"),
+      });
+      let out = "";
+      child.stdout.on("data", (c: Buffer) => (out += c.toString()));
+      child.on("error", fail);
+      child.on("close", (status) => (status === 0 ? done(out.trim()) : fail(new Error(`fingerprint exited ${status}`))));
+    });
+  }
+
+  subscribe(req: IncomingMessage, res: ServerResponse, client: string): void {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+    this.clients.set(res, client);
+    const send = (e: JobEvent): boolean => res.write(`data: ${JSON.stringify(e)}\n\n`);
+    send({ type: "snapshot", jobs: [...this.jobs.values()].map((j) => j.state) });
+    const beat = setInterval(() => res.write(": beat\n\n"), 15_000);
+    req.on("close", () => {
+      clearInterval(beat);
+      this.clients.delete(res);
+      // A tab that closed mid-▶ Test lets the bakes go.
+      if (client && this.holds.delete(client)) this.pump();
+    });
+  }
+
+  private publish(job: Job): void {
+    const msg = `data: ${JSON.stringify({ type: "job", job: job.state } satisfies JobEvent)}\n\n`;
+    for (const res of this.clients.keys()) res.write(msg);
+  }
+
+  private running(kind: JobKind): number {
+    let n = 0;
+    for (const j of this.jobs.values()) if (j.state.kind === kind && j.state.state === "running") n++;
+    return n;
+  }
+
+  private pump(): void {
+    const queued = [...this.jobs.values()].filter((j) => j.state.state === "queued").sort((a, b) => a.state.queuedAt - b.state.queuedAt);
+    for (const job of queued) {
+      // Geometry and decorations are Python and a headless Blender on the
+      // CPU: GEOMETRY_SLOTS of them at once.
+      const cpu = job.state.kind === "geometry" || job.state.kind === "decoration";
+      if (cpu && this.running("geometry") + this.running("decoration") < GEOMETRY_SLOTS) this.start(job);
+      else if (cpu) continue;
+      // A bake and an asset's accept (a model export, baked) both hold the
+      // GPU: one of them at a time.
+      else if (job.state.kind !== "geometry" && this.running("bake") + this.running("asset") === 0) {
+        if (this.holds.size) {
+          if (job.state.step !== "held while ▶ Test runs") {
+            job.state.step = "held while ▶ Test runs";
+            this.publish(job);
+          }
+          continue;
+        }
+        this.start(job);
+      }
+    }
+  }
+
+  private start(job: Job): void {
+    const s = job.state;
+    // A geometry job queued behind its own twin's bake, or the like: the
+    // store may have it by now.
+    const done = this.result(s.hash, s.kind);
+    if (done) {
+      s.result = done;
+      this.finish(job, "done");
+      return;
+    }
+    const dir = join(this.root, ".cache", "formation-jobs");
+    mkdirSync(dir, { recursive: true });
+    let argv: string[];
+    if (s.kind === "asset") {
+      argv = [join(this.root, "scripts", "formation-asset.ts"), s.hash.slice("asset:".length)];
+    } else if (s.kind === "decoration") {
+      const request = join(dir, `${s.id}.json`);
+      writeFileSync(request, JSON.stringify(job.request));
+      argv = [join(this.root, "scripts", "decoration-build.ts"), request];
+    } else {
+      const recipe = join(dir, `${s.id}.json`);
+      const { generator, variant, params, guide } = job.formation!;
+      writeFileSync(recipe, JSON.stringify({ generator, ...(variant ? { variant } : {}), params, guide }));
+      argv = [join(this.root, "scripts", "formation-build.ts"), recipe, ...(s.kind === "bake" ? ["--bake"] : [])];
+    }
+    s.log = `.cache/formation-jobs/${s.id}.log`;
+    s.state = "running";
+    s.startedAt = Date.now();
+    s.progress = 0;
+    s.step = "starting";
+    this.publish(job);
+    const child = spawn("bun", ["run", ...argv], {
+      cwd: this.root,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    job.child = child;
+    let partial = "";
+    const take = (chunk: Buffer): void => {
+      const text = chunk.toString();
+      job.output += text;
+      const lines = (partial + text).split("\n");
+      partial = lines.pop()!;
+      for (const line of lines) {
+        const p = progressOf(s.kind, line);
+        if (p) {
+          s.progress = Math.max(s.progress ?? 0, p.progress);
+          s.step = p.step;
+          this.publish(job);
+        }
+      }
+    };
+    child.stdout!.on("data", take);
+    child.stderr!.on("data", (c: Buffer) => (job.output += c.toString()));
+    child.on("close", (status, signal) => {
+      writeFileSync(join(this.root, s.log), job.output);
+      if ((job as Job & { cancelled?: boolean }).cancelled) return this.finish(job, "cancelled");
+      const accepted = s.kind === "asset" && status === 0 && /^FORMATION_ASSET_DONE /m.test(job.output);
+      const result: JobResult | null = accepted
+        ? { hash: s.hash, front: 0, generatorHash: "", recipeVersion: 0, tiers: [], warnings: [], model: s.hash.slice("asset:".length) }
+        : this.result(s.hash, s.kind);
+      if (status === 0 && result) {
+        s.result = result;
+        return this.finish(job, "done");
+      }
+      // The step list's own rows say nothing the step line has not.
+      const lines = job.output.split("\n").filter((l) => l.trim() && !/^\s*([✓✗·▸-] |total )/.test(l) && !/ step \d+\/\d+: /.test(l));
+      s.error = `${signal ?? `exit ${status}`}: ${lines.slice(-8).join("\n")}`;
+      this.finish(job, "failed");
+    });
+  }
+
+  private finish(job: Job, state: JobStateName): void {
+    job.state.state = state;
+    job.state.endedAt = Date.now();
+    if (state === "done") {
+      job.state.progress = 1;
+      job.state.step = job.state.step === "in the store" ? job.state.step : "done";
+    }
+    job.child = undefined;
+    this.publish(job);
+    const finished = [...this.jobs.values()].filter((j) => j.state.endedAt !== undefined).sort((a, b) => a.state.endedAt! - b.state.endedAt!);
+    for (const old of finished.slice(0, Math.max(0, finished.length - KEEP_FINISHED))) this.jobs.delete(old.state.id);
+    this.pump();
+  }
+}

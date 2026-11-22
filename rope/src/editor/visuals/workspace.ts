@@ -195,11 +195,16 @@ export class VisualsWorkspace {
   // exactly (`headOn`, to the bit), so switching changes how the view is driven
   // and not what is on screen; every later time it is the pose left behind,
   // since each workspace keeps its own view.
+  // Whether the guides are drawn into the scene. The editor's one 3D view
+  // draws its overlay projected through the pose instead (projectedCanvas.ts),
+  // so it uses the workspace for its camera alone.
+  showGuides = true;
+
   enter(): void {
     if (this.on) return;
     this.on = true;
     this.pose ??= headOn(this.host.camera2d(), this.host.lens());
-    this.host.scene.editorLayer.add(this.guides.group);
+    if (this.showGuides) this.host.scene.editorLayer.add(this.guides.group);
     this.apply();
   }
 
@@ -229,7 +234,7 @@ export class VisualsWorkspace {
 
   resume(): void {
     if (!this.on) return;
-    this.host.scene.editorLayer.add(this.guides.group);
+    if (this.showGuides) this.host.scene.editorLayer.add(this.guides.group);
     this.apply();
   }
 

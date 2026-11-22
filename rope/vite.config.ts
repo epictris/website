@@ -6,19 +6,21 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   watch,
   writeFileSync,
 } from "node:fs";
 import { execSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
-import { levelModelNames, levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
+import { levelFormationFiles, levelModelNames, levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
 import { MODEL_MESH_FILE, MODELS_DIR } from "./src/render3d/models";
 import { SCENE_MESH_FILE, SCENES_DIR } from "./src/render3d/scenes";
 import { sceneService } from "./src/server/scenes";
+import { formationService } from "./src/server/formations";
 import { soundService } from "./src/server/sounds";
 import { soundLayerService } from "./src/server/soundLayers";
 
@@ -505,6 +507,36 @@ function exportsInBuild(): Plugin {
       };
       prune(SCENES_DIR, scenes, SCENE_MESH_FILE, "scenes");
       prune(MODELS_DIR, models, MODEL_MESH_FILE, "models");
+      // The formation store ships only the file each registered level's
+      // formations draw (docs/formations.md): not the sources, the meta, the
+      // other tiers, nor anything the retired generator service left there.
+      const served = new Set<string>();
+      for (const spec of Object.values(LEVELS)) {
+        for (const f of levelFormationFiles(levelData(spec))) served.add(f.file.slice(1));
+      }
+      const generated = join(outDir, "generated");
+      if (existsSync(generated)) {
+        let kept = 0;
+        let dropped = 0;
+        const walk = (dir: string): void => {
+          for (const name of readdirSync(dir)) {
+            const at = join(dir, name);
+            if (statSync(at).isDirectory()) {
+              walk(at);
+              if (!readdirSync(at).length) rmSync(at, { recursive: true, force: true });
+            } else if (served.has(relative(outDir, at).split("\\").join("/"))) kept++;
+            else {
+              rmSync(at, { force: true });
+              dropped++;
+            }
+          }
+        };
+        walk(generated);
+        if (existsSync(generated) && !readdirSync(generated).length) rmSync(generated, { recursive: true, force: true });
+        const missing = [...served].filter((f) => !existsSync(join(outDir, f)));
+        if (missing.length) this.warn(`formations: ${missing.length} drawn file(s) are not in public/generated (\`bun run assets:fetch\`): ${missing.slice(0, 5).join(", ")}`);
+        this.info(`formations: ${kept} drawn files kept, ${dropped} other files dropped from ${outDir}`);
+      }
     },
   };
 }
@@ -544,12 +576,23 @@ export default defineConfig({
         // the service). Open pages hear of a change over a BroadcastChannel;
         // the service invalidates the module graph for the next load.
         "**/public/sounds/**",
+        // The formation store, which a job writes while the editor is open
+        // (src/server/formations.ts serves it), and the jobs' scratch.
+        "**/public/generated/**",
+        "**/.cache/**",
+        // A level's paint, written by the editor's save (src/server/formations.ts).
+        "**/levels/paint/**",
+        "**/formation-assets/**",
         "**/src/audio/soundAssets.json",
         "**/src/audio/soundBank.json",
         "**/tools/audio/layer-projects.json",
         "**/tools/audio/layer-uploads/**",
       ],
     },
+    // The formation guides' solid kernel is the Orthographic Studio's
+    // (3d/orthographic/src/core/manifold.ts, imported where it lives), so the
+    // page may be served files from beside rope/.
+    fs: { allow: [join(import.meta.dirname), join(import.meta.dirname, "..", "3d")] },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
     // beside the dev server, `?record=1` streams into it and /admin shows it.
     proxy: {
@@ -557,6 +600,9 @@ export default defineConfig({
       "/admin": "http://localhost:8080",
     },
   },
+  // manifold-3d finds its wasm beside itself (`new URL("manifold.wasm",
+  // import.meta.url)`), which a pre-bundled copy in vite's cache would not.
+  optimizeDeps: { exclude: ["manifold-3d"] },
   build: {
     target: "esnext",
     rollupOptions: {
@@ -587,6 +633,7 @@ export default defineConfig({
     prodReplays(),
     editorRoute(),
     sceneService(),
+    formationService(),
     soundService(),
     soundLayerService(),
     exportsInBuild(),

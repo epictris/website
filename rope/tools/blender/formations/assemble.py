@@ -158,17 +158,24 @@ obj.data.polygons.foreach_set("material_index", [0] * len(obj.data.polygons))
 obj.data.materials.clear()
 obj.data.materials.append(slate)
 
-# Bevel and remesh can collapse a triangle to nothing; remove only
-# microscopic geometry, so the silhouette and the slabs are untouched.
-bm = bmesh.new()
-try:
-    bm.from_mesh(obj.data)
-    remove_degenerate(bm, 1e-5)
-    bm.normal_update()
-    bm.to_mesh(obj.data)
-    obj.data.update()
-finally:
-    bm.free()
+def clean(obj):
+    """Bevel and remesh can collapse a triangle to nothing; remove only
+    microscopic geometry, so the silhouette and the slabs are untouched.
+    Returns how many faces went."""
+    before = len(obj.data.polygons)
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(obj.data)
+        remove_degenerate(bm, 1e-5)
+        bm.normal_update()
+        bm.to_mesh(obj.data)
+        obj.data.update()
+    finally:
+        bm.free()
+    return before - len(obj.data.polygons)
+
+
+clean(obj)
 if generator == 'solid':
     # The adaptive remesh supplies a sampling grid, not the painted facets.
     # Join shallow folds into the existing slate's broad planes before tone
@@ -194,6 +201,13 @@ for piece in list(src.objects):
     if data is not None and data.users == 0:
         bpy.data.batch_remove(ids=[data])
 bpy.data.collections.remove(src)
+if generator == 'solid':
+    # The facet dissolve and the jointed finish come after the clean above
+    # and can leave faces of no area of their own (backdrop.back-wall, a 48 m
+    # wall built Cliff, 2026-11-22: the rock failed validation for it).
+    gone = clean(obj)
+    if gone:
+        print(f"Solid finish: {gone} microscopic faces removed after the finish", flush=True)
 validate_worker(obj)
 (out / "health.json").write_text(json.dumps(mesh_health(obj), indent=2))
 bpy.ops.wm.save_as_mainfile(filepath=str(out / "rock.blend"))

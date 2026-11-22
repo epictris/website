@@ -104,6 +104,10 @@ import {
   type ShapeData,
   type BeltLook,
   type DebugDrawData,
+  type FormationData,
+  type DecorationObjectData,
+  type PaintStamp,
+  isDecorationObject,
   LEVEL_FORMAT,
 } from "../level/levelFormat";
 import {
@@ -184,7 +188,29 @@ export const defaultShelter = (): EdShelter => ({ front: null });
 // `model` is a 3D model of the library placed on the body (`ModelObjectData`):
 // appearance only, carried by the body like its lights. Its fields are
 // `modelRef`; its shape is the marker box a click lands on, as an anchor's is.
-export type EdObject = "collision" | "light" | "anchor" | "model";
+//
+// `formation` is the body's generated rock (`FormationData`, docs/formations.md):
+// at most one per body, its recipe and guide in `formation`, its placement the
+// item's own, so it rides the body exactly as a model does and stays where it
+// stands when the body's origin moves. Its shape is the marker a click on the
+// plane lands on; in 3D a click on the rock picks it.
+//
+// `decoration` is moss, ivy or a plant grown on the body's formation
+// (`DecorationObjectData`): its fields in `decoration`, its strokes (a painted
+// one's) there too, saved beside the level rather than in it. Its anchor is in
+// the formation's frame, so its `pos` is only where its mark is drawn on the
+// plane, found from the formation item whenever it is needed.
+export type EdObject = "collision" | "light" | "anchor" | "model" | "formation" | "decoration";
+
+// A DECORATION object's own fields, and a painted one's strokes. Replaced
+// whole on an edit, as a formation's are.
+export type EdDecoration = Omit<DecorationObjectData, "type" | "x" | "y" | "rot"> & { strokes?: PaintStamp[] };
+
+// A FORMATION object's own fields: the level's `FormationData` less its
+// placement, which is the item's. On every item, read only on one whose
+// `object` is "formation"; replaced whole on an edit, never mutated, since an
+// undo snapshot or a copy shares it.
+export type EdFormation = Omit<FormationData, "x" | "y" | "rot">;
 
 // A MODEL object's own fields (`ModelObjectData`), metres and radians. On every
 // item, read only on one whose `object` is "model", as `light` is read only on
@@ -747,6 +773,10 @@ export interface EdItem {
   // in with - the id is content, not a handle. 0 on everything else.
   // A model object's fields (see `EdModelRef`).
   modelRef: EdModelRef;
+  // A formation object's fields (see `EdFormation`); null on everything else.
+  formation: EdFormation | null;
+  // A decoration object's (see `EdDecoration`); null on everything else.
+  decoration: EdDecoration | null;
   anchorId: number;
   // Firefly paths only (the fireflies layer): the id a swarm names this path
   // by (`FireflyPathData.id`, `LightObjectData.path`), preserved through a
@@ -918,6 +948,13 @@ export interface EdBodyFrame {
   rot: number; // radians
 }
 
+// A 3D body's depth (metres, toward the camera) and tilt (radians about
+// three's x then y, before the frame's turn): see `EdModel.bodies3d`.
+export interface EdBody3d {
+  z: number;
+  tilt: [number, number];
+}
+
 export interface EdModel {
   // Preserve an explicit empty mask after its last region is deleted.
   fogRegionsEnabled?: boolean;
@@ -960,6 +997,12 @@ export interface EdModel {
   // written down before anything is edited (`pinBodyFrame`, from the editor's
   // `beginAction`), so a body that can be edited a piece at a time always has one.
   bodyFrames: Map<number, EdBodyFrame>;
+  // THE 3D BODIES (`LevelBodyData.space`): a body id here is drawn off the
+  // gameplay plane, at its depth and tilt about its frame above. Kept beside
+  // the frame rather than in it, since the frame's own rules (derived from the
+  // first object, pinned before an edit) are about the plane and stay so. A
+  // body holding collision is never in it.
+  bodies3d: Map<number, EdBody3d>;
   // The level's light and air (see `EnvironmentData`). One object rather than a
   // list, because it is a property of the LEVEL and not of anything in it.
   //
@@ -1350,6 +1393,7 @@ function fromLevelData(data: LevelData): EdModel {
   // `authoredFrame` below); the rest are left to be derived from their first
   // object, which is where a body's frame has always been measured from.
   const bodyFrames = new Map<number, EdBodyFrame>();
+  const bodies3d = new Map<number, EdBody3d>();
   for (const b of data.bodies) {
     const firstOfBody = bodies.length;
     // ONE ITEM PER SCENE OBJECT. Nothing is folded together: a barrel is a body
@@ -1388,6 +1432,12 @@ function fromLevelData(data: LevelData): EdModel {
         filedFrame.rot !== leadFrame.rot);
     const frame = authoredFrame ? filedFrame : leadFrame;
     if (authoredFrame) bodyFrames.set(bodyId, frame);
+    // A 3D body's depth and tilt are about the frame the FILE states, so that
+    // frame is kept as stated whatever its first object says.
+    if (b.space === "3d") {
+      bodies3d.set(bodyId, { z: b.z ?? 0, tilt: b.tilt ? [b.tilt[0], b.tilt[1]] : [0, 0] });
+      if (!authoredFrame) bodyFrames.set(bodyId, filedFrame);
+    }
     // An authored bearing, carried into that frame. For a body whose frame the
     // file states it is already measured there and comes back unchanged; for one
     // whose frame is the first object's, the same world point is re-measured
@@ -1462,6 +1512,7 @@ function fromLevelData(data: LevelData): EdModel {
       light: defaultLight(),
       note: defaultNote(),
       modelRef: defaultModelRef(),
+      formation: null, decoration: null,
       shelter: defaultShelter(),
       anchorId: 0,
       pathId: 0,
@@ -1549,7 +1600,42 @@ function fromLevelData(data: LevelData): EdModel {
         });
         continue;
       }
-      bodies.push(lightItem(o, w.pos, w.rot, bodyId));
+      if (isDecorationObject(o)) {
+        // Its mark on the plane: where it is drawn, through its formation's
+        // placement in the body (the anchor is in the formation's frame, y up).
+        const fw = worldPlacement(b, b.formation ?? {});
+        const at = o.onRock ?? o.anchor;
+        const { type: _t, x: _x, y: _y, rot: _r, ...data } = o;
+        bodies.push({
+          ...base,
+          id: newBodyId(),
+          object: "decoration",
+          pos: fw.pos.add(new Vec2(at.p[0], -at.p[1]).rotated(fw.rot)),
+          rot: 0,
+          shape: { kind: "rect", w: MODEL_MARK / 2, h: MODEL_MARK / 2 },
+          impermeable: false,
+          mask: MASK_ALL,
+          rail: false,
+          viscosity: 0,
+          slipFloor: 0,
+          material: DEFAULT_MATERIAL,
+          density: DEFAULT_DENSITY,
+          thickness: DEFAULT_THICKNESS,
+          debug: NO_DEBUG(),
+          root: null,
+          decoration: data,
+        });
+        continue;
+      }
+      bodies.push(lightItem(o as LightObjectData, w.pos, w.rot, bodyId));
+    }
+    // The body's formation, an item of its own placed where the file puts it
+    // in the body (`EdFormation`): after the objects, so a body's objects keep
+    // the items an index into them names.
+    if (b.formation) {
+      const w = worldPlacement(b, b.formation);
+      const { x: _x, y: _y, rot: _rot, ...data } = b.formation;
+      bodies.push(formationItem(base, w.pos, w.rot, data));
     }
     const made = bodies.slice(firstOfBody);
     itemOfBody.push(made.find((i) => i.object === "collision") ?? null);
@@ -1651,6 +1737,7 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     modelRef: defaultModelRef(),
+    formation: null, decoration: null,
     shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
@@ -1776,6 +1863,7 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     modelRef: defaultModelRef(),
+    formation: null, decoration: null,
     shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
@@ -1883,6 +1971,7 @@ function lightItem(
     },
     note: defaultNote(),
     modelRef: defaultModelRef(),
+    formation: null, decoration: null,
     shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
@@ -1948,6 +2037,7 @@ function lightItem(
     cam: defaultCamera(),
     light: defaultLight(),
     modelRef: defaultModelRef(),
+    formation: null, decoration: null,
     shelter: defaultShelter(),
     anchorId: 0,
     pathId: 0,
@@ -2057,6 +2147,7 @@ function lightItem(
     // against on the way back out - so a level opened and saved untouched is
     // byte-stable exactly as it was.
     bodyFrames,
+    bodies3d,
     // Copied rather than shared, since everything else here hands the caller a
     // fresh object, and undo snapshots this by value.
     environment: data.environment ? { ...data.environment } : undefined,
@@ -2166,7 +2257,11 @@ export function fogRegionInner(i: EdItem): EdItem | null {
   return null;
 }
 
-export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number>): LevelData {
+// What a drawn thing in the 3D scene is tagged with, which `toLevelData`'s
+// `itemOf` maps back to the item that wrote it: an object, or a formation.
+export type SceneTag = SceneObjectData | FormationData;
+
+export function toLevelData(model: EdModel, itemOf?: Map<SceneTag, number>): LevelData {
   // A camera PATH has no ShapeData form at all - an open polyline is not one of
   // the three shapes - so it never reaches here: the camera layer is split by
   // shape kind below, and a path is written as a `CameraPathData` instead.
@@ -2352,7 +2447,25 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       objects.push(o);
       itemOf?.set(o, item.id);
     };
+    // The body's formation, written beside its objects rather than among them
+    // (`LevelBodyData.formation`), and recorded in `itemOf` the same way: a 3D
+    // click on the rock answers with it.
+    let formation: FormationData | undefined;
     for (const i of run) {
+      if (i.object === "formation" && i.formation) {
+        if (formation) continue; // one per body; `cli levels` says so of a file
+        formation = { ...i.formation, ...localOf(i) };
+        itemOf?.set(formation, i.id);
+        continue;
+      }
+      if (i.object === "decoration" && i.decoration) {
+        // Its anchor is in its formation's frame, so its own placement says
+        // nothing and is not written; its strokes go to the sidecar
+        // (`paintOf`), not here.
+        const { strokes: _strokes, ...data } = i.decoration;
+        emit(i, { type: "decoration", ...data });
+        continue;
+      }
       if (i.object === "anchor") {
         // A placement and the id chains name it by, and nothing else - which is
         // all an anchor is.
@@ -2475,7 +2588,18 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         // a thing is made of is a fact about the shape rather than about the
         // model drawn over it.
         ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
-        soundMaterial: i.soundMaterial ?? "auto",
+        // ...and the sound it makes, only where it is not what loading would
+        // derive from the rest of the piece (`soundMaterialOf`): a level saved
+        // untouched comes back byte-identical, and means the same either way.
+        ...((i.soundMaterial ?? "auto") !==
+        soundMaterialOf({
+          ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
+          viscosity: i.viscosity,
+          root: i.root ?? undefined,
+          shape: { kind: i.shape.kind },
+        })
+          ? { soundMaterial: i.soundMaterial ?? "auto" }
+          : {}),
         // A typed density, and only then: a preset's is its material's.
         ...(i.material === CUSTOM_MATERIAL ? { density: i.density } : {}),
         ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
@@ -2490,11 +2614,20 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       });
     }
 
+    // A 3D body's depth and tilt (`EdModel.bodies3d`), about the frame above.
+    const space3d = model.bodies3d.get(run[0]!.bodyId);
     return {
       kind: lead.object === "collision" ? lead.kind : "static",
       x: origin.pos.x,
       y: origin.pos.y,
       rot: origin.rot,
+      ...(space3d
+        ? {
+            space: "3d" as const,
+            ...(space3d.z !== 0 ? { z: space3d.z } : {}),
+            ...(space3d.tilt[0] !== 0 || space3d.tilt[1] !== 0 ? { tilt: [space3d.tilt[0], space3d.tilt[1]] as [number, number] } : {}),
+          }
+        : {}),
       // Only a SOLID lead has a body fill to give. A body that is nothing but
       // a light has no fill at all, and writing the light's own faint editor
       // colour as one would put a body colour on disk that nothing draws.
@@ -2629,6 +2762,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       // The name, outside the physics half because a body of any make-up may
       // carry one, and only when set: an unnamed body writes nothing.
       ...(lead.name ? { name: lead.name } : {}),
+      ...(formation ? { formation } : {}),
       objects,
     };
   });
@@ -3636,6 +3770,8 @@ function bodyKindLabel(members: readonly EdItem[]): string {
   if (!first) return "empty";
   if (first.object === "light") return "light";
   if (first.object === "model") return "model";
+  // A body of nothing but a formation: a background guide's rock.
+  if (first.object === "formation") return "backdrop";
   if (first.layer === "camera") return "camera";
   if (first.layer === "fireflies") return "fireflies";
   if (first.layer === "shelter") return "shelter";
@@ -3656,6 +3792,15 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   // `BodyKind`; it is the `passable` flag now, so nothing else answers to it.
   if (item.object === "anchor") return `anchor ${item.anchorId}`;
   if (item.object === "model") return `model ${item.modelRef.name || "(none)"}`;
+  if (item.object === "decoration" && item.decoration) {
+    const d = item.decoration;
+    return `${d.kind} ${d.id}${d.lost ? " (lost)" : ""}`;
+  }
+  // A formation by its generator, and by its id when a decoration names it.
+  if (item.object === "formation" && item.formation) {
+    const f = item.formation;
+    return `formation ${f.generator}${f.variant ? ` ${f.variant}` : ""}`;
+  }
   // A checkpoint is named by the name it is REACHED by (`?checkpoint=vines`),
   // since that is what tells two of them apart; an unnamed one says so, being a
   // marker nothing can ask for yet.
@@ -3918,7 +4063,7 @@ export interface SettleGhost {
 }
 
 export function settledGhosts(model: EdModel): SettleGhost[] {
-  const itemOf = new Map<SceneObjectData, number>();
+  const itemOf = new Map<SceneTag, number>();
   const data = toLevelData(model, itemOf);
   const built = buildLevelBodies(new World(), data, () => {});
   const out: SettleGhost[] = [];
@@ -4252,6 +4397,43 @@ export function syncBodyProps(members: readonly EdItem[]): void {
   if (!lead) return;
   for (const m of members) {
     if (m === lead || m.object !== "collision") continue;
+    copyBodyProps(m, lead);
+  }
+}
+
+// Give `m` the properties its body has one of, as `lead` holds them: what
+// `syncBodyProps` does to each piece, and what a piece made for a body (a
+// formation's fit) is born with.
+// A formation item (`EdFormation`) for the body whose shared fields `body`
+// holds (any member, or the load's per-body base), placed at `pos`/`rot`. Its
+// per-object fields say nothing: it is not a piece of anything.
+type ObjectFields = "id" | "object" | "pos" | "rot" | "shape" | "formation" | "impermeable" | "mask" | "rail" | "viscosity" | "slipFloor" | "material" | "soundMaterial" | "density" | "thickness" | "debug" | "root";
+export function formationItem(body: Omit<EdItem, ObjectFields>, pos: Vec2, rot: number, data: EdFormation): EdItem {
+  const { soundMaterial: _sm, ...shared } = body as EdItem;
+  return {
+    ...shared,
+    id: newBodyId(),
+    object: "formation",
+    pos,
+    rot,
+    shape: { kind: "rect", w: MODEL_MARK, h: MODEL_MARK },
+    impermeable: false,
+    mask: MASK_ALL,
+    rail: false,
+    viscosity: 0,
+    slipFloor: 0,
+    material: DEFAULT_MATERIAL,
+    density: DEFAULT_DENSITY,
+    thickness: DEFAULT_THICKNESS,
+    debug: NO_DEBUG(),
+    root: null,
+    formation: data,
+    decoration: null,
+  };
+}
+
+export function copyBodyProps(m: EdItem, lead: EdItem): void {
+  {
     m.kind = lead.kind;
     m.color = lead.color;
     m.opacity = lead.opacity;
@@ -4710,6 +4892,7 @@ export function emptyModel(): EdModel {
     // Nothing stored: a fresh level's one body holds one object, whose placement
     // IS the frame (see `EdModel.bodyFrames`).
     bodyFrames: new Map(),
+    bodies3d: new Map(),
     // A fresh level authors none, which is every level authored before the
     // block and is what the renderer's own defaults are for.
     environment: undefined,
@@ -4778,6 +4961,7 @@ export function emptyModel(): EdModel {
         light: defaultLight(),
         note: defaultNote(),
         modelRef: defaultModelRef(),
+        formation: null, decoration: null,
         shelter: defaultShelter(),
         anchorId: 0,
         pathId: 0,

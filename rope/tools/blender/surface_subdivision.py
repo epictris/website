@@ -4,6 +4,20 @@ import bmesh
 import numpy as np
 
 
+def _new_face(bm, verts):
+    """A face on these corners, or None when one already exists on them.
+
+    A polygon that is not flat can fold over a neighbouring triangle (the
+    jointed finish leaves dozens: 36 on backdrop.rock-a, 2026-11-22), so one
+    of its tessellation triangles has exactly that neighbour's corners. The
+    neighbour already draws that triangle; a second face on it would be a
+    double, which BMesh refuses. Blender's own triangulate drops such doubles
+    the same way (BM_mesh_triangulate's faces_double)."""
+    if bm.faces.get(verts) is not None:
+        return None
+    return bm.faces.new(verts)
+
+
 def split_large_faces(mesh, ob):
     from formations import render
     from formations import depth_lod
@@ -67,7 +81,9 @@ def split_large_faces(mesh, ob):
             continue
         loops = {loop.vert.index: loop for loop in face.loops}
         for indices in triangles[face.index]:
-            new = bm.faces.new([bm.verts[i] for i in indices])
+            new = _new_face(bm, [bm.verts[i] for i in indices])
+            if new is None:
+                continue
             new.material_index = face.material_index
             new.smooth = face.smooth
             for layer in face_layers:
@@ -100,7 +116,8 @@ def split_large_faces(mesh, ob):
         tess=[loops for loops in bm.calc_loop_triangles() if loops[0].face in ngons]
         for loops in tess:
             source=loops[0].face
-            new=bm.faces.new([loop.vert for loop in loops])
+            new=_new_face(bm,[loop.vert for loop in loops])
+            if new is None:continue
             new.material_index,new.smooth=source.material_index,source.smooth
             for layer in face_layers:new[layer]=source[layer]
             for dst,src in zip(new.loops,loops):dst.copy_from(src)

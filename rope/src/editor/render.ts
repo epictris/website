@@ -72,6 +72,7 @@ import {
 import { DEFAULT_SUN_DIR, DEFAULT_SUN_INTENSITY } from "../render3d/environment";
 import { shelterShadowOffset } from "../render3d/shelterCover";
 import { MASK_ALL } from "../engine/body";
+import { piecePolygon } from "../formation/outline";
 import {
   outlineOfData,
   pathOutline,
@@ -97,6 +98,9 @@ import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 // actually played at (see the spawn marker).
 import { BallLevel } from "../level/ballLevel";
 import { DEFAULT_FIREFLY_NOTICE } from "../render3d/fireflies";
+import { atDepth, beginWorld, makePath } from "./projectedCanvas";
+import { itemMatrix } from "./space3d";
+import * as THREE from "three";
 
 // Exported, like the handle colours below, for the Visuals workspace's guides
 // (editor/visuals/guides.ts), which draw the same marks into the 3D scene and
@@ -166,6 +170,12 @@ export const BODY_MEMBER = "#4f9dff";
 // A model's mark (`drawModelMark`) and its label: the overlay's neutral
 // foreground, since a model has no colour of its own to show.
 const MODEL_MARK_COLOR = "#cbccc6";
+// A formation's mark and its guide (`drawFormationGuide`): the slate's own edge
+// line, lifted to be read over the level - rock, not furniture.
+const FORMATION_MARK_COLOR = "#9aa6c8";
+// A decoration's mark: the moss's green; one that lost its rock, amber.
+const DECORATION_MARK_COLOR = "#9fd39a";
+const LOST_MARK_COLOR = "#d0a215";
 
 // Scripted motion - a pendulum's arc, a platform's route. A colour of its own
 // because it is neither geometry nor a handle: it is what the level DOES with a
@@ -763,8 +773,8 @@ export function cameraBufferMargin(r: EdItem): Margin | null {
 
 // Every piece of a compound body accumulated into one path, so it can be filled
 // as their union (nonzero) rather than one fill per piece.
-function unionPath(items: readonly EdItem[]): Path2D {
-  const p = new Path2D();
+function unionPath(ctx: CanvasRenderingContext2D, items: readonly EdItem[]): Path2D {
+  const p = makePath(ctx);
   for (const i of items) pathOutlineInto(p, i.pos, i.rot, outlineOf(i));
   return p;
 }
@@ -796,7 +806,7 @@ function strokeCompoundOutline(
     const grow = ctx.lineWidth;
     for (let j = 0; j < items.length; j++) {
       if (i === j) continue;
-      const outside = new Path2D();
+      const outside = makePath(ctx);
       outside.rect(
         box.min.x - pad,
         box.min.y - pad,
@@ -806,7 +816,7 @@ function strokeCompoundOutline(
       pathOutlineIntoGrown(outside, items[j]!.pos, items[j]!.rot, outlineOf(items[j]!), grow);
       ctx.clip(outside, "evenodd");
     }
-    const own = new Path2D();
+    const own = makePath(ctx);
     pathOutlineInto(own, items[i]!.pos, items[i]!.rot, outlineOf(items[i]!));
     ctx.stroke(own);
     ctx.restore();
@@ -1044,7 +1054,13 @@ const LIGHT_MARK_RAYS = 8;
 // A MODEL's mark on the plane: a cube in outline on its marker box, turned
 // with the item, dashed because it is not geometry. The model itself is drawn
 // by the 3D scene; this is where the 2D view has it, and what a click lands on.
-function drawModelMark(ctx: CanvasRenderingContext2D, m: EdItem, worldLine: number, selected: boolean): void {
+function drawModelMark(
+  ctx: CanvasRenderingContext2D,
+  m: EdItem,
+  worldLine: number,
+  selected: boolean,
+  color = MODEL_MARK_COLOR,
+): void {
   const half = m.shape.kind === "rect" ? m.shape.w / 2 : 0.15;
   const back = half * 0.45;
   ctx.save();
@@ -1065,9 +1081,46 @@ function drawModelMark(ctx: CanvasRenderingContext2D, m: EdItem, worldLine: numb
     ctx.setLineDash([]);
     ctx.stroke();
   }
-  ctx.strokeStyle = MODEL_MARK_COLOR;
+  ctx.strokeStyle = color;
   ctx.lineWidth = worldLine * 1.5;
   ctx.setLineDash([worldLine * 4, worldLine * 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// A formation's guide on the plane: each piece it was taken from, in the
+// formation's frame placed by the item, dashed in the formation's colour. A
+// solid guide has no outline on the plane; the 3D view draws it.
+// Where a decoration is drawn in 3D, in the overlay's terms (x, y down, z
+// toward the camera): its point on the rock carried through its formation's
+// frame. Null when its formation is not there to say.
+function decorationPoint(model: EdModel, d: EdItem): { x: number; y: number; z: number } | null {
+  const dec = d.decoration;
+  if (!dec) return null;
+  const f = model.items.find((i) => i.object === "formation" && i.bodyId === d.bodyId && i.formation?.id === dec.formation);
+  if (!f) return null;
+  const p = (dec.onRock ?? dec.anchor).p;
+  const w = new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(itemMatrix(f));
+  return { x: w.x, y: -w.y, z: w.z };
+}
+
+function drawFormationGuide(ctx: CanvasRenderingContext2D, f: EdItem, worldLine: number): void {
+  const guide = f.formation?.guide;
+  if (guide?.kind !== "collision") return;
+  ctx.save();
+  ctx.translate(f.pos.x, f.pos.y);
+  ctx.rotate(f.rot);
+  ctx.beginPath();
+  for (const p of guide.pieces) {
+    const poly = piecePolygon(p);
+    if (!poly) continue;
+    poly.forEach((q, k) => (k ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+    ctx.closePath();
+  }
+  ctx.strokeStyle = FORMATION_MARK_COLOR;
+  ctx.lineWidth = worldLine * 1.5;
+  ctx.setLineDash([worldLine * 6, worldLine * 4]);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
@@ -2009,6 +2062,11 @@ function drawBodyMembers(
   ctx.lineWidth = worldLine * 3;
   for (const i of items) {
     if (!bodyIds.has(i.bodyId) || !visibleLayers.has(i.layer)) continue;
+    // A formation, a decoration or a model has no outline of its own on the
+    // plane - its shape is a placeholder at its placement point, which can be
+    // anywhere relative to what it draws - so it is said by the scene (the
+    // selection highlight on its rock or mesh) and its own mark, not here.
+    if (i.object === "formation" || i.object === "decoration" || i.object === "model") continue;
     if (i.object === "light" || i.object === "anchor") {
       ctx.beginPath();
       ctx.arc(i.pos.x, i.pos.y, lightPickRadius(worldLine) * 1.6, 0, Math.PI * 2);
@@ -2127,10 +2185,10 @@ export function drawEditor(
   const paint = (color: string): string => (layers === "fill" ? color : "rgba(0,0,0,0)");
 
   ctx.save();
-  ctx.translate(w / 2, h / 2);
+  // World metres from here: the head-on transform, or each point carried
+  // through the 3D view when the overlay is drawn turned (projectedCanvas.ts).
+  beginWorld(ctx, cam, w, h);
   const scale = cam.zoom * PIXELS_PER_METER;
-  ctx.scale(scale, scale);
-  ctx.translate(-cam.position.x, -cam.position.y);
 
   const worldLine = 1 / scale;
   // Every visible layer draws at full strength, whether or not it is the one
@@ -2181,7 +2239,7 @@ export function drawEditor(
     const members = bodyMembers(ordered, body.bodyId).filter((m) => !m.passable);
     if (members.length < 2) continue;
     for (const m of members) drawnAsBody.add(m.id);
-    const union = unionPath(members);
+    const union = unionPath(ctx, members);
     ctx.fillStyle = paint(hexToRgba(body.color, body.opacity));
     ctx.fill(union);
     // THE HALO IS ROUND WHAT IS SELECTED, not round the body it is in. Alt+click
@@ -2718,7 +2776,37 @@ export function drawEditor(
   const models = visibleLayers.has("scene")
     ? model.items.filter((i) => i.object === "model")
     : [];
-  for (const m of models) drawModelMark(ctx, m, worldLine, selectedIds.has(m.id));
+  // A model's mark at its own depth (drawn there by a projected overlay; head
+  // on it is the same picture).
+  for (const m of models) {
+    atDepth(ctx, depthOf(m));
+    drawModelMark(ctx, m, worldLine, selectedIds.has(m.id));
+    atDepth(ctx, 0);
+  }
+  // ...and the formations: while the formation or its body is selected, the
+  // GUIDE it is generated from - which a fitted collision has moved away from
+  // on purpose (docs/formations.md), so the two are told apart by sight. No
+  // mark of its own: its placement point (the body's frame origin) can be
+  // anywhere relative to the rock, so a mark there said nothing true. The rock
+  // is in the scene and picked there; a solid guide is drawn and picked as
+  // the volume it is (solidGuides.ts).
+  const formations = visibleLayers.has("scene")
+    ? model.items.filter((i) => i.object === "formation" && i.formation?.guide.kind === "collision")
+    : [];
+  for (const f of formations) {
+    if (selectedIds.has(f.id) || selectedBodyIds.has(f.bodyId)) drawFormationGuide(ctx, f, worldLine);
+  }
+  // ...and what grows on them, at the point each is drawn at in 3D - on its
+  // rock, through its formation's frame (a 3D body's depth and tilt
+  // included), not that point carried onto the plane; a lost one in the
+  // warning colour.
+  for (const d of visibleLayers.has("scene") ? model.items.filter((i) => i.object === "decoration") : []) {
+    const at = decorationPoint(model, d);
+    const mark = at ? { ...d, pos: new Vec2(at.x, at.y) } : d;
+    if (at) atDepth(ctx, at.z);
+    drawModelMark(ctx, mark, worldLine, selectedIds.has(d.id), d.decoration?.lost ? LOST_MARK_COLOR : DECORATION_MARK_COLOR);
+    atDepth(ctx, 0);
+  }
 
   // Over every object it marks - a body's pieces are drawn in several passes and
   // an outline under one of them would be half hidden - and under the handles,

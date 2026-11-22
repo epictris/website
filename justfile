@@ -54,11 +54,28 @@ sources:
 # modelAssets.json, and their sources (the .blend files, pinned in
 # rope/scripts/sceneSources.json), bake every level's roots (`just roots`),
 # then upload every other pinned asset (props, texture maps, skies, root bakes)
-# the release does not hold yet. Run it after `just scene`, `just model` or a
-# root edit, then commit the pins with the level; run it before pushing any
-# commit that re-pins an asset.
+# the release does not hold yet. The levels' generated formations go up as
+# region bundles, pinned in rope/src/render3d/formationAssets.json (see
+# rope/docs/formations.md). Run it after `just scene`, `just model`, a root
+# edit or a Generate in the editor, then commit the pins with the level; run it
+# before pushing any commit that re-pins an asset.
 publish:
-    cd rope && bun run assets:publish-scenes && bun run assets:publish-models && bun run assets:publish-sources && bun run roots:bake && bun run assets:publish-stored
+    cd rope && bun run assets:publish-scenes && bun run assets:publish-models && bun run assets:publish-sources && bun run assets:publish-formations && bun run roots:bake && bun run assets:publish-stored
+
+# Regenerate the editor's formation schema (rope/src/level/formationSchema.json)
+# from the formations add-on, after a generator parameter changes.
+formation-schema:
+    cd rope && blender -b --factory-startup --python-exit-code 1 --python tools/blender/formations/schema_export.py -- src/level/formationSchema.json
+
+# Write the decoration add-ons' settings (moss, ivy, foliage) for the editor's
+# Decoration panel. See rope/docs/formations.md.
+decoration-schema:
+    cd rope && blender -b --factory-startup --python-exit-code 1 --python tools/blender/decoration_schema_export.py -- src/level/decorationSchema.json
+
+# Remove what no level file names from the formation store
+# (rope/public/generated). See rope/docs/formations.md.
+formation-sweep *FLAGS:
+    cd rope && bun run formation:sweep {{FLAGS}}
 
 # Grow every level's roots ahead of time into rope/public/roots/<level>.glb and
 # pin them in rope/src/render3d/rootBakes.json, so the game draws them rather

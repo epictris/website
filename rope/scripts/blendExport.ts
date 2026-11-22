@@ -54,7 +54,9 @@ export interface BlendExport {
   // What it is, for the log and the steps (`[scene]`, `[model]`), and the
   // name its caches and Blender log are kept under.
   tag: string;
-  kind: "scene" | "model";
+  // A formation's bake (scripts/formation-build.ts) is a model's, but its
+  // logs are kept apart: they are named by the recipe's hash.
+  kind: "scene" | "model" | "formation" | "decoration";
   name: string;
   // Every face counts as seen by the game camera when the unwrap shares out
   // the texels (`scene_export.py --all-seen`): a model may be turned to show
@@ -264,6 +266,9 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       // would blur away (formations/render.py `detail_blur`), with its numbers.
       { ...process.env, TMPDIR: exportTemp, SCENE_EXPORT_DOF: JSON.stringify({ maxBlur: DOF_MAX_BLUR.high, focusBand: FOCUS_BAND }),
         SCENE_EXPORT_EMISSION: opts.kind === "scene" ? "1" : "0",
+        // A decoration ships a texture-only moss as a shell of its own: its rock
+        // is not in the export to be painted (docs/formations.md).
+        SCENE_EXPORT_MOSS_SHELL: opts.kind === "decoration" ? "1" : "0",
         SCENE_EXPORT_DYNAMIC: JSON.stringify(opts.dynamicNodes ?? []),
       },
     );

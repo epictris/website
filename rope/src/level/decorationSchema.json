@@ -1,0 +1,3648 @@
+{
+ "kinds": {
+  "moss": {
+   "group": "moss",
+   "sections": [
+    {
+     "title": "Moss",
+     "fields": [
+      {
+       "field": "kind"
+      },
+      {
+       "field": "detail"
+      }
+     ]
+    },
+    {
+     "title": "Quality",
+     "when": {
+      "kind": [
+       "MOUND"
+      ]
+     },
+     "fields": [
+      {
+       "field": "mound_density"
+      },
+      {
+       "field": "texel"
+      },
+      {
+       "field": "max_texture"
+      }
+     ]
+    },
+    {
+     "title": "Dabs",
+     "fields": [
+      {
+       "field": "resolution"
+      },
+      {
+       "field": "threshold"
+      },
+      {
+       "field": "dab_min"
+      },
+      {
+       "field": "dab_max"
+      },
+      {
+       "field": "layers"
+      },
+      {
+       "field": "shrink"
+      },
+      {
+       "field": "buffer"
+      },
+      {
+       "field": "first_buffer"
+      },
+      {
+       "field": "min_clump"
+      }
+     ]
+    },
+    {
+     "title": "Tone",
+     "fields": [
+      {
+       "field": "dark"
+      },
+      {
+       "field": "light"
+      },
+      {
+       "field": "levels"
+      },
+      {
+       "field": "ref_depth"
+      },
+      {
+       "field": "steps_deep"
+      },
+      {
+       "field": "erode_scale"
+      },
+      {
+       "field": "field_mix"
+      },
+      {
+       "field": "curve"
+      },
+      {
+       "field": "mottle"
+      },
+      {
+       "field": "mottle_scale"
+      }
+     ]
+    },
+    {
+     "title": "Height",
+     "when": {
+      "kind": [
+       "MOUND"
+      ]
+     },
+     "fields": [
+      {
+       "field": "floor"
+      },
+      {
+       "field": "lift"
+      },
+      {
+       "field": "up_floor"
+      },
+      {
+       "field": "height_blur"
+      },
+      {
+       "field": "rim"
+      },
+      {
+       "field": "drape"
+      }
+     ]
+    },
+    {
+     "title": "Bioluminescence",
+     "when": {
+      "kind": [
+       "MOUND"
+      ]
+     },
+     "fields": [
+      {
+       "field": "emission_strength"
+      },
+      {
+       "field": "emission_color"
+      },
+      {
+       "field": "emission_threshold"
+      }
+     ]
+    },
+    {
+     "title": "Edge",
+     "fields": [
+      {
+       "field": "edge_kind",
+       "when": {
+        "kind": [
+         "MOUND"
+        ]
+       }
+      },
+      {
+       "field": "edge_apron",
+       "when": {
+        "kind": [
+         "MOUND"
+        ],
+        "edge_kind": [
+         "PRINT"
+        ]
+       }
+      },
+      {
+       "field": "edge_round",
+       "when": {
+        "kind": [
+         "MOUND"
+        ]
+       },
+       "whenNot": {
+        "edge_kind": [
+         "PRINT"
+        ]
+       }
+      },
+      {
+       "field": "overhang",
+       "when": {
+        "kind": [
+         "MOUND"
+        ]
+       },
+       "whenNot": {
+        "edge_kind": [
+         "PRINT"
+        ]
+       }
+      },
+      {
+       "field": "edge_detail",
+       "when": {
+        "kind": [
+         "MOUND"
+        ]
+       },
+       "whenNot": {
+        "edge_kind": [
+         "PRINT"
+        ]
+       }
+      },
+      {
+       "field": "strays"
+      },
+      {
+       "field": "stray_reach"
+      }
+     ]
+    },
+    {
+     "title": "Grass",
+     "when": {
+      "kind": [
+       "MOUND"
+      ]
+     },
+     "fields": [
+      {
+       "field": "grass"
+      },
+      {
+       "field": "grass_height"
+      },
+      {
+       "field": "grass_blades"
+      },
+      {
+       "field": "grass_tip"
+      }
+     ]
+    },
+    {
+     "title": "Mesh and print",
+     "closed": true,
+     "fields": [
+      {
+       "field": "min_patch"
+      },
+      {
+       "field": "print_edge"
+      }
+     ]
+    }
+   ]
+  },
+  "ivy": {
+   "group": "ivy",
+   "sections": [
+    {
+     "title": "Carpet",
+     "fields": [
+      {
+       "field": "detail"
+      },
+      {
+       "field": "resolution"
+      }
+     ]
+    },
+    {
+     "title": "Outline",
+     "fields": [
+      {
+       "field": "threshold"
+      },
+      {
+       "field": "edge_noise"
+      },
+      {
+       "field": "edge_scale"
+      },
+      {
+       "field": "min_patch"
+      },
+      {
+       "field": "rounding"
+      }
+     ]
+    },
+    {
+     "title": "Growth",
+     "fields": [
+      {
+       "field": "thickness"
+      },
+      {
+       "field": "tilt"
+      },
+      {
+       "field": "spread"
+      },
+      {
+       "field": "taper"
+      }
+     ]
+    },
+    {
+     "title": "Clumps",
+     "when": {
+      "detail": [
+       "CLUMPS"
+      ]
+     },
+     "fields": [
+      {
+       "field": "clump_min"
+      },
+      {
+       "field": "clump_max"
+      },
+      {
+       "field": "clump_fill"
+      },
+      {
+       "field": "edge_fill"
+      },
+      {
+       "field": "edge_round"
+      },
+      {
+       "field": "underlay"
+      }
+     ]
+    },
+    {
+     "title": "Leaves",
+     "whenNot": {
+      "detail": [
+       "CLUMPS"
+      ]
+     },
+     "fields": [
+      {
+       "field": "sheets"
+      },
+      {
+       "field": "leaf_min"
+      },
+      {
+       "field": "leaf_max"
+      },
+      {
+       "field": "leaf_fill"
+      },
+      {
+       "field": "edge_fill"
+      },
+      {
+       "field": "density"
+      },
+      {
+       "field": "edge_round"
+      },
+      {
+       "field": "underlay"
+      }
+     ]
+    },
+    {
+     "title": "Vines",
+     "fields": [
+      {
+       "field": "vine_length"
+      },
+      {
+       "field": "leaf_size",
+       "whenNot": {
+        "detail": [
+         "CLUMPS"
+        ]
+       }
+      },
+      {
+       "field": "leaf_tip",
+       "whenNot": {
+        "detail": [
+         "CLUMPS"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "title": "Colour",
+     "closed": true,
+     "fields": [
+      {
+       "field": "tone_a"
+      },
+      {
+       "field": "tone_b"
+      },
+      {
+       "field": "tone_c"
+      },
+      {
+       "field": "light"
+      },
+      {
+       "field": "shade"
+      },
+      {
+       "field": "tone_scale"
+      },
+      {
+       "field": "variation"
+      },
+      {
+       "field": "depth_shade"
+      }
+     ]
+    },
+    {
+     "title": "Shadow",
+     "closed": true,
+     "fields": [
+      {
+       "field": "shadow_strength"
+      },
+      {
+       "field": "shadow_reach"
+      },
+      {
+       "field": "shadow_drop"
+      },
+      {
+       "field": "shadow_color"
+      }
+     ]
+    }
+   ]
+  },
+  "fern": {
+   "group": "foliage",
+   "sections": [
+    {
+     "title": "Fern",
+     "fields": [
+      {
+       "field": "variety"
+      },
+      {
+       "field": "fronds"
+      },
+      {
+       "field": "fern_length"
+      },
+      {
+       "field": "droop"
+      },
+      {
+       "field": "spread"
+      }
+     ]
+    },
+    {
+     "title": "Shape",
+     "fields": [
+      {
+       "field": "lean"
+      },
+      {
+       "field": "fold"
+      },
+      {
+       "field": "twist"
+      },
+      {
+       "field": "croziers"
+      },
+      {
+       "field": "length_var"
+      }
+     ]
+    },
+    {
+     "title": "Leaves",
+     "whenNot": {
+      "variety": [
+       "PAINTED"
+      ]
+     },
+     "fields": [
+      {
+       "field": "pinnae"
+      },
+      {
+       "field": "leaflets",
+       "when": {
+        "variety": [
+         "LEAFLET"
+        ]
+       }
+      },
+      {
+       "field": "fern_leaf_size"
+      },
+      {
+       "field": "leaf_curve"
+      },
+      {
+       "field": "leaf_variation"
+      },
+      {
+       "field": "leaf_form",
+       "when": {
+        "variety": [
+         "LEAFLET"
+        ]
+       }
+      },
+      {
+       "field": "mirror_pairs"
+      }
+     ]
+    },
+    {
+     "title": "Colour",
+     "closed": true,
+     "fields": [
+      {
+       "field": "paint_tint"
+      }
+     ]
+    }
+   ]
+  },
+  "vine": {
+   "group": "foliage",
+   "sections": [
+    {
+     "title": "Hanging vine",
+     "fields": [
+      {
+       "field": "vine_length"
+      },
+      {
+       "field": "vine_leaf_size"
+      },
+      {
+       "field": "leaf_spacing"
+      }
+     ]
+    },
+    {
+     "title": "Shape",
+     "fields": [
+      {
+       "field": "vine_radius"
+      },
+      {
+       "field": "cling"
+      },
+      {
+       "field": "bend"
+      },
+      {
+       "field": "leaf_angle"
+      },
+      {
+       "field": "variation"
+      },
+      {
+       "field": "natural"
+      }
+     ]
+    },
+    {
+     "title": "Colour",
+     "closed": true,
+     "fields": [
+      {
+       "field": "paint_tint"
+      }
+     ]
+    }
+   ]
+  },
+  "mushroom": {
+   "group": "foliage",
+   "sections": [
+    {
+     "title": "Mushrooms",
+     "fields": [
+      {
+       "field": "mushroom_form"
+      },
+      {
+       "field": "cluster_count"
+      },
+      {
+       "field": "cluster_radius"
+      },
+      {
+       "field": "bio_size"
+      },
+      {
+       "field": "bio_variation"
+      },
+      {
+       "field": "shape_variation"
+      },
+      {
+       "field": "surface_detail"
+      },
+      {
+       "field": "bio_height",
+       "when": {
+        "mushroom_form": [
+         "CAP"
+        ]
+       }
+      },
+      {
+       "field": "cap_dome"
+      }
+     ]
+    },
+    {
+     "title": "Colour and glow",
+     "fields": [
+      {
+       "field": "body_color"
+      },
+      {
+       "field": "glow_color"
+      },
+      {
+       "field": "glow_strength"
+      }
+     ]
+    }
+   ]
+  },
+  "orbs": {
+   "group": "foliage",
+   "sections": [
+    {
+     "title": "Pendant orbs",
+     "fields": [
+      {
+       "field": "cluster_count"
+      },
+      {
+       "field": "cluster_radius"
+      },
+      {
+       "field": "bio_size"
+      },
+      {
+       "field": "bio_variation"
+      },
+      {
+       "field": "shape_variation"
+      },
+      {
+       "field": "surface_detail"
+      },
+      {
+       "field": "orb_stalk"
+      }
+     ]
+    },
+    {
+     "title": "Colour and glow",
+     "fields": [
+      {
+       "field": "body_color"
+      },
+      {
+       "field": "glow_color"
+      },
+      {
+       "field": "glow_strength"
+      }
+     ]
+    }
+   ]
+  },
+  "glow": {
+   "group": "foliage",
+   "sections": [
+    {
+     "title": "Glow flora",
+     "fields": [
+      {
+       "field": "glow_kind"
+      },
+      {
+       "field": "glow_palette"
+      },
+      {
+       "field": "glow_detail"
+      },
+      {
+       "field": "glow_collisions"
+      }
+     ]
+    },
+    {
+     "title": "Grove",
+     "when": {
+      "glow_kind": [
+       "GROVE"
+      ]
+     },
+     "fields": [
+      {
+       "field": "glow_grove_mushrooms"
+      },
+      {
+       "field": "glow_grove_lanterns"
+      },
+      {
+       "field": "glow_grove_ferns"
+      },
+      {
+       "field": "glow_grove_reeds"
+      },
+      {
+       "field": "glow_grove_size"
+      },
+      {
+       "field": "glow_grove_width"
+      },
+      {
+       "field": "glow_grove_depth"
+      },
+      {
+       "field": "glow_grove_capVariety"
+      },
+      {
+       "field": "glow_grove_dome"
+      },
+      {
+       "field": "glow_grove_flare"
+      },
+      {
+       "field": "glow_grove_tilt"
+      },
+      {
+       "field": "glow_grove_spots"
+      },
+      {
+       "field": "glow_grove_glow"
+      },
+      {
+       "field": "glow_grove_mound"
+      }
+     ]
+    },
+    {
+     "title": "Mushrooms",
+     "when": {
+      "glow_kind": [
+       "MUSHROOM"
+      ]
+     },
+     "fields": [
+      {
+       "field": "glow_mushroom_count"
+      },
+      {
+       "field": "glow_mushroom_spread"
+      },
+      {
+       "field": "glow_mushroom_depth"
+      },
+      {
+       "field": "glow_mushroom_size"
+      },
+      {
+       "field": "glow_mushroom_sizeVariety"
+      },
+      {
+       "field": "glow_mushroom_heightVariety"
+      },
+      {
+       "field": "glow_mushroom_lean"
+      },
+      {
+       "field": "glow_mushroom_bend"
+      },
+      {
+       "field": "glow_mushroom_capVariety"
+      },
+      {
+       "field": "glow_mushroom_dome"
+      },
+      {
+       "field": "glow_mushroom_domeVariety"
+      },
+      {
+       "field": "glow_mushroom_flare"
+      },
+      {
+       "field": "glow_mushroom_flareVariety"
+      },
+      {
+       "field": "glow_mushroom_separation"
+      },
+      {
+       "field": "glow_mushroom_tilt"
+      },
+      {
+       "field": "glow_mushroom_spots"
+      },
+      {
+       "field": "glow_mushroom_spotSize"
+      },
+      {
+       "field": "glow_mushroom_glow"
+      },
+      {
+       "field": "glow_mushroom_mound"
+      }
+     ]
+    },
+    {
+     "title": "Lanterns",
+     "when": {
+      "glow_kind": [
+       "LANTERN"
+      ]
+     },
+     "fields": [
+      {
+       "field": "glow_lantern_count"
+      },
+      {
+       "field": "glow_lantern_spread"
+      },
+      {
+       "field": "glow_lantern_depth"
+      },
+      {
+       "field": "glow_lantern_size"
+      },
+      {
+       "field": "glow_lantern_sizeVariety"
+      },
+      {
+       "field": "glow_lantern_arch"
+      },
+      {
+       "field": "glow_lantern_bulbSize"
+      },
+      {
+       "field": "glow_lantern_bulbLength"
+      },
+      {
+       "field": "glow_lantern_ribs"
+      },
+      {
+       "field": "glow_lantern_leaves"
+      },
+      {
+       "field": "glow_lantern_glow"
+      }
+     ]
+    },
+    {
+     "title": "Ferns",
+     "when": {
+      "glow_kind": [
+       "FERN"
+      ]
+     },
+     "fields": [
+      {
+       "field": "glow_fern_count"
+      },
+      {
+       "field": "glow_fern_spread"
+      },
+      {
+       "field": "glow_fern_depth"
+      },
+      {
+       "field": "glow_fern_size"
+      },
+      {
+       "field": "glow_fern_sizeVariety"
+      },
+      {
+       "field": "glow_fern_fronds"
+      },
+      {
+       "field": "glow_fern_tilt"
+      },
+      {
+       "field": "glow_fern_droop"
+      },
+      {
+       "field": "glow_fern_curl"
+      },
+      {
+       "field": "glow_fern_leaflets"
+      },
+      {
+       "field": "glow_fern_width"
+      },
+      {
+       "field": "glow_fern_glow"
+      }
+     ]
+    },
+    {
+     "title": "Reeds",
+     "when": {
+      "glow_kind": [
+       "REED"
+      ]
+     },
+     "fields": [
+      {
+       "field": "glow_reed_count"
+      },
+      {
+       "field": "glow_reed_spread"
+      },
+      {
+       "field": "glow_reed_depth"
+      },
+      {
+       "field": "glow_reed_size"
+      },
+      {
+       "field": "glow_reed_sizeVariety"
+      },
+      {
+       "field": "glow_reed_blades"
+      },
+      {
+       "field": "glow_reed_lean"
+      },
+      {
+       "field": "glow_reed_width"
+      },
+      {
+       "field": "glow_reed_orbs"
+      },
+      {
+       "field": "glow_reed_orbSize"
+      },
+      {
+       "field": "glow_reed_glow"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "fields": {
+  "moss": {
+   "kind": {
+    "label": "Kind",
+    "description": "Grow a mound of moss, or only paint its colour onto the rock",
+    "type": "enum",
+    "default": "MOUND",
+    "items": [
+     {
+      "id": "MOUND",
+      "label": "Mound",
+      "description": "A low mound of moss with its own printed texture"
+     },
+     {
+      "id": "TEXTURE",
+      "label": "Texture Only",
+      "description": "No geometry: the dabs are painted into the rock's colour map when the scene is exported (Blender shows them on a decal that is not exported)"
+     }
+    ]
+   },
+   "detail": {
+    "label": "Detail",
+    "description": "How fine the moss is grown: at 0.5 the dabs and texels are twice as big and a build takes about a quarter of the time. Where the colours fall is kept. Lower it for moss far in the background",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.1,
+    "max": 1.0,
+    "softMin": 0.1,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "mound_density": {
+    "label": "Triangles / m\u00b2",
+    "description": "Poly count: the mound is decimated to this many triangles per square metre (at most what Resolution gives)",
+    "type": "float",
+    "default": 400.0,
+    "min": 50.0,
+    "max": null,
+    "softMin": 50.0,
+    "softMax": 20000.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "texel": {
+    "label": "Texel Size",
+    "description": "Texture quality: the size of a texel of the print in the world; smaller is sharper",
+    "type": "float",
+    "default": 0.005,
+    "min": 0.0003,
+    "max": null,
+    "softMin": 0.0003,
+    "softMax": 0.02,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "max_texture": {
+    "label": "Max Texture",
+    "description": "Largest side of the print; where the mound does not fit at Texel Size, its texels grow. The export encodes at most 4096",
+    "type": "enum",
+    "default": "4096",
+    "items": [
+     {
+      "id": "256",
+      "label": "256",
+      "description": "At most 256 x 256 px"
+     },
+     {
+      "id": "512",
+      "label": "512",
+      "description": "At most 512 x 512 px"
+     },
+     {
+      "id": "1024",
+      "label": "1024",
+      "description": "At most 1024 x 1024 px"
+     },
+     {
+      "id": "2048",
+      "label": "2048",
+      "description": "At most 2048 x 2048 px"
+     },
+     {
+      "id": "4096",
+      "label": "4096",
+      "description": "At most 4096 x 4096 px"
+     }
+    ]
+   },
+   "resolution": {
+    "label": "Resolution",
+    "description": "Edge length the rock is refined to under the paint",
+    "type": "float",
+    "default": 0.05,
+    "min": 0.004,
+    "max": null,
+    "softMin": 0.004,
+    "softMax": 0.05,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "threshold": {
+    "label": "Threshold",
+    "description": "Paint coverage at which moss starts",
+    "type": "float",
+    "default": 0.35,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "dab_min": {
+    "label": "Dab Min",
+    "description": "Smallest dab radius",
+    "type": "float",
+    "default": 0.032,
+    "min": 0.005,
+    "max": null,
+    "softMin": 0.005,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "dab_max": {
+    "label": "Dab Max",
+    "description": "Largest dab radius",
+    "type": "float",
+    "default": 0.05,
+    "min": 0.005,
+    "max": null,
+    "softMin": 0.005,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "layers": {
+    "label": "Layers",
+    "description": "Lighter layers grown inside the dark base",
+    "type": "int",
+    "default": 5,
+    "min": 0,
+    "max": 8,
+    "softMin": 0,
+    "softMax": 8,
+    "step": 1
+   },
+   "shrink": {
+    "label": "Shrink",
+    "description": "Dab radius from one layer to the next (floored at 0.65)",
+    "type": "float",
+    "default": 0.92,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "buffer": {
+    "label": "Buffer",
+    "description": "How far inside the layer below a lighter layer stays",
+    "type": "float",
+    "default": 0.035,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "first_buffer": {
+    "label": "First Buffer",
+    "description": "How far inside the dark base the first lighter layer stays",
+    "type": "float",
+    "default": 0.012,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "min_clump": {
+    "label": "Min Clump",
+    "description": "Clumps of fewer dabs are dropped",
+    "type": "int",
+    "default": 6,
+    "min": 1,
+    "max": 2147483647,
+    "softMin": 1,
+    "softMax": 30,
+    "step": 1
+   },
+   "dark": {
+    "label": "Dark",
+    "description": "The darkest moss: the base and the rim",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.167,
+     0.264,
+     0.226
+    ]
+   },
+   "light": {
+    "label": "Light",
+    "description": "The lightest moss: the summits",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.329,
+     0.456,
+     0.142
+    ]
+   },
+   "levels": {
+    "label": "Levels",
+    "description": "Tone steps from darkest to lightest",
+    "type": "int",
+    "default": 8,
+    "min": 2,
+    "max": 2147483647,
+    "softMin": 2,
+    "softMax": 16,
+    "step": 1
+   },
+   "ref_depth": {
+    "label": "Reference Depth",
+    "description": "A patch this deep reaches the lightest tone; shallower patches stay mid-green",
+    "type": "float",
+    "default": 0.42,
+    "min": 0.05,
+    "max": null,
+    "softMin": 0.05,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "steps_deep": {
+    "label": "Steps",
+    "description": "Erosion passes across the reference depth",
+    "type": "float",
+    "default": 5.0,
+    "min": 1.0,
+    "max": null,
+    "softMin": 1.0,
+    "softMax": 12.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "erode_scale": {
+    "label": "Erosion Noise",
+    "description": "1/m: how finely each erosion pass's outline is roughened",
+    "type": "float",
+    "default": 14.0,
+    "min": 0.5,
+    "max": null,
+    "softMin": 0.5,
+    "softMax": 60.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "field_mix": {
+    "label": "Field Mix",
+    "description": "Tone from the erosion field (1) or from the layer (0)",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "curve": {
+    "label": "Curve",
+    "description": "Tone curve: above 1 keeps the light to the summits",
+    "type": "float",
+    "default": 1.3,
+    "min": 0.2,
+    "max": null,
+    "softMin": 0.2,
+    "softMax": 4.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "mottle": {
+    "label": "Mottle",
+    "description": "Slow positional variation, in tone steps",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 3.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "mottle_scale": {
+    "label": "Mottle Scale",
+    "description": "1/m: size of the mottle",
+    "type": "float",
+    "default": 4.0,
+    "min": 0.1,
+    "max": null,
+    "softMin": 0.1,
+    "softMax": 30.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "floor": {
+    "label": "Floor",
+    "description": "How proud of the rock the darkest moss stands, away from the rim",
+    "type": "float",
+    "default": 0.001,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.05,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "lift": {
+    "label": "Lift",
+    "description": "How much prouder the lightest moss stands than the darkest: the lighter, the taller",
+    "type": "float",
+    "default": 0.09,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.3,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "up_floor": {
+    "label": "Wall Share",
+    "description": "The share of its height moss keeps on a wall (a full pile on a wall faces the ground)",
+    "type": "float",
+    "default": 0.3,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "height_blur": {
+    "label": "Height Blur",
+    "description": "How far the height is smoothed, so blotches are pillows, not terraces",
+    "type": "float",
+    "default": 0.027,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "rim": {
+    "label": "Rim",
+    "description": "Distance over which the height fades in from the mound's edge",
+    "type": "float",
+    "default": 0.1,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.5,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "drape": {
+    "label": "Drape",
+    "description": "The tightest curve the moss bends in: across a step or hollow tighter than this it slopes from the edge down to the moss below instead of following the rock's corner. 0 follows the rock",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 3.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "emission_strength": {
+    "label": "Emission",
+    "description": "Brightness of the lighter patches (Mound only); add game lights for illumination",
+    "type": "float",
+    "default": 0.0,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 10.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "emission_color": {
+    "label": "Glow Colour",
+    "description": "",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.45,
+     1.0,
+     0.12
+    ]
+   },
+   "emission_threshold": {
+    "label": "Glow Threshold",
+    "description": "Only tones above this fraction of Dark to Light glow; the dark rim stays matte",
+    "type": "float",
+    "default": 0.65,
+    "min": 0.0,
+    "max": 0.99,
+    "softMin": 0.0,
+    "softMax": 0.99,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "edge_kind": {
+    "label": "Edge",
+    "description": "How the mound's edge is drawn",
+    "type": "enum",
+    "default": "PRINT",
+    "items": [
+     {
+      "id": "PRINT",
+      "label": "Printed",
+      "description": "The outline is in the print: its alpha is the distance to the dabs' outline, the material cuts the moss there and shades a rolled lip inside it. The mesh runs a little past the outline and costs only what the mound's area costs"
+     },
+     {
+      "id": "MESH",
+      "label": "Mesh",
+      "description": "The mesh is cut along the dabs' outline, rounded over and skirted under its lip: hundreds of triangles a metre of outline"
+     }
+    ]
+   },
+   "edge_apron": {
+    "label": "Apron",
+    "description": "How far past the outline the mesh runs before the print cuts it (never less than a refined edge and a half)",
+    "type": "float",
+    "default": 0.03,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "edge_round": {
+    "label": "Edge Round",
+    "description": "How far in from its outline the moss's top rounds down to its lip",
+    "type": "float",
+    "default": 0.012,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.05,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "overhang": {
+    "label": "Overhang",
+    "description": "How high the lip stands over the rock and how far its foot is tucked in under it (at most half of Floor)",
+    "type": "float",
+    "default": 0.004,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.02,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "edge_detail": {
+    "label": "Edge Detail",
+    "description": "Edge length of the mesh along the outline: the smaller, the rounder its lobes",
+    "type": "float",
+    "default": 0.006,
+    "min": 0.001,
+    "max": null,
+    "softMin": 0.001,
+    "softMax": 0.03,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "strays": {
+    "label": "Strays",
+    "description": "Detached clumps of moss on the rock beyond the outline, per metre of outline",
+    "type": "float",
+    "default": 4.0,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 30.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "stray_reach": {
+    "label": "Stray Reach",
+    "description": "How far beyond the outline a stray clump may be",
+    "type": "float",
+    "default": 0.08,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.3,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "grass": {
+    "label": "Grass",
+    "description": "Tufts of grass blades per square metre of the moss's up-facing top, more where it is lighter",
+    "type": "float",
+    "default": 6.0,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 60.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "grass_height": {
+    "label": "Grass Height",
+    "description": "How tall the tallest blades stand",
+    "type": "float",
+    "default": 0.045,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.3,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "grass_blades": {
+    "label": "Blades",
+    "description": "Blades in a tuft, about",
+    "type": "int",
+    "default": 10,
+    "min": 1,
+    "max": 2147483647,
+    "softMin": 1,
+    "softMax": 20,
+    "step": 1
+   },
+   "grass_tip": {
+    "label": "Grass Tip",
+    "description": "The lightest blade tip; the tips run from Light to this",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.6,
+     0.678,
+     0.239
+    ]
+   },
+   "min_patch": {
+    "label": "Min Patch",
+    "description": "Mound islands smaller than this are dropped (stray clumps are kept)",
+    "type": "float",
+    "default": 0.002,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.1,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "",
+    "unit": "AREA"
+   },
+   "print_edge": {
+    "label": "Dab Edge",
+    "description": "Anti-aliased width of a dab's edge in the print",
+    "type": "float",
+    "default": 0.002,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.02,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   }
+  },
+  "ivy": {
+   "detail": {
+    "label": "Detail",
+    "description": "",
+    "type": "enum",
+    "default": "LEAVES",
+    "items": [
+     {
+      "id": "LEAVES",
+      "label": "Leaves",
+      "description": "A card per leaf, in sheets that shade one another: ivy near the gameplay plane"
+     },
+     {
+      "id": "CLUMPS",
+      "label": "Clumps",
+      "description": "A card per clump of leaves: ivy on the backdrop, at a fraction of the cards"
+     }
+    ]
+   },
+   "resolution": {
+    "label": "Resolution",
+    "description": "Edge length the host is refined to under the paint; the underlay's and the candidates' resolution",
+    "type": "float",
+    "default": 0.04,
+    "min": 0.005,
+    "max": null,
+    "softMin": 0.005,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "threshold": {
+    "label": "Threshold",
+    "description": "Paint coverage at which ivy starts; higher shrinks the patch inside the painted area",
+    "type": "float",
+    "default": 0.35,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "edge_noise": {
+    "label": "Edge Noise",
+    "description": "How lobed the outline is",
+    "type": "float",
+    "default": 0.15,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "edge_scale": {
+    "label": "Edge Scale",
+    "description": "Size of the outline's lobes",
+    "type": "float",
+    "default": 0.18,
+    "min": 0.01,
+    "max": null,
+    "softMin": 0.01,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "min_patch": {
+    "label": "Min Patch",
+    "description": "Islands smaller than this are dropped",
+    "type": "float",
+    "default": 0.01,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.2,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "",
+    "unit": "AREA"
+   },
+   "rounding": {
+    "label": "Rounding",
+    "description": "How far the rock's creases are rounded over in the normal the leaves shade with",
+    "type": "float",
+    "default": 0.12,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.5,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "thickness": {
+    "label": "Thickness",
+    "description": "How high the leaves stand over the underlay at the origin; they slope down to the rock at the far end of the carpet",
+    "type": "float",
+    "default": 0.04,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.3,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "tilt": {
+    "label": "Tilt",
+    "description": "Degrees a leaf pitches tip-up off the rock, so its tip rides over the leaf beyond it",
+    "type": "float",
+    "default": 8.0,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 30.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "spread": {
+    "label": "Spread",
+    "description": "Degrees a leaf may stray from pointing straight away from the origin",
+    "type": "float",
+    "default": 25.0,
+    "min": 0.0,
+    "max": 180.0,
+    "softMin": 0.0,
+    "softMax": 180.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "taper": {
+    "label": "Taper",
+    "description": "How much smaller the leaves at the far end of the carpet are than those at the origin",
+    "type": "float",
+    "default": 0.3,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "clump_min": {
+    "label": "Clump Min",
+    "description": "Smallest clump card",
+    "type": "float",
+    "default": 0.3,
+    "min": 0.05,
+    "max": null,
+    "softMin": 0.05,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "clump_max": {
+    "label": "Clump Max",
+    "description": "Largest clump card",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.05,
+    "max": null,
+    "softMin": 0.05,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "clump_fill": {
+    "label": "Fill",
+    "description": "Clump area laid over the paint, as a multiple of the paint's area",
+    "type": "float",
+    "default": 1.8,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 4.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "edge_fill": {
+    "label": "Edge Fill",
+    "description": "Extra fill toward the paint's edge, so the underlay never shows as a rim",
+    "type": "float",
+    "default": 2.5,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 4.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "edge_round": {
+    "label": "Edge Round",
+    "description": "Distance in from the paint's edge over which the carpet curves down onto the rock: shorter is a steeper edge",
+    "type": "float",
+    "default": 0.15,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "underlay": {
+    "label": "Underlay",
+    "description": "Height of the solid green skin under the leaves",
+    "type": "float",
+    "default": 0.02,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 0.1,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "sheets": {
+    "label": "Sheets",
+    "description": "Sheets of leaves stacked 3 cm apart, each shading the next",
+    "type": "int",
+    "default": 3,
+    "min": 1,
+    "max": 2147483647,
+    "softMin": 1,
+    "softMax": 6,
+    "step": 1
+   },
+   "leaf_min": {
+    "label": "Leaf Min",
+    "description": "Shortest leaf",
+    "type": "float",
+    "default": 0.07,
+    "min": 0.01,
+    "max": null,
+    "softMin": 0.01,
+    "softMax": 0.5,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "leaf_max": {
+    "label": "Leaf Max",
+    "description": "Longest leaf",
+    "type": "float",
+    "default": 0.12,
+    "min": 0.01,
+    "max": null,
+    "softMin": 0.01,
+    "softMax": 0.5,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "leaf_fill": {
+    "label": "Fill",
+    "description": "Leaf area laid over the paint, as a multiple of the paint's area, shared by the sheets",
+    "type": "float",
+    "default": 3.5,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 8.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "density": {
+    "label": "Candidates",
+    "description": "Candidate points per square metre the sheets pick leaves from",
+    "type": "float",
+    "default": 6000.0,
+    "min": 100.0,
+    "max": null,
+    "softMin": 100.0,
+    "softMax": 20000.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "vine_length": {
+    "label": "New Length",
+    "description": "Length a newly placed vine is given; scale its arrow (S) to change one",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.05,
+    "max": null,
+    "softMin": 0.05,
+    "softMax": 3.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "leaf_size": {
+    "label": "Leaf Size",
+    "description": "Leaf length at the top of a vine",
+    "type": "float",
+    "default": 0.15,
+    "min": 0.01,
+    "max": null,
+    "softMin": 0.01,
+    "softMax": 0.5,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "leaf_tip": {
+    "label": "Leaf Tip",
+    "description": "Leaf length at the tip of a vine",
+    "type": "float",
+    "default": 0.045,
+    "min": 0.005,
+    "max": null,
+    "softMin": 0.005,
+    "softMax": 0.3,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "tone_a": {
+    "label": "Yellow-green",
+    "description": "The first of three tones that patch across the carpet",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.42,
+     0.53,
+     0.1
+    ]
+   },
+   "tone_b": {
+    "label": "Leaf green",
+    "description": "The second tone",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.27,
+     0.47,
+     0.1
+    ]
+   },
+   "tone_c": {
+    "label": "Blue-green",
+    "description": "The third tone",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.19,
+     0.42,
+     0.2
+    ]
+   },
+   "light": {
+    "label": "Crown",
+    "description": "What a leaf turns toward where the rock faces up",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.48,
+     0.54,
+     0.14
+    ]
+   },
+   "shade": {
+    "label": "Shade",
+    "description": "What the lower sheets cool toward",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.17,
+     0.37,
+     0.22
+    ]
+   },
+   "tone_scale": {
+    "label": "Tone Scale",
+    "description": "Size of the tone patches",
+    "type": "float",
+    "default": 0.22,
+    "min": 0.02,
+    "max": null,
+    "softMin": 0.02,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "variation": {
+    "label": "Variation",
+    "description": "Brightness variation between neighbouring leaves",
+    "type": "float",
+    "default": 0.16,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "depth_shade": {
+    "label": "Depth Shade",
+    "description": "How much darker the lower sheets are",
+    "type": "float",
+    "default": 0.0,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "shadow_strength": {
+    "label": "Strength",
+    "description": "Opacity of the shadow under the carpet; 0 grows none",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "shadow_reach": {
+    "label": "Reach",
+    "description": "How far beside the paint's edge the shadow fades out",
+    "type": "float",
+    "default": 0.25,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "shadow_drop": {
+    "label": "Drop",
+    "description": "How much further the shadow reaches below the paint than beside it",
+    "type": "float",
+    "default": 1.5,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 4.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "shadow_color": {
+    "label": "Shadow Colour",
+    "description": "The shadow's colour",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.12,
+     0.19,
+     0.27
+    ]
+   }
+  },
+  "foliage": {
+   "variety": {
+    "label": "Variety",
+    "description": "",
+    "type": "enum",
+    "default": "PAINTED",
+    "items": [
+     {
+      "id": "PAINTED",
+      "label": "Painted Fronds",
+      "description": "Each frond one painted card, folded down its midrib"
+     },
+     {
+      "id": "LEAFLET",
+      "label": "Leaflets",
+      "description": "Each frond a stem with pairs of small painted leaves"
+     },
+     {
+      "id": "SPRIG",
+      "label": "Leaf Sprigs",
+      "description": "Painted sprigs along each stem, set like louvres: a leafy bush"
+     }
+    ]
+   },
+   "fronds": {
+    "label": "Fronds",
+    "description": "Fronds the clump tries to fit; a tight spot fits fewer",
+    "type": "int",
+    "default": 18,
+    "min": 1,
+    "max": 24,
+    "softMin": 1,
+    "softMax": 24,
+    "step": 1
+   },
+   "fern_length": {
+    "label": "Length",
+    "description": "Frond length",
+    "type": "float",
+    "default": 0.45,
+    "min": 0.05,
+    "max": null,
+    "softMin": 0.05,
+    "softMax": 3.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "droop": {
+    "label": "Droop",
+    "description": "How far the fronds bend down toward their tips",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "spread": {
+    "label": "Spread",
+    "description": "Degrees the fronds open out from the clump's axis",
+    "type": "float",
+    "default": 50.0,
+    "min": 5.0,
+    "max": 85.0,
+    "softMin": 5.0,
+    "softMax": 85.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "lean": {
+    "label": "Lean",
+    "description": "How far the clump leans toward its open side (the plant's +Y)",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "fold": {
+    "label": "Midrib Fold",
+    "description": "How far each frond folds down its midrib",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "twist": {
+    "label": "Twist",
+    "description": "How much the fronds twist along their length",
+    "type": "float",
+    "default": 0.3,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "croziers": {
+    "label": "Fiddleheads",
+    "description": "Young coiled fronds standing in the middle",
+    "type": "int",
+    "default": 2,
+    "min": 0,
+    "max": 6,
+    "softMin": 0,
+    "softMax": 6,
+    "step": 1
+   },
+   "length_var": {
+    "label": "Length Variation",
+    "description": "How much the fronds' lengths vary",
+    "type": "float",
+    "default": 0.3,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "pinnae": {
+    "label": "Leaf Pairs",
+    "description": "Pairs of leaves (or leaflet stems) along each frond",
+    "type": "int",
+    "default": 12,
+    "min": 3,
+    "max": 30,
+    "softMin": 3,
+    "softMax": 30,
+    "step": 1
+   },
+   "leaflets": {
+    "label": "Tiny Leaves",
+    "description": "Tiny leaves a side on each leaflet stem; 0 sets single leaves straight on the frond",
+    "type": "int",
+    "default": 0,
+    "min": 0,
+    "max": 14,
+    "softMin": 0,
+    "softMax": 14,
+    "step": 1
+   },
+   "fern_leaf_size": {
+    "label": "Leaf Size",
+    "description": "Leaf size, as a multiple of the reference size",
+    "type": "float",
+    "default": 0.8,
+    "min": 0.3,
+    "max": 2.0,
+    "softMin": 0.3,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "leaf_curve": {
+    "label": "Leaf Curve",
+    "description": "How curved the leaves are: the crease, the tip's curl and the sideways sweep",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "leaf_variation": {
+    "label": "Leaf Variation",
+    "description": "How much leaves vary in colour and size",
+    "type": "float",
+    "default": 0.3,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "leaf_form": {
+    "label": "Leaf Form",
+    "description": "",
+    "type": "enum",
+    "default": "SMOOTH",
+    "items": [
+     {
+      "id": "SMOOTH",
+      "label": "Smooth",
+      "description": "Leaves joined straight to the stem"
+     },
+     {
+      "id": "CREASED",
+      "label": "Creased",
+      "description": "Deeply folded leaves, overlapping like shingles"
+     }
+    ]
+   },
+   "mirror_pairs": {
+    "label": "Mirror Pairs",
+    "description": "The two leaves of a pair are mirror images, alike in size and colour",
+    "type": "bool",
+    "default": true
+   },
+   "paint_tint": {
+    "label": "Paint Tint",
+    "description": "How far the painted pieces' own colours are moved toward the chosen greens",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "vine_length": {
+    "label": "Length",
+    "description": "The stem's length along the rock and down from it",
+    "type": "float",
+    "default": 0.85,
+    "min": 0.05,
+    "max": null,
+    "softMin": 0.05,
+    "softMax": 30.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "vine_leaf_size": {
+    "label": "Leaf Size",
+    "description": "Leaf length (painted leaves keep their sizes relative to one another)",
+    "type": "float",
+    "default": 0.1,
+    "min": 0.03,
+    "max": null,
+    "softMin": 0.03,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "leaf_spacing": {
+    "label": "Leaf Gap",
+    "description": "Distance between leaves along the stem",
+    "type": "float",
+    "default": 0.14,
+    "min": 0.04,
+    "max": null,
+    "softMin": 0.04,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "vine_radius": {
+    "label": "Stem Radius",
+    "description": "The stem's radius at its root; it tapers to a third at the tip",
+    "type": "float",
+    "default": 0.008,
+    "min": 0.001,
+    "max": null,
+    "softMin": 0.001,
+    "softMax": 0.06,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "cling": {
+    "label": "Cling",
+    "description": "How long the stem holds to the rock over a steep side or an overhang before it lets go and hangs",
+    "type": "float",
+    "default": 0.4,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "bend": {
+    "label": "Bend",
+    "description": "How softly a hanging stem turns down",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "leaf_angle": {
+    "label": "Leaf Spread",
+    "description": "Degrees a leaf stands off the stem",
+    "type": "float",
+    "default": 58.0,
+    "min": 5.0,
+    "max": 85.0,
+    "softMin": 5.0,
+    "softMax": 85.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "variation": {
+    "label": "Variation",
+    "description": "How much leaves vary in size, angle, colour and rhythm",
+    "type": "float",
+    "default": 0.35,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "natural": {
+    "label": "Natural Leaves",
+    "description": "Gravity droop, curved blades, colour and size by age; off is the flat early look",
+    "type": "bool",
+    "default": true
+   },
+   "mushroom_form": {
+    "label": "Form",
+    "description": "",
+    "type": "enum",
+    "default": "CAP",
+    "items": [
+     {
+      "id": "CAP",
+      "label": "Stemmed Caps",
+      "description": "Umbrella caps with luminous gills"
+     },
+     {
+      "id": "SHELF",
+      "label": "Wall Shelves",
+      "description": "Thin fans projecting from a wall"
+     }
+    ]
+   },
+   "cluster_count": {
+    "label": "Count",
+    "description": "",
+    "type": "int",
+    "default": 5,
+    "min": 1,
+    "max": 24,
+    "softMin": 1,
+    "softMax": 24,
+    "step": 1
+   },
+   "cluster_radius": {
+    "label": "Cluster Radius",
+    "description": "Area over which individual attachments are placed",
+    "type": "float",
+    "default": 0.22,
+    "min": 0.01,
+    "max": null,
+    "softMin": 0.01,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "bio_size": {
+    "label": "Size",
+    "description": "Cap radius, orb radius, or frond half-width",
+    "type": "float",
+    "default": 0.12,
+    "min": 0.015,
+    "max": null,
+    "softMin": 0.015,
+    "softMax": 0.6,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "bio_variation": {
+    "label": "Size Variation",
+    "description": "Independent seeded variation in width and height",
+    "type": "float",
+    "default": 0.45,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "shape_variation": {
+    "label": "Shape Variation",
+    "description": "Variation in cap profiles, bulb proportions, stem bends and frond curls",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "surface_detail": {
+    "label": "Surface Detail",
+    "description": "Cap surface markings, soft orb lobe depth, and subtle frond twist; outlines stay smooth",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "bio_height": {
+    "label": "Height",
+    "description": "Stem height or frond length; shelves and orb stalks have their own proportions",
+    "type": "float",
+    "default": 0.38,
+    "min": 0.03,
+    "max": null,
+    "softMin": 0.03,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "DISTANCE",
+    "unit": "LENGTH"
+   },
+   "cap_dome": {
+    "label": "Cap Dome",
+    "description": "Cap height relative to radius; shelves use a quarter of this",
+    "type": "float",
+    "default": 0.32,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "body_color": {
+    "label": "Body Colour",
+    "description": "",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.055,
+     0.18,
+     0.025
+    ]
+   },
+   "glow_color": {
+    "label": "Glow Colour",
+    "description": "",
+    "type": "color",
+    "gamma": false,
+    "default": [
+     0.45,
+     1.0,
+     0.12
+    ]
+   },
+   "glow_strength": {
+    "label": "Emission",
+    "description": "Surface brightness; nearby game lights illuminate the surroundings",
+    "type": "float",
+    "default": 2.5,
+    "min": 0.0,
+    "max": null,
+    "softMin": 0.0,
+    "softMax": 10.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "orb_stalk": {
+    "label": "Stalk Length",
+    "description": "Short individual stalk length, as a fraction of the bulb's diameter",
+    "type": "float",
+    "default": 0.65,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.03,
+    "subtype": "FACTOR",
+    "unit": "NONE"
+   },
+   "glow_kind": {
+    "label": "Patch",
+    "description": "",
+    "type": "enum",
+    "default": "GROVE",
+    "items": [
+     {
+      "id": "GROVE",
+      "label": "Grove",
+      "description": "A mushroom cluster with lantern blooms, ferns and reeds around it"
+     },
+     {
+      "id": "MUSHROOM",
+      "label": "Mushrooms",
+      "description": "A cluster of glowing mushrooms on a mound"
+     },
+     {
+      "id": "LANTERN",
+      "label": "Lanterns",
+      "description": "Arched stalks with hanging glowing bulbs"
+     },
+     {
+      "id": "FERN",
+      "label": "Ferns",
+      "description": "Glow ferns with unfurling fiddleheads"
+     },
+     {
+      "id": "REED",
+      "label": "Reeds",
+      "description": "Blade tufts with glowing seed pods"
+     }
+    ]
+   },
+   "glow_palette": {
+    "label": "Palette",
+    "description": "",
+    "type": "enum",
+    "default": "PASTEL",
+    "items": [
+     {
+      "id": "PASTEL",
+      "label": "Pastel",
+      "description": ""
+     },
+     {
+      "id": "MOONLIGHT",
+      "label": "Moonlight",
+      "description": ""
+     },
+     {
+      "id": "TOXIC",
+      "label": "Toxic",
+      "description": ""
+     },
+     {
+      "id": "EMBER",
+      "label": "Ember",
+      "description": ""
+     }
+    ]
+   },
+   "glow_detail": {
+    "label": "Detail",
+    "description": "",
+    "type": "enum",
+    "default": "0",
+    "items": [
+     {
+      "id": "0",
+      "label": "High",
+      "description": "Close-up detail"
+     },
+     {
+      "id": "1",
+      "label": "Mid",
+      "description": "About half the triangles"
+     },
+     {
+      "id": "2",
+      "label": "Low",
+      "description": "About an eighth of the triangles, for distant patches"
+     }
+    ]
+   },
+   "glow_collisions": {
+    "label": "Keep Apart",
+    "description": "Move plants until nothing intersects another plant, the mound, the ground or itself, with room for the sway",
+    "type": "bool",
+    "default": true
+   },
+   "glow_grove_mushrooms": {
+    "label": "Mushrooms",
+    "description": "",
+    "type": "int",
+    "default": 12,
+    "min": 0,
+    "max": 30,
+    "softMin": 0,
+    "softMax": 30,
+    "step": 1
+   },
+   "glow_grove_lanterns": {
+    "label": "Lantern Blooms",
+    "description": "",
+    "type": "int",
+    "default": 3,
+    "min": 0,
+    "max": 10,
+    "softMin": 0,
+    "softMax": 10,
+    "step": 1
+   },
+   "glow_grove_ferns": {
+    "label": "Ferns",
+    "description": "",
+    "type": "int",
+    "default": 2,
+    "min": 0,
+    "max": 6,
+    "softMin": 0,
+    "softMax": 6,
+    "step": 1
+   },
+   "glow_grove_reeds": {
+    "label": "Reeds",
+    "description": "",
+    "type": "int",
+    "default": 2,
+    "min": 0,
+    "max": 6,
+    "softMin": 0,
+    "softMax": 6,
+    "step": 1
+   },
+   "glow_grove_size": {
+    "label": "Size",
+    "description": "",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.2,
+    "max": 1.4,
+    "softMin": 0.2,
+    "softMax": 1.4,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_width": {
+    "label": "Width",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.3,
+    "max": 2.5,
+    "softMin": 0.3,
+    "softMax": 2.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_depth": {
+    "label": "Depth",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.15,
+    "max": 1.0,
+    "softMin": 0.15,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_capVariety": {
+    "label": "Cap Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_dome": {
+    "label": "Cap Dome",
+    "description": "",
+    "type": "float",
+    "default": 0.42,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_flare": {
+    "label": "Cap Flare",
+    "description": "",
+    "type": "float",
+    "default": 0.1,
+    "min": -1.0,
+    "max": 1.0,
+    "softMin": -1.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_tilt": {
+    "label": "Cap Tilt",
+    "description": "",
+    "type": "float",
+    "default": 0.4,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_spots": {
+    "label": "Spots",
+    "description": "",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.0,
+    "max": 1.5,
+    "softMin": 0.0,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_glow": {
+    "label": "Glow",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 2.5,
+    "softMin": 0.0,
+    "softMax": 2.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_grove_mound": {
+    "label": "Mound",
+    "description": "",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.0,
+    "max": 1.5,
+    "softMin": 0.0,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_count": {
+    "label": "Count",
+    "description": "",
+    "type": "int",
+    "default": 14,
+    "min": 1,
+    "max": 40,
+    "softMin": 1,
+    "softMax": 40,
+    "step": 1
+   },
+   "glow_mushroom_spread": {
+    "label": "Spread",
+    "description": "",
+    "type": "float",
+    "default": 0.32,
+    "min": 0.04,
+    "max": 1.0,
+    "softMin": 0.04,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_depth": {
+    "label": "Depth",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.15,
+    "max": 1.0,
+    "softMin": 0.15,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_size": {
+    "label": "Size",
+    "description": "",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.12,
+    "max": 1.6,
+    "softMin": 0.12,
+    "softMax": 1.6,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_sizeVariety": {
+    "label": "Size Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.75,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_heightVariety": {
+    "label": "Height Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.35,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_lean": {
+    "label": "Lean",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.0,
+    "max": 1.3,
+    "softMin": 0.0,
+    "softMax": 1.3,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_bend": {
+    "label": "Bend",
+    "description": "",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.0,
+    "max": 1.5,
+    "softMin": 0.0,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_capVariety": {
+    "label": "Cap Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_dome": {
+    "label": "Dome",
+    "description": "",
+    "type": "float",
+    "default": 0.42,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_domeVariety": {
+    "label": "Dome Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.8,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_flare": {
+    "label": "Flare",
+    "description": "",
+    "type": "float",
+    "default": 0.1,
+    "min": -1.0,
+    "max": 1.0,
+    "softMin": -1.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_flareVariety": {
+    "label": "Flare Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_separation": {
+    "label": "Fan Out",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 1.4,
+    "softMin": 0.0,
+    "softMax": 1.4,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_tilt": {
+    "label": "Cap Tilt",
+    "description": "",
+    "type": "float",
+    "default": 0.4,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_spots": {
+    "label": "Spots",
+    "description": "",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.0,
+    "max": 1.5,
+    "softMin": 0.0,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_spotSize": {
+    "label": "Spot Size",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.3,
+    "max": 2.0,
+    "softMin": 0.3,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_glow": {
+    "label": "Glow",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 2.5,
+    "softMin": 0.0,
+    "softMax": 2.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_mushroom_mound": {
+    "label": "Mound",
+    "description": "",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.0,
+    "max": 1.5,
+    "softMin": 0.0,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_count": {
+    "label": "Count",
+    "description": "",
+    "type": "int",
+    "default": 5,
+    "min": 1,
+    "max": 16,
+    "softMin": 1,
+    "softMax": 16,
+    "step": 1
+   },
+   "glow_lantern_spread": {
+    "label": "Spread",
+    "description": "",
+    "type": "float",
+    "default": 0.45,
+    "min": 0.05,
+    "max": 1.5,
+    "softMin": 0.05,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_depth": {
+    "label": "Depth",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.15,
+    "max": 1.0,
+    "softMin": 0.15,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_size": {
+    "label": "Height",
+    "description": "",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.2,
+    "max": 1.6,
+    "softMin": 0.2,
+    "softMax": 1.6,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_sizeVariety": {
+    "label": "Height Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.45,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_arch": {
+    "label": "Arch",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.0,
+    "max": 1.2,
+    "softMin": 0.0,
+    "softMax": 1.2,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_bulbSize": {
+    "label": "Bulb Size",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.4,
+    "max": 2.0,
+    "softMin": 0.4,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_bulbLength": {
+    "label": "Bulb Length",
+    "description": "",
+    "type": "float",
+    "default": 1.3,
+    "min": 0.6,
+    "max": 2.2,
+    "softMin": 0.6,
+    "softMax": 2.2,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_lantern_ribs": {
+    "label": "Ribs",
+    "description": "",
+    "type": "int",
+    "default": 8,
+    "min": 3,
+    "max": 16,
+    "softMin": 3,
+    "softMax": 16,
+    "step": 1
+   },
+   "glow_lantern_leaves": {
+    "label": "Leaves",
+    "description": "",
+    "type": "int",
+    "default": 3,
+    "min": 0,
+    "max": 6,
+    "softMin": 0,
+    "softMax": 6,
+    "step": 1
+   },
+   "glow_lantern_glow": {
+    "label": "Glow",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 2.5,
+    "softMin": 0.0,
+    "softMax": 2.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_count": {
+    "label": "Count",
+    "description": "",
+    "type": "int",
+    "default": 2,
+    "min": 1,
+    "max": 8,
+    "softMin": 1,
+    "softMax": 8,
+    "step": 1
+   },
+   "glow_fern_spread": {
+    "label": "Spread",
+    "description": "",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.05,
+    "max": 1.5,
+    "softMin": 0.05,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_depth": {
+    "label": "Depth",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.15,
+    "max": 1.0,
+    "softMin": 0.15,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_size": {
+    "label": "Frond Length",
+    "description": "",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.15,
+    "max": 1.2,
+    "softMin": 0.15,
+    "softMax": 1.2,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_sizeVariety": {
+    "label": "Size Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.35,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_fronds": {
+    "label": "Fronds",
+    "description": "",
+    "type": "int",
+    "default": 9,
+    "min": 3,
+    "max": 16,
+    "softMin": 3,
+    "softMax": 16,
+    "step": 1
+   },
+   "glow_fern_tilt": {
+    "label": "Upright",
+    "description": "",
+    "type": "float",
+    "default": 0.55,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_droop": {
+    "label": "Droop",
+    "description": "",
+    "type": "float",
+    "default": 0.5,
+    "min": 0.0,
+    "max": 1.2,
+    "softMin": 0.0,
+    "softMax": 1.2,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_curl": {
+    "label": "Fiddleheads",
+    "description": "",
+    "type": "float",
+    "default": 0.3,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_leaflets": {
+    "label": "Leaflets",
+    "description": "",
+    "type": "int",
+    "default": 14,
+    "min": 4,
+    "max": 26,
+    "softMin": 4,
+    "softMax": 26,
+    "step": 1
+   },
+   "glow_fern_width": {
+    "label": "Leaflet Width",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.3,
+    "max": 2.0,
+    "softMin": 0.3,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_fern_glow": {
+    "label": "Glow",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 2.5,
+    "softMin": 0.0,
+    "softMax": 2.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_count": {
+    "label": "Count",
+    "description": "",
+    "type": "int",
+    "default": 3,
+    "min": 1,
+    "max": 10,
+    "softMin": 1,
+    "softMax": 10,
+    "step": 1
+   },
+   "glow_reed_spread": {
+    "label": "Spread",
+    "description": "",
+    "type": "float",
+    "default": 0.45,
+    "min": 0.05,
+    "max": 1.5,
+    "softMin": 0.05,
+    "softMax": 1.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_depth": {
+    "label": "Depth",
+    "description": "",
+    "type": "float",
+    "default": 0.6,
+    "min": 0.15,
+    "max": 1.0,
+    "softMin": 0.15,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_size": {
+    "label": "Height",
+    "description": "",
+    "type": "float",
+    "default": 0.7,
+    "min": 0.15,
+    "max": 1.6,
+    "softMin": 0.15,
+    "softMax": 1.6,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_sizeVariety": {
+    "label": "Height Variety",
+    "description": "",
+    "type": "float",
+    "default": 0.35,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_blades": {
+    "label": "Blades",
+    "description": "",
+    "type": "int",
+    "default": 11,
+    "min": 3,
+    "max": 24,
+    "softMin": 3,
+    "softMax": 24,
+    "step": 1
+   },
+   "glow_reed_lean": {
+    "label": "Lean",
+    "description": "",
+    "type": "float",
+    "default": 0.35,
+    "min": 0.0,
+    "max": 1.2,
+    "softMin": 0.0,
+    "softMax": 1.2,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_width": {
+    "label": "Blade Width",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.3,
+    "max": 2.5,
+    "softMin": 0.3,
+    "softMax": 2.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_orbs": {
+    "label": "Seed Pods",
+    "description": "",
+    "type": "float",
+    "default": 0.4,
+    "min": 0.0,
+    "max": 1.0,
+    "softMin": 0.0,
+    "softMax": 1.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_orbSize": {
+    "label": "Pod Size",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.4,
+    "max": 2.0,
+    "softMin": 0.4,
+    "softMax": 2.0,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   },
+   "glow_reed_glow": {
+    "label": "Glow",
+    "description": "",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 2.5,
+    "softMin": 0.0,
+    "softMax": 2.5,
+    "precision": 2,
+    "step": 0.01,
+    "subtype": "NONE",
+    "unit": "NONE"
+   }
+  }
+ }
+}

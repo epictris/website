@@ -31,12 +31,13 @@
 // its line as thin as the gate it stands in, and the lint has nothing to say
 // about the size of one.
 
-import { collides, isModelObject, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
+import { collides, isCollisionObject, isModelObject, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
 import { rootProblems } from "./roots";
 import { PX } from "../engine/units";
 import { LEVELS, listedLevels } from "./registry";
 import { nodeNameOf } from "../render3d/scenes";
 import { isModelName } from "../render3d/models";
+import { FORMATION_SCHEMA, generatorsFor } from "../formation/recipe";
 
 export interface LevelCheck {
   name: string;
@@ -79,7 +80,9 @@ function checkLevel(id: string, title: string, data: LevelData): LevelCheck[] {
   ];
 }
 
-export function runLevelChecks(): LevelCheck[] {
+// `formationStored` answers whether the formation store holds a built hash
+// (`cli levels` looks on disk); without it the store is not asked.
+export function runLevelChecks(formationStored?: (hash: string) => boolean): LevelCheck[] {
   const listed = listedLevels();
   const checks: LevelCheck[] = [];
 
@@ -168,6 +171,37 @@ export function runLevelChecks(): LevelCheck[] {
       }
     });
   }
+  // FORMATIONS (docs/formations.md): a decoration names the guide it sits on
+  // by its formation's id, so ids are unique within a level; a guide offers
+  // only its own kind's generators (an outline is not a solid); and what a
+  // formation says it built is in the store, or the level draws nothing there.
+  const formations: string[] = [];
+  let built = 0;
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    const ids = new Map<string, number>();
+    normalizeLevelData(spec.data).bodies.forEach((b, i) => {
+      const f = b.formation;
+      if (!f) return;
+      const first = ids.get(f.id);
+      if (first !== undefined) formations.push(`${id}: bodies ${first} and ${i} share formation id "${f.id}"`);
+      else ids.set(f.id, i);
+      if (!f.id) formations.push(`${id}: body ${i}: a formation with no id`);
+      if (!(FORMATION_SCHEMA.generators as Record<string, unknown>)[f.generator]) formations.push(`${id}: body ${i}: no generator "${f.generator}"`);
+      else if (!generatorsFor(f.guide).includes(f.generator)) formations.push(`${id}: body ${i}: a ${f.guide.kind} guide cannot use the ${f.generator} generator`);
+      if (f.built) {
+        built++;
+        if (formationStored && !formationStored(f.built.hash)) {
+          formations.push(`${id}: body ${i}: built ${f.built.hash.slice(0, 12)} is not in the store (regenerate it in the editor, or fetch the published bundles)`);
+        }
+      }
+    });
+  }
+  checks.push({
+    name: "levels: every formation has its own id, a generator its guide offers, and what it built in the store",
+    pass: formations.length === 0,
+    detail: formations.length === 0 ? `${built} built formation${built === 1 ? "" : "s"}, all in order` : formations.join("; "),
+  });
+
   checks.push({
     name: "levels: every model object names a model and a positive scale",
     pass: models.length === 0,
@@ -195,6 +229,21 @@ export function runLevelChecks(): LevelCheck[] {
     name: "levels: no two bodies in a level share a name",
     pass: sameName.length === 0,
     detail: sameName.length === 0 ? "every named body is the only one of its name" : sameName.join("; "),
+  });
+
+  // A 3D BODY IS ONLY DRAWN (`LevelBodyData.space`): it may stand off the
+  // gameplay plane and tilt only because nothing in it collides. A collision
+  // object in one would be built in the plane while drawn elsewhere.
+  const solid3d: string[] = [];
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    scaleLevelData(spec.data, PX).bodies.forEach((b, i) => {
+      if (b.space === "3d" && b.objects.some(isCollisionObject)) solid3d.push(`${id}: body ${i}${b.name ? ` (${b.name})` : ""}`);
+    });
+  }
+  checks.push({
+    name: "levels: a 3D body holds nothing that collides",
+    pass: solid3d.length === 0,
+    detail: solid3d.length === 0 ? "every 3D body is drawn only" : solid3d.join("; "),
   });
 
   return checks;

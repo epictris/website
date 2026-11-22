@@ -160,6 +160,15 @@ through the shared `src/level/buildBodies.ts` (statics, killzones, force areas,
 water, finish lines and rigid bodies); it was shared so the grapple and ball controllers loaded identical scenes, until the grapple was retired on 2026-10-19.
 `rigid` bodies get mass/inertia from `ShapeGeometry` and fall under gravity.
 
+## 2D and 3D bodies
+
+A body is a thing in the gameplay plane: `x`, `y`, `rot` and no depth, because the sim has no third axis.
+A **3D body** (`space: "3d"`, since 2026-11-22) is one the sim never sees at all, because it holds nothing that collides - a backdrop: its formation, decorations, models, lights.
+Its frame gains `z` (disk pixels, toward the camera) and `tilt: [x, y]` (radians about three's x then y, applied before `rot`: Euler order ZYX), and everything in it is drawn in that frame (`placeBody3d` in `render3d/space.ts` for the game, `editor/space3d.ts` for the editor's guides and decorations).
+`cli levels` refuses a collision object in a 3D body ("a 3D body holds nothing that collides").
+In the editor a collision-free body's Transform offers `space 2D | 3D` with `z` and the tilts, and a 3D body's gizmo moves along and turns about all three axes; **Backdrop** makes 3D bodies.
+The editor keeps the depth and tilt beside the body frame (`EdModel.bodies3d`) rather than in it, since the frame's own rules (derived from the first object, pinned before an edit) are about the plane; a 3D body's frame is always the one the file states.
+
 ## Regenerating level geometry
 
 `levelData.ts` is generated from the prototype's Godot scene; do not hand-edit it:

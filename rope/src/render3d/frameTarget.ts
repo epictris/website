@@ -31,21 +31,29 @@ import { FullScreenQuad } from "three/examples/jsm/postprocessing/Pass.js";
 // The same four samples `antialias: true` gave the canvas.
 const SAMPLES = 4;
 
-// Texel for pixel: no filtering, and correct inside any viewport, so the
-// editor's letterboxed sub-rect copies the same way the whole frame does.
+// Texel for pixel: no filtering. The frame is the picture alone, so where it
+// lands on the canvas (the editor's letterboxed sub-rect) is an offset here.
 const PRESENT_FRAGMENT = /* glsl */ `
   uniform sampler2D tFrame;
+  uniform ivec2 offset;
   void main() {
-    gl_FragColor = texelFetch(tFrame, ivec2(gl_FragCoord.xy), 0);
+    gl_FragColor = texelFetch(tFrame, ivec2(gl_FragCoord.xy) - offset, 0);
   }`;
 
+// The sizes kept made: the whole canvas while editing and the letterboxed
+// picture of a ▶ Test, so going in and out of a test makes no target.
+const KEPT_SIZES = 2;
+
 export class FrameTarget {
+  // Most recently used first.
+  private readonly frames: THREE.WebGLRenderTarget[] = [];
   private frame: THREE.WebGLRenderTarget | null = null;
   private readonly size = new THREE.Vector2();
+  private readonly offset = new THREE.Vector2();
   private readonly presentMaterial = new THREE.ShaderMaterial({
     vertexShader: /* glsl */ `void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`,
     fragmentShader: PRESENT_FRAGMENT,
-    uniforms: { tFrame: { value: null } },
+    uniforms: { tFrame: { value: null }, offset: { value: this.offset } },
     toneMapped: false,
     depthTest: false,
     depthWrite: false,
@@ -54,29 +62,33 @@ export class FrameTarget {
 
   constructor(private readonly renderer: THREE.WebGLRenderer) {}
 
-  // The target for this frame, at the drawing buffer's size and drawing into
-  // `rect` (bottom-left origin, device pixels) or the whole of it.
+  // The target for this frame: the picture alone, at the size of `rect`
+  // (bottom-left origin, device pixels) or of the whole drawing buffer.
+  //
+  // Sized to the picture rather than to the canvas with the picture drawn
+  // into a corner of it, so a pass that reads the frame back (the depth of
+  // field, see depthOfField.ts) reads a whole frame wherever the picture is
+  // shown: the editor's letterboxed ▶ Test is blurred as the game is.
+  //
   // `withDepth` keeps the depth resolved into `depthTexture` for a pass that
   // reads it; otherwise only the colour is resolved.
   begin(
     rect: { x: number; y: number; w: number; h: number } | null,
     withDepth: boolean,
   ): THREE.WebGLRenderTarget {
-    const frame = this.fit();
+    this.renderer.getDrawingBufferSize(this.size);
+    const w = Math.max(1, rect ? rect.w : this.size.x);
+    const h = Math.max(1, rect ? rect.h : this.size.y);
+    const frame = this.fit(w, h);
+    this.offset.set(rect ? rect.x : 0, rect ? rect.y : 0);
     frame.resolveDepthBuffer = withDepth;
-    if (rect) {
-      frame.viewport.set(rect.x, rect.y, rect.w, rect.h);
-      frame.scissor.set(rect.x, rect.y, rect.w, rect.h);
-      frame.scissorTest = true;
-    } else {
-      frame.viewport.set(0, 0, frame.width, frame.height);
-      frame.scissorTest = false;
-    }
+    frame.viewport.set(0, 0, w, h);
+    frame.scissorTest = false;
     return frame;
   }
 
   // The finished frame onto the canvas, inside the renderer's own viewport
-  // (which the caller has set to the same rect).
+  // (which the caller has set to the rect the frame was begun for).
   present(): void {
     const frame = this.frame;
     if (!frame) return;
@@ -100,13 +112,20 @@ export class FrameTarget {
     this.presentQuad.dispose();
   }
 
-  // Made on first use and remade when the canvas is resized.
-  private fit(): THREE.WebGLRenderTarget {
-    this.renderer.getDrawingBufferSize(this.size);
-    const w = Math.max(1, this.size.x);
-    const h = Math.max(1, this.size.y);
-    if (this.frame && this.frame.width === w && this.frame.height === h) return this.frame;
-    this.free();
+  // A target of this size: one of the kept ones, or made, the least recently
+  // used freed once more than `KEPT_SIZES` are held.
+  private fit(w: number, h: number): THREE.WebGLRenderTarget {
+    const i = this.frames.findIndex((f) => f.width === w && f.height === h);
+    if (i >= 0) {
+      const [found] = this.frames.splice(i, 1);
+      this.frames.unshift(found!);
+      return (this.frame = found!);
+    }
+    while (this.frames.length >= KEPT_SIZES) {
+      const old = this.frames.pop()!;
+      old.depthTexture?.dispose();
+      old.dispose();
+    }
     const frame = new THREE.WebGLRenderTarget(w, h, {
       samples: SAMPLES,
       colorSpace: THREE.SRGBColorSpace,
@@ -116,13 +135,16 @@ export class FrameTarget {
     // the canvas's space.
     (frame as { isXRRenderTarget?: boolean }).isXRRenderTarget = true;
     frame.texture.internalFormat = "RGBA8";
-    this.frame = frame;
-    return frame;
+    this.frames.unshift(frame);
+    return (this.frame = frame);
   }
 
   private free(): void {
-    this.frame?.depthTexture?.dispose();
-    this.frame?.dispose();
+    for (const f of this.frames) {
+      f.depthTexture?.dispose();
+      f.dispose();
+    }
+    this.frames.length = 0;
     this.frame = null;
   }
 }

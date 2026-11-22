@@ -54,6 +54,7 @@ import {
   isCollisionObject,
   isLightObject,
   isModelObject,
+  isDecorationObject,
   type BeltLook,
   type CollisionObjectData,
   type LevelBodyData,
@@ -70,9 +71,11 @@ import { RootSkeleton, skinRootGeometry, skinToBone } from "./rootSkin";
 import { acquireRootMeshes, releaseRootMeshes, type RootMeshSet } from "./rootBake";
 import { rootMeshKey } from "./rootKey";
 import { beltLoopOf } from "../render/beltTread";
-import { orientTo, placeAt, threeY } from "./space";
-import { decodedFile, loadModelFile, mountExport, noShadowBehindPlane } from "./sceneDressing";
+import { orientTo, placeAt, placeBody3d, threeY } from "./space";
+import { decodedFile, loadExportFile, loadModelFile, mountExport, noShadowBehindPlane } from "./sceneDressing";
 import { modelFile } from "./models";
+import { decodedFormationFile, decorationDelta, formationFile, loadFormationFile } from "./formations";
+import { decorationFile } from "../formation/decoration";
 
 // The floor an authored colour's brightness is lifted to before it tints a
 // generated surface. A belt's `color` was authored for a flat 2D renderer, where
@@ -377,6 +380,10 @@ export class BodyVisual {
     if (!body && built) {
       placeAt(this.root, built.origin);
       orientTo(this.root, built.rotation);
+      // A 3D body (`LevelBodyData.space`) is never built in the sim, so this
+      // is its one placement: off the plane by its depth, tilted before its
+      // turn in the plane.
+      if (built.data.space === "3d") placeBody3d(this.root, built.data);
     }
   }
 
@@ -390,6 +397,8 @@ export class BodyVisual {
     this.mountRoots(data, solidZ);
     this.mountDebug(data, solidZ);
     this.mountModels(data);
+    this.mountFormation(data);
+    this.mountDecorations(data);
 
     // Lights last, so the budgets are spent in authored order and a light is
     // never built for a body that failed above.
@@ -541,6 +550,87 @@ export class BodyVisual {
       if (ready !== undefined) land(ready, false);
       else void loadModelFile(o.model).then((loaded) => land(loaded, true));
     });
+  }
+
+  // The body's FORMATION (docs/formations.md, `render3d/formations.ts`): the
+  // rock generated in the body's own frame, so it is placed at the body's
+  // authored origin and turn and the body carries it as it carries a model.
+  // Tagged with the formation, so a click on the rock picks its body.
+  // Shown and hidden with the models: both are the look.
+  private mountFormation(data: LevelBodyData): void {
+    const f = data.formation;
+    const which = f ? formationFile(f) : null;
+    if (!f || !which) return;
+    const local = localPlacement(this.built!, f);
+    const holder = this.piece(local.pos.x, local.pos.y, local.rot, f);
+    holder.name = `formation:${f.id}`;
+    holder.visible = this.modelsShown;
+    this.modelHolders.push(holder);
+    const solid = data.objects.some(isCollisionObject);
+    const land = (loaded: THREE.Object3D | null, late: boolean): void => {
+      if (!loaded || this.disposed) return;
+      const node = mountExport(loaded);
+      holder.add(node);
+      node.updateWorldMatrix(true, true);
+      if (!solid) noShadowBehindPlane(node);
+      this.adoptDressing(node);
+      if (late) this.modelLanded?.();
+    };
+    const ready = decodedFormationFile(which);
+    if (ready !== undefined) land(ready, false);
+    else void loadFormationFile(which).then((loaded) => land(loaded, true));
+  }
+
+  // The body's DECORATIONS (`DecorationObjectData`, docs/formations.md): each
+  // grown on its formation's rock in the formation's frame, so mounted where
+  // the formation is. A placed one is drawn moved from where it was grown to
+  // where its anchor lands on the rock now (`decorationDelta`); a painted one
+  // was grown on the rock where it is. Tagged with the decoration, so a click
+  // on it picks it.
+  private readonly decorationHolders = new Map<string, THREE.Group>();
+  private mountDecorations(data: LevelBodyData): void {
+    const f = data.formation;
+    if (!f) return;
+    const local = localPlacement(this.built!, f);
+    const solid = data.objects.some(isCollisionObject);
+    for (const o of data.objects) {
+      if (!isDecorationObject(o) || o.formation !== f.id || !o.built) continue;
+      const holder = this.piece(local.pos.x, local.pos.y, local.rot, o);
+      holder.name = `decoration:${o.id}`;
+      holder.visible = this.modelsShown;
+      this.modelHolders.push(holder);
+      const inner = new THREE.Group();
+      inner.matrixAutoUpdate = false;
+      inner.matrix.copy(decorationDelta(o));
+      holder.add(inner);
+      this.decorationHolders.set(o.id, inner);
+      const file = decorationFile(o.built.hash);
+      const land = (loaded: THREE.Object3D | null, late: boolean): void => {
+        if (!loaded || this.disposed) return;
+        const node = mountExport(loaded);
+        inner.add(node);
+        node.updateWorldMatrix(true, true);
+        if (!solid) noShadowBehindPlane(node);
+        this.adoptDressing(node);
+        if (late) this.modelLanded?.();
+      };
+      const ready = decodedFile(file);
+      if (ready !== undefined) land(ready, false);
+      else void loadExportFile(file, 0, `decoration ${o.id}`).then((loaded) => land(loaded, true));
+    }
+  }
+
+  // Move the decorations already mounted to where `data` has them, without
+  // rebuilding anything: what a drag of one along its rock writes every frame.
+  moveDecorations(data: LevelBodyData): void {
+    for (const o of data.objects) {
+      if (!isDecorationObject(o)) continue;
+      const inner = this.decorationHolders.get(o.id);
+      if (inner) {
+        inner.matrix.copy(decorationDelta(o));
+        inner.matrixWorldNeedsUpdate = true;
+      }
+    }
   }
 
   // Show or hide this body's models (`Scene3D.setSceneShown`): they are the

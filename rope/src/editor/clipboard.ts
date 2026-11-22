@@ -86,12 +86,15 @@ export function writeClipboard(model: EdModel, items: readonly EdItem[]): string
   for (const id of new Set(scope.items.map((i) => i.bodyId))) {
     frames.set(id, bodyFrameOf(model, id));
   }
+  // ...and which of them are 3D, with their depth and tilt.
+  const bodies3d = new Map([...model.bodies3d].filter(([id]) => frames.has(id)));
   const sub: EdModel = {
     player: { pos: Vec2.ZERO, radius: NO_SPAWN.radius * PX, hang: false, roll: 0, arrival: "" },
     items: scope.items,
     chains: scope.chains,
     vines: scope.vines,
     bodyFrames: frames,
+    bodies3d,
     environment: undefined,
     camera: undefined,
     meta: {},

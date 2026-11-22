@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { SCENE_ASSETS } from "../src/render3d/scenes";
 import { MODEL_ASSETS } from "../src/render3d/models";
 import { assetName, assetUrl, levelsModelNames, levelsSceneNames, sha256, storedAssets } from "./assetStore";
+import { fetchFormations } from "./formationBundles";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -88,6 +89,15 @@ for (const asset of entries) {
   } catch (err) {
     failures.push(`${key}: ${String(err)} <- ${url}`);
   }
+}
+
+// The levels' formations: region bundles unpacked into the loose store
+// (scripts/formationBundles.ts), which is what the editor and the build read.
+{
+  const f = await fetchFormations();
+  fetched += f.fetched;
+  skipped += f.current;
+  failures.push(...f.failures);
 }
 
 console.log(`[assets] ${fetched} fetched, ${skipped} already current, ${failures.length} failed`);

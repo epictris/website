@@ -2561,7 +2561,11 @@ async function cmdLevels(): Promise<void> {
   for (const l of listedLevels()) {
     console.log(`  ${l.intro ? "*" : " "} ${l.title}  (?level=${l.id})`);
   }
-  const results = runLevelChecks();
+  // A built formation's files, in the local store (src/formation/store.ts).
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const store = join(import.meta.dirname, "..", "..", "public", "generated");
+  const results = runLevelChecks((hash) => existsSync(join(store, hash, "meta.json")));
   let failed = 0;
   for (const r of results) {
     console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);

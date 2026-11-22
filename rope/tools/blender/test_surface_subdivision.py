@@ -68,4 +68,25 @@ area=sum(p.area for p in me.polygons)
 assert split_large_faces(me,pentagon)==2
 assert abs(sum(p.area for p in me.polygons)-area)<1e-6
 me.calc_tangents(uvmap='UVMap');me.free_tangents()
-print('SURFACE_SUBDIVISION_OK area, normals and original UV interpolation; every large-plane atlas occupied', flush=True)
+
+# A polygon folded over a neighbouring triangle (the jointed finish leaves
+# them: 36 on backdrop.rock-a, 2026-11-22) tessellates into a triangle on that
+# neighbour's very corners. BMesh refuses a second face there, and every solid
+# rock's bake failed on it; the neighbour already draws that triangle, so the
+# double is dropped, as Blender's own triangulate drops one.
+me=bpy.data.meshes.new('folded pentagon')
+co=[(.3*np.cos(a),.3*np.sin(a),0) for a in np.linspace(0,2*np.pi,5,endpoint=False)]
+me.from_pydata(co,[],[list(range(5))]);me.update()
+me.calc_loop_triangles()
+fold=sorted(me.loop_triangles[0].vertices)
+me=bpy.data.meshes.new('folded pentagon')
+me.from_pydata(co,[],[list(range(5)),fold]);me.update()
+uv=me.uv_layers.new(name='UVMap')
+for loop in me.loops:
+    p=me.vertices[loop.vertex_index].co
+    uv.data[loop.index].uv=(p.x+.5,p.y+.5)
+folded=bpy.data.objects.new('folded pentagon',me);bpy.context.collection.objects.link(folded)
+split_large_faces(me,folded)
+assert all(len(p.vertices)==3 for p in me.polygons)
+assert len({frozenset(p.vertices) for p in me.polygons})==len(me.polygons)==3, [list(p.vertices) for p in me.polygons]
+print('SURFACE_SUBDIVISION_OK area, normals and original UV interpolation; every large-plane atlas occupied; a folded polygon drops its double', flush=True)

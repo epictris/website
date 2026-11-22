@@ -967,7 +967,198 @@ export interface ModelObjectData extends ObjectPlacement {
   scale?: number;
 }
 
-export type SceneObjectData = CollisionObjectData | LightObjectData | AnchorObjectData | ModelObjectData;
+// A DECORATION: moss, ivy, a fern, a hanging vine, mushrooms, glow flora -
+// grown on a formation's rock by the decoration add-ons (tools/blender/moss,
+// ivy, foliage; docs/formations.md "Decorations"). Level content: its shape is
+// the rock's under it, so it is never reused.
+//
+// It is tied to the formation's GUIDE, which a regenerate leaves where it
+// was, and not to the rock, which a regenerate rearranges facet by facet: its
+// `anchor` is a point on the guide's surface with the guide's normal there,
+// in the formation's frame (the 3D view's: x right, y up, z toward the camera;
+// metres in memory, pixels on disk, as every length). Where it is drawn is
+// that point carried along the normal onto the rock (`onRock`), found again
+// by the editor whenever the rock or the anchor changes; one that finds no
+// rock near enough, or moves too far, is `lost` and stays where it was.
+//
+// A PLACED one (a fern, a vine, mushrooms, glow flora) is grown once where it
+// stands and only moved after. A PAINTED one (moss, ivy) is its strokes, kept
+// beside the level in `levels/<level>.paint.json` under its `id`, and is grown
+// again whenever they or its rock change.
+//
+// Appearance only, as a model is: the sim never reads it.
+export interface DecorationObjectData extends ObjectPlacement {
+  type: "decoration";
+  // Unique in the level: what its strokes are filed under in the sidecar.
+  id: string;
+  kind: DecorationKind;
+  // The id of the formation (`FormationData.id`) in this body it grows on.
+  formation: string;
+  anchor: DecorationAnchor;
+  // Where it is drawn: the anchor carried onto the rock that is drawn now.
+  onRock?: DecorationAnchor;
+  // The anchor could not be carried onto the rock after its last change.
+  lost?: boolean;
+  seed?: number;
+  // The add-on's own settings by property name, as it names them; absent
+  // takes its default.
+  settings?: DecorationSettings;
+  // What is drawn: the store's hash, the formation build it grew on, and where
+  // it was grown (a placed one is drawn moved from there to `onRock`).
+  built?: { hash: string; host: string; at: DecorationAnchor };
+}
+
+export type DecorationKind = "moss" | "ivy" | "fern" | "vine" | "mushroom" | "orbs" | "glow";
+// A decoration's add-on settings by property name (the editor's fields are
+// src/level/decorationSchema.json): numbers, switches, options, and colours
+// as their three or four linear components.
+export type DecorationSettings = Record<string, number | boolean | string | number[]>;
+export const PAINTED_DECORATIONS: readonly DecorationKind[] = ["moss", "ivy"];
+
+export interface DecorationAnchor {
+  p: [number, number, number];
+  n: [number, number, number];
+}
+
+// One brush stamp of a painted decoration (the add-ons' `Stamps`): a point
+// on the rock and its normal in the formation's frame, a radius and a signed
+// strength (negative erases). Metres, in the sidecar and in memory alike: the
+// paint is the add-ons', not the level's geometry.
+export interface PaintStamp {
+  p: [number, number, number];
+  n: [number, number, number];
+  r: number;
+  s: number;
+}
+
+export type SceneObjectData = CollisionObjectData | LightObjectData | AnchorObjectData | ModelObjectData | DecorationObjectData;
+
+// A FORMATION: rock generated from a guide in the level, by one of the
+// formation generators (tools/blender/formations), and drawn on its body. It is
+// level content, 1:1 with its guide, and never reused (docs/formations.md).
+//
+// The recipe is here; the result is in the store, `public/generated/<hash>/`,
+// named by the hash of the recipe it was built from (`formationHash`,
+// `src/formation/recipe.ts`). It is built in the BODY's frame, so the body
+// carries it and moving the body rebuilds nothing.
+//
+// Appearance only. The sim never reads it; collision is the body's own, and
+// the one thing that ever writes collision from a formation is the editor's
+// "Fit collision to geometry", pressed by hand.
+//
+// UNITS. The guide is level geometry and scales with the level (pixels on
+// disk, metres in memory). `params` are the generator's own, in its own units
+// (lengths in metres), and cross the conversion untouched, as a model's mesh
+// does: they are a recipe for a Blender script, not positions in the level.
+//
+// FRAME. The guide and the rock are in the formation's own frame, which its
+// placement (`x`, `y`, `rot`, absent = the body's origin) puts in the body's,
+// as any object's does: so a body whose origin is moved (the editor's "origin
+// to centre of mass") keeps its rock where it stands, and a whole-body move
+// carries it.
+export interface FormationData extends ObjectPlacement {
+  // Stable for the life of the formation, written to disk, unique in the
+  // level: what a decoration names the guide it sits on by.
+  id: string;
+  generator: FormationGenerator;
+  // The solid generator's variant; absent for the outline generators.
+  variant?: SolidVariant;
+  // The generator's parameters by recipe key (src/level/formationSchema.json).
+  // A key left out takes the generator's default.
+  params: Record<string, number | boolean>;
+  // The guide the next Generate builds from.
+  guide: FormationGuide;
+  // Which tier of the bake the game loads: "auto" (absent) chooses by depth
+  // behind the play plane (`autoTier`), a number is that tier, 0 the finest.
+  lod?: "auto" | number;
+  // What is drawn now: absent until the first Generate lands.
+  built?: FormationBuilt;
+}
+
+export type FormationGenerator = "boulders" | "fitted" | "solid";
+export type SolidVariant = "boulder" | "cliff" | "wall";
+
+// What the store holds for a formation, as the store says it: in metres
+// whatever the file's units, like `params` (it is a record of the build, not
+// a placement), so it crosses the conversion untouched.
+export interface FormationBuilt {
+  // The recipe's hash (`formationHash`), which names the files in the store.
+  hash: string;
+  // The rock's nearest point to the camera, z in the body's frame: how far
+  // behind the play plane it stands decides its automatic tier (`autoTier`).
+  front: number;
+  // The fingerprint of the generator code that built it (`worker.fingerprint`).
+  generatorHash: string;
+  recipeVersion: number;
+  // The tiers the store holds for this hash, finest first; empty until baked.
+  tiers: FormationTier[];
+}
+
+export interface FormationTier {
+  triangles: number;
+  // The sides of its colour and normal maps, texels.
+  colour: number;
+  normal: number;
+  bytes: number;
+}
+
+export type FormationGuide = CollisionGuide | SolidGuide;
+
+// A copy of the body's collision pieces as they were when the guide was taken
+// ("Generate" or "Align guide to collision"), each its shape and placement, so
+// "Align collision to guide" puts back exactly what was taken. The rock is
+// generated from their union, which must be one outline.
+export interface CollisionGuide {
+  kind: "collision";
+  pieces: GuidePiece[];
+  // Indices into the body's collision objects the pieces were taken from;
+  // absent means every one.
+  subset?: number[];
+}
+
+// One piece as it was taken: its shape and placement in the formation's frame,
+// which is all the guide is made from, and the rest of the collision object
+// (hook-proof, mud, `passes`, ...), which "Align collision to guide" puts
+// back. Only the shape and placement are in the recipe's hash.
+export interface GuidePiece extends ObjectPlacement {
+  shape: ShapeData;
+  piece?: Omit<CollisionObjectData, "type" | "shape" | "x" | "y" | "rot">;
+}
+
+// A 3D solid that collides with nothing, as a tree of boolean operations over
+// primitives, meshed live (`src/formation/solid.ts`). Its frame is the body's
+// as the 3D view draws it: x right, y UP (against the level's y), z toward the
+// camera, origin at the body's origin; the same frame a model is placed in.
+export interface SolidGuide {
+  kind: "solid";
+  tree: SolidNode;
+}
+
+export type SolidNode = SolidOp | SolidPrim;
+
+export interface SolidOp {
+  op: "union" | "difference" | "intersection";
+  of: SolidNode[];
+}
+
+export type SolidPrim =
+  // An outline in the primitive's own x/y plane pushed along its +z for
+  // `length`, narrowing by `taper` (0 none, 1 to a point) toward the far end.
+  | ({ prim: "extrude"; outline: { x: number; y: number }[]; length: number; taper?: number } & SolidPose)
+  // The convex hull of points in the primitive's frame.
+  | ({ prim: "hull"; points: [number, number, number][] } & SolidPose)
+  // A box or an ellipsoid of these full extents, centred on the pose.
+  | ({ prim: "box" | "ellipsoid"; size: [number, number, number] } & SolidPose)
+  // A fixed closed mesh, a content-hash name in the store, in metres.
+  | ({ prim: "mesh"; file: string } & SolidPose);
+
+// Where a primitive stands in its body's frame. `pos` is a length; `rot` is
+// Euler XYZ radians and `scale` a ratio, neither scaled with the level.
+export interface SolidPose {
+  pos?: [number, number, number];
+  rot?: [number, number, number];
+  scale?: [number, number, number];
+}
 
 export interface LevelBodyData {
   // What this body IS, physically. Consulted only when the body has at least one
@@ -1000,6 +1191,18 @@ export interface LevelBodyData {
   //
   // Collision objects are the same statement one level down: `CollisionObjectData`
   // is a placement in the plane and a shape, and has never had a z to lose.
+  //
+  // ...EXCEPT a 3D BODY (since 2026-11-22, plans/editor-ux-pass.md): one the
+  // sim never sees at all, because it holds nothing that collides (`cli
+  // levels` refuses a collision object in one) - a backdrop: its formation,
+  // the decorations on it, models, lights. Being only drawn, it may stand
+  // anywhere in the scene, so its frame gains a depth (`z`, toward the camera)
+  // and a tilt about x and y (`tilt`, radians, applied before `rot`), and
+  // everything in it is drawn in that frame. Absent `space` is a 2D body,
+  // which is every body with collision and every body authored before it.
+  space?: "3d";
+  z?: number;
+  tilt?: [number, number];
   // Everything a body has exactly one of. They were per-entry and collapsed onto
   // a group's first member, which is a rule an author had to know and a file
   // could disagree with; here there is one of each because there is one body.
@@ -1352,6 +1555,9 @@ export interface LevelBodyData {
   // and read nowhere downstream of it.
   movePath?: { x: number; y: number }[];
   moveClosed?: boolean;
+  // The rock generated for this body, if it has one (`FormationData`): drawn
+  // only, never seen by the sim. At most one per body.
+  formation?: FormationData;
   // What this body is made of and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -1381,6 +1587,10 @@ export function isAnchorObject(o: SceneObjectData): o is AnchorObjectData {
 
 export function isModelObject(o: SceneObjectData): o is ModelObjectData {
   return o.type === "model";
+}
+
+export function isDecorationObject(o: SceneObjectData): o is DecorationObjectData {
+  return o.type === "decoration";
 }
 
 // Does this body take part in the simulation at all? One predicate, so "is this
@@ -2886,13 +3096,15 @@ function finish(
   // (a retired panel, a visual with no collision, a backdrop of geometry
   // objects), and a body with nothing in it builds nothing, lights nothing and
   // draws nothing. It builds no engine body either, so no build index moves
-  // and no recorded replay is renumbered.
+  // and no recorded replay is renumbered. A body holding a FORMATION is kept:
+  // it draws its rock (a background guide's, docs/formations.md), and builds
+  // no engine body, as a body of models alone does not.
   const greybox = (raw.format ?? 1) < 2 && !raw.scene;
   const out = bodies.flatMap((b, i) => {
     const extra = added.get(i);
     const withAnchors = extra ? { ...b, objects: [...b.objects, ...extra] } : b;
     const body = withoutLook(withAnchors);
-    if (body.objects.length === 0) return [];
+    if (body.objects.length === 0 && !body.formation) return [];
     const migrated = withoutSpillSpeed(withoutConflictingSpring(withMigratedMask(body)));
     return [greybox ? withDebugFromGreybox(migrated) : migrated];
   });
@@ -3399,6 +3611,24 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.path !== undefined ? { path: o.path } : {}),
     };
   }
+  // A decoration's anchor points are lengths; normals, the seed, the
+  // add-on's settings (its own units) and a store hash are not.
+  if (o.type === "decoration") {
+    const anchor = (a: DecorationAnchor): DecorationAnchor => ({ p: [a.p[0] * factor, a.p[1] * factor, a.p[2] * factor], n: [...a.n] });
+    return {
+      type: "decoration",
+      id: o.id,
+      kind: o.kind,
+      formation: o.formation,
+      ...placed,
+      anchor: anchor(o.anchor),
+      ...(o.onRock ? { onRock: anchor(o.onRock) } : {}),
+      ...(o.lost ? { lost: true } : {}),
+      ...(o.seed !== undefined ? { seed: o.seed } : {}),
+      ...(o.settings ? { settings: { ...o.settings } } : {}),
+      ...(o.built ? { built: { hash: o.built.hash, host: o.built.host, at: anchor(o.built.at) } } : {}),
+    };
+  }
   // Every kind is above. A retired geometry object never reaches here:
   // `normalizeLevelData` has already taken it out of the body (`withoutLook`).
   return o satisfies never;
@@ -3725,6 +3955,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       x: b.x * factor,
       y: b.y * factor,
       rot: b.rot,
+      // A 3D body's depth is a length; its tilt is an angle.
+      ...(b.space === "3d" ? { space: "3d" as const, ...(b.z ? { z: b.z * factor } : {}), ...(b.tilt ? { tilt: [b.tilt[0], b.tilt[1]] as [number, number] } : {}) } : {}),
       ...(b.color !== undefined ? { color: b.color } : {}),
       ...(b.opacity !== undefined ? { opacity: b.opacity } : {}),
       ...(b.friction !== undefined ? { friction: b.friction } : {}),
@@ -3811,7 +4043,88 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.movePhase !== undefined ? { movePhase: b.movePhase } : {}),
       ...(b.moveEase !== undefined ? { moveEase: b.moveEase } : {}),
       ...(b.moveAlign !== undefined ? { moveAlign: b.moveAlign } : {}),
+      ...(b.formation !== undefined ? { formation: scaleFormation(b.formation, factor) } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };
+}
+
+// A formation's lengths: its guide's, and nothing else. The parameters are the
+// generator's, in metres whatever the file's units (see `FormationData`), and
+// the build record names files and counts texels.
+export function scaleFormation(f: FormationData, factor: number): FormationData {
+  return {
+    id: f.id,
+    ...(f.x !== undefined ? { x: f.x * factor } : {}),
+    ...(f.y !== undefined ? { y: f.y * factor } : {}),
+    ...(f.rot !== undefined ? { rot: f.rot } : {}),
+    generator: f.generator,
+    ...(f.variant !== undefined ? { variant: f.variant } : {}),
+    params: { ...f.params },
+    guide: scaleGuide(f.guide, factor),
+    ...(f.lod !== undefined ? { lod: f.lod } : {}),
+    ...(f.built !== undefined
+      ? {
+          built: {
+            hash: f.built.hash,
+            front: f.built.front,
+            generatorHash: f.built.generatorHash,
+            recipeVersion: f.built.recipeVersion,
+            tiers: f.built.tiers.map((t) => ({ triangles: t.triangles, colour: t.colour, normal: t.normal, bytes: t.bytes })),
+          },
+        }
+      : {}),
+  };
+}
+
+function scaleGuide(g: FormationGuide, factor: number): FormationGuide {
+  if (g.kind === "collision") {
+    return {
+      kind: "collision",
+      pieces: g.pieces.map((p) => {
+        // The piece's own fields scale as the object they came from does.
+        const props = p.piece
+          ? (({ type: _t, shape: _s, ...rest }) => rest)(scaleObject({ type: "collision", shape: p.shape, ...p.piece }, factor) as CollisionObjectData)
+          : undefined;
+        return {
+          ...(p.x !== undefined ? { x: p.x * factor } : {}),
+          ...(p.y !== undefined ? { y: p.y * factor } : {}),
+          ...(p.rot !== undefined ? { rot: p.rot } : {}),
+          shape: scaleShape(p.shape, factor),
+          ...(props ? { piece: props } : {}),
+        };
+      }),
+      ...(g.subset !== undefined ? { subset: [...g.subset] } : {}),
+    };
+  }
+  return { kind: "solid", tree: scaleSolidNode(g.tree, factor) };
+}
+
+// A node's position, sizes, outline, length and hull points are lengths; its
+// turn, its scale, its taper and a mesh's name are not. A mesh leaf's vertices
+// are metres in the store, as a model's are, so only where it stands scales.
+function scaleSolidNode(n: SolidNode, factor: number): SolidNode {
+  if ("op" in n) return { op: n.op, of: n.of.map((c) => scaleSolidNode(c, factor)) };
+  const pose: SolidPose = {
+    ...(n.pos ? { pos: [n.pos[0] * factor, n.pos[1] * factor, n.pos[2] * factor] } : {}),
+    ...(n.rot ? { rot: [...n.rot] } : {}),
+    ...(n.scale ? { scale: [...n.scale] } : {}),
+  };
+  switch (n.prim) {
+    case "extrude":
+      return {
+        prim: "extrude",
+        outline: n.outline.map((p) => ({ x: p.x * factor, y: p.y * factor })),
+        length: n.length * factor,
+        ...(n.taper !== undefined ? { taper: n.taper } : {}),
+        ...pose,
+      };
+    case "hull":
+      return { prim: "hull", points: n.points.map((p) => [p[0] * factor, p[1] * factor, p[2] * factor]), ...pose };
+    case "box":
+    case "ellipsoid":
+      return { prim: n.prim, size: [n.size[0] * factor, n.size[1] * factor, n.size[2] * factor], ...pose };
+    case "mesh":
+      return { prim: "mesh", file: n.file, ...pose };
+  }
 }
