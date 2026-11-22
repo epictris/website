@@ -12,9 +12,9 @@ import { setRootBark } from "./rootEditing";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { BALL_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
-import { readSettings } from "../render/settings";
+import { DEPTH_OF_FIELD_LEVELS } from "../render/settings";
 import { attachProjector, ProjectedContext, ViewProjector } from "./projectedCanvas";
-import { body3dLift, setBody3dResolver } from "./space3d";
+import { body3dLift, itemMatrix, setBody3dResolver } from "./space3d";
 import {
   CameraController,
   REGION_EXIT_MARGIN,
@@ -208,12 +208,13 @@ import {
   routeWorldPoints,
   type SceneTag,
 } from "./model";
+import { pickTagOf } from "../render3d/bodyVisuals";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { FormationJobs, mountJobsPanel } from "./formationJobs";
 import { addShapeToGuide, applyJobResult, buildFormationSection, createBackdrop, guideCentre, SHAPE_KINDS, type FormationHost } from "./formationPanel";
 import { enclosingItem } from "./formationEdit";
 import { newFormationId } from "../formation/recipe";
-import { SolidGuideView, type SolidSel } from "./solidGuides";
+import { guideBounds, SolidGuideView, type SolidSel } from "./solidGuides";
 import { headOn } from "./visuals/viewControls";
 import { DECORATION_LABELS, DecorationController, type SurfaceHit } from "./decorationPanel";
 import { newPrimitive, nodeAt, pointsOf, replaceAt, withPoint } from "../formation/solidTree";
@@ -1953,6 +1954,148 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // handles have to start exactly there.
   const handleZ = (it: EdItem): number => depthOf(it);
 
+  // AN OBJECT OF A 3D BODY is placed in the body's frame, which stands off the
+  // plane and tilts (`EdModel.bodies3d`, `itemMatrix`), while its handlers speak
+  // the plane's coordinates. This carries what they say into the body's frame
+  // and what the handles do back out of it, so the handles stand on the object
+  // where it is drawn rather than where it would be on an untilted plane at
+  // z 0. The frame is held for a drag: an object's edit does not move it.
+  function lifted(h: GizmoHandlers, lift: () => THREE.Matrix4 | null): GizmoHandlers {
+    let held: { into: THREE.Matrix4; turn: THREE.Quaternion } | null = null;
+    const turnOf = (m: THREE.Matrix4) => new THREE.Quaternion().setFromRotationMatrix(m);
+    return {
+      pose() {
+        const p = h.pose();
+        const m = lift();
+        return m ? { pos: p.pos.clone().applyMatrix4(m), quat: turnOf(m).multiply(p.quat) } : p;
+      },
+      axes: (mode) => h.axes(mode),
+      begin(mode) {
+        const m = lift();
+        held = m ? { into: m.clone().invert(), turn: turnOf(m).invert() } : null;
+        h.begin(mode);
+      },
+      apply(mode, pos, quat, scale) {
+        if (!held) return h.apply(mode, pos, quat, scale);
+        h.apply(mode, pos.clone().applyMatrix4(held.into), held.turn.clone().multiply(quat), scale);
+      },
+      end(mode) {
+        held = null;
+        h.end(mode);
+      },
+    };
+  }
+
+  // HANDLES STANDING ON WHAT IS DRAWN rather than on the frame it is placed by.
+  //
+  // For most things the two are one point. A solid guide is not: it is a mesh
+  // placed anywhere in its frame, and a backdrop migrated from a Blender scene
+  // keeps its vertices where the scene had them, with its body's frame left at
+  // the level's origin (or on its first decoration's anchor) and at the plane's
+  // depth - so handles on the frame stood metres off the rock, out in front of
+  // it, with nothing under them.
+  //
+  // `centre` names the point in the world (three's frame); the handles stand
+  // there, turned with the frame, and the handlers are handed the pose their
+  // FRAME takes. A move carries the frame by what the handles moved, and a turn
+  // swings it round the handles, which is what keeps the thing turning in place
+  // under them. The point is held in the frame for a drag, so it rides the
+  // frame rather than being measured afresh off a scene being rebuilt.
+  function pivoted(h: GizmoHandlers, centre: () => THREE.Vector3 | null): GizmoHandlers {
+    let held: THREE.Vector3 | null = null;
+    const local = (frame: { pos: THREE.Vector3; quat: THREE.Quaternion }): THREE.Vector3 | null => {
+      const at = centre();
+      return at ? at.sub(frame.pos).applyQuaternion(frame.quat.clone().invert()) : null;
+    };
+    return {
+      pose() {
+        const p = h.pose();
+        const at = local(p);
+        return at ? { pos: at.applyQuaternion(p.quat).add(p.pos), quat: p.quat } : p;
+      },
+      axes: (mode) => h.axes(mode),
+      begin(mode) {
+        held = local(h.pose());
+        h.begin(mode);
+      },
+      apply(mode, pos, quat, scale) {
+        h.apply(mode, held ? pos.clone().sub(held.clone().applyQuaternion(quat)) : pos, quat, scale);
+      },
+      end(mode) {
+        held = null;
+        h.end(mode);
+      },
+    };
+  }
+
+  // The middle of the solid guides among these objects, in three's frame: the
+  // mean of each one's own middle (the centre of the box round its solid in
+  // its own frame, `guideBounds`), carried by its placement. Taken in the
+  // guide's frame rather than off the box round it in the world so that it is
+  // a point OF the solid, turning with it: a box measured in the world is a
+  // different box once the thing has turned, and handles stood on it would
+  // hop at the end of every turn. Null with no solid guide, or none whose
+  // meshes have loaded yet.
+  function solidCentre(items: readonly EdItem[]): THREE.Vector3 | null {
+    const sum = new THREE.Vector3();
+    let n = 0;
+    for (const it of items) {
+      const guide = it.object === "formation" ? it.formation?.guide : undefined;
+      const box = guide?.kind === "solid" ? guideBounds(guide.tree) : null;
+      if (!box) continue;
+      sum.add(box.getCenter(new THREE.Vector3()).applyMatrix4(itemMatrix(it)));
+      n++;
+    }
+    return n ? sum.divideScalar(n) : null;
+  }
+
+  // THE POINT ONE BODY TURNS ABOUT, whichever control turns it - the gizmo's
+  // ring, the 2D knob, the panel's rot°. A body with collision turns about the
+  // centre of mass the engine mounts it at (`bodyCentroid`). One with none but
+  // a solid guide (a backdrop) has no mass to agree with, and its pieces'
+  // placement points are not where it is - a migrated backdrop's are the
+  // level's origin - so it turns about the middle of its solids, and its
+  // handles stand there, at that depth (`solidCentre`). In three's frame.
+  function bodyTurnPoint(items: readonly EdItem[]): THREE.Vector3 {
+    const solid = items.some((i) => i.object === "collision") ? null : solidCentre(items);
+    if (solid) return solid;
+    const c = bodyCentroid(items);
+    const at = new THREE.Vector3(c.x, threeY(c.y), 0);
+    const lift = items.length ? bodyLift(items[0]!.bodyId) : null;
+    return lift ? at.applyMatrix4(lift) : at;
+  }
+
+  // ...as a point of the plane the body's objects are placed in, which is what
+  // a turn in that plane (`rotateItemsAbout`) goes round: the plane a 3D body
+  // stands off and tilts (`bodyLift`), carried back out of it.
+  function bodyTurnCentre(items: readonly EdItem[]): Vec2 {
+    const p = bodyTurnPoint(items);
+    const lift = items.length ? bodyLift(items[0]!.bodyId) : null;
+    if (lift) p.applyMatrix4(lift.invert());
+    return new Vec2(p.x, threeY(p.y));
+  }
+
+  // A 3D body's frame as a transform of the plane its objects are placed in
+  // (`body3dLift`). Null for a body in the plane.
+  function bodyLift(bodyId: number): THREE.Matrix4 | null {
+    const space = model.bodies3d.get(bodyId);
+    return space ? body3dLift(bodyFrameOf(model, bodyId), space) : null;
+  }
+
+  // The handles for one object: on it where its body draws it, and on the
+  // middle of its solid when it is a solid guide's formation.
+  function objectHandlers(id: number): GizmoHandlers {
+    const find = (): EdItem | null => model.items.find((b) => b.id === id) ?? null;
+    const lift = (): THREE.Matrix4 | null => {
+      const it = find();
+      return it ? bodyLift(it.bodyId) : null;
+    };
+    return pivoted(lifted(itemHandlers(id), lift), () => {
+      const it = find();
+      return it ? solidCentre([it]) : null;
+    });
+  }
+
   // The item the handles are on, resolved by id every time rather than held:
   // undo and redo replace the model wholesale, so a captured object is a stale
   // one the moment a drag is undone.
@@ -1960,6 +2103,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const find = (): EdItem | null => model.items.find((b) => b.id === id) ?? null;
     // The sizes a scale drag is measured against (see `GizmoHandlers.apply`).
     let base: { shape: EdShape; pos: Vec2; snapAt: Vec2; scale: number } | null = null;
+    // Where a turn leaves the placement: carried round the handles when they
+    // stand off it (`pivoted`), so the thing turns in place under them, and
+    // nowhere otherwise. Under a nanometre is the round trip through a 3D
+    // body's frame (`lifted`) and back, not a move.
+    const swung = (pos: THREE.Vector3): Vec2 => {
+      const d = new Vec2(pos.x, threeY(pos.y)).sub(base!.pos);
+      return d.length() < 1e-9 ? Vec2.ZERO : d;
+    };
     return {
       pose() {
         const it = find();
@@ -2006,9 +2157,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           it.rot = threeRotation(e.z);
           it.modelRef.rotX = e.x;
           it.modelRef.rotY = e.y;
+          if (base) it.pos = base.pos.add(swung(pos));
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
           it.rot = threeRotation(e.z);
+          if (base) it.pos = base.pos.add(swung(pos));
         } else if (base && it.object === "model") {
           // One factor, whichever box is dragged: the axis furthest from 1.
           const f = [scale.x, scale.y, scale.z].reduce((a, b) => (Math.abs(b - 1) > Math.abs(a - 1) ? b : a), 1);
@@ -2177,7 +2330,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           const e = new THREE.Euler().setFromQuaternion(quat, "ZYX");
           const frame = bodyFrameOf(model, id);
           rotateItemsAbout(model, members(), frame.pos, threeRotation(e.z) - frame.rot);
-          model.bodies3d.set(id, { z: spaceOf().z, tilt: [e.x, e.y] });
+          // ...and carried to where the turn about the handles leaves the frame
+          // (`pivoted`): the frame's own place, unmoved, when the handles stand
+          // on it.
+          translateItems(model, members(), new Vec2(pos.x, threeY(pos.y)).sub(bodyFrameOf(model, id).pos));
+          model.bodies3d.set(id, { z: pos.z, tilt: [e.x, e.y] });
         }
         gizmoTouched();
       },
@@ -2199,11 +2356,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     } | null = null;
     return {
       pose() {
-        const c = bodyCentroid(members());
-        return {
-          pos: new THREE.Vector3(c.x, threeY(c.y), 0),
-          quat: new THREE.Quaternion(),
-        };
+        return { pos: bodyTurnPoint(members()), quat: new THREE.Quaternion() };
       },
       axes(mode): GizmoAxes {
         if (!members().length) return null;
@@ -2215,7 +2368,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         gizmoBegin();
         const items = members();
         base = {
-          centre: bodyCentroid(items),
+          centre: bodyTurnCentre(items),
           pos: new Map(items.map((m) => [m.id, m.pos])),
           frame: bodyFrameOf(model, id),
           applied: 0,
@@ -2454,9 +2607,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
               ? solidHandlers()
               : spec.kind === "body"
               ? model.bodies3d.has(spec.id)
-                ? body3dHandlers(spec.id)
+                ? pivoted(body3dHandlers(spec.id), () => solidCentre(bodyMembers(model.items, spec.id)))
                 : bodyHandlers(spec.id)
-              : itemHandlers(spec.id),
+              : objectHandlers(spec.id),
       );
     }
     // The same 15° the 2D drags snap to. A move is NOT snapped by three: that
@@ -2845,12 +2998,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testShowDebug = false;
     // A test opens as the game does, with the pieces' debug geometry drawn.
     scene3d?.setDebugShown(true);
-    // ...through the player's lens: the depth of field at the level the game's
-    // settings panel left (the editor's own view is drawn without it), and
-    // nothing of the editor's in the picture - the paint marks, the solid
-    // guides, the guides of the old Visuals view - since a test is meant to be
-    // the level exactly as it is played.
-    scene3d?.setDepthOfField(readSettings().depthOfField);
+    // ...through the player's lens at its fullest: the maximum depth of field,
+    // whatever the game's settings panel was left at, so a test always judges
+    // the level by the deepest blur a player can choose (the editor's own view
+    // is drawn without it). Nothing of the editor's is in the picture - the
+    // paint marks, the solid guides, the guides of the old Visuals view - since
+    // a test is meant to be the level exactly as it is played.
+    scene3d?.setDepthOfField(DEPTH_OF_FIELD_LEVELS[DEPTH_OF_FIELD_LEVELS.length - 1]);
     if (scene3d) scene3d.editorLayer.visible = false;
     // The camera is the game's for the test: no projection through the
     // editor's turned view (see the frame loop).
@@ -4351,7 +4505,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           "rot°",
           () => (frame().rot * 180) / Math.PI,
           (v) =>
-            rotateItemsAbout(model, whole, bodyCentroid(whole), (v * Math.PI) / 180 - frame().rot),
+            rotateItemsAbout(model, whole, bodyTurnCentre(whole), (v * Math.PI) / 180 - frame().rot),
         );
       } else {
         // Also relative: an object's `rot` is an offset from its body's, which
@@ -4371,7 +4525,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           (b) => deg(framedByItself(b) ? b.rot : b.rot - bodyOrigin(b).rot),
           (b, v) => {
             if (framedByItself(b)) {
-              rotateItemsAbout(model, [b], bodyCentroid([b]), rad(v) - b.rot);
+              rotateItemsAbout(model, [b], bodyTurnCentre([b]), rad(v) - b.rot);
               return;
             }
             b.rot = bodyOrigin(b).rot + rad(v);
@@ -6552,7 +6706,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       () => deg(origin().rot),
       // About the point the built body actually turns about - its centre of
       // mass - so the editor's rotation and the engine's are the same operation.
-      (v) => rotateItemsAbout(model, members, bodyCentroid(members), rad(v) - origin().rot),
+      (v) => rotateItemsAbout(model, members, bodyTurnCentre(members), rad(v) - origin().rot),
     );
     // 2D OR 3D (`LevelBodyData.space`). A body holding nothing that collides
     // is only drawn, so it may be a 3D body: off the plane by a depth and
@@ -10916,7 +11070,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (whole) {
       const gh = computeGroupHandles(camera, whole);
       if (scr.distanceTo(gh.rotate) <= HANDLE_HIT_PX) {
-        const centre = bodyCentroid(whole);
+        const centre = bodyTurnCentre(whole);
         const world = screenToWorld(camera, scr.x, scr.y).sub(centre);
         return {
           mode: "rotateGroup",
@@ -11491,32 +11645,40 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // drawn and what is picked.
   const picks3d = (): boolean => overlayLayers() === "outline" && sceneLevel !== null;
 
-  // The items under the pointer in the 3D scene, as item ids, nearest
-  // first collapsed into a set - the ORDER a pick prefers them in is `pickOrder`'s
-  // and is not this function's to have an opinion about. Null when the scene is
-  // not what is on screen, which is what leaves the 2D view untouched.
-  function raycastItems(scr: Vec2): Set<number> | null {
+  // The items under the pointer in the 3D scene: each one's id and how far
+  // along the ray it is first met. Which of them a pick prefers is
+  // `pickCandidatesAt`'s rule; the distance is here for the one part of it
+  // that is about depth - things behind the gameplay plane, `behind` (see
+  // there). Null when the scene is not what is on screen, which is what leaves
+  // the 2D view untouched.
+  function raycastItems(scr: Vec2): { near: Map<number, number>; behind: Set<number> } | null {
     if (!picks3d()) return null;
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return null;
-    const ids = new Set<number>();
+    const near = new Map<number, number>();
+    const meet = (id: number, distance: number): void => {
+      if (!(near.get(id)! <= distance)) near.set(id, distance);
+    };
     const ndc = { x: (scr.x / r.width) * 2 - 1, y: 1 - (scr.y / r.height) * 2 };
-    const tags = scene3d!.pick(ndc.x, ndc.y);
-    for (const tag of tags) {
-      const id = itemOfSceneObject.get(tag as SceneTag);
-      if (id !== undefined) ids.add(id);
+    for (const hit of scene3d!.hitsAt(ndc.x, ndc.y)) {
+      const id = itemOfSceneObject.get(pickTagOf(hit.object) as SceneTag);
+      if (id !== undefined) meet(id, hit.distance);
     }
     // ...and the solid guides: a backdrop not generated yet is only its guide,
     // and a click on the guide is a click on the formation.
-    for (const { id } of solidView?.pickGuides(ndc, scene3d!.camera) ?? []) ids.add(id);
-    return ids;
+    const behind = new Set<number>();
+    for (const g of solidView?.pickGuides(ndc, scene3d!.camera) ?? []) {
+      meet(g.id, g.distance);
+      if (g.behind) behind.add(g.id);
+    }
+    return { near, behind };
   }
 
   // Does a click at `world` land on this item? Everything is its own outline
   // except a LIGHT, which is its icon rather than its reach - see
   // `lightPickRadius` - and whatever the scene's models under the pointer name
   // (see `raycastItems`).
-  function hitsItem(b: EdItem, world: Vec2, ray: ReadonlySet<number> | null = null): boolean {
+  function hitsItem(b: EdItem, world: Vec2, ray: ReadonlyMap<number, number> | null = null): boolean {
     // An anchor is never picked as an ITEM. Its canvas presence is the ring its
     // chain draws at it, and that ring is already a drag handle - two things
     // answering one click, one of them an invisible 30 cm box sitting on the wall
@@ -11611,38 +11773,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   }
 
-  // The formation items whose solid guide the pointer's ray meets only beyond
-  // the gameplay plane (see `pickCandidatesAt`).
-  function behindPlaneGuides(scr: Vec2): number[] {
-    if (!picks3d() || !solidView) return [];
-    const r = canvas.getBoundingClientRect();
-    if (!r.width || !r.height) return [];
-    const ndc = { x: (scr.x / r.width) * 2 - 1, y: 1 - (scr.y / r.height) * 2 };
-    return solidView.pickGuides(ndc, scene3d!.camera).filter((g) => g.behind).map((g) => g.id);
-  }
-
   // Everything under a world point, in the order the pick prefers it: what
   // `topmostAt` answers, then what it would answer with that taken away, and so
   // on. It is the same rule applied down the stack rather than a second ordering
   // beside it, so the first candidate IS the pick and nothing can disagree.
   function pickCandidatesAt(world: Vec2, scr: Vec2): EdItem[] {
     const ray = raycastItems(scr);
-    const hit = pickOrder().filter((b) => hitsItem(b, world, ray));
+    const hit = pickOrder().filter((b) => hitsItem(b, world, ray?.near));
     // DEPTH FIRST: a backdrop's guide met only beyond the gameplay plane is
     // behind whatever the plane holds at that point, so it is a candidate
     // after all of it - the rock in front is what the click lands on, and the
     // backdrop is one more click into the stack (or the first, where the
     // plane holds nothing).
-    const behind = new Set(behindPlaneGuides(scr));
+    //
+    // ...and among themselves, nearest first along the ray. Out there nothing
+    // is an outline on the plane, so neither the plane's stacking nor which box
+    // holds which says anything about what is in front: a rock standing in
+    // front of the back wall is the nearer surface, and the click lands on it.
+    const behind = ray?.behind ?? new Set<number>();
     const left = hit.filter((b) => !behind.has(b.id));
-    const later = hit.filter((b) => behind.has(b.id));
+    const later = hit.filter((b) => behind.has(b.id)).sort((a, b) => ray!.near.get(a.id)! - ray!.near.get(b.id)!);
     const out: EdItem[] = [];
     for (;;) {
-      const best = bestHit(left.length ? left : later);
-      if (!best) return out;
+      const best = bestHit(left);
+      if (!best) return out.concat(later);
       out.push(best);
-      const from = left.length ? left : later;
-      from.splice(from.indexOf(best), 1);
+      left.splice(left.indexOf(best), 1);
     }
   }
 

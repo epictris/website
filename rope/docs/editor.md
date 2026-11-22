@@ -486,11 +486,16 @@ The 2D canvas is the gameplay plane seen head on, so it has handles for the two 
 It is also the only editing there is while the view is **orbited**: the gizmo is in the scene, so it is drawn from wherever the camera is.
 The two features are a pair - orbit to see the depth, drag the blue arrow to author it.
 
-**The handles sit at the depth the object is drawn at** (`handleZ`): a light's `z`, and the gameplay plane for everything else, which is where collision is.
+**The handles sit at the depth the object is drawn at** (`handleZ`): a light's `z`, a solid guide's middle (below), and the gameplay plane for everything else, which is where collision is.
 
 **The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on any revision that changes what it draws - that is, on most drags. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
 
 **The gizmo is offered for one object, one body, or the whole selection** (`gizmoSpec`), ordered by how much is known about the target rather than by how many things it holds: one object offers what it has of a depth, a turn and a size; one body turns about the centre of mass the engine mounts it at; anything wider is an ARRANGEMENT, and what an arrangement has is a place and an angle.
+
+**A backdrop turns about the middle of its solids** (`bodyTurnPoint`, `solidCentre`), whichever control turns it - the gizmo, the 2D knob, the panel's `rot°`.
+A body with nothing that collides has no centre of mass to agree with, and its placement points are not where it is: a solid guide is a mesh standing anywhere in its frame, and the backdrops migrated from the river's Blender scene keep the scene's coordinates with their frame at the level's origin (or on a decoration's anchor), so until 2026-11-23 their handles stood at the top-left of the level, at z 0, metres in front of a rock 18 m deep.
+The middle is each guide's own box centre carried by its placement, a point OF the solid, so it turns with the rock and the handles do not hop at the end of a turn as they would on a box measured in the world.
+A 3D body's handles do the same through `pivoted` (they stand at the middle, the handlers are handed the pose of the frame, and a turn swings the frame round the handles), and so does a single formation picked inside one, whose handles are also carried into the body's 3D frame (`lifted`) rather than drawn where it would be on an untilted plane.
 
 **A handle is offered only where the format has somewhere to put its answer** (`GizmoHandlers.axes`), so what is on screen is the level's real degrees of freedom rather than three of everything:
 

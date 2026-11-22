@@ -5802,7 +5802,7 @@
         {
           "type": "collision",
           "x": 44.780654264799516,
-          "y": 135.87528167454056,
+          "y": 135.87528167454062,
           "rot": -0.5235987755982983,
           "shape": {
             "kind": "curve",
@@ -9618,10 +9618,10 @@
         "x": -1039.6339416503906,
         "y": -733.9149951934814,
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "cliff",
         "params": {
           "seed": 95585,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -9636,6 +9636,13 @@
             "prim": "mesh",
             "file": "12cfd24c9ea510a6267792059b68be80e49f591d03d9987cbe2fe25d5e4cbbd8"
           }
+        },
+        "built": {
+          "hash": "151b5755d8609b1af785ee665abf2e404edefc5c71a5415b3df7342462789a9c",
+          "front": -12.2609,
+          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": [
@@ -9656,6 +9663,7 @@
               0.020757177148164992
             ]
           },
+          "lost": true,
           "settings": {
             "kind": "TEXTURE",
             "seed": 0,
@@ -9712,6 +9720,22 @@
             "reused": false,
             "build_ms": 4718.087890625,
             "built_key": "acd19d1ad793ad1a135a12b148c367067bfebd56"
+          },
+          "built": {
+            "hash": "a4553b7b3c5b9f4fe6d42f4faa5364b7177b3a96b5e88bdbf9cb669967c43499",
+            "host": "0fab0dd7d5c3d6414998941ed9f19e3f7b4f8fa75f41ddeae472bbf15e093256",
+            "at": {
+              "p": [
+                1039.6339416503906,
+                -733.9149951934814,
+                -1503.2357215881348
+              ],
+              "n": [
+                -0.83610680874139,
+                0.5481738264210798,
+                0.020757177148164992
+              ]
+            }
           }
         }
       ]
@@ -10359,7 +10383,7 @@
         "variant": "boulder",
         "params": {
           "seed": 6501,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10374,6 +10398,13 @@
             "prim": "mesh",
             "file": "7241ad69c3d0c7576052f282060e47702dc844079d7c06ed685efc0f6c30d08f"
           }
+        },
+        "built": {
+          "hash": "ad609200ed9d64247c622531e685145484238ba08acea665eeab9bf2fe279d20",
+          "front": -11.4357,
+          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": [
@@ -10450,6 +10481,22 @@
             "reused": false,
             "build_ms": 3658.209228515625,
             "built_key": "b724236e7eb96f3e6b5e97d80af49351e9465f47"
+          },
+          "built": {
+            "hash": "1a8b733a248d3ef305cce9a577f9e062a7487116482a73dbe89f4a193f87a994",
+            "host": "ad609200ed9d64247c622531e685145484238ba08acea665eeab9bf2fe279d20",
+            "at": {
+              "p": [
+                923.799991607666,
+                -857.4089050292969,
+                -1217.0464515686035
+              ],
+              "n": [
+                -0.6745521153930764,
+                0.4557695502854478,
+                0.5807353619776624
+              ]
+            }
           }
         }
       ]
@@ -10468,7 +10515,7 @@
         "variant": "boulder",
         "params": {
           "seed": 87265,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10483,6 +10530,13 @@
             "prim": "mesh",
             "file": "09a0defff92336f0fe8f33d95c849725042633c6d2b23165573f127594f2dc79"
           }
+        },
+        "built": {
+          "hash": "9141734b9b6811210bf962141db06fa748df33e1f7baeba422bc0645ac4bcce5",
+          "front": -12.0673,
+          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": [
@@ -10559,6 +10613,22 @@
             "reused": false,
             "build_ms": 15912.7900390625,
             "built_key": "ad5c3c7269784b4f742bcea3b7d135538a81f5d2"
+          },
+          "built": {
+            "hash": "bc7446595b2f08811d8ebf5fcbad8cf4afdb3883052b6c30ea4cfc17acded546",
+            "host": "9141734b9b6811210bf962141db06fa748df33e1f7baeba422bc0645ac4bcce5",
+            "at": {
+              "p": [
+                1530.3685188293457,
+                -864.6749496459961,
+                -1370.201301574707
+              ],
+              "n": [
+                0.015369174796625433,
+                0.9990799293541568,
+                -0.040038521797936676
+              ]
+            }
           }
         }
       ]
@@ -10572,10 +10642,10 @@
       "formation": {
         "id": "2739fnil",
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "cliff",
         "params": {
           "seed": 53208,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10590,6 +10660,13 @@
             "prim": "mesh",
             "file": "1d51b0dcaa20a550f3a3249e7e216c1f946a7ff12ee5dfcccc0a8c98df11a40d"
           }
+        },
+        "built": {
+          "hash": "63b6f04b9f256379df21d2ca6adda22e1079827f138f5d7686eda0b97fc798b6",
+          "front": -9.2621,
+          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": []
@@ -10606,7 +10683,7 @@
         "variant": "boulder",
         "params": {
           "seed": 41346,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10621,6 +10698,13 @@
             "prim": "mesh",
             "file": "56bf8fc2730b68cf5ff2cfda1b83df60b423f69932f72b7571828bd8195fc711"
           }
+        },
+        "built": {
+          "hash": "98a0e268dddc0accde55a7e2eca9bbdcac82f58f81a12c4fd3bae765a08f0af1",
+          "front": -9.3106,
+          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": []
@@ -10683,6 +10767,13 @@
             "prim": "mesh",
             "file": "2757ac6dea835f976713f8a9178579c30792303f4d289481dbac9c5ef4228688"
           }
+        },
+        "built": {
+          "hash": "c39c3d567d6463c51a5b5fd2d65a66de542e2ab664dae345fca33f082883a4de",
+          "front": -7.4061,
+          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": []

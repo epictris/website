@@ -59,6 +59,25 @@ export function requestMeshes(tree: SolidNode, landed: () => void): boolean {
   return missing;
 }
 
+// The box round what a solid guide makes, in the guide's own frame (its
+// formation item's, `itemMatrix`). Null until every mesh it imports has
+// loaded, and for a guide that makes nothing: a box measured off half the
+// meshes is a box in the wrong place, and an answer the caller would keep.
+//
+// Kept per tree: an edit to a guide replaces its tree rather than changing it
+// in place, so a tree seen before is the same solid, and its CSG is not run
+// again on every frame something asks where it is.
+const boundsOfTree = new WeakMap<SolidNode, THREE.Box3 | null>();
+export function guideBounds(tree: SolidNode): THREE.Box3 | null {
+  const known = boundsOfTree.get(tree);
+  if (known !== undefined) return known;
+  if (meshFiles(tree).some((name) => !meshes.has(name))) return null;
+  const made = solidMesh(tree, meshes).mesh;
+  const box = made?.positions.length ? new THREE.Box3().setFromArray(made.positions) : null;
+  boundsOfTree.set(tree, box);
+  return box;
+}
+
 function geometryOf(mesh: SolidMesh): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
@@ -255,16 +274,16 @@ export class SolidGuideView {
   // backdrop's guide selects. `behind` says the ray meets the guide only
   // beyond the gameplay plane, where whatever the plane holds at that point is
   // in front of it and is picked first.
-  pickGuides(ndc: { x: number; y: number }, camera: THREE.Camera): { id: number; behind: boolean }[] {
+  pickGuides(ndc: { x: number; y: number }, camera: THREE.Camera): { id: number; distance: number; behind: boolean }[] {
     if (!this.guideTargets.length) return [];
     this.group.updateWorldMatrix(true, true);
     this.raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), camera);
     const toPlane = this.raycaster.ray.distanceToPlane(PLANE);
-    const out: { id: number; behind: boolean }[] = [];
+    const out: { id: number; distance: number; behind: boolean }[] = [];
     for (const hit of this.raycaster.intersectObjects(this.guideTargets, false)) {
       const id = hit.object.userData.solidItem as number | undefined;
       if (id === undefined || out.some((o) => o.id === id)) continue;
-      out.push({ id, behind: toPlane !== null && hit.distance > toPlane });
+      out.push({ id, distance: hit.distance, behind: toPlane !== null && hit.distance > toPlane });
     }
     return out;
   }

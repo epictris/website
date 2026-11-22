@@ -15,7 +15,7 @@ import { insertPoint, newPrimitive, nodeAt, nodeLabel, pointsOf, removePoint, re
 import { appendEntry, isGroup, moveEntry, removeEntry, setMode, stackOf } from "../formation/solidStack";
 import { MESHES_API } from "../formation/store";
 import { scaleLevelData, type LevelData, type SolidNode, type SolidPrim } from "../level/levelFormat";
-import { loadedMeshes, requestMeshes, type SolidSel } from "./solidGuides";
+import { guideBounds, loadedMeshes, requestMeshes, type SolidSel } from "./solidGuides";
 import { formationHash, generatorsFor, isStale, newFormationId, resolvedParams, variantOf, visibleFields, FORMATION_SCHEMA } from "../formation/recipe";
 import { metaFile, type FormationMeta } from "../formation/store";
 import type { FormationGenerator, SolidVariant } from "../level/levelFormat";
@@ -552,17 +552,8 @@ export function createBackdrop(host: FormationHost, at: { x: number; y: number }
 // on the gameplay plane in front of it. The default backdrop's middle when
 // nothing is made yet.
 export function guideCentre(tree: SolidNode): [number, number, number] {
-  const made = solidMesh(tree, loadedMeshes()).mesh;
-  if (!made || !made.positions.length) return [0, 1, -2.5];
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < made.positions.length; i += 3) {
-    for (let a = 0; a < 3; a++) {
-      min[a] = Math.min(min[a]!, made.positions[i + a]!);
-      max[a] = Math.max(max[a]!, made.positions[i + a]!);
-    }
-  }
-  return [(min[0]! + max[0]!) / 2, (min[1]! + max[1]!) / 2, (min[2]! + max[2]!) / 2];
+  const box = guideBounds(tree);
+  return box ? box.getCenter(new THREE.Vector3()).toArray() : [0, 1, -2.5];
 }
 
 // A shape added to the end of a solid guide's stack (as an Add; its badge
