@@ -20,7 +20,7 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
 
-from .worker import DEFAULT_PARAMS, GENERATORS, LEGACY_THICKNESS, legacy_slab_size
+from .worker import DEFAULT_PARAMS, GENERATORS, LEGACY_THICKNESS, SOLID_VARIANTS, legacy_slab_size, solid_parameters
 
 # Lengths show three significant digits: Blender's unit display counts
 # precision in them, and at its default 1.05 m reads as "1 m".
@@ -31,10 +31,19 @@ FIELDS = {
                  "slabLength": "slab_length", "weathering": "weathering",
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
                  "edgeBevelWidth": "edge_bevel"},
-    "solid": {"seed": "seed", "stoneSize": "stone_size", "knub": "knub", "curveTurn": "curve_turn"},
+    "solid": {"seed": "seed", "stoneSize": "stone_size", "surfaceRelief": "surface_relief",
+              "jointed": "jointed", "jointAspect": "joint_aspect", "knub": "knub", "curveTurn": "curve_turn"},
 }
 FITTED = GENERATORS["fitted"]
 SOLID = GENERATORS["solid"]
+
+
+def _variant_get(settings):
+    return 1 if settings.jointed else 0
+
+
+def _variant_set(settings, value):
+    settings.jointed = value == 1
 
 
 class FormationParams(bpy.types.PropertyGroup):
@@ -80,6 +89,16 @@ class FormationParams(bpy.types.PropertyGroup):
                               "small-fragment threshold", default=SOLID["stoneSize"], min=.25, max=4)
     knub: FloatProperty(name="Merge small", description="A stone under this share of its kind's median volume "
                         "is joined to its neighbour instead of standing as a knub", default=SOLID["knub"], min=0, max=1)
+    surface_relief: FloatProperty(name="Surface relief", description="Depth of projecting cleavage planes and "
+                                  "offset folds, as a share of Stone size; zero keeps the shallow roof taper",
+                                  default=SOLID["surfaceRelief"], min=0, max=1.5)
+    jointed: BoolProperty(name="Jointed rock", default=SOLID['jointed'],
+                         description="Long primary fractures and clustered secondary breaks in one rock mass")
+    variant: EnumProperty(name="Variant", items=SOLID_VARIANTS,
+                          get=_variant_get, set=_variant_set,
+                          description="Rock generation style; existing size and relief settings are retained")
+    joint_aspect: FloatProperty(name="Joint length", default=SOLID['jointAspect'], min=1, max=6,
+                               description="Primary fracture length along local Z, relative to stone width")
     curve_turn: FloatProperty(name="Curve split", description="Degrees a cell's surface must turn in gentle bends "
                               "before it splits into smaller stones; lower keeps more curves round",
                               default=SOLID["curveTurn"], min=5, max=1000)
@@ -107,7 +126,13 @@ def draw(layout, settings, solid):
         row.use_property_split = False
         row.prop_enum(settings, "generator", "fitted", text="Fitted slate")
         row.prop_enum(settings, "generator", "boulders", text="Boulders")
+    else:
+        layout.prop(settings, 'variant')
     for field in FIELDS[settings.generator].values():
+        if field == 'jointed':
+            continue
+        if field == 'joint_aspect' and not settings.jointed:
+            continue
         layout.prop(settings, field)
 
 
@@ -135,7 +160,7 @@ def built(ob):
     """The generator and parameters the mesh was built with, defaults filled."""
     recipe = json.loads(ob["formation_recipe"])
     generator = generator_of(recipe)
-    given = recipe["params"]
+    given = solid_parameters(recipe) if generator == 'solid' else recipe["params"]
     params = {k: given.get(k, GENERATORS[generator].get(k)) for k in FIELDS[generator]}
     if generator == "boulders" and recipe.get("version", 1) < 2:
         # Built when its depth was the construction's and its slabs were

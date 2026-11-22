@@ -80,7 +80,8 @@ GENERATORS = {
     # here because this runs outside Blender. A recipe from before
     # 2026-11-13 also carries recipe F's facets, chisel and facetFalloff,
     # which `prepare` drops.
-    "solid": {"seed": 0, "stoneSize": 1.0, "knub": 0.3, "curveTurn": 60.0},
+    "solid": {"seed": 0, "stoneSize": 1.0, "knub": 0.3, "curveTurn": 60.0, "surfaceRelief": 0.5,
+              "jointed": True, "jointAspect": 2.8},
 }
 
 
@@ -92,11 +93,33 @@ RECIPE_VERSION = 2
 LEGACY_THICKNESS = 2.6
 
 
+SOLID_VARIANTS = (
+    ('boulder', 'Boulder', 'Irregular polygon cells with the original boulder surface'),
+    ('cliff', 'Cliff', 'Directional fractures, anchored stones and crisp broad cleavage planes'),
+)
+
+
+def solid_variant(parameters):
+    return 'cliff' if parameters.get('jointed', GENERATORS['solid']['jointed']) else 'boulder'
+
+
+def solid_parameters(recipe):
+    """Named variants take precedence; older jointed recipes keep their look."""
+    parameters = dict(recipe.get('params', {}))
+    variant = recipe.get('variant')
+    if variant is not None:
+        if variant not in {item[0] for item in SOLID_VARIANTS}:
+            raise ValueError(f'Unknown solid variant {variant!r}')
+        parameters['jointed'] = variant == 'cliff'
+    return parameters
+
+
 def fingerprint():
     """What built the rock: this adapter and the generators, byte for byte."""
     h = hashlib.sha256()
     for p in [Path(__file__), HERE / "assemble.py", HERE / "fitted.py", HERE / "solidfit.py", HERE / "slate.py",
-              HERE / 'cell_sampling.py', HERE / 'render.py',
+              HERE / 'cell_sampling.py', HERE / 'jointed.py', HERE / 'render.py',
+              HERE / 'curve.py', HERE / 'detail.py',
               HERE.parent / 'native' / 'src' / 'cells.cpp', HERE.parent / 'native' / '__init__.py',
               *sorted(GENERATOR.glob("*.py")), GENERATOR / "params.json"]:
         h.update(p.name.encode())
@@ -107,8 +130,9 @@ def fingerprint():
 def prepare(recipe, output):
     if recipe.get("generator") == "solid":
         # All Blender, from the recipe's own guide, camera and frame.
-        given = {k: v for k, v in recipe.get("params", {}).items() if k in GENERATORS["solid"]}
+        given = {k: v for k, v in solid_parameters(recipe).items() if k in GENERATORS["solid"]}
         resolved = {"version": RECIPE_VERSION, "generator": "solid", "guide": recipe["guide"],
+                    "variant": solid_variant(given),
                     "construction": "ASSET", "params": {**GENERATORS["solid"], **given},
                     "generatorHash": fingerprint()}
         (output / "recipe.json").write_text(json.dumps(resolved, separators=(",", ":")))

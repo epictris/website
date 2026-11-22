@@ -2,7 +2,7 @@
 
 import bpy
 
-from . import camera, look, outlines
+from . import camera, look, model_preview, outlines
 from .formations_addon import core
 
 
@@ -18,10 +18,17 @@ class GAME_PT_main(bpy.types.Panel):
         busy = core.busy()
         cam = camera.game_camera(scene)
         box = layout.box()
-        if cam is None:
-            box.label(text="No game camera", icon="ERROR")
-            box.label(text="Run: just scene-guide <level>")
-        else:
+        box.label(text="Model lighting")
+        river = model_preview.is_river(scene) and scene.game_lighting
+        box.operator("game.preview_river_lighting", icon="SHADING_RENDERED",
+                     text="Refresh River Lighting" if river else "Preview River Lighting")
+        if river:
+            box.label(text="River (ball) environment")
+            box.operator("game.restore_scene_lighting", icon="LOOP_BACK")
+        if scene.get(look.ERROR):
+            box.label(text=scene[look.ERROR], icon="ERROR")
+        if cam is not None:
+            box = layout.box()
             box.operator("game.look", icon="VIEW_CAMERA")
             row = box.row(align=True)
             row.operator("game.ride", text="", icon="PLAY_REVERSE").direction = "BACK"
@@ -30,7 +37,7 @@ class GAME_PT_main(bpy.types.Panel):
             row.prop(scene, "frame_current", text="Frame")
             box.label(text=str(cam.get("game_source", "")))
             row = box.row(align=True)
-            row.prop(scene, "game_lighting", toggle=True)
+            row.prop(scene, "game_lighting", text="River lighting" if model_preview.is_river(scene) else "Lighting", toggle=True)
             row.prop(scene, "game_fog", toggle=True)
             # "Depth of Field" is cut short at the sidebar's width.
             row.prop(scene, "game_dof", text="DoF", toggle=True)
@@ -47,8 +54,10 @@ class GAME_PT_main(bpy.types.Panel):
         if busy:
             layout.label(text=core.rebuild_progress, icon="TIME")
 
+        if cam is None and not outlines.collision_outlines(scene):
+            return
         box = layout.box()
-        box.enabled = not busy
+        box.enabled = not busy and cam is not None
         box.label(text="Depth from the game camera")
         box.prop(scene, "game_depth_step", text="Step")
         box.prop(scene, "game_depth_keep_size")

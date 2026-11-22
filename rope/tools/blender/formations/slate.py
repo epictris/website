@@ -67,6 +67,7 @@ CONVEX_GATE = (0.85, 0.97)
 # The two Bevel nodes' names: the edge line's, and the one on the BSDF's
 # Normal that `add_detail` feeds the detail normal map into.
 LINE_BEVEL, SHADING_BEVEL = "Slate edge line bevel", "Slate shading bevel"
+WEATHERING_PROP = 'slate_weathering'
 # How fast the per-facet tone changes with a face's orientation (tone_facets).
 TONE_SCALE = 1.5
 # Chamfer strips (`mark_strips`): a plane (faces within STRIP_PLANE degrees)
@@ -312,7 +313,10 @@ def paint(mat):
         b = N("ShaderNodeBevel")
         b.name = b.label = name
         b.samples = 8
-        b.inputs["Radius"].default_value = BEVEL_RADIUS * scale
+        # Jointed masters have flat face normals. Give their exposed edges
+        # a narrow readable wear line without rounding the broad planes.
+        radius = BEVEL_RADIUS * (2.0 if mat.get(WEATHERING_PROP, False) else 1.0)
+        b.inputs["Radius"].default_value = radius * scale
         return b
 
     line = bevel(LINE_BEVEL)
@@ -334,7 +338,26 @@ def paint(mat):
     L(remap(strip.outputs["Fac"], 0.0, 1.0, 0.0, EDGE_MIX), edge.inputs[1])
     L(mul(edge.outputs[0], convex), edged.inputs[0])
     L(edged.outputs[2], bsdf.inputs["Base Color"])
-    L(bevel(SHADING_BEVEL).outputs["Normal"], bsdf.inputs["Normal"])
+    shading = bevel(SHADING_BEVEL).outputs["Normal"]
+    if mat.get(WEATHERING_PROP, False):
+        # Restrained surface weathering for jointed masters. Keep the slate
+        # palette and geometric edge line; the fine pits never get outlines.
+        pores = noise_tex(coord, 24., 2.)
+        flakes = remap(noise_tex(coord, 6., 2.), .25, .75, 0., .8)
+        relief = N('ShaderNodeMath')
+        relief.operation = 'MULTIPLY_ADD'
+        L(pores, relief.inputs[0])
+        relief.inputs[1].default_value = .2
+        L(flakes, relief.inputs[2])
+        bump = N('ShaderNodeBump')
+        bump.name = bump.label = 'Slate fine weathering'
+        bump.inputs['Strength'].default_value = .35
+        bump.inputs['Distance'].default_value = .045*scale
+        L(relief.outputs[0], bump.inputs['Height'])
+        L(shading, bump.inputs['Normal'])
+        shading = bump.outputs['Normal']
+        L(remap(noise_tex(coord, 5., 2.), .2, .8, .86, 1.), bsdf.inputs['Roughness'])
+    L(shading, bsdf.inputs["Normal"])
 
 
 def add_detail(mat, color, uv_map):

@@ -15,9 +15,9 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, FloatProperty
 
-from . import emission_preview, legacy, look, ops, outlines, ui
+from . import emission_preview, legacy, look, model_preview, ops, outlines, ui
 
-CLASSES = ops.CLASSES + emission_preview.CLASSES + ui.CLASSES
+CLASSES = ops.CLASSES + emission_preview.CLASSES + model_preview.CLASSES + ui.CLASSES
 
 # Until 2026-10-08 all of this was the Formations add-on's, and a file saved
 # then holds it under these names (the toggles and the depth step as the

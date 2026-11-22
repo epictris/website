@@ -640,6 +640,9 @@ def recipe_for(ob):
     else:
         recipe["outline"] = outline_points(ob)
     recipe["generator"], recipe["params"] = params.current(ob)
+    if recipe['generator'] == 'solid':
+        from .worker import solid_variant
+        recipe['variant'] = solid_variant(recipe['params'])
     recipe["version"] = RECIPE_VERSION
     return recipe
 

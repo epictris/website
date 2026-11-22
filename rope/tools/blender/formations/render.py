@@ -5,6 +5,7 @@ Lower-detail representations are derived from evaluated masters by asset_export.
 """
 
 import math
+import json
 
 from .slate import OBJECT_SCALE_PROP as DETAIL_SCALE
 
@@ -41,6 +42,10 @@ CAMERA = "backdrop_camera"
 def setting(ob, name):
     """Explicit surface settings, otherwise full-detail defaults."""
     if name == 'export_depth_lod':
+        return False
+    # The master owns these finishing decisions. In particular, jointed
+    # rock deliberately keeps straight fractures instead of export bows.
+    if name in PASSES and name in json.loads(ob.get('formation_recipe', '{}')).get('surfaceFinish', []):
         return False
     if name in ob:
         return ob[name]

@@ -38,7 +38,13 @@ WORLD = "guide.world"
 # What the scene had before a toggle took it over, restored when it is off.
 SAVED_FOG = "game_fog_saved"
 SAVED_LIGHTING = "game_lighting_saved"
+SAVED_WORLD = "game_lighting_original_world"
+SAVED_LIGHTS = "game_lighting_original_lights"
+ACTIVE_LIGHTS = "game_lighting_collection"
 ERROR = "game_look_error"
+SHADING_FIELDS = ("type", "use_scene_lights", "use_scene_world", "use_scene_lights_render", "use_scene_world_render")
+CYCLES_FIELDS = ("use_preview_denoising", "preview_samples", "use_denoising", "sample_clamp_direct",
+                 "sample_clamp_indirect", "use_fast_gi")
 # Depth at or past this is the sky (the world), which the game never fogs.
 SKY_DEPTH = 1e6
 
@@ -63,10 +69,6 @@ def apply(context):
     transform the fog's tree converts through."""
     scene = context.scene
     retire_volume_preview(scene)
-    if camera.game_camera(scene) is None:
-        if enabled(scene):
-            raise ValueError(camera.NO_CAMERA)
-        return
     apply_lighting(scene, context.view_layer)
     apply_dof(scene)
     apply_fog(context)
@@ -84,6 +86,10 @@ def retire_volume_preview(scene):
 
 def apply_dof(scene):
     plain = camera.game_camera(scene)
+    if plain is None:
+        if scene.game_dof:
+            raise ValueError(camera.NO_CAMERA)
+        return
     if plain.get("game_dof"):
         plain = plain.parent
     twin = next((ob for ob in plain.children if ob.get("game_dof")), None)
@@ -112,22 +118,49 @@ def linked(kind, name, library):
     return getattr(data_to, kind)[0]
 
 
+def viewports(scene):
+    for window in bpy.context.window_manager.windows:
+        if window.scene != scene:
+            continue
+        for i, area in enumerate(window.screen.areas):
+            if area.type == "VIEW_3D":
+                yield window.screen.name, i, area.spaces.active.shading
+
+
 def apply_lighting(scene, view_layer):
-    library = guide_library(scene)
+    from . import model_preview
     on = scene.game_lighting
+    if on:
+        if model_preview.is_river(scene):
+            world, lights = model_preview.lighting(scene)
+        else:
+            library = guide_library(scene)
+            if library is None:
+                raise ValueError("No linked game lighting: use Preview River Lighting for a standalone model")
+            world = linked("worlds", WORLD, library)
+            lights = linked("collections", LIGHTS, library)
     if on and SAVED_LIGHTING not in scene:
-        if library is None:
-            raise ValueError("The game camera is not linked from a guide file")
-        world = linked("worlds", WORLD, library)
-        lights = linked("collections", LIGHTS, library)
-        own = [ob for ob in scene.objects if ob.type == "LIGHT" and ob.library is None
+        preview_objects = set(lights.all_objects)
+        own = [ob for ob in scene.objects if ob.type == "LIGHT" and ob not in preview_objects
                and not (ob.hide_viewport and ob.hide_render)]
         settings = scene.view_settings
         scene[SAVED_LIGHTING] = json.dumps({
             "world": scene.world.name if scene.world else None,
             "view": [settings.view_transform, settings.look, settings.exposure, settings.gamma],
             "lights": {ob.name: [ob.hide_viewport, ob.hide_render] for ob in own},
+            "collection_linked": lights.name in scene.collection.children,
+            "engine": scene.render.engine,
+            "cycles": {key: getattr(scene.cycles, key) for key in CYCLES_FIELDS},
+            "viewports": [[screen, index, {key: getattr(shading, key) for key in SHADING_FIELDS}]
+                          for screen, index, shading in viewports(scene)],
         })
+        if scene.world is not None:
+            scene[SAVED_WORLD] = scene.world
+        # ID references survive renaming and distinguish linked lights with
+        # the same name. Retain the JSON names for older saved previews.
+        scene[SAVED_LIGHTS] = {str(i): {"object": ob, "viewport": ob.hide_viewport, "render": ob.hide_render}
+                              for i, ob in enumerate(own)}
+        scene[ACTIVE_LIGHTS] = lights
         for ob in own:
             ob.hide_viewport = True
             ob.hide_render = True
@@ -140,17 +173,34 @@ def apply_lighting(scene, view_layer):
         settings.gamma = 1.0
     elif not on and SAVED_LIGHTING in scene:
         saved = json.loads(scene[SAVED_LIGHTING])
+        active = scene.get(ACTIVE_LIGHTS)
         for coll in list(scene.collection.children):
-            if coll.name == LIGHTS and coll.library is not None:
+            if ((coll == active and not saved.get("collection_linked", False))
+                    or (active is None and coll.name == LIGHTS and coll.library is not None)):
                 scene.collection.children.unlink(coll)
-        scene.world = bpy.data.worlds.get(saved["world"]) if saved["world"] else None
+        scene.world = scene.get(SAVED_WORLD) or (bpy.data.worlds.get(saved["world"]) if saved["world"] else None)
         settings = scene.view_settings
         settings.view_transform, settings.look, settings.exposure, settings.gamma = saved["view"]
-        for name, (hide_viewport, hide_render) in saved["lights"].items():
-            ob = bpy.data.objects.get(name)
+        stored = scene.get(SAVED_LIGHTS)
+        originals = ((entry.get("object"), entry["viewport"], entry["render"]) for entry in stored.values()) \
+            if stored is not None else ((bpy.data.objects.get(name), *flags) for name, flags in saved["lights"].items())
+        for ob, hide_viewport, hide_render in originals:
             if ob is not None:
                 ob.hide_viewport = hide_viewport
                 ob.hide_render = hide_render
+        if "engine" in saved:
+            scene.render.engine = saved["engine"]
+        for key, value in saved.get("cycles", {}).items():
+            setattr(scene.cycles, key, value)
+        shades = {(screen, index): shading for screen, index, shading in viewports(scene)}
+        for screen, index, values in saved.get("viewports", []):
+            shading = shades.get((screen, index))
+            if shading is not None:
+                for key, value in values.items():
+                    setattr(shading, key, value)
+        scene.pop(SAVED_WORLD, None)
+        scene.pop(SAVED_LIGHTS, None)
+        scene.pop(ACTIVE_LIGHTS, None)
         del scene[SAVED_LIGHTING]
     if on:
         # Older linked guides may still contain copied point/spot lights.
@@ -160,7 +210,6 @@ def apply_lighting(scene, view_layer):
                 ob.hide_render = True
         # A saved scene may have been manually exposed after Lighting was
         # enabled. Reapplying Game Lighting restores the guide's current view.
-        world = linked("worlds", WORLD, library)
         scene.world = world
         scene.view_settings.view_transform = world["game_tone_view"]
         scene.view_settings.look = "None"
@@ -168,14 +217,11 @@ def apply_lighting(scene, view_layer):
         scene.view_settings.gamma = 1.0
         # Material Preview otherwise uses its studio HDRI even though the
         # game's world and lights have been linked into the scene.
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area.type == "VIEW_3D":
-                    shading = area.spaces.active.shading
-                    shading.use_scene_lights = True
-                    shading.use_scene_world = True
-                    shading.use_scene_lights_render = True
-                    shading.use_scene_world_render = True
+        for _, _, shading in viewports(scene):
+            shading.use_scene_lights = True
+            shading.use_scene_world = True
+            shading.use_scene_lights_render = True
+            shading.use_scene_world_render = True
     from . import emission_preview
     emission_preview.set_enabled(scene, on)
 

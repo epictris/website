@@ -38,7 +38,8 @@ import {
 } from "../src/level/levelFormat";
 import { outlineOfData } from "../src/render/shapePath";
 import { DOF_MAX_BLUR, FOCUS_BAND } from "../src/render3d/depthOfField";
-import { EQUIRECT_SIZE, equirectPixels, fogOf, lightingOf, TONE_MAPPING_EXPOSURE } from "../src/render3d/environment";
+import { fogOf } from "../src/render3d/environment";
+import { lightingJob } from "./lightingJob";
 import * as THREE from "three";
 import { isSceneName } from "../src/render3d/scenes";
 import { LEVELS } from "../src/level/registry";
@@ -162,20 +163,9 @@ const cameraJob = {
 // `Environment` builds from the level's block (sun, hemisphere fill, the
 // generated sky it reflects, background, tone mapping). Editor light objects
 // are intentionally not copied: Blender previews illumination from its meshes.
-function lightingJob() {
-  const l = lightingOf(level.environment);
-  const lin = (c: THREE.Color): number[] => [c.r, c.g, c.b].map((v) => Math.round(v * 1e6) / 1e6);
-  const vec = (v: THREE.Vector3): number[] => [v.x, v.y, v.z].map(round);
+function guideLightingJob() {
   return {
-    sun: l.sun && { color: lin(l.sun.color), intensity: l.sun.intensity, dir: vec(l.sun.dir) },
-    fill: { sky: lin(l.fill.sky), ground: lin(l.fill.ground), intensity: l.fill.intensity },
-    // RGBA floats, row 0 straight down, as three reads them (`equirectDirection`).
-    sky: { ...EQUIRECT_SIZE, pixels: Array.from(equirectPixels(l.sky), (v) => Math.round(v * 1e6) / 1e6) },
-    envIntensity: l.envIntensity,
-    // The CSS hex three clears to: shown as these sRGB bytes, never tone mapped.
-    background: l.background,
-    hdri: l.hdri,
-    toneMappingExposure: TONE_MAPPING_EXPOSURE,
+    ...lightingJob(level.environment),
     shelters: (level.shelters ?? []).flatMap((s) => {
       const outline = placedOutline(s);
       return outline ? [{ outline: outline.map((p) => [p.x, p.y]), front: s.front ?? DEFAULT_SHELTER_FRONT, thickness: SHELTER_THICKNESS }] : [];
@@ -190,7 +180,7 @@ const job = {
   spawn: { x: round(level.player.x), y: round(-level.player.y), r: round(level.player.radius) },
   bodies,
   camera: cameraJob,
-  lighting: lightingJob(),
+  lighting: guideLightingJob(),
 };
 
 const blender = flag("blender") ?? process.env["BLENDER_PATH"] ?? process.env["BLENDER"] ?? "blender";

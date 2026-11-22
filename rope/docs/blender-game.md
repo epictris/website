@@ -13,6 +13,35 @@ just game-install         # once per machine; links the add-on into Blender and 
 ```
 
 The add-on is the **Game** tab in the 3D viewport's sidebar (N).
+
+## Preview a model with river lighting
+
+**N → Game → Model lighting → Preview River Lighting** works in any scene,
+including an unsaved file with no camera or linked level guide. It reads the
+current `levels/ball.json` through the game's own lighting code and applies
+the river's sun, generated sky, hemisphere fill, background and ACES tone
+mapping. It switches the viewport to Cycles Rendered shading; orbit normally
+or keep looking through your own scene camera. It does not move your model,
+change your camera, or change the timeline.
+
+**Refresh River Lighting** reads the level again after environment edits.
+**Restore Scene Lighting** restores the original world, light visibility,
+colour management, renderer, Cycles preview settings and viewport shading.
+Both buttons support Undo. The local preview world and packed sky are saved
+with the scene, so reopening a preview does not need a linked guide or Bun;
+refreshing requires the project's installed Bun dependencies. Existing Game
+installations use the repository through a symlink: restart Blender or use
+**Reload Scripts** to pick up the new buttons.
+
+This is a model-lighting preview, using the same environment conversion as
+the linked-guide preview. River's location-specific shelter walls, fog,
+camera path, editor point/spot lights and scenery emitters are not imported
+into an unrelated model scene. Any emitting geometry already in the model
+scene uses the existing Cycles emission preview. Judge placement-specific
+shadows, fog and the exported material in the actual level.
+
+## Scene guides
+
 The `game.light-preview*` helper walls and fog volumes are locked against
 selection on load. The shared foliage, moss and ivy placement ray also skips
 them, so clicking through a preview volume plants or paints on the rock behind

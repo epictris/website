@@ -360,7 +360,7 @@ def to_blender_dir(v):
     return Vector((v[0], -v[2], v[1])).normalized()
 
 
-def build_lighting(job):
+def build_lighting(job, collection_name=LIGHTS_COLLECTION, world_name=WORLD):
     """The game's light at rest, for the Game panel's Lighting: the
     lights in `guide.lights` (never in the Guide, so the scene does not light
     with them until asked) and the sky as `guide.world`.
@@ -371,7 +371,7 @@ def build_lighting(job):
     lights a surface as three's environment of L does. three's hemisphere fill
     is irradiance mix(ground, sky, (1 + n.y) / 2) * I, which is exactly what a
     world of sky above and ground below at I/pi gives a diffuse surface."""
-    coll = bpy.data.collections.new(LIGHTS_COLLECTION)
+    coll = bpy.data.collections.new(collection_name)
     bpy.context.scene.collection.children.link(coll)
     sun = job.get("sun")
     if sun:
@@ -383,12 +383,13 @@ def build_lighting(job):
         # A sun shines down its -Z; three's `dir` is where its lamp sits.
         ob.rotation_euler = to_blender_dir(sun["dir"]).to_track_quat("Z", "Y").to_euler()
         coll.objects.link(ob)
-    build_world(job)
+    world = build_world(job, world_name)
     log(f"game lighting: {'a sun, ' if sun else ''}no copied editor lights, "
         f"{'HDRI ' + job['hdri'] + ' (not carried: the generated sky stands in)' if job.get('hdri') else 'generated sky'}")
+    return world, coll
 
 
-def build_world(job):
+def build_world(job, name=WORLD):
     """The game's sky as a world: the generated environment three reflects (the
     same pixels, sampled with three's own equirectangular mapping), the
     hemisphere fill, and to the camera the background colour three clears to."""
@@ -402,18 +403,23 @@ def build_world(job):
     # image sRGB-encoded).
     import tempfile
     settings = bpy.context.scene.render.image_settings
-    settings.file_format = "OPEN_EXR"
-    settings.color_depth = "32"
-    with tempfile.TemporaryDirectory() as scratch:
-        path = os.path.join(scratch, "guide.sky.exr")
-        image.save_render(filepath=path, scene=bpy.context.scene)
-        bpy.data.images.remove(image)
-        image = bpy.data.images.load(path)
-        image.name = "guide.sky"
-        image.pack()
+    original = settings.file_format, settings.color_depth, settings.color_mode
+    try:
+        settings.file_format = "OPEN_EXR"
+        settings.color_depth = "32"
+        settings.color_mode = "RGBA"
+        with tempfile.TemporaryDirectory() as scratch:
+            path = os.path.join(scratch, "guide.sky.exr")
+            image.save_render(filepath=path, scene=bpy.context.scene)
+            bpy.data.images.remove(image)
+            image = bpy.data.images.load(path)
+            image.name = "guide.sky"
+            image.pack()
+    finally:
+        settings.file_format, settings.color_depth, settings.color_mode = original
     image.filepath_raw = "//guide.sky.exr"
     image.colorspace_settings.name = "Linear Rec.709"
-    world = bpy.data.worlds.new(WORLD)
+    world = bpy.data.worlds.new(name)
     world.use_fake_user = True
     world.use_nodes = True
     nt = world.node_tree
@@ -482,6 +488,7 @@ def build_world(job):
     links.new(mix.outputs[0], out.inputs["Surface"])
     world["game_tone_view"] = TONE_VIEW
     world["game_tone_exposure"] = math.log2(job["toneMappingExposure"] / .6)
+    return world
 
 
 def build_shelters(job):
@@ -563,4 +570,5 @@ def main():
         log(f"{scene_path} exists; left alone (it links the guide, so it sees the new one on open)")
 
 
-main()
+if __name__ == "__main__":
+    main()

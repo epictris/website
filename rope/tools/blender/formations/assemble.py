@@ -132,11 +132,15 @@ bpy.context.scene.collection.children.link(src)
 slate = painted_slate()
 generator = recipe.get("generator", "boulders")
 if generator == "solid":
+    from formations.worker import solid_parameters, solid_variant
+    recipe['params'] = solid_parameters(recipe)
+    recipe['variant'] = solid_variant(recipe['params'])
     obj, scale = solidfit.build_from_recipe(recipe, src)
     dst.objects.link(obj)
     # Its lengths times its depth over the gameplay plane's, so it is worked
     # as finely on screen as a rock on the plane (scene_export.detail_scale).
     slate[slate_module.SCALE_PROP] = 1.0
+    slate[slate_module.WEATHERING_PROP] = bool(recipe['params'].get('jointed'))
     slate_module.paint(slate)
     obj[render.DEPTH_SCALE] = round(scale, 4)
 elif generator == "fitted":
@@ -170,8 +174,19 @@ if generator == 'solid':
     # Join shallow folds into the existing slate's broad planes before tone
     # assignment, so arbitrary remesh triangles do not become colour patches.
     obj.data.calc_loop_triangles()
-    fitted._facets(obj, len(obj.data.loop_triangles), preserve_topology=True)
+    # Jointed faces intentionally meet at shallow cleavage angles. The
+    # old 9-degree dissolve erased these into wide featureless panels.
+    fitted._facets(obj, len(obj.data.loop_triangles),
+                   angle=3. if recipe['params'].get('jointed') else None,
+                   preserve_topology=True)
 tone_facets(obj, recipe["params"]["seed"])
+if generator == 'solid' and recipe['params'].get('jointed'):
+    from formations.jointed import finish
+    finish(obj, recipe['params']['seed'], dst)
+    # The straight fracture boundaries are intentional. Export must not
+    # reintroduce the broad crease bows that melted their plane transitions.
+    recipe['surfaceFinish'] = ['export_creases']
+    obj['formation_recipe'] = json.dumps(recipe, separators=(',', ':'))
 
 for piece in list(src.objects):
     data = piece.data

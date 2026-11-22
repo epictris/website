@@ -1,6 +1,13 @@
 """A SOLID formation: a closed guide mesh cut into stones that fit it, each
 finished as the boulder generator finishes the top of an outline rock.
 
+Jointed rock (2026-11-21, jointed.py) is now the default partition: long,
+slanted primary fractures, smaller breaks at their ends, correlated cleavage
+relief and asymmetric corner loss. Disable jointed for the earlier cells
+and roof taper described below. Both use the same guide intersection and
+closed core. Jointed masters retain planar faces and flat normals, with a
+narrow slate shader bevel; the export chip bake is retained.
+
 Two halves, each the better of two generators (Tris, 2026-11-13: "this is the
 best so far ... I'm happy to switch to this new approach"; the study, with
 every render it judged, is in docs/blender-backdrop.md):
@@ -41,6 +48,12 @@ swept through a plane:
 Everything is sized in asset-local metres. The full-detail master is independent
 of camera, scene depth, water and placement. Legacy depth parameters are ignored;
 asset_export.py derives simpler representations from the finished mesh.
+
+Surface relief adds a projecting cleavage plane and an offset, oblique fold
+to each stone (2026-11-21). It replaces the shared roof field gradually, fully
+at 0.5, so a flat wall has broad irregular facets without horizontal bands.
+The same displacement decides overlapping joints before cutting the cells;
+the outer guard includes its maximum projection. Zero keeps the roof taper.
 """
 
 import math
@@ -132,7 +145,11 @@ UNFOLD_MAX, UNFOLD_KEEP = 60, 0.95
 # - stoneSize: every stone's size times this (CELLS_PER_M3 / stoneSize^3);
 # - knub: KNUB;
 # - curveTurn: CURVE_TURN, degrees;
-PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0}
+# - surfaceRelief: cleavage depth as a share of stoneSize;
+# - jointed: hierarchical cleavage instead of the earlier polygon cells;
+# - jointAspect: primary vertical fracture length relative to its width;
+PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0, "surfaceRelief": 0.5,
+          "jointed": True, "jointAspect": 2.8}
 
 
 def resolved(params):
@@ -427,11 +444,27 @@ def sink(taper, points):
     """How far `taper` takes `points` in along its inward normal (out where
     negative): hybrid_geometry.taper_chunk, |z| (the distance from the
     ridge along the depth axis) times the slope on that side times the
-    influence, less the mean slope's share (the roof, module docstring)."""
+    influence, less the mean slope's share (the roof, module docstring),
+    blended into the stone's own projecting cleavage planes."""
+    if taper.get('jointed'):
+        from .jointed import sink as joint_sink
+        return joint_sink(taper, points)
     pts = np.atleast_2d(points)
     z = pts @ taper["t"] - taper["r"]
     slope = np.where(z < 0, taper["slopes"][0], taper["slopes"][1])
-    return np.abs(z) * (slope - taper["mean"]) * taper["influence"]
+    result = np.abs(z) * (slope - taper["mean"]) * taper["influence"]
+    if taper.get("relief", 0):
+        # Fade the shared roof field out as cleavage takes over; otherwise
+        # its common ridge heights draw horizontal bands across a flat wall.
+        result *= max(0., 1. - 2. * taper["relief"])
+        # A broad cleavage plane and one offset fold per stone. Unlike the
+        # shared roof ridges these still have relief on a perfectly flat guide.
+        delta = (pts - taper["centre"]) / taper["k"]
+        plane = delta @ taper["cleavage"]
+        fold = np.abs(delta @ taper["fold_axis"] - taper["fold_at"])
+        displacement = -taper["lift"] + plane + taper["fold_slope"] * fold
+        result += taper["relief"] * taper["k"] * np.clip(displacement, -1., .35)
+    return result
 
 
 class Cells:
@@ -572,10 +605,18 @@ class Cells:
         n = self._normal(hit[0], NORMAL_REACH * k)
         t = along(n)
         spacing = RIDGE_SPACING * d
-        return {"n": n, "t": t, "r": spacing * round(float(np.dot(point, t)) / spacing),
+        taper = {"n": n, "t": t, "r": spacing * round(float(np.dot(point, t)) / spacing),
                 "slopes": rng.uniform(b["taperSlopeMin"], b["taperSlopeMax"], 2),
                 "mean": (b["taperSlopeMin"] + b["taperSlopeMax"]) / 2,
                 "influence": math.exp(-hit[3] / (d * b["taperReach"])), "k": k}
+        across = np.cross(n, t)
+        angle = rng.uniform(-.7, .7)
+        fold_axis = t * math.cos(angle) + across * math.sin(angle)
+        taper.update(relief=self.p["surfaceRelief"], centre=np.array(hit[0]),
+                     cleavage=t * rng.uniform(-.35, .35) + across * rng.uniform(-.3, .3),
+                     fold_axis=fold_axis, fold_at=rng.uniform(-.3, .3),
+                     fold_slope=rng.uniform(.12, .45), lift=rng.uniform(.15, .8))
+        return taper
 
     def _normal(self, at, reach):
         """The solid's area-weighted normal over its faces within `reach` of
@@ -584,7 +625,11 @@ class Cells:
         not the same from one run to the next."""
         near = sorted(i for _, i, _ in self.faces.find_range(at, reach))
         if not near:
-            near = [self.faces.find(at)[1]]
+            # Face centres are not a surface-distance query. On a wide box,
+            # the centre of an end cap can be closer than the front's centre,
+            # even though this point is on the front: it sheared those stones
+            # sideways and left the wall's outer regions completely flat.
+            return np.array(self.surface.find_nearest(at)[1])
         n = self.face_n[near].sum(0)
         return n / np.linalg.norm(n)
 
@@ -673,7 +718,7 @@ def _curved(ob, surface, half):
 
 # -- a stone ----------------------------------------------------------------
 
-def surface_planes(ob, surface):
+def surface_planes(ob, surface, *, min_share=PLANE_SHARE, max_planes=MAX_PLANES):
     """A stone's faces on the solid's surface grouped by direction, largest
     first, each group's plane (normal, offset) through its area-weighted
     centre: what saws the stone flat."""
@@ -698,8 +743,8 @@ def surface_planes(ob, surface):
         else:
             groups.append({"n": n * a, "c": c * a, "a": a})
     planes = []
-    for g in sorted(groups, key=lambda g: -g["a"])[:MAX_PLANES]:
-        if g["a"] >= PLANE_SHARE * total:
+    for g in sorted(groups, key=lambda g: -g["a"])[:max_planes]:
+        if g["a"] >= min_share * total:
             n = g["n"] / np.linalg.norm(g["n"])
             offset = float(n @ (g["c"] / g["a"]))
             planes.append((n, offset))
@@ -711,7 +756,11 @@ def work(ob, taper, surface, boulder, rng, camera=None):
     planes, the chunk bevel, split at its ridge and tapered (`sink`)."""
     bmesh, bpy, _, Vector, _ = _bpy()
     co = np.array([v.co for v in ob.data.vertices])
-    planes = surface_planes(ob, surface)
+    planes = surface_planes(ob, surface, min_share=.025, max_planes=6) if taper.get('jointed') else surface_planes(ob, surface)
+    profiles = [taper]
+    if taper.get('jointed'):
+        from .jointed import surface_profiles
+        profiles = surface_profiles(taper, planes, co)
     if planes:
         v = halfspaces(planes, co.min(0) - 0.5, co.max(0) + 0.5)
         me = hull_mesh(v, "saw") if len(v) >= 4 else None
@@ -723,7 +772,13 @@ def work(ob, taper, surface, boulder, rng, camera=None):
     if len(ob.data.polygons) < 4:
         return False
     k = taper["k"]
+    if taper.get('jointed'):
+        from .jointed import wear
+        for profile in profiles:
+            wear(ob, profile, rng)
     width = rng.uniform(boulder["chunkBevelMin"], boulder["chunkBevelMax"]) * k
+    if taper.get('jointed'):
+        width *= .2
     near = min(v.co.y for v in ob.data.vertices)
     blur = camera.budget.blur(near-camera.eye[1]-camera.distance) if camera else 0.
     if width >= blur:
@@ -733,12 +788,50 @@ def work(ob, taper, surface, boulder, rng, camera=None):
     # taper_chunk splits a piece at its ridge so each side takes its slope.
     bm = bmesh.new()
     bm.from_mesh(ob.data)
-    bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
-                           plane_co=Vector(taper["t"] * taper["r"]), plane_no=Vector(taper["t"]))
+    if taper.get('jointed'):
+        # A fixed root plane in each exposed face's inward direction. Even
+        # thin edge pieces keep part of their original attachment volume.
+        co = np.array([v.co for v in bm.verts])
+        for profile in profiles:
+            normal = profile['n']
+            distance = profile.get('plane', normal@profile['centre'])
+            deepest = max(1e-6, float(np.max(distance-co@normal)))
+            profile['anchor_depth'] = min(.55*k, .65*deepest)
+            at = normal*(distance-profile['anchor_depth'])
+            bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
+                                  plane_co=Vector(at), plane_no=Vector(normal))
+        # Exact break planes of the piecewise-linear shared mass field.
+        co = np.array([v.co for v in bm.verts])/k
+        for normal, phase in ((np.array([.72, 0., .18]), taper['phase']),
+                              (np.array([0., .25, .5]), taper['phase']*1.3)):
+            values = co@normal+phase
+            for index in range(math.ceil(values.min()), math.floor(values.max())+1):
+                at = normal*((index-phase)*k/np.dot(normal, normal))
+                bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
+                                      plane_co=Vector(at), plane_no=Vector(normal))
+    if not taper.get('jointed'):
+        bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
+                               plane_co=Vector(taper["t"] * taper["r"]), plane_no=Vector(taper["t"]))
+    for profile in profiles:
+        if profile.get('jointed'):
+            if profile['cross_fold']:
+                normal = profile['cross_axis']
+                at = profile['centre']+normal*profile['cross_at']*k
+                bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
+                                      plane_co=Vector(at), plane_no=Vector(normal))
+        if profile.get('relief', 0) and (not profile.get('jointed') or profile['fold']):
+            axis = profile['fold_axis']
+            at = profile['centre']+axis*profile['fold_at']*k
+            bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
+                                  plane_co=Vector(at), plane_no=Vector(axis))
     bm.to_mesh(ob.data)
     bm.free()
     co = np.array([v.co for v in ob.data.vertices])
-    co -= taper["n"] * sink(taper, co)[:, None]
+    if taper.get('jointed'):
+        from .jointed import displace
+        co = displace(profiles, co)
+    else:
+        co -= taper["n"] * sink(taper, co)[:, None]
     ob.data.vertices.foreach_set("co", co.ravel())
     ob.data.update()
     return True
@@ -1077,6 +1170,8 @@ def build(solid, camera, params, collection, water_z=None):
     p = resolved(params)
     # Asset geometry is independent of the camera, water and scene placement.
     boulder, reinforce, limit_edge_bevel = _boulders()
+    if p['jointed']:
+        boulder = dict(boulder, thinEdgeOffset=.018, smoothFactor=0., smoothIterations=0)
     rng = np.random.default_rng(int(p["seed"]))
     guide = solid
     solid = bpy.data.objects.new("Construction guide", guide.data.copy())
@@ -1094,7 +1189,12 @@ def build(solid, camera, params, collection, water_z=None):
         bpy.data.meshes.remove(me)
 
     # The cells' pieces of the solid, those with any of its surface.
-    cells = Cells(solid, surface, camera, p, boulder, rng, report, guide=guide)
+    if p['jointed']:
+        from .jointed import JointCells
+        cell_type = JointCells
+    else:
+        cell_type = Cells
+    cells = cell_type(solid, surface, camera, p, boulder, rng, report, guide=guide)
     pieces, curved = [], set()
     todo = cells.ids()
     while todo:
@@ -1171,9 +1271,10 @@ def build(solid, camera, params, collection, water_z=None):
     core_tree = _tree(core) if len(core.data.polygons) else None
 
     # The guard: the solid grown by the most a step can rise above it, the
-    # half of a ridge spacing at the steepest share of the mean slope.
+    # half of a ridge spacing at the steepest share of the mean slope,
+    # plus the bounded cleavage displacement.
     rise = (RIDGE_SPACING * DEPTH / 2.6 * k / 2 * (cells.tapers[0]["mean"] - boulder["taperSlopeMin"])
-            + CELL_OVERLAP * scale * size_factor) if cells.tapers else 0.0
+            + CELL_OVERLAP * scale * size_factor + p["surfaceRelief"] * k) if cells.tapers else 0.0
     guard = grown(solid, rise, 0.05, collection, "Guard")
 
     # One rock: the core and the stones, then the boulder's finish
@@ -1264,7 +1365,7 @@ def build_from_recipe(recipe, collection):
         raise ValueError(f"the guide is not a closed mesh ({open_edges} non-manifold edges)")
     solid = bpy.data.objects.new("Guide", me)
     collection.objects.link(solid)
-    piece, parts, scale, report = build(solid, None, recipe["params"], collection)
+    piece, parts, scale, report = build(solid, None, worker.solid_parameters(recipe), collection)
     collection.objects.unlink(solid)
     bpy.data.objects.remove(solid)
     bpy.data.meshes.remove(me)
