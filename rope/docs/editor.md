@@ -9,7 +9,7 @@ stable id per body) and manipulates it with the mouse: pan (**middle**-button dr
 right button, or a **left** drag on anything not selected), wheel-zoom about the cursor,
 click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
-This page is the editor's **Level** workspace; the toolbar's switcher (**W**) turns the same editor into the **Visuals** workspace, a free 3D view of the collision, lights and cameras against the level's Blender scene ([Workspaces](#workspaces-level-and-visuals), [editor-visuals](editor-visuals.md)).
+The editor is arranged as three **workspaces**, one per workflow - 2D, Formations and Decorations ([below](#workspaces-2d-formations-decorations)).
 The editor authors what the game simulates and lights; what a level LOOKS like is its Blender scene ([blender-scenes](blender-scenes.md)), and a collision shape is drawn in 3D only by its own **debug geometry** ([below](#debug-geometry)).
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
@@ -409,14 +409,90 @@ The **Sounds** button beside the file controls opens the menu that assigns sound
 It is not part of any level: what it writes is `src/audio/soundBank.json` and the sound library, and a change is heard straight away in ▶ Test and in a game open in another tab.
 See [sound](sound.md#the-sounds-menu).
 
+## Workspaces: 2D, Formations, Decorations
+
+Since 2026-11-23 the editor is three workspaces, tabs in the middle of the command bar (**1**, **2**, **3**), as Blender's Layout / Modeling / Texture Paint tabs are.
+Tris asked for it because one editor offering everything at once was too busy: each workflow should have its own UI readily to hand and nothing else's in the way.
+The policy is one module, `src/editor/workspaces.ts`; the editor asks it.
+
+| | 2D | Formations | Decorations |
+|---|---|---|---|
+| View | the gameplay plane head on, locked | free 3D | free 3D |
+| Dock | the draw tools grouped (Collision, Gameplay, Scene), `kind`, the root widths, the layers | Level / Assets, Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision |
+| Drawn and picked | everything on the plane, all layers; not 3D bodies or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations |
+| Inspector | everything but the Formation and Decorations sections | Level, Environment, 3D camera, a body's Transform and Formation | Level, Environment, 3D camera, a rock's Decorations, a decoration's panel |
+
+**What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), what a click or a band picks (`pickableItems`), and what the outliner lists ("Rocks" in the 3D workspaces, numbered as the level numbers its bodies, so a body is the same number in all three).
+Chains, vines, berries and the spawn marker are the plane's and are picked in 2D only; the solid guides are drawn and picked in Formations only, where in the others they were wireframe in front of the rock.
+The scene itself is drawn whole in every workspace: the rocks are the reference 2D is drawn against, and the collision outlines are a formation's guide.
+Switching drops from the selection whatever the new workspace does not hold, as hiding a layer does: it could be neither seen nor clicked, but a nudge, a field or a Delete would still reach it.
+The draw tools are 2D's (`setTool` refuses one elsewhere, so their keys arm nothing), the Assets tab is Formations' (leaving it closes the asset and brings the level back), and the decoration palette and brush end when Decorations is left.
+
+**The inspector** is filtered by section key (`sectionShown`, applied by `pruneEmptySections`), so a rock's panel in Formations is its recipe rather than its bounce, friction and mover first.
+The section a workspace's work is done in (`PRIMARY_SECTIONS`: Formation, Decorations, a decoration's own) starts open until the author closes it, remembered as opened sections are (`setDefaultOpen` in `panelUi.ts`).
+
+**The 2D view is locked head on** (`VisualsWorkspace.headOnOnly`): the middle drag pans instead of orbiting, the wheel zooms about the plane point under the pointer (never a rock behind it, which would move the target off the plane), and **F** frames the selection's footprint with the target kept on the plane.
+Entering 2D turns a turned view back to the plane over the same place; "Align camera to plane" is not offered there, since there is nothing to align.
+**Each 3D workspace keeps its angle**: leaving one stores its yaw, pitch and the depth it orbited about, and coming back applies them over wherever the view now looks, at the current distance - so 2D and Formations can be swapped over one ledge without the view jumping to another part of the level.
+
+**Guides and rocks** (Formations, 2026-11-23).
+Every guide is drawn in its own bright colour (`guideColor` in `src/editor/guideColors.ts`): a hue hashed from the formation's id, so it is "random" but keeps its colour through a reload, an undo or a regenerate, and the solid guides' volumes and edges and the collision guides' dashed outlines (`drawFormationGuide`) wear it alike.
+The dock's **Show** has two globals, **Guides** and **Rocks**, remembered by the browser (`guides`, `rocks` in `prefs.ts`): every guide in the level drawn or not, every generated rock drawn or not.
+**Selected** switches the selected formations between **Guide** (the rock hidden), **Rock** (the guide hidden) and **Both**; **Tab** swaps guide and rock, as Blender's Tab swaps object and edit mode.
+A per-formation choice (`formationView`) overrides the globals until either global is set again, which clears them all, so a global always means every formation in the level.
+A rock not generated has nothing but its guide, so Rock and Both are offered only for one that is.
+A hidden rock is hidden as an H-hidden body is (`Scene3D.setHidden`, from `syncHighlight`), so it is not picked either; a hidden guide is not handed to `SolidGuideView` at all.
+Outside Formations the rocks are always drawn and the guides are not.
+Until this change a generated rock's guide was drawn only while it was selected; now Guides decides.
+
+**Primitives** (Formations, 2026-11-23): **+ Box** and **+ Cylinder** - the starting shapes a guide is sculpted from; outlines, the three-outline preset, hulls and ellipsoids were retired the same day ([formations](formations.md#in-the-editor), `bun run guides:migrate`) - each make a new guide of their own - a 3D body holding one formation whose solid guide is that one shape (`createBackdrop` with a shape) - standing at the view's target, depth included, and selected, as Blender adds at the 3D cursor; **Shift+A** with no guide selected offers the same.
+With a solid guide selected the dock adds **Add to selected guide** (the same shapes into its stack, as Shift+A then does) and **Combine with other guides**.
+The cylinder is a primitive of the format since this change (`prim: "cylinder"`, `size` its full extents, standing along its y), meshed by manifold-3d like the others; the generator is handed the guide's mesh, so nothing in Blender changed.
+
+**Sculpt** (Formations, 2026-11-23, Selected in the dock, the panel, or **Ctrl+Tab**): the selected solid guide shaped with **D** Draw, **G** Grab and **C** Cut, Dyntopo and Remesh, as Blender's sculpt mode; while it is on, the dock is the mode's and every key but the view's and the workspaces' is too, so **G** is the Grab brush there, not the object grab below.
+**C** outside the mode cuts the selected guide's whole stack to a polygon drawn on the view.
+All of it is in [formations](formations.md#sculpting).
+
+**Combining guides**: with a solid guide selected, **Union**, **Subtract** or **Intersect**, then a click on each other guide to fold in (in the view or its outliner row; again to leave it out), **Enter** (or Apply) to apply, **Esc** to drop it.
+Each picked guide is carried into the selected guide's frame (`carryTree` with `frameBetween` in `solidGuides.ts`: the two body frames are rigid, so each leaf's pose re-decomposes exactly over its own scale) and appended to its stack in that mode (`appendEntry`); a guide that is one shape becomes one row, a larger one a group row.
+It is destructive and one undo step: the picked guides leave the level, with the decorations tied to them, and the notice says how many.
+The picked guides are drawn in front and tinted (`COMBINE_PICK`) while it is chosen; selecting anything else ends it.
+
+**Grab, Rotate, Scale** (**G**, **R**, **S**, any workspace, 2026-11-23, Blender's modal transforms): what the gizmo would move, turn or size follows the pointer - a body, a 3D body, a guide's picked shape, a multi-selection - through the gizmo's own handlers (`handlersFor`), so each does exactly what the matching handle drag would, as one undo step (`startTransform` and friends in editor.ts).
+A click or **Enter** places; **Esc** or a right click puts it back and takes the undo step away again; **X**, **Y**, **Z** hold it to that axis (again frees it).
+The gizmo is put away meanwhile, so the placing click cannot land on a handle.
+
+- **G** moves in the plane facing the camera through where the target stood, or in a plane parallel to the gameplay plane for a target that cannot leave it; an axis is a world axis.
+- **R** turns by the pointer's angle round the target's centre on screen (counterclockwise on screen turns it counterclockwise as seen), about the view axis, or the world z for a target that turns only in the plane; an axis is a world axis. It snaps to 15° while snap is on, as the rings do.
+- **S** sizes by the pointer's distance from the target's centre on screen over the distance it started at; an axis is one of the target's own (the scale boxes are local too).
+  A body has no size, so **S** on a body holding a solid guide sizes the guide: every shape, about its middle, evenly (`guideScaleHandlers`, `scaleTree`), since a per-axis factor on a turned shape is a shear no pose can hold; pick one shape in the stack to size it along an axis.
+
+**R** and **S** take the key only when the selection has something to turn or size; otherwise they arm the Rect and Checkpoint tools in 2D as before.
+
+**The gizmo's centre box** (2026-11-23) moves the target in the plane facing the camera, so a 3D body is placed in one drag rather than one per axis.
+It is three's own move-centre handle (`XYZ`) drawn as a box (`reshapeHandle` in `gizmo.ts`); the uniform-scale box that held the centre until then is gone, and a model's one-number scale follows any one axis box.
+
+**The palette** (`DecorationController.arm`) arms a kind for the next click on any generated rock; before, a decoration was started from a button in one rock's panel and landed on that rock only.
+A placed kind stays armed, so a row of ferns is a row of clicks; a painted one (moss, ivy) goes straight to its brush on the rock clicked.
+Esc, its button again, or a press off every rock disarms it.
+
+**Collision** (Decorations' dock, Show, 2026-11-23): the collision outlines drawn over the rocks, as 2D draws them, for reference while dressing; never picked, so a click still lands on the rock (`referenceOutline` in `shownModel`, outside `inWorkspace`).
+Off by default, remembered by the browser (`collision` in `prefs.ts`).
+An outline is drawn in its body's colour, so over a piece whose debug geometry is on it is lost in the box of the same colour.
+
+**Generate N out of date** asks a geometry build of every formation that is not generated or is stale (`isStale`) and has no build of its recipe queued or running; Bake stays per rock.
+**Grow N out of date** does the same for decorations (`DecorationController.stale`), skipping a painted one with no paint and one that is lost.
+
+The workspace is remembered by the browser (`rope.editor.workspace`) and written to the address (`ws=2d|formations|decorations`); the address wins on a reload.
+
 ## The 3D view (since 2026-11-22)
 
 The editor has one view: a free 3D camera, navigated as 3D editors are, with the overlay drawn through it at any angle ([plans/editor-ux-pass.md](../plans/editor-ux-pass.md)).
-The Level and Visuals workspaces it replaced, and **W**, are gone; the tabs at the top are **Level** and **Assets**, which is what is being edited rather than how it is seen.
+The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and **Assets** (in the Formations workspace's dock) say what is being edited rather than how it is seen, and the 2D workspace locks this view head on ([Workspaces](#workspaces-2d-formations-decorations)).
 
 | Gesture or key | Does |
 |---|---|
-| middle drag | orbit about the view's target |
+| middle drag | orbit about the view's target (in 2D, pan) |
 | Shift + middle drag, right drag | pan |
 | wheel | dolly toward what is under the pointer |
 | left drag on empty space | the selection band, at any angle |
@@ -434,7 +510,7 @@ The Level and Visuals workspaces it replaced, and **W**, are gone; the tabs at t
 It draws in world metres through a canvas transform, which is affine and so can only draw the plane head on; turned, a `ProjectedContext` stands in for the 2D context and carries every point through the scene's camera (`ViewProjector`), clipping each path in homogeneous coordinates to the eye and a guard band four screens wide before it reaches the canvas (a canvas clip region does not survive coordinates in the millions).
 Line widths, dashes and fonts stay in head-on pixels, and a glyph - a circle or square a few pixels across, which is every handle and icon - is drawn screen-sized at its projected centre, as a 3D editor draws its overlays.
 The 2D `Camera` carries the same projection while the view is turned (`Camera.project`/`unproject`), so `worldToScreen` and `screenToWorld`, and with them every handle, hit test, drag and tool, work at any angle.
-It is drawn projected whenever there is a scene, head on too: the plane is the same picture either way (`cli render3d` holds the two to 1e-6 px, `visuals: head on, the projected overlay is the 2D camera's mapping`), but a mark at a depth - a decoration at its point on its rock, a model at its `z` - lands where it is drawn only through the camera.
+It is drawn projected whenever there is a scene, head on too: the plane is the same picture either way (`cli render3d` holds the two to 1e-6 px, `visuals: head on, the projected overlay is the 2D camera's mapping`), but a mark at a depth - a selected decoration at its point on its rock, a model at its `z` - lands where it is drawn only through the camera.
 A formation on a solid guide has no mark on the plane: its guide is drawn and picked in the scene.
 The camera is the `VisualsWorkspace` pose (its guides are not drawn); the 2D camera is read off it every frame (`cameraFromPose`).
 A chain knotted through bodies (a rope bridge, `ChainData.through`; see [scene-chains](scene-chains.md#tied-chains)) is strung out with the same tool: **Shift-release** on a body ties the chain there and keeps the draft going past the release, each further **Shift-click** on a body ties another knot, a plain click on a body ends the chain there and **Esc** drops it - so a bridge is one gesture, post, each slat's two ends, ..., post, and it starts with 3% slack.
@@ -443,9 +519,21 @@ It is drawn with small filled rings at its knots, and its panel lists the knots 
 The one predicate the press handler asks is `inScene()` - the Visuals workspace, or the Level workspace turned - which says a press is resolved through the scene's camera rather than the 2D camera's scale and offset; where the two differ, each branch says which it is (see [Picking](editor-visuals.md#picking) there).
 **Home** resets the Level workspace's orbit as `⟲ Reset view` does.
 
+## The view cube
+
+Since 2026-11-23 the top right of the viewport holds a **view cube** (`src/editor/viewCube.ts`), as Blender's, Fusion's and Unity's navigation gizmos are, with the lens under it (**Persp | Ortho**, below).
+The cube turns with the view: six labelled faces drawn on a small 2D canvas through the pose's own basis (`poseBasis`), back to front, each label laid on its face by an affine transform so it turns and foreshortens with it.
+A click on a face swings the view to look from that side - Front (the gameplay plane head on, ending as "Align camera to plane" does), Back, Left, Right, Top (straight down, the front at the foot of the screen, as Blender's top view has it) and Bottom - about the same target and at the same distance, eased over 220 ms (`swingView`); an orbit, a pan or the wheel during the swing takes over from it.
+Face on, the other five faces are edge-on and cannot be clicked, so four arrows round the cube (Fusion's) go to the face next to it that way: the face whose normal is nearest the screen's right, left, up or down.
+The 2D workspace shows the lens alone, since its view has no other side to go to.
+
+Top and Bottom are at the poles, which the view could not reach before: the pitch was clamped at 80 degrees (`MAX_ORBIT_PITCH`), because `applyPose` aimed the camera with world +y as its up, which degenerates there.
+The editor's pose now goes to ±90 degrees (`MAX_VIEW_PITCH`, also the orbit drag's limit, so an orbit away from Top does not snap back to 80); past 80 degrees `applyPose` takes its up from the pose's own basis, which is the same direction there and the only one defined at the pole, and up to 80 it is world +y exactly as before.
+A `CameraOrbit` (`poseFromCamera`) is still clamped at 80 degrees, so the cameras built from one are the bit they were (`cli render3d`'s `visuals: a pose from the 2D camera is today's camera to the bit`); `visuals: orbit ... clamps the pitch at the pole` checks the camera at the pole looks at its target, at its distance.
+
 ## The lens
 
-`⧉ Ortho` (**O**) draws the scene through an **orthographic** camera instead of the perspective one (`ViewProjection` in `render3d/space.ts`).
+**Persp | Ortho** under the view cube (**O** toggles) draws the scene through an **orthographic** camera instead of the perspective one (`ViewProjection` in `render3d/space.ts`).
 It is an authoring instrument, not a look: a perspective camera divides by depth, so a ledge 2 m behind the plane is drawn a little smaller and pulled toward the centre of the frame - which means two things that are exactly in line in the level do not look it, and two that look it are not.
 Orthographic removes the divide, so a metre is the same number of pixels at every depth and what is on screen IS the plan, which is what makes aligning off-plane geometry by eye possible at all.
 Both lenses are driven from the same visible height, so the gameplay plane is framed identically through either and the overlay, the handles and the picking are unchanged by the toggle (`cli render3d` asserts both halves: the plane matches the 2D renderer to a hundredth of a view pixel, and 20 m of depth moves a point by nothing).

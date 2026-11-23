@@ -23,6 +23,7 @@
 // the output and the path of the whole of it.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -31,7 +32,7 @@ import type { Plugin } from "vite";
 import { canonical, formationHash } from "../formation/recipe";
 import { decorationHash, type DecorationRequest } from "../formation/decoration";
 import { sha256Hex } from "../formation/sha256";
-import type { StoredMesh } from "../formation/solid";
+import { decodeMeshBin, type StoredMesh } from "../formation/meshBin";
 import { FORMATION_HASH, FORMATION_STORE, GEOMETRY_FILE, MESHES, MESHES_API, META_FILE, PAINT_API, ROCK_FILE, tierFileName, type FormationMeta } from "../formation/store";
 import type { FormationData, FormationTier } from "../level/levelFormat";
 import { MODEL_NAME } from "../render3d/models";
@@ -131,13 +132,13 @@ export function formationService(): Plugin {
 
       server.middlewares.use(FORMATION_STORE, (req, res, next) => {
         const [hash, file, ...rest] = (req.url ?? "").split("?")[0]!.replace(/^\//, "").split("/");
-        const mesh = hash === MESHES && !!file && /^[0-9a-f]{64}\.json$/.test(file);
+        const mesh = hash === MESHES && !!file && /^[0-9a-f]{64}\.(json|bin)$/.test(file);
         if (!hash || !file || rest.length || (!mesh && (!FORMATION_HASH.test(hash) || !STORE_FILES.test(file)))) return next();
         if (req.method !== "GET" && req.method !== "HEAD") return next();
         const path = join(store, hash, file);
         stat(path).then(
           (info) => {
-            res.setHeader("Content-Type", file.endsWith(".json") ? "application/json" : "model/gltf-binary");
+            res.setHeader("Content-Type", file.endsWith(".json") ? "application/json" : file.endsWith(".bin") ? "application/octet-stream" : "model/gltf-binary");
             res.setHeader("Content-Length", info.size);
             res.setHeader("Cache-Control", "no-store");
             if (req.method === "HEAD") res.end();
@@ -182,9 +183,29 @@ export function formationService(): Plugin {
         next();
       });
 
-      // An imported mesh for a solid guide: kept once, by its content.
+      // A solid guide's mesh: kept once, by its content. An applied or
+      // sculpted one comes as the binary form (formation/meshBin.ts), named
+      // by its bytes' sha256 plus `.bin`; an imported one as JSON.
       server.middlewares.use(MESHES_API, (req, res, next) => {
         if (req.method !== "POST") return next();
+        if (req.headers["content-type"] === "application/octet-stream") {
+          return readBytes(req).then(
+            (bytes) => {
+              try {
+                decodeMeshBin(bytes);
+              } catch (e) {
+                return json(res, 400, { error: (e as Error).message });
+              }
+              const name = `${createHash("sha256").update(bytes).digest("hex")}.bin`;
+              const dir = join(store, MESHES);
+              mkdirSync(dir, { recursive: true });
+              const path = join(dir, name);
+              if (!existsSync(path)) writeFileSync(path, bytes);
+              json(res, 200, { name });
+            },
+            (e: Error) => json(res, 400, { error: e.message }),
+          );
+        }
         readJson(req).then(
           (body) => {
             const m = body as Partial<StoredMesh>;
@@ -270,6 +291,15 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
   res.end(JSON.stringify(body));
+}
+
+function readBytes(req: IncomingMessage): Promise<Uint8Array> {
+  return new Promise((done, fail) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => done(new Uint8Array(Buffer.concat(chunks))));
+    req.on("error", fail);
+  });
 }
 
 function readJson(req: IncomingMessage): Promise<unknown> {

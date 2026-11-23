@@ -3,16 +3,15 @@
 // so a reload - the dev server's, after an edit to the editor itself - comes
 // back looking at the same corner of the same level instead of at the spawn.
 //
-//   /editor?level=ball&cam=12.5,-3.25,2&vis=12.5,3.25,0,0.3,-0.1,4.2&ws=visuals&lens=ortho
+//   /editor?level=ball&cam=12.5,-3.25,2&vis=12.5,3.25,0,0.3,-0.1,4.2&ws=formations&lens=ortho
 //
 // `cam` is the Level workspace's view: the 2D camera's centre (sim metres, y
 // down) and zoom, then the orbit's yaw and pitch (radians) when it is turned.
 // `vis` is the Visuals workspace's pose, once it has one: its target (three's
 // frame, y up), yaw, pitch and half height (metres) - the field of view is
-// the level's lens, so it is not carried. `ws` names the workspace when it is
-// Visuals, `lens` the lens when it is orthographic. Each workspace keeps its
-// own view (see `setWorkspace`), so both are written, and a reload hands each
-// back its own.
+// the level's lens, so it is not carried. `ws` names the workspace (2d,
+// formations or decorations: editor/workspaces.ts), `lens` the lens when it is
+// orthographic.
 //
 // Per tab, where the level last open (prefs.ts) is per browser: two tabs on
 // two levels each reload onto their own. A value that does not parse is
@@ -37,7 +36,8 @@ export interface EditorView {
   level: string | null;
   cam: LevelView | null;
   vis: VisualsView | null;
-  visualsActive: boolean;
+  // The workspace's name as written; the editor parses it (workspaces.ts).
+  workspace: string | null;
   ortho: boolean;
 }
 
@@ -74,7 +74,7 @@ export function readEditorView(search: string): EditorView {
       v && v[5]! > 0
         ? { target: { x: v[0]!, y: v[1]!, z: v[2]! }, yaw: v[3]!, pitch: v[4]!, halfHeight: v[5]! }
         : null,
-    visualsActive: q.get("ws") === "visuals",
+    workspace: q.get("ws") || null,
     ortho: q.get("lens") === "ortho",
   };
 }
@@ -110,7 +110,7 @@ export function editorViewHref(href: string, view: EditorView): string {
       ? [metres(v.target.x), metres(v.target.y), metres(v.target.z), radians(v.yaw), radians(v.pitch), scale(v.halfHeight)].join(",")
       : null,
   );
-  put("ws", view.visualsActive ? "visuals" : null);
+  put("ws", view.workspace);
   put("lens", view.ortho ? "ortho" : null);
   // Commas are legal in a query string; left encoded they make it unreadable.
   url.search = q.toString().replace(/%2C/g, ",");

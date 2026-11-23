@@ -36,6 +36,7 @@ import {
   isHeadOn,
   lensOf,
   MAX_ORBIT_PITCH,
+  MAX_VIEW_PITCH,
   NO_ORBIT,
   poseDistance,
   poseFromCamera,
@@ -914,11 +915,18 @@ function visualsView(): CaseResult[] {
       worstCentre = Math.max(worstCentre, Math.abs(q.x), Math.abs(q.y));
       worstDist = Math.max(worstDist, Math.abs(c.position.distanceTo(new THREE.Vector3(free.target.x, free.target.y, free.target.z)) - d0));
     }
+    // Clamped AT the pole (the view cube's Top), where world up degenerates:
+    // the camera there must still look at the target, unrolled, at its
+    // distance (`applyPose` takes the pose's own up past MAX_ORBIT_PITCH).
     const pole = orbit(free, 0, 10);
+    const pc = posedCamera(pole, aspect);
+    const pq = ndc(pc, pole.target);
+    const poleCentre = Math.max(Math.abs(pq.x), Math.abs(pq.y));
+    const poleDist = Math.abs(pc.position.distanceTo(new THREE.Vector3(pole.target.x, pole.target.y, pole.target.z)) - d0);
     out.push({
-      name: "visuals: orbit keeps the target's screen position and the distance, and clamps the pitch",
-      pass: worstCentre <= 1e-9 && worstDist <= 1e-9 && pole.pitch === MAX_ORBIT_PITCH,
-      detail: `target off centre by ${worstCentre.toExponential(2)} ndc, distance by ${worstDist.toExponential(2)} m, pitch at the pole ${pole.pitch.toFixed(4)}`,
+      name: "visuals: orbit keeps the target's screen position and the distance, and clamps the pitch at the pole",
+      pass: worstCentre <= 1e-9 && worstDist <= 1e-9 && pole.pitch === MAX_VIEW_PITCH && poleCentre <= 1e-9 && poleDist <= 1e-9,
+      detail: `target off centre by ${worstCentre.toExponential(2)} ndc, distance by ${worstDist.toExponential(2)} m, pitch at the pole ${pole.pitch.toFixed(4)}, there off centre ${poleCentre.toExponential(2)}, distance ${poleDist.toExponential(2)}`,
     });
   }
 
@@ -1260,6 +1268,7 @@ function visualsWorkspace(): CaseResult[] {
       setViewPose: (p: ViewPose | null) => handed.push(p),
       pick: () => [],
       pickSurface: () => null,
+      drawnSurfaceAt: () => null,
     } as unknown as WorkspaceScene;
     const cam2d = camera(3.2, -1.4, 1.7);
     const lens: SceneLens = { fovYDeg: 38, zOffset: -0.4 };

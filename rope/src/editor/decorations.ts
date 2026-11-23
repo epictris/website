@@ -21,16 +21,15 @@
 // level's (y down) with the formation item's placement in it.
 
 import * as THREE from "three";
-import { manifold } from "../../../3d/orthographic/src/core/manifold";
+import { manifold } from "../formation/manifold";
 import { Vec2 } from "../engine/vec2";
 import { guideOutline } from "../formation/guide";
 import { resolvedParams } from "../formation/recipe";
-import { solidMesh } from "../formation/solid";
 import type { DecorationAnchor, PaintStamp } from "../level/levelFormat";
 import { formationFile, loadFormationFile, decodedFormationFile } from "../render3d/formations";
 import { threeRotation, threeY } from "../render3d/space";
 import type { EdItem } from "./model";
-import { loadedMeshes } from "./solidGuides";
+import { guideMesh } from "./solidGuides";
 import { itemMatrix } from "./space3d";
 
 // How far along its normal an anchor looks for the rock, either way, metres.
@@ -83,7 +82,7 @@ export function guideSurface(f: EdItem): THREE.Mesh | null {
       indices = new Uint32Array(mesh.triVerts);
     }
   } else {
-    const r = solidMesh(data.guide.tree, loadedMeshes());
+    const r = guideMesh(data.guide.tree);
     if (r.mesh) {
       positions = r.mesh.positions;
       indices = r.mesh.indices;

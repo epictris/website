@@ -32,7 +32,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { manifold } from "../../3d/orthographic/src/core/manifold";
+import { manifold } from "../src/formation/manifold";
 import { PIXELS_PER_METER, PX } from "../src/engine/units";
 import { piecePolygon, type Pt } from "../src/formation/outline";
 import { canonical, newFormationId } from "../src/formation/recipe";

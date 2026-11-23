@@ -1142,15 +1142,22 @@ export interface SolidOp {
 }
 
 export type SolidPrim =
-  // An outline in the primitive's own x/y plane pushed along its +z for
-  // `length`, narrowing by `taper` (0 none, 1 to a point) toward the far end.
-  | ({ prim: "extrude"; outline: { x: number; y: number }[]; length: number; taper?: number } & SolidPose)
-  // The convex hull of points in the primitive's frame.
-  | ({ prim: "hull"; points: [number, number, number][] } & SolidPose)
-  // A box or an ellipsoid of these full extents, centred on the pose.
-  | ({ prim: "box" | "ellipsoid"; size: [number, number, number] } & SolidPose)
-  // A fixed closed mesh, a content-hash name in the store, in metres.
+  // A box or a cylinder of these full extents, centred on the pose; a
+  // cylinder stands along its y (the round of it is x by z).
+  | ({ prim: "box" | "cylinder"; size: [number, number, number] } & SolidPose)
+  // A fixed closed mesh, a content-hash name in the store (`<sha256>` for an
+  // imported JSON mesh, `<sha256>.bin` for an applied or sculpted one), in
+  // metres.
   | ({ prim: "mesh"; file: string } & SolidPose);
+
+// The leaves the orthographic authoring route made (an outline pushed through
+// a depth, a hull of points, an ellipsoid), retired 2026-11-23
+// (plans/sculpt-guides.md). Meshing one needs manifold-3d's WASM, which must
+// not reach the sim path, so they are not folded in on load: a level holding
+// one is refused, naming the one-off migration that meshes each into a mesh
+// leaf (scripts/migrate-solid-guides.ts).
+export const RETIRED_SOLID_PRIMS = ["extrude", "hull", "ellipsoid"] as const;
+export const SOLID_MIGRATION = "bun run guides:migrate";
 
 // Where a primitive stands in its body's frame. `pos` is a length; `rot` is
 // Euler XYZ radians and `scale` a ratio, neither scaled with the level.
@@ -4100,9 +4107,9 @@ function scaleGuide(g: FormationGuide, factor: number): FormationGuide {
   return { kind: "solid", tree: scaleSolidNode(g.tree, factor) };
 }
 
-// A node's position, sizes, outline, length and hull points are lengths; its
-// turn, its scale, its taper and a mesh's name are not. A mesh leaf's vertices
-// are metres in the store, as a model's are, so only where it stands scales.
+// A node's position and sizes are lengths; its turn, its scale and a mesh's
+// name are not. A mesh leaf's vertices are metres in the store, as a model's
+// are, so only where it stands scales.
 function scaleSolidNode(n: SolidNode, factor: number): SolidNode {
   if ("op" in n) return { op: n.op, of: n.of.map((c) => scaleSolidNode(c, factor)) };
   const pose: SolidPose = {
@@ -4111,20 +4118,18 @@ function scaleSolidNode(n: SolidNode, factor: number): SolidNode {
     ...(n.scale ? { scale: [...n.scale] } : {}),
   };
   switch (n.prim) {
-    case "extrude":
-      return {
-        prim: "extrude",
-        outline: n.outline.map((p) => ({ x: p.x * factor, y: p.y * factor })),
-        length: n.length * factor,
-        ...(n.taper !== undefined ? { taper: n.taper } : {}),
-        ...pose,
-      };
-    case "hull":
-      return { prim: "hull", points: n.points.map((p) => [p[0] * factor, p[1] * factor, p[2] * factor]), ...pose };
     case "box":
-    case "ellipsoid":
+    case "cylinder":
       return { prim: n.prim, size: [n.size[0] * factor, n.size[1] * factor, n.size[2] * factor], ...pose };
     case "mesh":
       return { prim: "mesh", file: n.file, ...pose };
+    default: {
+      const prim = (n as { prim: string }).prim;
+      throw new Error(
+        (RETIRED_SOLID_PRIMS as readonly string[]).includes(prim)
+          ? `a solid guide holds a retired "${prim}" leaf: run \`${SOLID_MIGRATION}\` (scripts/migrate-solid-guides.ts) with the editor closed`
+          : `a solid guide holds an unknown leaf "${prim}"`,
+      );
+    }
   }
 }

@@ -494,11 +494,63 @@ def _facets(ob, target, angle=None, *, preserve_topology=False):
     if loose:
         bmesh.ops.delete(bm, geom=loose, context="EDGES")
         bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
-    if loose or preserve_topology:
-        bm.to_mesh(ob.data)
+    if not preserve_topology:
+        # Not yet on the crease-keeping path (Boulder, Cliff, Wall through
+        # assemble.py): flattened, a Boulder rock failed "must be watertight"
+        # even with flatten's guard (2026-11-23, 2 builds in 2).
+        flatten(bm)
+    bm.to_mesh(ob.data)
     bm.free()
     for p in ob.data.polygons:
         p.use_smooth = False
+
+
+FLATTEN_PASSES = 50       # planar_faces passes: 10 left 1.8% of a Faceted rock's
+                          # area over 10 degrees off its facet, 50 left 0.7%
+
+
+def flatten(bm):
+    """Move the vertices so each facet lies in its plane.
+
+    The planar dissolve's angle is between NEIGHBOURS, so it chains: faces a
+    few degrees apart across a rounded edge merge into one n-gon bent right
+    round it (2026-11-23, the Faceted rock of ball.json's central-rock: n-gons
+    bent up to 118 degrees, 7% of its area in triangles over 10 degrees off
+    their facet). Blender shades an n-gon with its one normal, so it looked
+    flat there; the game draws the triangles, and each sliver of a bent
+    n-gon's fan caught the light on its own (spikes across the rock's faces).
+    Splitting the bent n-gons (connect_verts_nonplanar) left half of it, and a
+    dissolve that holds every face of a facet within the angle of its plane
+    two thirds: the inner vertices it removes are what made the rim bend.
+    Flattening moves vertices a centimetre or so (10 cm at most on that rock,
+    Facet size 0.25).
+
+    A face the flattening squashes (under half its area) or turns over has
+    its corners put back, until none is: a facet's small neighbours can go
+    to no area, and on a Boulder rock the clean-up after the finish
+    (assemble.remove_degenerate) then left loose edges and a hole. Returns
+    how many vertices were put back."""
+    import bmesh
+    faces = [f for f in bm.faces if len(f.verts) > 3]
+    if not faces:
+        return 0
+    bm.normal_update()
+    was = {v: v.co.copy() for v in bm.verts}
+    shape = {f: (f.calc_area(), f.normal.copy()) for f in bm.faces}
+    bmesh.ops.planar_faces(bm, faces=faces, iterations=FLATTEN_PASSES, factor=1.0)
+    back = set()
+    for _ in range(FLATTEN_PASSES):
+        bm.normal_update()
+        bad = [f for f, (area, normal) in shape.items()
+               if f.calc_area() < 0.5 * area or f.normal.dot(normal) <= 0]
+        moved = {v for f in bad for v in f.verts if v.co != was[v]}
+        if not moved:
+            break
+        for v in moved:
+            v.co = was[v]
+        back |= moved
+    bm.normal_update()
+    return len(back)
 
 
 def build_stone(name, half, seed, collection):

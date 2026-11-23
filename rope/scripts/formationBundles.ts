@@ -14,7 +14,7 @@ import { join, relative } from "node:path";
 import { PX } from "../src/engine/units";
 import { bundleReleaseName, levelFormations, packBundle, unpackBundle, type FormationBundles } from "../src/formation/bundle";
 import { meshFiles } from "../src/formation/solid";
-import { FORMATION_HASH, MESHES } from "../src/formation/store";
+import { FORMATION_HASH, meshFileName, MESHES } from "../src/formation/store";
 import { scaleLevelData } from "../src/level/levelFormat";
 import { LEVELS } from "../src/level/registry";
 import { ASSET_REPO, ASSET_TAG, sha256 } from "./assetStore";
@@ -88,8 +88,8 @@ export function publishFormations(): boolean {
         for (const f of readdirSync(dir)) files.push({ name: `${hash}/${f}`, bytes: readFileSync(join(dir, f)) });
       }
       for (const m of meshes) {
-        const path = join(STORE, MESHES, `${m}.json`);
-        if (existsSync(path)) files.push({ name: `${MESHES}/${m}.json`, bytes: readFileSync(path) });
+        const path = join(STORE, MESHES, meshFileName(m));
+        if (existsSync(path)) files.push({ name: `${MESHES}/${meshFileName(m)}`, bytes: readFileSync(path) });
         else missing.push(`mesh ${m.slice(0, 12)}`);
       }
       if (missing.length) {

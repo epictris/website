@@ -589,10 +589,7 @@ export default defineConfig({
         "**/tools/audio/layer-uploads/**",
       ],
     },
-    // The formation guides' solid kernel is the Orthographic Studio's
-    // (3d/orthographic/src/core/manifold.ts, imported where it lives), so the
-    // page may be served files from beside rope/.
-    fs: { allow: [join(import.meta.dirname), join(import.meta.dirname, "..", "3d")] },
+    fs: { allow: [join(import.meta.dirname)] },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
     // beside the dev server, `?record=1` streams into it and /admin shows it.
     proxy: {

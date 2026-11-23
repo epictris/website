@@ -33,13 +33,16 @@ FIELDS = {
                  "edgeBevelWidth": "edge_bevel"},
     "solid": {"seed": "seed", "stoneSize": "stone_size", "surfaceRelief": "surface_relief",
               "jointed": "jointed", "wall": "wall", "stones": "stones", "faceted": "faceted",
-              "jointAspect": "joint_aspect", "knub": "knub", "curveTurn": "curve_turn"},
+              "jointAspect": "joint_aspect", "knub": "knub", "curveTurn": "curve_turn",
+              "edgeRadius": "edge_radius", "mergeAngle": "merge_angle", "bulgeSize": "bulge_size"},
 }
 # The solid fields the variant sets, never shown as themselves.
 VARIANT_FIELDS = {"jointed", "wall", "stones", "faceted"}
 # The solid fields a variant does not use, by its field name.
-HIDDEN = {"wall": {"knub", "curve_turn"}, "boulder": {"joint_aspect"},
-          "stones": {"knub", "curve_turn", "joint_aspect", "surface_relief"},
+_FACETED_ONLY = {"edge_radius", "merge_angle", "bulge_size"}
+HIDDEN = {"cliff": _FACETED_ONLY, "wall": {"knub", "curve_turn"} | _FACETED_ONLY,
+          "boulder": {"joint_aspect"} | _FACETED_ONLY,
+          "stones": {"knub", "curve_turn", "joint_aspect", "surface_relief"} | _FACETED_ONLY,
           "faceted": {"knub", "curve_turn", "joint_aspect"}}
 # The label a solid field takes under a variant, by its field name.
 LABELS = {"wall": {"joint_aspect": "Slab height / width"},
@@ -124,6 +127,16 @@ class FormationParams(bpy.types.PropertyGroup):
     curve_turn: FloatProperty(name="Curve split", description="Degrees a cell's surface must turn in gentle bends "
                               "before it splits into smaller stones; lower keeps more curves round",
                               default=SOLID["curveTurn"], min=5, max=1000)
+    edge_radius: FloatProperty(name="Edge radius", description="How far every convex edge of the guide is rounded "
+                               "over; 0 keeps its corners. Parts thinner than twice this go",
+                               default=SOLID["edgeRadius"], min=0, max=10, soft_max=3, precision=3,
+                               subtype="DISTANCE")
+    merge_angle: FloatProperty(name="Merge angle", description="Degrees within which neighbouring faces merge "
+                               "into one flat facet; higher gives fewer, broader planes",
+                               default=SOLID["mergeAngle"], min=1, max=30)
+    bulge_size: FloatProperty(name="Bulge size", description="How broad the bulge's swells are: small dents "
+                              "each face, large leans whole faces", default=SOLID["bulgeSize"], min=.1, max=20,
+                              soft_max=6, precision=3, subtype="DISTANCE")
     voxel_cap: FloatProperty(name="Voxel cap", description="Largest remesh voxel, whatever the outline",
                              default=DEFAULT_PARAMS["voxelCap"], min=.002, max=.1, precision=3, subtype="DISTANCE")
     edge_bevel: FloatProperty(name="Edge bevel", description="Width of the bevel on every sharp edge: well under a "

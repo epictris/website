@@ -62,100 +62,65 @@ export function walk(tree: SolidNode, path: number[] = []): { node: SolidNode; p
 export function nodeLabel(n: SolidNode): string {
   if ("op" in n) return `${n.op} (${n.of.length})`;
   switch (n.prim) {
-    case "extrude":
-      return `outline, ${n.outline.length} points, ${n.length.toFixed(2)} m deep${n.taper ? `, taper ${n.taper}` : ""}`;
-    case "hull":
-      return `hull of ${n.points.length} points`;
     case "box":
-    case "ellipsoid":
+    case "cylinder":
       return `${n.prim} ${n.size.map((s) => s.toFixed(2)).join(" × ")}`;
     case "mesh":
-      return `mesh ${n.file.slice(0, 8)}`;
+      return `${n.file.endsWith(".bin") ? "sculpt" : "mesh"} ${n.file.slice(0, 8)}`;
   }
 }
 
-// The primitives a new node can be, as the panel offers them, each a size a
-// metre or two across centred on `at`.
-export function newPrimitive(kind: "box" | "ellipsoid" | "hull" | "extrude", at: [number, number, number]): SolidPrim {
-  switch (kind) {
-    case "box":
-      return { prim: "box", size: [2, 2, 2], pos: at };
-    case "ellipsoid":
-      return { prim: "ellipsoid", size: [2, 1.6, 1.6], pos: at };
-    case "hull":
-      return {
-        prim: "hull",
-        points: [[-1, -0.8, -0.6], [1.1, -0.8, -0.5], [0.2, -0.8, 0.8], [-0.3, 1.1, 0.1], [0.6, 0.6, -0.4]],
-        pos: at,
-      };
-    case "extrude":
-      // An outline in its own x/y pushed along its +z: centred on `at` in z.
-      return {
-        prim: "extrude",
-        outline: [{ x: -1, y: -1 }, { x: 1, y: -1 }, { x: 1.2, y: 0.6 }, { x: 0, y: 1.2 }, { x: -1.1, y: 0.5 }],
-        length: 1.5,
-        pos: [at[0], at[1], at[2] - 0.75],
-      };
-  }
-}
-
-// The Orthographic Studio's solid: the intersection of three outlines pushed
-// through a box from the front, the top and the side, each a rectangle of the
-// box to start from, each then edited in its own plane. The front's outline is
-// in x/y pushed along z; the top's is in x/z pushed along y (turned -90° about
-// x, so its own y is the world's -z); the side's in z/y pushed along x (turned
-// 90° about y, its own x the world's -z).
-export function threeOutlinePreset(size: [number, number, number], at: [number, number, number]): SolidOp {
-  const [w, h, d] = size;
-  const rect = (a: number, b: number) => [
-    { x: -a / 2, y: -b / 2 }, { x: a / 2, y: -b / 2 }, { x: a / 2, y: b / 2 }, { x: -a / 2, y: b / 2 },
-  ];
-  const [x, y, z] = at;
+// The whole tree sized by `f` about `centre` (its own frame): each leaf's
+// position moved out from the centre and its scale multiplied. Exact for
+// every leaf, turned or not, because the factor is the same on every axis
+// (a per-axis factor on a turned leaf would be a shear no pose can hold).
+// **S** on a guide's body (editor.ts).
+export function scaleTree(tree: SolidNode, centre: [number, number, number], f: number): SolidNode {
+  if ("op" in tree) return { ...tree, of: tree.of.map((c) => scaleTree(c, centre, f)) };
+  const p = tree.pos ?? [0, 0, 0];
+  const s = tree.scale ?? [1, 1, 1];
   return {
-    op: "intersection",
-    of: [
-      { prim: "extrude", outline: rect(w, h), length: d, pos: [x, y, z - d / 2] },
-      { prim: "extrude", outline: rect(w, d), length: h, rot: [-Math.PI / 2, 0, 0], pos: [x, y - h / 2, z] },
-      { prim: "extrude", outline: rect(d, h), length: w, rot: [0, Math.PI / 2, 0], pos: [x - w / 2, y, z] },
-    ],
+    ...tree,
+    pos: [centre[0] + (p[0] - centre[0]) * f, centre[1] + (p[1] - centre[1]) * f, centre[2] + (p[2] - centre[2]) * f],
+    scale: [s[0] * f, s[1] * f, s[2] * f],
   };
 }
 
-// The editable points of a primitive in its own frame: a hull's points, an
-// extrusion's outline (z 0, its base plane). Null for one with none.
-export function pointsOf(n: SolidNode): [number, number, number][] | null {
-  if ("op" in n) return null;
-  if (n.prim === "hull") return n.points.map((p) => [...p] as [number, number, number]);
-  if (n.prim === "extrude") return n.outline.map((p) => [p.x, p.y, 0]);
-  return null;
-}
+// The primitives a new node can be, as the editor offers them, each a size a
+// metre or two across centred on `at`: the starting shapes a guide is then
+// sculpted from (plans/sculpt-guides.md). The outline, three-outline, hull
+// and ellipsoid shapes were retired on 2026-11-23 (`RETIRED_SOLID_PRIMS` in
+// levelFormat.ts).
+export type PrimitiveKind = "box" | "cylinder";
 
-// The primitive with its point `k` at `p` (its own frame). An outline point is
-// held to the outline's plane: its z is dropped.
-export function withPoint(n: SolidPrim, k: number, p: [number, number, number]): SolidPrim {
-  if (n.prim === "hull") return { ...n, points: n.points.map((q, i) => (i === k ? p : q)) };
-  if (n.prim === "extrude") return { ...n, outline: n.outline.map((q, i) => (i === k ? { x: p[0], y: p[1] } : q)) };
-  return n;
-}
-
-// ...with a point added after `k` (between it and the next), or removed.
-export function insertPoint(n: SolidPrim, k: number): SolidPrim {
-  if (n.prim === "hull") {
-    const a = n.points[k]!;
-    const b = n.points[(k + 1) % n.points.length]!;
-    const mid: [number, number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 0.3, (a[2] + b[2]) / 2];
-    return { ...n, points: [...n.points.slice(0, k + 1), mid, ...n.points.slice(k + 1)] };
+export function newPrimitive(kind: PrimitiveKind, at: [number, number, number]): SolidPrim {
+  switch (kind) {
+    case "box":
+      return { prim: "box", size: [2, 2, 2], pos: at };
+    case "cylinder":
+      return { prim: "cylinder", size: [1.6, 2, 1.6], pos: at };
   }
-  if (n.prim === "extrude") {
-    const a = n.outline[k]!;
-    const b = n.outline[(k + 1) % n.outline.length]!;
-    return { ...n, outline: [...n.outline.slice(0, k + 1), { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, ...n.outline.slice(k + 1)] };
-  }
-  return n;
 }
 
-export function removePoint(n: SolidPrim, k: number): SolidPrim {
-  if (n.prim === "hull" && n.points.length > 4) return { ...n, points: n.points.filter((_, i) => i !== k) };
-  if (n.prim === "extrude" && n.outline.length > 3) return { ...n, outline: n.outline.filter((_, i) => i !== k) };
-  return n;
+// A SCULPTABLE guide (plans/sculpt-guides.md): one mesh leaf standing where
+// its vertices say, with no pose - a stored mesh in the guide's own frame,
+// which is what a sculpt edits. Its store name, or null for any other tree
+// (which Apply first meshes into one).
+export function sculptedMeshOf(tree: SolidNode): string | null {
+  const leaf = "op" in tree ? (tree.op === "union" && tree.of.length === 1 ? tree.of[0]! : null) : tree;
+  if (!leaf || "op" in leaf || leaf.prim !== "mesh") return null;
+  const still = (v: [number, number, number] | undefined, d: number): boolean => !v || v.every((c) => c === d);
+  return still(leaf.pos, 0) && still(leaf.rot, 0) && still(leaf.scale, 1) ? leaf.file : null;
+}
+
+// Whether Apply has anything to do: the tree is not already one unposed mesh.
+export function needsApply(tree: SolidNode): boolean {
+  return sculptedMeshOf(tree) === null;
+}
+
+// The tree of a guide that is one stored mesh, as Apply and a sculpt's commit
+// write it: a union of one, so the stack reads it as its base and a shape
+// added after it lands beside it.
+export function meshLeafTree(file: string): SolidNode {
+  return { op: "union", of: [{ prim: "mesh", file }] };
 }

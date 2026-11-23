@@ -39,8 +39,9 @@ import { join, relative, resolve } from "node:path";
 import { PX } from "../src/engine/units";
 import { guideOutline, fromRock, workerRecipe } from "../src/formation/guide";
 import { formationRecipe, RECIPE_VERSION, recipeHash } from "../src/formation/recipe";
-import { meshFiles, solidWorkerRecipe, type StoredMesh } from "../src/formation/solid";
-import { FORMATION_HASH, GEOMETRY_FILE, MESHES, META_FILE, ROCK_FILE, tierFileName, type FormationMeta, type SectionLoop } from "../src/formation/store";
+import { readStoredMesh } from "../src/formation/meshBin";
+import { meshFiles, solidWorkerRecipe, type SolidMesh } from "../src/formation/solid";
+import { FORMATION_HASH, GEOMETRY_FILE, meshFileName, MESHES, META_FILE, ROCK_FILE, tierFileName, type FormationMeta, type SectionLoop } from "../src/formation/store";
 import { isCollisionObject, scaleLevelData, type FormationData, type FormationTier, type RawLevelData, type SolidNode } from "../src/level/levelFormat";
 import { exportBlend, ROOT } from "./blendExport";
 import { StepProgress } from "./stepProgress";
@@ -161,12 +162,12 @@ mkdirSync(logDir, { recursive: true });
 mkdirSync(store, { recursive: true });
 console.log(`${TAG} ${hash.slice(0, 12)}: ${recipe.generator}${recipe.variant ? ` (${recipe.variant})` : ""}`);
 
-// A solid guide's imported meshes, from the store's `meshes/`.
-function storedMeshes(tree: SolidNode): Map<string, StoredMesh> {
-  const out = new Map<string, StoredMesh>();
+// A solid guide's stored meshes, from the store's `meshes/`, in either form.
+function storedMeshes(tree: SolidNode): Map<string, SolidMesh> {
+  const out = new Map<string, SolidMesh>();
   for (const name of meshFiles(tree)) {
-    const path = join(store, MESHES, `${name}.json`);
-    if (existsSync(path)) out.set(name, JSON.parse(readFileSync(path, "utf8")) as StoredMesh);
+    const path = join(store, MESHES, meshFileName(name));
+    if (existsSync(path)) out.set(name, readStoredMesh(name, readFileSync(path)));
   }
   return out;
 }

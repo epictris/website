@@ -38,17 +38,23 @@ export function metaFile(hash: string): string {
   return `${formationDir(hash)}/${META_FILE}`;
 }
 
-// A solid guide's imported meshes (`SolidPrim` "mesh"): fixed closed meshes,
-// `{verts, faces}` in metres in the guide's frame, each named by the sha256 of
-// its canonical JSON (`meshName`), under `meshes/`.
+// A solid guide's stored meshes (`SolidPrim` "mesh"): fixed closed meshes in
+// metres in the guide's frame, under `meshes/`. An imported one is
+// `{verts, faces}` JSON named by the sha256 of its canonical text (the leaf's
+// `file` is the bare hash); a sculpted or applied one is binary
+// (`formation/meshBin.ts`), named by the sha256 of its bytes plus `.bin`.
 // A level's paint, the strokes of its painted decorations, kept beside the
 // level in `levels/paint/<level>.json` (src/server/formations.ts).
 export const PAINT_API = "/api/paint";
 
 export const MESHES = "meshes";
 export const MESHES_API = "/api/formations/meshes";
+// The file a leaf's `file` names, inside `meshes/`.
+export function meshFileName(name: string): string {
+  return name.endsWith(".bin") ? name : `${name}.json`;
+}
 export function meshFile(name: string): string {
-  return `${FORMATION_STORE}/${MESHES}/${name}.json`;
+  return `${FORMATION_STORE}/${MESHES}/${meshFileName(name)}`;
 }
 
 // A closed loop (or an open chain, where the rock had a hole at the plane) in

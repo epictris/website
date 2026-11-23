@@ -1,27 +1,25 @@
 {
   "ball": {
     "file": "/roots/ball.glb",
-    "sha256": "8199ed0717894b2beb6e152fbcc2bec506baf61a42f28bdef4e0ab0c3b011a0d",
-    "bytes": 2032180,
+    "sha256": "9391d4d7d5cd3423318e4ad76d58cb30d05fab31a09acfda2cbde923703fbcc3",
+    "bytes": 1839312,
     "keys": [
-      "05313505e02a1f20",
-      "0995f56ae8f34763",
-      "0fe8894ff1174fa4",
-      "22e6c5fddf5406ca",
-      "2e9d7700897be96d",
-      "3038a284bb911170",
-      "312646a3c7e03f9c",
-      "502c98f62b45b331",
-      "5ab9af1d01b54441",
-      "5b011edd3eddbe1a",
-      "627367f510c04b63",
-      "65b93dbad17ae2c5",
-      "7631ee2c48f567c0",
-      "78a5c0ca9bd639df",
-      "c98404fab8ce2174",
-      "cba352d3abd6a7fd",
-      "f2142d5bf440fcd8",
-      "fba0a59d30fec1d3"
+      "09be26353c961d31",
+      "273a299ad5749d6b",
+      "46f69c3e550b05b4",
+      "518a502ea9a2991b",
+      "5252c86033b76458",
+      "69dac56983ec699b",
+      "6c3a635c6f490f5b",
+      "8772b96132e8f022",
+      "890f3d9dbfbe031d",
+      "a22d920b51f13b96",
+      "a2e903dda7738931",
+      "c551b326ff386b30",
+      "cdb3068947b48aaf",
+      "f8589193fdd00398",
+      "fb75420091674035",
+      "fd2475457f16c675"
     ]
   }
 }

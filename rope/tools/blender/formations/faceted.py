@@ -7,17 +7,21 @@ facets, and anything finer is lost in the fog and the depth of field.
 
 From the guide, in its local frame:
 
-1. remesh - a voxel remesh at an eighth of the facet size;
-2. round - a volume-preserving Laplacian smooth, so a box drawn in the
-   editor comes out a boulder, its corners rounded over about ROUND facets;
-3. bulge - a broad noise along the normals (Surface relief x the facet size),
-   so the planes do not follow a perfect ellipsoid;
-4. facets - Greg Zaal's two decimates as recipe F uses them: collapse to
+1. round - a morphological opening of the guide's distance field, every
+   convex edge rounded to Edge radius (`edgeRadius`, metres; 0 keeps the
+   guide's corners), meshed at an eighth of the facet size;
+2. bulge - a noise along the normals, Bulge x RELIEF facets deep and Bulge
+   size (`bulgeSize`, metres) across, so the planes do not follow the guide
+   exactly: a small size dents a face, a large one leans it whole;
+3. facets - Greg Zaal's two decimates as recipe F uses them: collapse to
    about TRIS_PER_FACET triangles per facet of area, then planar dissolve at
-   ANGLE so neighbours nearly in one plane merge into one polygon; flat
-   shading.
+   Merge angle (`mergeAngle`, degrees) so neighbours nearly in one plane
+   merge into one polygon; flat shading.
 
-Every length is times Stone size (the panel calls it Facet size here). The
+Facet size (the Stone size field) sets the facets' density and the bulge's
+depth; the edge radius and bulge size are lengths of their own (until
+2026-11-23 they were 1.5 and 2 facets, so a larger facet rounded the rock
+more; Tris wanted broad planes with crisp edges, his cave reference). The
 surface is the shared painted slate. The export keeps the facets' edges
 straight and adds no chips (`surfaceFinish`, assemble.py).
 """
@@ -28,15 +32,14 @@ import random
 # At Stone size 1, metres.
 FACET = 0.7               # a facet's typical width (0.55 with 2.2 triangles a
                           # facet drew twice the references' facets, reading wavy)
-ROUND = 1.5               # the corners' rounding, in facets
-BULGE_SCALE = 2.0         # the bulge's noise period, in facets
 RELIEF = 0.4              # the bulge at Surface relief 1, in facets: enough that a
                           # flat face of the guide breaks into planes too (at 0.35 x
                           # 3 facets a box's faces stayed one plane each, its facets
                           # all on the rounded edges)
 TRIS_PER_FACET = 1.6      # triangles the collapse keeps per facet of area
-ANGLE = 8.0               # degrees: neighbours nearer one plane than this merge
 MAX_VOXELS = 250          # the remesh voxel is at least the guide's extent over this
+RADIUS_VOXELS = 12        # ...and at least the edge radius over this: the old
+                          # 1.5 facets over a voxel of facet / 8
 KEEP = 0.5                # a rounding that leaves less of the guide's volume is redone smaller
 
 
@@ -61,7 +64,12 @@ def build(solid, camera, parameters, collection):
     # one, so a rounding that leaves too little is tried again smaller.
     from .stones import inside_grid
     grid = inside_grid(solid, facet / 0.07 / 4)
-    radius = min(ROUND * facet, 0.9 * grid.gaps(grid.inside).max() * grid.cell)
+    radius = min(float(parameters["edgeRadius"]), 0.9 * grid.gaps(grid.inside).max() * grid.cell)
+    # The opening's cost goes with the radius in voxels (its band), so the
+    # voxel grows with a radius past RADIUS_VOXELS of them: what is finer
+    # than the radius is rounded away anyway. Unbounded, Edge radius 0.525 m
+    # at Facet size 0.25 took 16 s against 2 s (2026-11-23).
+    voxel = max(voxel, radius / RADIUS_VOXELS)
     guide = ob.data.copy()
     whole = abs(_volume(guide))
     floor = min(c[2] for c in co)
@@ -71,7 +79,7 @@ def build(solid, camera, parameters, collection):
             break
         radius *= 0.7
         if radius < 2 * voxel:
-            raise ValueError("the guide is too thin to round at this Facet size")
+            raise ValueError("the guide is too thin to round at this Edge radius")
         old = ob.data
         ob.data = guide.copy()
         bpy.data.meshes.remove(old)
@@ -83,14 +91,15 @@ def build(solid, camera, parameters, collection):
         bm = bmesh.new()
         bm.from_mesh(ob.data)
         bm.normal_update()
-        moves = [v.normal * relief * noise.noise(v.co / (BULGE_SCALE * facet) + off) for v in bm.verts]
+        period = float(parameters["bulgeSize"])
+        moves = [v.normal * relief * noise.noise(v.co / period + off) for v in bm.verts]
         for v, d in zip(bm.verts, moves):
             v.co += d
         bm.to_mesh(ob.data)
         bm.free()
 
     area = sum(p.area for p in ob.data.polygons)
-    fitted._facets(ob, TRIS_PER_FACET * area / facet ** 2, angle=ANGLE)
+    fitted._facets(ob, TRIS_PER_FACET * area / facet ** 2, angle=float(parameters["mergeAngle"]))
     # Cut after the facets, not before: the facets run on down past the floor
     # and the plane slices them clean. Cut first, the collapse worked against
     # the cap's ring and left a zig-zag band of fan triangles round the base.
@@ -130,8 +139,10 @@ def _round(ob, voxel, radius):
     sdf, below = n.new("GeometryNodeMeshToSDFGrid"), n.new("GeometryNodeMeshToSDFGrid")
     for grid in (sdf, below):
         grid.inputs["Voxel Size"].default_value = voxel
-        # The band must hold the distances the offsets reach.
-        grid.inputs["Band Width"].default_value = math.ceil(radius / voxel) + 3
+        # The band must hold the distances the offsets reach, and 6 voxels
+        # more: at radius 0 a band of 3 or 4 meshed to nothing and 5 was
+        # marginal (2026-11-23, 0.5 % off the volume 6 and 7 agree on).
+        grid.inputs["Band Width"].default_value = math.ceil(radius / voxel) + 6
     # The guide again, a radius and a bit lower, in union with it: the base
     # carries on down, so the opening rounds no bottom edge and the cut at
     # the guide's floor (`flat_base`) leaves it flat.

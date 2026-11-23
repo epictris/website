@@ -26,7 +26,7 @@ bun run generators:setup   # once per machine: the venv the formations add-on's 
 `/` loads the introduction and then offers the **difficulty select** - Normal (iron ball) or Hard (`?ball=glass`, a glass ball that breaks on anything solid, [docs/glass-ball.md](docs/glass-ball.md)) - and `?level=NAME` plays one level (`src/level/registry.ts`); `BALL` is the introduction, and every level is played with the ball & chain controller in 3D (the grapple controller was retired on 2026-10-19).
 `?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, F4 captures the camera for `cli shot --view`.
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
-`/editor` is the level editor: one free 3D view (middle drag orbits, F frames, Numpad 1 aligns to the plane) with the overlay projected through it at any angle ([docs/editor.md](docs/editor.md#the-3d-view-since-2026-11-22)), and **Assets** opens reusable rocks for the model library ([docs/formations.md](docs/formations.md)).
+`/editor` is the level editor, in three workspaces (**1**/**2**/**3**, [docs/editor.md](docs/editor.md#workspaces-2d-formations-decorations)): **2D** (the plane head on, collision and gameplay), **Formations** (free 3D: guides, sculpted as Blender sculpts - Draw, Grab, Cut, Dyntopo - [docs/formations.md](docs/formations.md#sculpting), generating rock, and **Assets**, reusable rocks for the model library, [docs/formations.md](docs/formations.md)) and **Decorations** (free 3D: the palette and brush on the rocks); the 3D view projects the overlay at any angle ([docs/editor.md](docs/editor.md#the-3d-view-since-2026-11-22)).
 **P** downloads a replayable session bundle stamped with the served tree.
 `?replay=NAME` watches one back on a transport - space pauses, `[`/`]` change speed, the arrows and the bar seek, and seeking re-simulates rather than rewinding ([docs/running.md](docs/running.md#watching-a-replay)).
 Controls, gamepad and touch mapping, the level list and the aim modes: [docs/running.md](docs/running.md).
@@ -144,12 +144,12 @@ Tooling
 Editor and levels
 
 - [levels](docs/levels.md) - the difficulty select (after the load), `meta` and the listing rules, the finish line and the crossing, the completion panel (time, Retry/Next Level/Menu, the feedback half) and where what players say is kept, the level hash.
-- [editor](docs/editor.md) - gestures, selection, vertex editing, the 3D view, orbit, the lens, the gizmo, the depth handle, ▶ Test.
+- [editor](docs/editor.md) - the workspaces (2D, Formations, Decorations), gestures, selection, vertex editing, the 3D view, orbit, the lens, the gizmo, the depth handle, ▶ Test.
 - [editor-visuals](docs/editor-visuals.md) - the Visuals workspace, merged into the one 3D view on 2026-11-22: the free view's pose and gestures (current), the guides and their routing (retired).
 - [generators](docs/generators.md) - retired 2026-09-29: the editor's boulder and mushroom generator service, and what survives of it in Blender.
 - [editor-model](docs/editor-model.md) - layers, the body outliner, decoration, notes, compound bodies.
 - [level-format](docs/level-format.md) - level files, the dev REST API, autosave, `levelFormat.ts`, regenerating `levelData.ts`.
-- [formations](docs/formations.md) - the editor owns the level: formations (recipes and guides, collision or boolean solid), the store and its hash, the job runner, Fit collision to geometry, the iteration look, decorations tied to the guide and their paint, the Assets tab, publishing as region bundles, migrating a Blender scene.
+- [formations](docs/formations.md) - the editor owns the level: formations (recipes and guides, collision or boolean solid), sculpting a guide (Apply, Draw, Grab, Dyntopo, Remesh, Cut, the commit and the hand-over's decimation), the retired orthographic leaves and their migration, the store and its hash, the job runner, Fit collision to geometry, the iteration look, decorations tied to the guide and their paint, the Assets tab, publishing as region bundles, migrating a Blender scene.
 
 Camera
 

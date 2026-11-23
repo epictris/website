@@ -61,6 +61,8 @@ if (existsSync(STORE)) {
   const meshDir = join(STORE, MESHES);
   if (existsSync(meshDir)) {
     for (const f of readdirSync(meshDir)) {
+      // The leaf's name: the bare hash for a JSON mesh, the file name for a
+      // binary one (formation/meshBin.ts).
       const name = f.replace(/\.json$/, "");
       if (!meshes.has(name)) sweep(join(meshDir, f), `mesh ${name.slice(0, 12)}`);
     }

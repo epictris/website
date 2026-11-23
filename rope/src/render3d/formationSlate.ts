@@ -118,7 +118,13 @@ let shared: THREE.MeshPhysicalMaterial | null = null;
 
 export function formationSlateMaterial(): THREE.MeshPhysicalMaterial {
   if (shared) return shared;
-  const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 0, flatShading: true });
+  // Shaded by the exported normals, not flat: since 2026-11-23 every corner
+  // carries its facet's normal (formation_export.py `edge_attributes`), so a
+  // facet's triangles shade as one plane, as Blender shades the n-gon; a
+  // facet's corners are only nearly coplanar, and flat shading drew each
+  // sliver of it as a bright strip. Rocks exported before carry their
+  // triangles' own normals, which is what flat shading drew.
+  const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
   m.name = "Formation slate (iteration)";
   // Principled's Specular IOR Level 0.1 is a fifth of its default reflectance.
   m.onBeforeCompile = (shader) => {
@@ -223,9 +229,13 @@ export function prepareSlateGeometry(mesh: THREE.Mesh, toRock: THREE.Matrix4): b
   out.setAttribute("aEdge", edge ? floats(edge) : new THREE.BufferAttribute(new Float32Array(position.count * 3).fill(1e3), 3));
   out.setAttribute("aCrease", crease ? floats(crease) : new THREE.BufferAttribute(new Float32Array(position.count * 3), 3));
   if (g.index) out.setIndex(g.index.clone());
-  out.computeBoundingBox();
-  out.computeBoundingSphere();
-  mesh.geometry = out;
+  // The material shades by the normals; a mesh without them is shaded flat,
+  // each triangle by its own (unwelded, so no corner is shared).
+  const shaded = normal ? out : out.index ? out.toNonIndexed() : out;
+  if (!normal) shaded.computeVertexNormals();
+  shaded.computeBoundingBox();
+  shaded.computeBoundingSphere();
+  mesh.geometry = shaded;
   g.dispose();
   mesh.material = formationSlateMaterial();
   return true;

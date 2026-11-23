@@ -51,9 +51,9 @@ def tessellate(bm, mesh):
     triangles: the split Blender's tessellation makes, which the glTF exporter
     ships (the baked rock) and the growths grow on (stampbrush host_world).
 
-    A solid rock's faces are planar dissolves, n-gons up to the dissolve's
-    angle out of plane (a Faceted rock's: 8 degrees, 5.8 cm across a metre
-    facet), so two triangulations of one are two surfaces. bmesh's own
+    A solid rock's faces are planar dissolves, n-gons flattened afterwards
+    (`fitted.flatten`) but not exactly planar, so two triangulations of one
+    are two surfaces. bmesh's own
     (`bmesh.ops.triangulate`, BEAUTY) split 161 of a Faceted rock's 380
     triangles the other way, and the editor drew a rock that stood through the
     moss grown on it (2026-11-23: rock-coloured triangles cut out of a texture
@@ -177,10 +177,27 @@ def edge_attributes(mesh):
 
     The mesh is triangulated first, as Blender tessellates it (`tessellate`;
     a face attribute is copied to the pieces).
-    Edges shared by two faces of one plane, and boundary edges, are 0."""
+    Boundary edges, and the diagonals `tessellate` cuts inside one face, are
+    0; an edge between two faces takes the faces' own normals.
+
+    Each corner's normal is set to its face's (custom normals, which the
+    glTF exporter writes and the slate shades with): the triangles of one
+    face are shaded as one plane, as Blender shades an n-gon. A facet's
+    corners are flattened but not exactly coplanar (formations/fitted.py
+    `flatten`), and a sliver triangle a few millimetres out of its facet's
+    plane turned tens of degrees; shaded by its own normal, with an edge line
+    along its diagonal, it drew a thin bright strip across the facet
+    (2026-11-23, Tris's body 106)."""
+    from mathutils import Vector
+    normals = np.empty(3 * len(mesh.polygons), np.float32)
+    mesh.polygons.foreach_get("normal", normals)
+    normals = normals.reshape(-1, 3)
     bm = bmesh.new()
     try:
         bm.from_mesh(mesh)
+        source = bm.faces.layers.int.new("_source_face")
+        for f in bm.faces:
+            f[source] = f.index
         tessellate(bm, mesh)
         bm.normal_update()
         bm.faces.ensure_lookup_table()
@@ -188,9 +205,11 @@ def edge_attributes(mesh):
         dist = np.zeros((n, 3, 3), np.float32)
         crease = np.zeros((n, 3), np.float32)
         centre = [f.calc_center_median() for f in bm.faces]
+        owner = np.array([f[source] for f in bm.faces], np.int32)
         for fi, f in enumerate(bm.faces):
             loops = list(f.loops)
             vs = [l.vert.co for l in loops]
+            nf = Vector(normals[owner[fi]])
             for i in range(3):
                 # Edge i joins corners i+1 and i+2; corner i is its height away.
                 a, b = vs[(i + 1) % 3], vs[(i + 2) % 3]
@@ -200,15 +219,26 @@ def edge_attributes(mesh):
                 dist[fi, i, i] = h
                 edge = loops[(i + 1) % 3].edge
                 other = [g for g in edge.link_faces if g is not f]
-                if len(other) != 1:
+                if len(other) != 1 or owner[other[0].index] == owner[fi]:
                     continue
                 g = other[0]
-                half = 0.5 * f.normal.angle(g.normal, 0.0)
-                convex = f.normal.dot(centre[g.index] - centre[fi]) < 0
+                half = 0.5 * nf.angle(Vector(normals[owner[g.index]]), 0.0)
+                convex = nf.dot(centre[g.index] - centre[fi]) < 0
                 crease[fi, i] = half if convex else -half
+        # The edges between faces sharp, the diagonals inside one smooth: a
+        # custom normal is held per smooth fan about a vertex, so a fan
+        # running on into the next face blended the two faces' normals (9%
+        # of a Faceted rock's triangles).
+        for e in bm.edges:
+            faces = e.link_faces
+            e.smooth = bool(len(faces) == 2 and owner[faces[0].index] == owner[faces[1].index])
+        bm.faces.layers.int.remove(source)
         bm.to_mesh(mesh)
     finally:
         bm.free()
+    # Each corner its source face's normal; flat-shaded faces would drop it.
+    mesh.polygons.foreach_set("use_smooth", np.ones(len(mesh.polygons), bool))
+    mesh.normals_split_custom_set([tuple(normals[owner[p.index]]) for p in mesh.polygons for _ in range(3)])
     # Corners in the mesh's own loop order: triangulated, face fi's loops are
     # loop_start .. loop_start + 2, in the bmesh face's loop order.
     starts = np.empty(len(mesh.polygons), np.int32)

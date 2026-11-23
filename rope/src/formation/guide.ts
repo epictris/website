@@ -12,7 +12,7 @@
 // point [x, -y] (docs/formations.md, "Coordinates"; held by `cli formations`,
 // which generates from an asymmetric outline and checks where the rock lands).
 
-import { manifold } from "../../../3d/orthographic/src/core/manifold";
+import { manifold } from "./manifold";
 import type { CollisionGuide, FormationData } from "../level/levelFormat";
 import { piecePolygon, signedArea, type Pt } from "./outline";
 import { formationRecipe } from "./recipe";

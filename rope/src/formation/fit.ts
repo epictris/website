@@ -23,7 +23,7 @@
 //
 // Everything is in the formation's frame (metres, y down), as the section is.
 
-import { manifold } from "../../../3d/orthographic/src/core/manifold";
+import { manifold } from "./manifold";
 import { signedArea, type Pt } from "./outline";
 import type { SectionLoop } from "./store";
 

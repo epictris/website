@@ -181,6 +181,12 @@ export interface CameraOrbit {
 export const NO_ORBIT: CameraOrbit = { yaw: 0, pitch: 0 };
 // Short of the poles, where the up vector degenerates and the view rolls.
 export const MAX_ORBIT_PITCH = (80 * Math.PI) / 180;
+// THE EDITOR'S VIEW POSE goes all the way to the poles: the view cube's Top
+// and Bottom look straight down and up (editor/viewCube.ts). Past
+// `MAX_ORBIT_PITCH` `applyPose` takes the camera's up from the pose's own
+// basis (level, no roll, continuous through the pole) rather than world +y,
+// which degenerates there.
+export const MAX_VIEW_PITCH = Math.PI / 2;
 export function isHeadOn(orbit: CameraOrbit): boolean {
   return orbit.yaw === 0 && orbit.pitch === 0;
 }
@@ -254,7 +260,9 @@ export function poseFromCamera(
   return {
     target: { x: camera.position.x, y: threeY(camera.position.y), z: lens.zOffset },
     yaw: orbit.yaw,
-    pitch: orbit.pitch,
+    // A `CameraOrbit` stops short of the poles, as it always has; only the
+    // editor's own pose goes on to them (`MAX_VIEW_PITCH`).
+    pitch: Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, orbit.pitch)),
     halfHeight: visibleHeightMetres(camera) / 2,
     fovYDeg: lens.fovYDeg,
   };
@@ -327,14 +335,21 @@ export function applyPose(threeCam: ViewCamera, pose: ViewPose, aspect: number):
   // Orbited: the camera swings around the point it was looking at, at exactly
   // the dolly distance the zoom asks for, so turning the view neither zooms it
   // nor slides what it is centred on.
-  const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, pose.pitch));
+  const pitch = Math.max(-MAX_VIEW_PITCH, Math.min(MAX_VIEW_PITCH, pose.pitch));
   const cp = Math.cos(pitch);
   threeCam.position.set(
     x + dist * Math.sin(pose.yaw) * cp,
     y + dist * Math.sin(pitch),
     z + dist * Math.cos(pose.yaw) * cp,
   );
-  threeCam.up.set(0, 1, 0);
+  // World up, as ever, short of the poles; beyond, the pose's own up
+  // (`poseBasis`'s: -sin(p)·(sin yaw, 0, cos yaw) + cos(p)·y), which is the
+  // same direction there and the only one defined at the pole itself.
+  if (Math.abs(pitch) <= MAX_ORBIT_PITCH) threeCam.up.set(0, 1, 0);
+  else {
+    const sp = Math.sin(pitch);
+    threeCam.up.set(-sp * Math.sin(pose.yaw), cp, -sp * Math.cos(pose.yaw));
+  }
   threeCam.lookAt(x, y, z);
   threeCam.updateProjectionMatrix();
 }

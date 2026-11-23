@@ -32,17 +32,8 @@ just scene ball
 A guide can be edited by script too: it is the mesh `backdrop.<id> / guide` in `Formation recipes`, parented to its rock (its vertices in the rock's frame, which for a backdrop rock is the world), and a rebuild reads it as it stands.
 The parameters are `solidfit.PARAMS`, the render settings `formations/render.py`; both are listed with what they do in [blender-formations](blender-formations.md#formations).
 
-**Seeding from a reference** (once, or for a piece the scene does not have yet):
-
-```sh
-bun scripts/ortho-solids.ts <studio scene id> /tmp/solids.json
-$B --import /tmp/solids.json [--only id] --save
-```
-
-The studio is a reference for a first build, not a source the backdrop depends on: its scenes do not persist.
-`ortho-solids.ts` fetches a studio scene (or reads a saved `scene.json`) and writes each rock's exact solid, meshed by the studio's own code (`3d/orthographic/src/core/mesher.ts`: the union of its parts, each the intersection of its front, top and side outlines' prisms), with the studio's camera.
-`--import` maps each into the game's view (below), sinks its feet, runs the roof's ceiling forward, and builds it as a solid formation whose guide it is, with its provenance in `formation_import`.
-A piece the scene already has is kept, edits and all, unless `--only` names it, which replaces it.
+**Seeding from a reference** (`--import` from an Orthographic Studio export through `scripts/ortho-solids.ts`) was removed on 2026-11-23 with the rest of the orthographic authoring route ([plans/sculpt-guides.md](../plans/sculpt-guides.md)): guides are sculpted in the level editor now.
+The river's pieces were seeded that way once, and the mapping below is how; the guides they left keep working.
 `--adopt` turned the 2026-10-04 backdrop (a mesh per piece in `Backdrop sources`, its rock in `Backdrop`) into solid formations with the seeds and floor they were built with; only the pool is left in `Backdrop`, rebuilt after every build.
 
 ## Where it stands
@@ -85,10 +76,10 @@ Since 2026-11-13 a piece is cut from its solid into stones that fit it, and each
 The stones are solidfit's, the surface is the boulder's: before, the stones were weathered by [cave-look](cave-look.md)'s recipe F (Tried and dropped, below).
 Every length is in screen metres (lengths on the gameplay plane) times the stone's depth over the plane's, so a stone far back is as big on screen as one near.
 
-0. **The solid** (imported from the studio with its feet sunk 0.4 under the water, `backdrop.sink`) is copied into world space, welded and wound outward (`backdrop.prepared`; the studio's arrived inside out, and every step below works along normals; an open mesh is refused by name), and **thickened** away from the eye (`solidfit.thicken`): its camera-facing faces are extruded 0.4 further along their own camera rays and unioned with it.
+0. **The solid** (the river's were imported from the studio with their feet sunk 0.4 under the water, `backdrop.sink`, removed 2026-11-23) is copied into world space, welded and wound outward (`backdrop.prepared`; the studio's arrived inside out, and every step below works along normals; an open mesh is refused by name), and **thickened** away from the eye (`solidfit.thicken`): its camera-facing faces are extruded 0.4 further along their own camera rays and unioned with it.
    A point moved along its ray stays on its pixel, so the silhouette from the start camera is exactly the studio's; only the hidden back grows.
    It is for the skins: where a solid's side is a thin slanted slice seen edge on (the central rock's top left, 2.6 m along the ray and centimetres across it), no stone survived and the outline had holes.
-   **The ceiling** runs forward to the level (`backdrop.extend`, the pieces in `EXTEND`; Tris, 2026-10-04: the roof arch should "extend out all the way to the foreground geometry"), cut off under a plane through the eye 0.1 screen metres above the start frame's top edge (`EXTEND_CLEAR`), so the opening shot is the studio's.
+   **The ceiling** ran forward to the level (`backdrop.extend`, removed with the studio import on 2026-11-23; Tris, 2026-10-04: the roof arch should "extend out all the way to the foreground geometry"), cut off under a plane through the eye 0.1 screen metres above the start frame's top edge (`EXTEND_CLEAR`), so the opening shot is the studio's.
    Its stones are cut at no less than the roof's own depth scale before the sweep (`backdrop_floor` on the solid, the **Depth floor** field): by the screen-size rule the sweep's front, at the plane, came to 196 stones a third the size of the rest.
 1. **Cells** (`solidfit.Cells`): the boulder generator's 3D Voronoi cells (its anisotropy, `boulders/chunk_geometry.py`), three to a cubic screen metre (over **Stone size** cubed), seeded by its farthest-point pick with each distance divided by the candidate's depth scale, so they spread evenly on screen.
    A grid of boxes (recipe F's cells) read as rectangular blocks in rows; 1.5 cells a cubic metre left Cube.001 sixteen stones with big plain faces.

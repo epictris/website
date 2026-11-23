@@ -358,6 +358,10 @@ export class BodyVisual {
         this.foamSurface = water.foam;
         this.releaseWater = water.release;
         this.waterObjects = water.objects;
+        // The water is a surface a click lands on, as any drawn thing is: it
+        // answers with the body's object (a water body is its one volume).
+        const tag = data.objects[0];
+        if (tag !== undefined) for (const o of water.objects) o.userData["pickTag"] = tag;
       }
       // A volume's pieces may still be made visible, as any piece may, and
       // it may carry models as any body may.

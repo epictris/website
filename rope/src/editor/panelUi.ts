@@ -28,11 +28,37 @@ const openSections: Set<string> = (() => {
   }
 })();
 
+// The sections that start OPEN (a workspace's own: the one its work is done
+// in, `setDefaultOpen`), and the ones of them the author has closed since,
+// remembered as the opened ones are.
+const CLOSED_KEY = "rope.editor.closedSections";
+let defaultOpen: ReadonlySet<string> = new Set<string>();
+const closedSections: Set<string> = (() => {
+  try {
+    const raw = localStorage.getItem(CLOSED_KEY);
+    const list: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(list) ? list.filter((k): k is string => typeof k === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+})();
+
+export function setDefaultOpen(keys: Iterable<string>): void {
+  defaultOpen = new Set(keys);
+}
+
+const isOpen = (key: string): boolean => openSections.has(key) || (defaultOpen.has(key) && !closedSections.has(key));
+
 function rememberOpen(key: string, open: boolean): void {
   if (open) openSections.add(key);
   else openSections.delete(key);
+  if (defaultOpen.has(key)) {
+    if (open) closedSections.delete(key);
+    else closedSections.add(key);
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify([...openSections]));
+    localStorage.setItem(CLOSED_KEY, JSON.stringify([...closedSections]));
   } catch {
     // Storage refused (private window, blocked site data): the state still
     // holds for this page, which is all it is for.
@@ -75,7 +101,7 @@ export function section(parent: HTMLElement, key: string, title: string, top = f
   const body = document.createElement("div");
   body.className = "ed-sec-body";
   sec.append(head, body);
-  setOpen(sec, openSections.has(key));
+  setOpen(sec, isOpen(key));
   parent.appendChild(sec);
   return body;
 }
@@ -90,9 +116,13 @@ export function revealInSection(el: HTMLElement): void {
   }
 }
 
-// Drop the sections nothing was put in: the builders open one per concern and
-// several concerns apply only to some kinds of body.
-export function pruneEmptySections(root: HTMLElement): void {
+// Drop the sections nothing was put in (the builders open one per concern and
+// several concerns apply only to some kinds of body), and the ones `keep`
+// refuses (the workspace's: workspaces.ts, `sectionShown`).
+export function pruneEmptySections(root: HTMLElement, keep: (key: string) => boolean = () => true): void {
+  for (const sec of root.querySelectorAll<HTMLElement>(".ed-sec")) {
+    if (!keep(sec.dataset["key"] ?? "")) sec.remove();
+  }
   for (const body of root.querySelectorAll<HTMLElement>(".ed-sec-body")) {
     if (!body.childElementCount) body.parentElement?.remove();
   }

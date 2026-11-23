@@ -92,11 +92,9 @@ const HANDLE_SIZE: Record<GizmoMode, number> = {
 // passing through - with one exception, in `winner`.
 const PICK_ORDER: readonly GizmoMode[] = ["scale", "translate", "rotate"];
 
-// The handle every axis picker's cone has its base on top of. Uniform scale is
-// drawn at the origin, so it is reachable only by beating the axes that all
-// start there, and it is the handle a MESH actually has: its `scale` is one
-// number, which makes the centre drag exact and every single axis an
-// approximation of it.
+// The handle every axis picker's cone has its base on top of: the free move in
+// the view plane (see the constructor), drawn at the origin, so it is
+// reachable only by beating the axes that all start there (`winner`).
 const CENTRE_HANDLE = "XYZ";
 
 // Take one handle out of a control's gizmo for good.
@@ -119,6 +117,27 @@ function dropHandle(controls: TransformControls, mode: GizmoMode, name: string):
   for (const group of [groups?.gizmo?.[mode], groups?.picker?.[mode]]) {
     if (!group) continue;
     for (const child of [...group.children]) if (child.name === name) group.remove(child);
+  }
+}
+
+// Give one handle new geometry: drawn as `drawn`, picked by `picker` (both in
+// the control's own units, scaled by its `size`). Inert, as `dropHandle` is, if
+// three ever renames the field.
+function reshapeHandle(controls: TransformControls, mode: GizmoMode, name: string, drawn: THREE.BufferGeometry, picker: THREE.BufferGeometry): void {
+  const groups = (
+    controls as unknown as {
+      _gizmo?: {
+        gizmo?: Record<string, THREE.Object3D | undefined>;
+        picker?: Record<string, THREE.Object3D | undefined>;
+      };
+    }
+  )._gizmo;
+  for (const [group, geometry] of [[groups?.gizmo?.[mode], drawn], [groups?.picker?.[mode], picker]] as const) {
+    for (const child of group?.children ?? []) {
+      if (child.name !== name || !(child instanceof THREE.Mesh)) continue;
+      child.geometry.dispose();
+      child.geometry = geometry;
+    }
   }
 }
 
@@ -176,14 +195,18 @@ export class EditorGizmo {
 
     // The handles the three sets would otherwise duplicate or bury.
     //
-    // The centre belongs to uniform scale (see `CENTRE_HANDLE`), so the move
-    // gizmo's own centre handle - a free drag in the view plane - goes; its `XY`
-    // plane handle already covers the gameplay plane, which is what that one was
-    // wanted for. Rotation's free-rotation ball goes for the plainer reason that
-    // it is a quarter-radius sphere sitting exactly where the move and scale
-    // handles are, and scale's plane handles because two axes at once is what
-    // the MOVE gizmo means and a squashed shape is rarely what was wanted.
-    dropHandle(this.controls.translate, "translate", CENTRE_HANDLE);
+    // THE CENTRE IS A FREE MOVE IN THE VIEW PLANE (since 2026-11-23, Tris: an
+    // object moved off the plane took three drags, left, then up, then back):
+    // the move gizmo's own centre handle, which three drags in the plane facing
+    // the camera, drawn as a box. Until then the centre was uniform scale's;
+    // that box goes, and a uniform scale is any one axis box on a target whose
+    // scale is one number (a model); other targets size per axis.
+    // Rotation's free-rotation ball goes for the plainer reason that it is a
+    // quarter-radius sphere sitting exactly where the move handle is, and
+    // scale's plane handles because two axes at once is what the MOVE gizmo
+    // means and a squashed shape is rarely what was wanted.
+    reshapeHandle(this.controls.translate, "translate", CENTRE_HANDLE, new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.BoxGeometry(0.3, 0.3, 0.3));
+    dropHandle(this.controls.scale, "scale", CENTRE_HANDLE);
     this.controls.rotate.showXYZE = false;
     this.controls.scale.showXY = false;
     this.controls.scale.showYZ = false;

@@ -211,15 +211,19 @@ import {
 import { pickTagOf } from "../render3d/bodyVisuals";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { FormationJobs, mountJobsPanel } from "./formationJobs";
-import { addShapeToGuide, applyJobResult, buildFormationSection, createBackdrop, guideCentre, SHAPE_KINDS, type FormationHost } from "./formationPanel";
+import { addShapeToGuide, applyJobResult, buildFormationSection, createBackdrop, guideCentre, requestFormationBuild, SHAPE_KINDS, type FormationHost } from "./formationPanel";
 import { enclosingItem } from "./formationEdit";
-import { newFormationId } from "../formation/recipe";
-import { guideBounds, SolidGuideView, type SolidSel } from "./solidGuides";
+import { formationHash, isStale, newFormationId } from "../formation/recipe";
+import { decorationHash, isPainted } from "../formation/decoration";
+import { carryTree, frameBetween, guideBounds, SolidGuideView, type SolidSel } from "./solidGuides";
+import { SculptController } from "./sculpt";
+import { appendEntry, type StackMode } from "../formation/solidStack";
+import { guideColor, guideCss } from "./guideColors";
+import { CUBE_FACES, ViewCube, type CubeFace } from "./viewCube";
 import { headOn } from "./visuals/viewControls";
 import { DECORATION_LABELS, DecorationController, type SurfaceHit } from "./decorationPanel";
-import { newPrimitive, nodeAt, pointsOf, replaceAt, withPoint } from "../formation/solidTree";
-import { poseMatrix } from "../formation/solid";
-import { scaleLevelData, type PaintStamp, type RawLevelData, type SolidPrim } from "../level/levelFormat";
+import { newPrimitive, nodeAt, replaceAt, scaleTree, type PrimitiveKind } from "../formation/solidTree";
+import { PAINTED_DECORATIONS, scaleLevelData, type DecorationKind, type PaintStamp, type RawLevelData, type SolidNode, type SolidPrim } from "../level/levelFormat";
 import { PAINT_API } from "../formation/store";
 import {
   ROOT_TIP_WIDTH,
@@ -268,6 +272,7 @@ import {
   computeHandles,
   drawEditor,
   BODY_MEMBER,
+  COMBINE_PICK,
   SELECT,
   CHAIN_DEFAULT_COLOR,
   VINE_DEFAULT_COLOR,
@@ -319,6 +324,7 @@ import {
   threeRotation,
   unprojectToPlane,
   type CameraOrbit,
+  type SceneLens,
   type ViewPose,
   type ViewProjection,
 } from "../render3d/space";
@@ -331,8 +337,24 @@ import {
   type Box3,
 } from "./visuals/workspace";
 import { guidePlaneZ } from "./visuals/guides";
+import { EDITOR_FOV_Y_DEG } from "./visuals/viewPose";
 import { surfacePlacement } from "./visuals/surfaceDrop";
-import { describe, fieldRow, heading, PANEL_UI_CSS, pruneEmptySections, revealInSection, section } from "./panelUi";
+import { describe, fieldRow, heading, PANEL_UI_CSS, pruneEmptySections, revealInSection, section, setDefaultOpen } from "./panelUi";
+import {
+  EMPTY_HINTS as WORKSPACE_EMPTY_HINTS,
+  HEAD_ON_ONLY,
+  inWorkspace,
+  parseWorkspace,
+  PRIMARY_SECTIONS,
+  readWorkspace,
+  sectionShown,
+  WORKSPACE_LABELS,
+  WORKSPACE_TITLES,
+  WORKSPACES,
+  workspaceLayers,
+  writeWorkspace,
+  type Workspace,
+} from "./workspaces";
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ, worldPlacement } from "../level/buildBodies";
 import {
@@ -488,6 +510,9 @@ const CLICK_SLOP_PX = 4;
 // this as the floor on what a click has to land within. Drawn size is unchanged:
 // this is about what can be hit, not about what is seen.
 const SMALL_MARK_PICK_PX = 12;
+// The gameplay plane in three's frame (z = 0): where a 3D pick meets the
+// outlines drawn on it (`raycastItems`).
+const GAMEPLAY_PLANE = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 // (Orbit sensitivity, `ORBIT_RADIANS_PER_PX`, is the Visuals workspace's
 // module's, so the two workspaces' orbits are one constant.)
 
@@ -795,10 +820,48 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // through the perspective camera whatever this says, since the whole point of
   // a test is that the framing is the player's (see the frame loop).
   let projection: ViewProjection = "perspective";
-  let projectionBtn: HTMLButtonElement | null = null;
+  // THE VIEW CUBE (viewCube.ts): top right of the viewport, the lens under it;
+  // the cube itself in the 3D workspaces only.
+  let viewCube: ViewCube | null = null;
   function setProjection(p: ViewProjection): void {
     projection = p;
-    projectionBtn?.classList.toggle("active", p === "orthographic");
+    viewCube?.setProjection(p);
+  }
+  // A face of the cube clicked: the view swung to look from that side, about
+  // the same target and at the same distance, eased over `VIEW_SWING_MS` as
+  // Blender's smooth view is (a cut would lose which way it went). Front is
+  // the gameplay plane head on, so it ends as "Align camera to plane" does.
+  const VIEW_SWING_MS = 220;
+  let viewSwing = 0;
+  function swingView(face: CubeFace): void {
+    const pose = visuals?.view;
+    const to = CUBE_FACES.find((f) => f.face === face);
+    if (!visuals || !pose || !to || HEAD_ON_ONLY[workspace]) return;
+    const from = { yaw: pose.yaw, pitch: pose.pitch };
+    // The shorter way round; at a pole the yaw is the face's own (Top and
+    // Bottom have the front at the foot of the screen).
+    let dYaw = (to.yaw - from.yaw) % (2 * Math.PI);
+    if (dYaw > Math.PI) dYaw -= 2 * Math.PI;
+    if (dYaw < -Math.PI) dYaw += 2 * Math.PI;
+    const run = ++viewSwing;
+    const t0 = performance.now();
+    const step = (now: number): void => {
+      const p = visuals?.view;
+      if (run !== viewSwing || !p || mode !== "edit") return;
+      const t = Math.min(1, (now - t0) / VIEW_SWING_MS);
+      const e = t * t * (3 - 2 * t);
+      visuals!.setView({ ...p, yaw: from.yaw + dYaw * e, pitch: from.pitch + (to.pitch - from.pitch) * e });
+      cameraFromPose();
+      if (t < 1) requestAnimationFrame(step);
+      else {
+        // Exactly on the axis, the yaw folded back into one turn.
+        visuals!.setView({ ...visuals!.view!, yaw: to.yaw, pitch: to.pitch });
+        if (face === "front") resetView();
+        cameraFromPose();
+        refreshOrbitBtn();
+      }
+    };
+    requestAnimationFrame(step);
   }
   let resetViewBtn: HTMLButtonElement | null = null;
   function refreshOrbitBtn(): void {
@@ -825,7 +888,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // ...and the other way: the pose head on at the 2D camera, after a load or
   // anything else that places the view by the camera.
   function poseFromCameraNow(): void {
-    visuals?.setView(headOn(camera, lensOf(model.camera)));
+    visuals?.setView(headOn(camera, editorLens()));
+  }
+  // The lens the editor's view is navigated through: the level's depth, the
+  // editor's own wide field of view (`EDITOR_FOV_Y_DEG`).
+  function editorLens(): SceneLens {
+    return { ...lensOf(model.camera), fovYDeg: EDITOR_FOV_Y_DEG };
   }
   // The solid formation being edited: the selected formation, or the one in
   // the selected body. Null for none, or for one guided by collision.
@@ -836,23 +904,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return f ?? null;
   }
   // The Shift+A menu: a column of shapes at the pointer; a pick adds one in
-  // the middle of the guide (`guideCentre`), Esc or a click elsewhere closes
-  // it.
+  // the middle of the selected guide (`guideCentre`), or with no guide
+  // selected a new guide where the view is looking (`addPrimitive`, the dock's
+  // Primitives). Esc or a click elsewhere closes it.
   let shapeMenu: HTMLElement | null = null;
   function closeShapeMenu(): void {
     shapeMenu?.remove();
     shapeMenu = null;
   }
-  function showShapeMenu(f: EdItem): void {
+  function showShapeMenu(f: EdItem | null): void {
     closeShapeMenu();
     const menu = el("div", "ed-shape-menu");
     const title = el("div", "ed-shape-menu-title");
-    title.textContent = "Add shape";
+    title.textContent = f ? "Add to guide" : "Add primitive";
     menu.appendChild(title);
     for (const { label, kind } of SHAPE_KINDS) {
       menu.appendChild(
         button(label, () => {
           closeShapeMenu();
+          if (!f) {
+            addPrimitive(kind);
+            return;
+          }
           const guide = f.formation?.guide;
           if (guide?.kind !== "solid") return;
           addShapeToGuide(formationHost, f, newPrimitive(kind, guideCentre(guide.tree)));
@@ -966,9 +1039,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     visuals = new VisualsWorkspace({
       scene: scene3d,
       camera2d: () => camera,
-      // The level's own lens, which the head-on pose is framed through exactly
-      // as the Level workspace's scene is (`Scene3D.setLevel` reads the same).
-      lens: () => lensOf(model.camera),
+      // The editor's own lens at the level's depth (`editorLens`).
+      lens: editorLens,
       canvasSize: () => ({ width: cssW, height: cssH }),
     });
     // Its camera alone: the overlay is drawn projected, not as guides.
@@ -977,6 +1049,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // --- state ----------------------------------------------------------------
   let model: EdModel = emptyModel();
+
+  // THE WORKSPACE (editor/workspaces.ts, docs/editor.md "Workspaces"): 2D,
+  // Formations or Decorations - how the view moves, what the dock offers,
+  // what is drawn, picked and listed, and which inspector sections show. The
+  // address bar's wins over the one this browser last used.
+  let workspace: Workspace = parseWorkspace(new URLSearchParams(location.search).get("ws")) ?? readWorkspace();
+  setDefaultOpen(PRIMARY_SECTIONS);
+  // Is an item part of the workspace (drawn, picked, listed)?
+  const inWs = (b: EdItem): boolean => inWorkspace(workspace, b, model.bodies3d.has(b.bodyId));
+  // Is a layer drawn and picked: shown in the layer list, and one the
+  // workspace works on.
+  const layerShown = (l: EdLayer): boolean => visibleLayers.has(l) && (workspaceLayers(workspace)?.includes(l) ?? true);
+  // Chains, vines and berries are the plane's, the 2D workspace's alone.
+  const planeFurniturePickable = (): boolean => workspace === "2d" && visibleLayers.has("scene") && !lockedLayers.has("scene");
 
   // Selection is a set: plain click selects one, shift+click toggles a body in
   // or out. Handles and the per-body inspector only apply to a lone selection.
@@ -1040,6 +1126,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const NO_NODES: ReadonlySet<number> = new Set<number>();
   // An empty selection, for drawing the overlay as if nothing were selected.
   const NO_IDS: ReadonlySet<number> = new Set<number>();
+  const NO_ITEMS: readonly EdItem[] = [];
+  // The layers the overlay draws: the list's visible ones the workspace works
+  // on (`layerShown`).
+  let shownLayersCache: { key: string; set: ReadonlySet<EdLayer> } | null = null;
+  function shownLayers(): ReadonlySet<EdLayer> {
+    const key = `${workspace}|${[...visibleLayers].join(",")}`;
+    if (shownLayersCache?.key !== key) shownLayersCache = { key, set: new Set(ED_LAYERS.filter(layerShown)) };
+    return shownLayersCache.set;
+  }
   let tool: Tool = "select";
   let placingMushroom = false;
   let newKind: BodyKind = "static";
@@ -1071,6 +1166,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // (prefs.ts); each one's change writes itself back.
   const viewSettings = readViewSettings();
   let snapOn = viewSettings.snap;
+  // GUIDES AND ROCKS in the Formations workspace (docs/editor.md): whether
+  // every formation's guide is drawn and whether every generated rock is,
+  // and per formation an override of the two (`formationView`), set from
+  // the dock's Guide / Rock / Both or Tab. Setting either global clears the
+  // overrides, so it applies to every formation in the level. Outside
+  // Formations the rocks are always drawn and the guides never.
+  let showGuides = viewSettings.guides;
+  let showRocks = viewSettings.rocks;
+  // The Decorations dock's "Collision": the collision outlines over the
+  // rocks there, drawn and not picked (`shownModel`).
+  let showCollisionOutlines = viewSettings.collision;
+  type FormationView = "guide" | "rock" | "both";
+  const formationView = new Map<number, FormationView>();
+  let formationViewRev = 0;
+  // Sculpt mode (editor/sculpt.ts), made with the Formations dock below. The
+  // formation being sculpted shows neither guide nor rock: Sculpt draws its
+  // working mesh in their place.
+  let sculptCtl: SculptController | null = null;
+  const guideShown = (f: EdItem): boolean => {
+    if (sculptCtl?.itemId === f.id) return false;
+    const o = formationView.get(f.id);
+    return o ? o !== "rock" : showGuides;
+  };
+  const rockShown = (f: EdItem): boolean => {
+    if (sculptCtl?.itemId === f.id) return false;
+    const o = formationView.get(f.id);
+    return o ? o !== "guide" : showRocks;
+  };
+  // A formation's guide colour, by its id (guideColors.ts).
+  const guideHex = (f: EdItem): number => guideColor(f.formation?.id ?? String(f.id));
+  const guideCssOf = (f: EdItem): string => guideCss(f.formation?.id ?? String(f.id));
+  // The overlay's collision guides in Formations (render.ts).
+  const formationGuideView = { shown: guideShown, color: guideCssOf };
   // Whether the editor's own view draws the level's fog. Off by default: the
   // haze is the player's view of the level, and through it a distant piece is
   // hard to judge. ▶ Test always draws it. A view setting like `snapOn`, so it
@@ -1196,8 +1324,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // formations it was built for (`applyJobResult`) - which is an edit like any
   // other, so it autosaves and rebuilds the scene to draw the new rock.
   const formationJobs = new FormationJobs();
-  // The node of a solid guide (and the point of it) the Formation panel has
-  // picked: what the gizmo moves while its formation or body is selected.
+  // The node of a solid guide the Formation panel has picked: what the gizmo
+  // moves while its formation or body is selected.
   let solidSel: SolidSel | null = null;
   function currentSolidSel(): SolidSel | null {
     const sel = solidSel;
@@ -1232,13 +1360,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   });
   if (scene3d) scene3d.editorLayer.add(decorations.preview);
   // Where a decoration gesture lands: the formation's rock under the pointer.
+  // The palette's placing (`decorations.anyRock`) lands on whichever generated
+  // rock is under the pointer.
   function decorationHit(scr: Vec2): SurfaceHit | null {
+    if (workspace !== "decorations" || !visuals) return null;
     const target = decorations.target(model.items.filter((i) => selectedIds.has(i.id)));
-    if (target === null || !visuals) return null;
-    const hit = visuals.surfaceAt(scr, (tag) => itemOfSceneObject.get(tag as SceneTag) === target);
+    const any = target === null && decorations.anyRock;
+    if (target === null && !any) return null;
+    const accept = (id: number | undefined): boolean =>
+      id !== undefined && (any ? decorations.isRock(id) && !hiddenBodies.has(itemOf(id)?.bodyId ?? -1) : id === target);
+    const hit = visuals.surfaceAt(scr, (tag) => accept(itemOfSceneObject.get(tag as SceneTag)));
     if (!hit) return null;
     return {
-      itemId: target,
+      itemId: any ? itemOfSceneObject.get(hit.tag as SceneTag)! : target!,
       point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z),
       normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z),
     };
@@ -1246,7 +1380,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const formationHost: FormationHost = {
     model: () => model,
     jobs: formationJobs,
-    decorations,
     solidSel: () => currentSolidSel(),
     setSolidSel: (sel) => {
       solidSel = sel;
@@ -1260,6 +1393,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Its name when it has one, which is what a level's author knows it by.
       return members[0]?.name || `body #${bodyIndexOf(bodyId)}`;
     },
+    sculpt: (item) => enterSculpt(item),
+    sculpting: () => sculptCtl?.itemId ?? null,
   };
   formationJobs.onDone((job) => {
     const regenerated = applyJobResult(model, job);
@@ -1302,7 +1437,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       params: {},
       guide: kind === "outline"
         ? { kind: "collision" as const, pieces: [{ shape: { kind: "poly" as const, verts: [{ x: -0.8, y: -0.5 }, { x: 0.9, y: -0.6 }, { x: 0.7, y: 0.5 }, { x: -0.6, y: 0.6 }] } }] }
-        : { kind: "solid" as const, tree: { op: "union" as const, of: [{ prim: "ellipsoid" as const, size: [1.6, 1.2, 1.2] as [number, number, number] }] } },
+        : { kind: "solid" as const, tree: { op: "union" as const, of: [{ prim: "box" as const, size: [1.6, 1.2, 1.2] as [number, number, number] }] } },
     };
     return modelFromDisk(scaleLevelData({
       player: { x: 0, y: -2, radius: 0.08 },
@@ -1594,9 +1729,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Model order, so a group keeps its z-order through copy/duplicate.
   const selectedBodies = () => model.items.filter((b) => selectedIds.has(b.id));
   // The items a click or a rubber-band may touch: everything on a layer that is
-  // both visible and unlocked, in a body that is not hidden (H).
+  // both visible and unlocked, in a body that is not hidden (H), and part of
+  // the workspace (`inWs`).
   const pickableItems = () =>
-    model.items.filter((b) => visibleLayers.has(b.layer) && !lockedLayers.has(b.layer) && !hiddenBodies.has(b.bodyId));
+    model.items.filter((b) => layerShown(b.layer) && !lockedLayers.has(b.layer) && !hiddenBodies.has(b.bodyId) && inWs(b));
 
   // HIDDEN BODIES (H, Alt+H, Shift+H, the outliner's eye; Blender's viewport
   // hide): not drawn - not in the overlay, the scene or the guides - and not
@@ -1623,14 +1759,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     rebuildInspector();
     syncGizmo();
   }
-  // The model as drawn: without the hidden bodies' items. The same object
-  // while nothing is hidden.
-  let shownCache: { rev: number; hidden: number; model: EdModel } | null = null;
+  // The model as drawn: without the hidden bodies' items, and only what is
+  // part of the workspace (`inWs`; the chains and vines are the 2D
+  // workspace's). The same object while nothing is hidden in 2D with no 3D
+  // body or decoration to leave out.
+  // In Decorations the collision outlines are drawn too while its dock's
+  // Collision is on (`showCollisionOutlines`): for reference only, so they
+  // stay out of `inWs` and a click passes through them to the rock.
+  let shownCache: { rev: number; hidden: number; ws: Workspace; collision: boolean; model: EdModel } | null = null;
+  const referenceOutline = (i: EdItem): boolean =>
+    workspace === "decorations" && showCollisionOutlines && i.layer === "scene" && i.object === "collision" && !model.bodies3d.has(i.bodyId);
   function shownModel(): EdModel {
-    if (!hiddenBodies.size) return model;
-    if (shownCache && shownCache.rev === modelRev && shownCache.hidden === hiddenRev && shownCache.model.player === model.player) return shownCache.model;
-    const shown = { ...model, items: model.items.filter((i) => !hiddenBodies.has(i.bodyId)) };
-    shownCache = { rev: modelRev, hidden: hiddenRev, model: shown };
+    if (
+      shownCache &&
+      shownCache.rev === modelRev &&
+      shownCache.hidden === hiddenRev &&
+      shownCache.ws === workspace &&
+      shownCache.collision === showCollisionOutlines &&
+      shownCache.model.player === model.player
+    ) {
+      return shownCache.model;
+    }
+    const items = model.items.filter((i) => !hiddenBodies.has(i.bodyId) && (inWs(i) || referenceOutline(i)));
+    const plane = workspace === "2d";
+    const shown = items.length === model.items.length && plane ? model : { ...model, items, chains: plane ? model.chains : [], vines: plane ? model.vines : [] };
+    shownCache = { rev: modelRev, hidden: hiddenRev, ws: workspace, collision: showCollisionOutlines, model: shown };
     return shown;
   }
   // The same set in click order, bottom-first (callers walk it backwards to take
@@ -2426,7 +2579,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     | { kind: "berry"; vineId: number; index: number }
     | { kind: "solid"; key: string };
 
-  // A NODE of a solid guide's tree, or one of its points, picked in the
+  // A NODE of a solid guide's tree, picked in the
   // Formation panel (`solidSel`): moved, turned and sized in the tree's frame,
   // which is the formation item's placement (docs/formations.md). Every write
   // is a new tree on a new formation, never an edit in place, so the undo
@@ -2455,18 +2608,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (!f) return { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
         const frame = frameOf(f.it);
         const frameQuat = new THREE.Quaternion().setFromRotationMatrix(frame);
-        if (f.sel.point !== null) {
-          const p = pointsOf(f.node)?.[f.sel.point];
-          const at = new THREE.Vector3(...(p ?? [0, 0, 0])).applyMatrix4(new THREE.Matrix4().fromArray(poseMatrix(f.node))).applyMatrix4(frame);
-          return { pos: at, quat: frameQuat.multiply(nodeQuat(f.node)) };
-        }
         return { pos: new THREE.Vector3(...(f.node.pos ?? [0, 0, 0])).applyMatrix4(frame), quat: frameQuat.multiply(nodeQuat(f.node)) };
       },
       axes(mode): GizmoAxes {
         const f = find();
         if (!f) return null;
-        // A point is moved and nothing else; an outline's is held to its plane.
-        if (f.sel.point !== null) return mode === "translate" ? { x: true, y: true, z: f.node.prim !== "extrude" } : null;
         return { x: true, y: true, z: true };
       },
       begin() {
@@ -2478,12 +2624,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (!f) return;
         const toTree = frameOf(f.it).invert();
         const local = pos.clone().applyMatrix4(toTree);
-        let next: SolidPrim = f.node;
-        if (f.sel.point !== null) {
-          if (mode !== "translate") return;
-          const own = local.applyMatrix4(new THREE.Matrix4().fromArray(poseMatrix(f.node)).invert());
-          next = withPoint(f.node, f.sel.point, [own.x, own.y, own.z]);
-        } else if (mode === "translate") {
+        let next: SolidPrim;
+        if (mode === "translate") {
           next = { ...f.node, pos: [local.x, local.y, local.z] };
         } else if (mode === "rotate") {
           const q = new THREE.Quaternion().setFromRotationMatrix(toTree).multiply(quat);
@@ -2590,27 +2732,251 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             : // A body made 3D (or 2D) is a different set of handles.
               `${t.kind}:${t.id}${t.kind === "body" && model.bodies3d.has(t.id) ? ":3d" : ""}`;
 
+  // What moves a target, for the gizmo's handles and for **G** alike, so the
+  // two move the same thing the same way, in one undo step each.
+  function handlersFor(spec: GizmoTarget): GizmoHandlers {
+    return spec.kind === "selection"
+      ? selectionHandlers(spec.ids)
+      : spec.kind === "berry"
+        ? berryHandlers(spec.vineId, spec.index)
+        : spec.kind === "solid"
+          ? solidHandlers()
+          : spec.kind === "body"
+            ? model.bodies3d.has(spec.id)
+              ? pivoted(body3dHandlers(spec.id), () => solidCentre(bodyMembers(model.items, spec.id)))
+              : bodyHandlers(spec.id)
+            : objectHandlers(spec.id);
+  }
+
+  // THE MODAL TRANSFORMS (Blender's **G**, **R** and **S**): what the gizmo
+  // would move, turn or size follows the pointer until a click or Enter
+  // places it, or Esc or a right click puts it back. X, Y or Z holds it to
+  // that axis (again frees it). Driven through the gizmo's own handlers
+  // (`handlersFor`), so each does exactly what the matching handle drag would,
+  // as one undo step, and a cancel leaves no step behind.
+  //
+  // - Grab moves in the plane facing the camera through where the target
+  //   stood (in a plane parallel to the gameplay plane for a target with no
+  //   depth to move along); an axis holds it to that world axis.
+  // - Rotate turns by the pointer's angle round the target's centre on
+  //   screen, about the view axis (the world z for a target that turns only
+  //   in the plane); an axis turns about that world axis instead. It snaps to
+  //   the editor's 15° while snap is on, as the rings do.
+  // - Scale sizes by the pointer's distance from the target's centre on
+  //   screen against where it started, on every axis the target sizes along;
+  //   an axis sizes along that one of the target's own (the gizmo's boxes are
+  //   local too).
+  type XformKind = "translate" | "rotate" | "scale";
+  type XformAxis = "x" | "y" | "z";
+  let grab: {
+    kind: XformKind;
+    h: GizmoHandlers;
+    axes: NonNullable<GizmoAxes>;
+    pos0: THREE.Vector3;
+    quat: THREE.Quaternion;
+    plane: THREE.Plane;
+    hit0: THREE.Vector3 | null;
+    // The target's centre on screen, and where the pointer started from it
+    // (rotate and scale).
+    centre: Vec2;
+    start: Vec2;
+    // Rotate: the pointer's angle last frame, and the turn so far (unwrapped,
+    // so going round more than once keeps turning).
+    lastAngle: number;
+    turn: number;
+    axis: XformAxis | null;
+    // A guide sized as a whole (`guideScaleHandlers`): uniform only.
+    uniform: boolean;
+    // The undo step `begin` pushed, so a cancel takes back that one only.
+    step: EdModel | undefined;
+  } | null = null;
+  const XFORM_NAMES: Record<XformKind, string> = { translate: "Grab", rotate: "Rotate", scale: "Scale" };
+  const grabRay = new THREE.Raycaster();
+  function grabPoint(scr: Vec2): THREE.Vector3 | null {
+    if (!grab || !visuals || !scene3d) return null;
+    const n = visuals.ndc(scr);
+    grabRay.setFromCamera(new THREE.Vector2(n.x, n.y), scene3d.camera);
+    return grabRay.ray.intersectPlane(grab.plane, new THREE.Vector3());
+  }
+  // A world point on the canvas (CSS pixels).
+  function screenOfWorld(p: THREE.Vector3): Vec2 {
+    const v = p.clone().project(scene3d!.camera);
+    return new Vec2(((v.x + 1) / 2) * cssW, ((1 - v.y) / 2) * cssH);
+  }
+  // The pointer's angle about the centre, counterclockwise on screen.
+  const screenAngle = (g: { centre: Vec2 }, scr: Vec2): number => Math.atan2(-(scr.y - g.centre.y), scr.x - g.centre.x);
+  // Start one. False when the selection offers nothing of this kind (no
+  // target, or a light that has no size), so the key can mean what it means
+  // without a selection (R and S arm the Rect and Checkpoint tools in 2D).
+  // **S** on a body holding a solid guide: a body has no size, so the guide
+  // is what is sized - every shape of it, uniformly, about its middle
+  // (`scaleTree`). Uniform only: a per-axis factor on a turned shape would be
+  // a shear. Null for a body with no solid guide.
+  function guideScaleHandlers(spec: GizmoTarget): GizmoHandlers | null {
+    if (spec.kind !== "body") return null;
+    const f = bodyMembers(model.items, spec.id).find((m) => m.object === "formation" && m.formation?.guide.kind === "solid");
+    if (!f) return null;
+    const base = handlersFor(spec);
+    let tree0: SolidNode | null = null;
+    let centre: [number, number, number] = [0, 0, 0];
+    return {
+      pose: () => base.pose(),
+      axes: (m) => (m === "scale" ? { x: true, y: true, z: true } : base.axes(m)),
+      begin() {
+        beginAction();
+        const g = f.formation!.guide;
+        tree0 = g.kind === "solid" ? g.tree : null;
+        if (tree0) centre = guideCentre(tree0);
+      },
+      apply(_m, _pos, _quat, scale) {
+        if (!tree0) return;
+        const k = Math.max(0.01, scale.x);
+        f.formation = { ...f.formation!, guide: { kind: "solid", tree: scaleTree(tree0, centre, k) } };
+        markDirty();
+      },
+      end() {
+        tree0 = null;
+        rebuildInspector();
+      },
+    };
+  }
+  function startTransform(kind: XformKind): boolean {
+    if (mode !== "edit" || !scene3d || !visuals || grab) return false;
+    const spec = gizmoSpec();
+    if (!spec) return false;
+    const guideScale = kind === "scale" ? guideScaleHandlers(spec) : null;
+    const h = guideScale ?? handlersFor(spec);
+    const axes = h.axes(kind);
+    if (!axes || !(axes.x || axes.y || axes.z)) return false;
+    const { pos, quat } = h.pose();
+    const before = history[history.length - 1];
+    h.begin(kind);
+    const top = history[history.length - 1];
+    // A target that cannot leave the gameplay plane's depth moves in a plane
+    // parallel to it; anything else in the plane facing the camera.
+    const normal = kind !== "translate" || axes.z ? scene3d.camera.getWorldDirection(new THREE.Vector3()) : new THREE.Vector3(0, 0, 1);
+    const pointer = lastPointerScreen ?? new Vec2(cssW / 2, cssH / 2);
+    const centre = screenOfWorld(pos);
+    grab = {
+      kind,
+      h,
+      axes,
+      pos0: pos.clone(),
+      quat: quat.clone(),
+      plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, pos),
+      hit0: null,
+      centre,
+      start: pointer,
+      lastAngle: 0,
+      turn: 0,
+      axis: null,
+      uniform: guideScale !== null,
+      step: top !== before ? top : undefined,
+    };
+    grab.hit0 = grabPoint(pointer);
+    grab.lastAngle = screenAngle(grab, pointer);
+    syncGizmo();
+    flashNotice(`${XFORM_NAMES[kind]}: move the pointer · X / Y / Z holds an axis · click or Enter places · Esc or right click cancels`);
+    canvas.style.cursor = kind === "translate" ? "move" : "crosshair";
+    return true;
+  }
+  function moveTransform(scr: Vec2): void {
+    const g = grab;
+    if (!g || !scene3d) return;
+    const one = new THREE.Vector3(1, 1, 1);
+    if (g.kind === "translate") {
+      const hit = grabPoint(scr);
+      if (!hit) return;
+      if (!g.hit0) g.hit0 = hit.clone();
+      const d = hit.sub(g.hit0);
+      if (g.axis) {
+        const keep = d[g.axis];
+        d.set(0, 0, 0);
+        d[g.axis] = keep;
+      }
+      g.h.apply("translate", g.pos0.clone().add(d), g.quat, one);
+    } else if (g.kind === "rotate") {
+      const a = screenAngle(g, scr);
+      let d = a - g.lastAngle;
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      g.turn += d;
+      g.lastAngle = a;
+      // Counterclockwise on screen is a right-handed turn about the axis
+      // pointing at the viewer; about a world axis, by which way it faces.
+      const back = scene3d.camera.getWorldDirection(new THREE.Vector3()).negate();
+      const free = g.axes.x && g.axes.y && g.axes.z;
+      const axis = g.axis
+        ? new THREE.Vector3(g.axis === "x" ? 1 : 0, g.axis === "y" ? 1 : 0, g.axis === "z" ? 1 : 0)
+        : free
+          ? back.clone()
+          : new THREE.Vector3(0, 0, 1);
+      const facing = axis.dot(back);
+      const sign = Math.abs(facing) < 1e-6 ? 1 : Math.sign(facing);
+      let angle = g.turn * sign;
+      if (snapOn) angle = Math.round(angle / ANGLE_STEP) * ANGLE_STEP;
+      const q = new THREE.Quaternion().setFromAxisAngle(axis, angle).multiply(g.quat);
+      g.h.apply("rotate", g.pos0, q, one);
+      flashNotice(`Rotate ${Math.round((angle * 180) / Math.PI)}°${g.axis ? ` about ${g.axis.toUpperCase()}` : ""}`);
+    } else {
+      const f = scr.distanceTo(g.centre) / Math.max(1, g.start.distanceTo(g.centre));
+      const along = (k: XformAxis): number => (g.axes[k] && (!g.axis || g.axis === k) ? f : 1);
+      g.h.apply("scale", g.pos0, g.quat, new THREE.Vector3(along("x"), along("y"), along("z")));
+      flashNotice(`Scale ×${f.toFixed(2)}${g.axis ? ` along its ${g.axis.toUpperCase()}` : ""}`);
+    }
+    syncGizmo();
+  }
+  function endTransform(keep: boolean): void {
+    const g = grab;
+    if (!g) return;
+    grab = null;
+    if (!keep) g.h.apply(g.kind, g.pos0, g.quat, new THREE.Vector3(1, 1, 1));
+    g.h.end(g.kind);
+    if (!keep && g.step && history[history.length - 1] === g.step) {
+      // Nothing changed: the step the transform began is taken back unseen.
+      replaceModel(history.pop()!);
+      afterHistoryChange();
+    }
+    notice = null;
+    updateTitle();
+    rebuildInspector();
+    syncGizmo();
+    applyToolCursor();
+  }
+  function setTransformAxis(axis: XformAxis): void {
+    const g = grab;
+    if (!g) return;
+    if (g.uniform) {
+      flashNotice("Scale: a whole guide sizes evenly; to size one shape along an axis, pick it in the guide's stack first");
+      return;
+    }
+    if (!g.axes[axis]) {
+      flashNotice(`${XFORM_NAMES[g.kind]}: this has no ${axis.toUpperCase()} to ${g.kind === "translate" ? "move along" : g.kind === "rotate" ? "turn about" : "size along"}`);
+      return;
+    }
+    g.axis = g.axis === axis ? null : axis;
+    if (!g.axis) flashNotice(`${XFORM_NAMES[g.kind]}: free`);
+    else if (g.kind === "translate") flashNotice(`Grab along ${axis.toUpperCase()} (${axis.toUpperCase()} again frees it)`);
+    if (lastPointerScreen) moveTransform(lastPointerScreen);
+  }
+
   function syncGizmo(): void {
     if (!gizmo) return;
+    // Put away while grabbing: the press that places the grab must not land
+    // on a handle (three listens for it first). And while sculpting or
+    // drawing a cut, where every press is the brush's or the polygon's.
+    if (grab || sculptCtl?.active || sculptCtl?.cutting) {
+      if (gizmoKey !== "grab") {
+        gizmoKey = "grab";
+        gizmo.attach(null);
+      }
+      return;
+    }
     const spec = gizmoSpec();
     const key = gizmoKeyOf(spec);
     if (key !== gizmoKey) {
       gizmoKey = key;
-      gizmo.attach(
-        spec === null
-          ? null
-          : spec.kind === "selection"
-            ? selectionHandlers(spec.ids)
-            : spec.kind === "berry"
-              ? berryHandlers(spec.vineId, spec.index)
-              : spec.kind === "solid"
-              ? solidHandlers()
-              : spec.kind === "body"
-              ? model.bodies3d.has(spec.id)
-                ? pivoted(body3dHandlers(spec.id), () => solidCentre(bodyMembers(model.items, spec.id)))
-                : bodyHandlers(spec.id)
-              : objectHandlers(spec.id),
-      );
+      gizmo.attach(spec === null ? null : handlersFor(spec));
     }
     // The same 15° the 2D drags snap to. A move is NOT snapped by three: that
     // would round the proxy, which stands at the centre, and a 2D drag lines up
@@ -2867,7 +3233,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   let highlightKey: string | null = null;
   function syncHighlight(): void {
     if (!scene3d) return;
-    const key = `${sceneBuilds}|${hiddenRev}|${[...selectedIds].join(",")}|${[...selectedBodyIds].join(",")}`;
+    const rocksKey = workspace === "formations" ? `${formationViewRev}|${combineRev}` : "-";
+    const key = `${sceneBuilds}|${hiddenRev}|${rocksKey}|${[...selectedIds].join(",")}|${[...selectedBodyIds].join(",")}`;
     if (key === highlightKey) return;
     highlightKey = key;
     // The hidden bodies' drawn objects (H), from the same map.
@@ -2875,6 +3242,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (hiddenBodies.size) {
       for (const item of model.items) {
         if (!hiddenBodies.has(item.bodyId)) continue;
+        const object = sceneObjectOfItem.get(item.id);
+        if (object) hiddenTags.add(object);
+      }
+    }
+    // ...and in Formations, the rocks it is set not to draw (`rockShown`):
+    // hidden as the H-hidden are, so neither drawn nor picked.
+    if (workspace === "formations") {
+      for (const item of model.items) {
+        if (item.object !== "formation" || rockShown(item)) continue;
         const object = sceneObjectOfItem.get(item.id);
         if (object) hiddenTags.add(object);
       }
@@ -2891,6 +3267,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Second, so an object picked out of a selected body reads as the selection
     // rather than as one more of its siblings.
     for (const id of selectedIds) paint(id, SELECT);
+    // The guides picked to combine with the selected one, in the combine
+    // colour (their guides are drawn in front too: `solidView.sync`).
+    for (const id of combine?.picks ?? []) paint(id, COMBINE_PICK);
     scene3d.setHighlight(tags);
   }
 
@@ -3289,6 +3668,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A running job's progress in the Formation section, between rebuilds.
   formationJobs.onChange(() => {
     for (const s of inspector.querySelectorAll<HTMLElement>(".ed-formation-status, .ed-asset-status")) s.dispatchEvent(new Event("refresh"));
+    // ...and the out-of-date counts in the 3D workspaces' docks.
+    refreshWorkspaceDock();
   });
 
   // Toolbar.
@@ -3313,9 +3694,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // What is being edited: the level, or the Assets tab's reusable rocks. (How
   // it is seen is the one 3D view's, the same for both.)
+  // The Formations workspace's alone: an asset is a rock and nothing else.
   const workspaceBtns: Partial<Record<"level" | "assets", HTMLButtonElement>> = {};
+  let assetsRow: HTMLElement | null = null;
   if (visuals) {
     const row = el("div", "ed-row");
+    assetsRow = row;
     bar.appendChild(row);
     workspaceBtns.level = button("Level", () => openAssets(false));
     workspaceBtns.level.title = "Edit the level";
@@ -3381,6 +3765,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   btnSounds.title = "Assign sound files to the game's events: rolling, attaching, bouncing, winding, the whoosh";
   fileRow.append(btnSounds);
 
+  // The workspace tabs (1, 2, 3), as Blender's are along its top bar.
+  const workspaceTabs = el("div", "ed-ws-tabs");
+  workspaceTabs.setAttribute("role", "tablist");
+  workspaceTabs.setAttribute("aria-label", "Workspace");
+  const workspaceTabBtns = new Map<Workspace, HTMLButtonElement>();
+  for (const ws of WORKSPACES) {
+    const b = button(WORKSPACE_LABELS[ws], () => setWorkspace(ws));
+    b.setAttribute("role", "tab");
+    b.title = WORKSPACE_TITLES[ws];
+    workspaceTabBtns.set(ws, b);
+    workspaceTabs.appendChild(b);
+  }
+  fileRow.append(workspaceTabs);
+
   const toolRow = el("div", "ed-row ed-tools");
   toolRow.setAttribute("role", "group");
   toolRow.setAttribute("aria-label", "Drawing tools");
@@ -3403,14 +3801,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     glow: button("Glow", () => { placingMushroom = false; setTool("glow"); }),
     fireflies: button("Fireflies", () => setTool("fireflies")),
   };
-  // A BACKDROP: a body behind the play plane holding only a formation on a
-  // solid guide (docs/formations.md), made where the view is looking and then
-  // shaped in its Formation panel.
-  const backdropButton = button("Backdrop", () => {
-    const made = createBackdrop(formationHost, { x: camera.position.x, y: camera.position.y });
-    if (made) setBodySelection(made.bodyId);
-  });
-  backdropButton.title = "Make a background rock: a solid guide (boxes, hulls, outlines, imported meshes, unions and differences) behind the play plane, generated into rock in its Formation panel. It collides with nothing.";
   const mushroomButton = button("Mushroom", () => { placingMushroom = true; setTool("glow"); });
   mushroomButton.title = "Click to plant a glowing, bouncy mushroom. Its cap expands on impact. Adjust Bounce and Launch on its body.";
   for (const [key, shortcut] of Object.entries({ select: "V", rect: "R", circle: "C", poly: "P", text: "T", arrow: "A", chain: "K", checkpoint: "S" })) {
@@ -3537,28 +3927,398 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   toolBtns.poly.title =
     "Click out an outline, concave corners included; Enter or the first vertex closes it, Esc cancels";
+  // The scene layer's tools, grouped by what they make: the outlines the ball
+  // collides with, the things it plays with, and what lights and dresses the
+  // plane. The other layers offer a handful each and need no headings.
+  const toolGroup = (text: string): HTMLElement => {
+    const h = el("div", "ed-tool-group");
+    h.textContent = text;
+    return h;
+  };
+  const toolGroups = [toolGroup("Collision"), toolGroup("Gameplay"), toolGroup("Scene")];
   toolRow.append(
     toolBtns.select,
+    kindWrap,
+    toolGroups[0]!,
     toolBtns.rect,
     toolBtns.circle,
-    toolBtns.belt,
     toolBtns.poly,
     toolBtns.path,
-    toolBtns.text,
-    toolBtns.arrow,
-    toolBtns.checkpoint,
+    toolBtns.belt,
+    toolGroups[1]!,
     toolBtns.chain,
     toolBtns.vine,
     toolBtns.root,
+    mushroomButton,
+    toolBtns.glow,
+    toolBtns.fireflies,
+    toolGroups[2]!,
     toolBtns.light,
     toolBtns.model,
-    toolBtns.glow,
-    mushroomButton,
-    toolBtns.fireflies,
-    backdropButton,
-    kindWrap,
+    toolBtns.text,
+    toolBtns.arrow,
+    toolBtns.checkpoint,
     rootWidthsWrap,
   );
+
+  // THE FORMATIONS WORKSPACE'S DOCK: Primitives - each a new guide where the
+  // view is looking, Blender's Add menu - then, with a solid guide selected,
+  // shapes added to its stack (Shift+A in the view), and generating every
+  // rock whose recipe or guide has changed in one go.
+  const formationsDock = el("div", "ed-row ed-tools ed-ws-dock");
+  formationsDock.setAttribute("role", "group");
+  formationsDock.setAttribute("aria-label", "Formation tools");
+  bar.appendChild(formationsDock);
+  const primitiveButtons = SHAPE_KINDS.map(({ label, kind }) => {
+    const b = button(`+ ${label}`, () => addPrimitive(kind));
+    b.title = `Add a new guide, a ${label.toLowerCase()}, where the view is looking: a background rock of its own, behind nothing, colliding with nothing, generated in its Formation panel (Shift+A in the view with nothing selected)`;
+    return b;
+  });
+  const stackGroup = toolGroup("Add to selected guide");
+  const shapeButtons = SHAPE_KINDS.map(({ label, kind }) => {
+    const b = button(`+ ${label}`, () => {
+      const f = activeSolidFormation();
+      const guide = f?.formation?.guide;
+      if (!f || guide?.kind !== "solid") return;
+      addShapeToGuide(formationHost, f, newPrimitive(kind, guideCentre(guide.tree)));
+    });
+    b.title = `Add a ${label.toLowerCase()} to the selected guide's stack, in its middle, to add to, cut or intersect it (Shift+A in the view)`;
+    return b;
+  });
+  const generateStaleBtn = button("Generate", () => generateStale());
+  generateStaleBtn.classList.add("ed-ws-wide");
+  generateStaleBtn.title =
+    "Generate every rock in the level that is not generated yet or whose guide or recipe has changed since (the iteration look; Bake stays per rock)";
+  // COMBINING GUIDES (Blender's boolean, applied): with a solid guide
+  // selected, Union, Subtract or Intersect, then a click on each other guide
+  // to fold in (again to leave it out), Enter to apply, Esc to drop it. Each
+  // picked guide becomes an entry of the selected guide's stack in that mode,
+  // carried into its frame, and leaves the level, with the decorations tied
+  // to it; one undo step.
+  const combineGroup = toolGroup("Combine with other guides");
+  const combineBtns = new Map<StackMode, HTMLButtonElement>();
+  for (const [op, label, tip] of [
+    ["add", "Union", "Pick other guides to merge into this one"],
+    ["subtract", "Subtract", "Pick other guides to cut out of this one"],
+    ["intersect", "Intersect", "Pick other guides to keep only what this one shares with them"],
+  ] as const) {
+    const b = button(label, () => startCombine(op));
+    b.title = `${tip}: click them in the view or the list, then Enter (Esc cancels). The picked guides leave the level.`;
+    combineBtns.set(op, b);
+  }
+  const combineSeg = el("div", "ed-seg ed-ws-wide");
+  combineSeg.append(...combineBtns.values());
+  const combineHint = el("div", "ed-hint ed-ws-hint");
+  const combineApply = button("Apply", () => applyCombine());
+  const combineCancel = button("Cancel", () => cancelCombine());
+  formationsDock.append(toolGroup("Primitives"), ...primitiveButtons, stackGroup, ...shapeButtons, combineGroup, combineSeg, combineHint, combineApply, combineCancel, toolGroup("Generate"), generateStaleBtn);
+
+  let combine: { op: StackMode; target: number; picks: number[] } | null = null;
+  let combineRev = 0;
+  const isSolidGuide = (i: EdItem | null | undefined): i is EdItem => i?.object === "formation" && i.formation?.guide.kind === "solid";
+  function startCombine(op: StackMode): void {
+    const target = activeSolidFormation();
+    if (!target) return;
+    combine = { op, target: target.id, picks: combine?.target === target.id ? combine.picks : [] };
+    combineRev++;
+    // Enter is the mode's: a button left focused would take it as a press.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    refreshWorkspaceDock();
+  }
+  function cancelCombine(): void {
+    if (!combine) return;
+    combine = null;
+    combineRev++;
+    refreshWorkspaceDock();
+  }
+  // A guide picked or let go again.
+  function toggleCombinePick(id: number): void {
+    if (!combine || id === combine.target || !isSolidGuide(itemOf(id))) return;
+    const k = combine.picks.indexOf(id);
+    if (k >= 0) combine.picks.splice(k, 1);
+    else combine.picks.push(id);
+    combineRev++;
+    refreshWorkspaceDock();
+  }
+  function applyCombine(): void {
+    const c = combine;
+    if (!c) return;
+    const target = itemOf(c.target);
+    const picks = c.picks.map((id) => itemOf(id)).filter(isSolidGuide);
+    combine = null;
+    combineRev++;
+    if (!isSolidGuide(target) || target.formation!.guide.kind !== "solid" || !picks.length) {
+      refreshWorkspaceDock();
+      return;
+    }
+    beginAction();
+    let tree = target.formation!.guide.tree;
+    for (const p of picks) {
+      if (p.formation!.guide.kind !== "solid") continue;
+      const carried = carryTree(p.formation!.guide.tree, frameBetween(p, target));
+      // A guide that is one shape is that shape, not a group of one.
+      const node = "op" in carried && carried.op === "union" && carried.of.length === 1 ? carried.of[0]! : carried;
+      tree = appendEntry(tree, node, c.op).tree;
+    }
+    target.formation = { ...target.formation!, guide: { kind: "solid", tree } };
+    // The picked guides go, and what grows on them: their anchors are on
+    // guides that are no longer there.
+    const ids = new Set(picks.map((p) => p.formation!.id));
+    const gone = new Set(picks.map((p) => p.id));
+    let decorationsGone = 0;
+    for (const i of model.items) {
+      if (i.object === "decoration" && i.decoration && ids.has(i.decoration.formation)) {
+        gone.add(i.id);
+        decorationsGone++;
+      }
+    }
+    model.items = model.items.filter((i) => !gone.has(i.id));
+    for (const id of gone) selectedIds.delete(id);
+    solidSel = null;
+    markDirty();
+    rebuildInspector();
+    syncGizmo();
+    const verb = { add: "Merged", subtract: "Cut", intersect: "Intersected" }[c.op];
+    flashNotice(`${verb} ${picks.length} guide${picks.length === 1 ? "" : "s"} into this one${decorationsGone ? `; ${decorationsGone} decoration${decorationsGone === 1 ? "" : "s"} on ${picks.length === 1 ? "it" : "them"} removed` : ""} (Ctrl+Z undoes)`);
+  }
+
+  // A primitive as a new guide of its own (a 3D body holding one formation),
+  // standing where the view is looking - at the view's target, depth and all -
+  // and selected, as Blender adds at the 3D cursor.
+  function addPrimitive(kind: PrimitiveKind): void {
+    const t = visuals?.view?.target;
+    const at = t ? { x: t.x, y: threeY(t.y), z: t.z } : { x: camera.position.x, y: camera.position.y, z: 0 };
+    const made = createBackdrop(formationHost, at, newPrimitive(kind, [0, 0, 0]));
+    if (made) setBodySelection(made.bodyId);
+  }
+
+  // What is drawn: every guide and every rock in the level (each setting
+  // clears the per-formation choices, so it applies to all), and the
+  // selected formations' own Guide / Rock / Both (Tab swaps guide and rock).
+  const guidesChk = checkbox("Guides", showGuides, (v) => setGlobalFormationView("guides", v));
+  guidesChk.title = "Draw every formation's guide, each in its own colour (clears the per-formation choices)";
+  const rocksChk = checkbox("Rocks", showRocks, (v) => setGlobalFormationView("rocks", v));
+  rocksChk.title = "Draw every generated rock (clears the per-formation choices)";
+  const formationViewBtns = new Map<FormationView, HTMLButtonElement>();
+  const viewSeg = el("div", "ed-seg ed-ws-wide");
+  for (const [v, label, tip] of [
+    ["guide", "Guide", "Show the selected formation's guide and hide its rock (Tab swaps)"],
+    ["rock", "Rock", "Show the selected formation's generated rock and hide its guide (Tab swaps)"],
+    ["both", "Both", "Show the selected formation's guide over its rock"],
+  ] as const) {
+    const b = button(label, () => setFormationView(v));
+    b.title = tip;
+    formationViewBtns.set(v, b);
+    viewSeg.appendChild(b);
+  }
+  const viewHint = el("div", "ed-hint ed-ws-hint");
+  viewHint.textContent = "Select a formation to switch it between guide and rock.";
+  // SCULPT (plans/sculpt-guides.md): the selected solid guide shaped with
+  // Draw, Grab and Cut; Ctrl+Tab enters and leaves. While it is on, the dock
+  // is the mode's alone (`ed-sculpting` in studio.css).
+  const sculptBtn = button("Sculpt", () => {
+    const f = activeSolidFormation();
+    if (f) enterSculpt(f);
+  });
+  sculptBtn.classList.add("ed-ws-wide");
+  sculptBtn.title = "Sculpt the selected guide (Ctrl+Tab): Draw (D), Grab (G), Cut (C). Applies its stack into one mesh first.";
+  formationsDock.append(toolGroup("Show"), guidesChk, rocksChk, toolGroup("Selected"), viewSeg, sculptBtn, viewHint);
+  if (scene3d && visuals) {
+    const vis = visuals;
+    sculptCtl = new SculptController({
+      layer: scene3d.editorLayer,
+      camera: () => scene3d.camera,
+      overlayParent: root,
+      canvas,
+      ndc: (scr) => vis.ndc(scr),
+      item: (id) => itemOf(id) ?? undefined,
+      stillSelected: (item) => selectedIds.has(item.id) || selectedBodyIds.has(item.bodyId),
+      frame: (item) => itemMatrix(item),
+      color: guideHex,
+      formation: formationHost,
+      notice: (text) => flashNotice(text),
+      changed: () => {
+        formationViewRev++;
+        refreshWorkspaceDock();
+        syncGizmo();
+        rebuildInspector();
+      },
+      ui: { el, button, checkbox, toolGroup },
+    });
+    formationsDock.appendChild(sculptCtl.dock);
+  }
+  // Sculpt mode on a formation's guide, from the dock, the panel or Ctrl+Tab.
+  function enterSculpt(item: EdItem): void {
+    if (!sculptCtl || workspace !== "formations") return;
+    if (grab) endTransform(true);
+    cancelCombine();
+    sculptCtl.enter(item);
+  }
+
+  // The formations selected, or in a selected body.
+  function selectedFormations(): EdItem[] {
+    return model.items.filter((i) => i.object === "formation" && (selectedIds.has(i.id) || selectedBodyIds.has(i.bodyId)));
+  }
+  // What a formation shows now, as the dock's buttons say it (null: nothing).
+  function viewOf(f: EdItem): FormationView | null {
+    const g = guideShown(f);
+    const r = rockShown(f);
+    return g && r ? "both" : g ? "guide" : r ? "rock" : null;
+  }
+  function setFormationView(v: FormationView): void {
+    const sel = selectedFormations();
+    if (!sel.length) return;
+    for (const f of sel) formationView.set(f.id, v);
+    formationViewRev++;
+    refreshWorkspaceDock();
+  }
+  function setGlobalFormationView(which: "guides" | "rocks", on: boolean): void {
+    if (which === "guides") showGuides = on;
+    else showRocks = on;
+    writeViewSetting(which, on);
+    formationView.clear();
+    formationViewRev++;
+    refreshWorkspaceDock();
+  }
+  // Tab in Formations, as Blender's Tab enters and leaves the mesh's edit
+  // mode: the selection between its guide and its rock.
+  function toggleFormationView(): void {
+    const first = selectedFormations()[0];
+    if (!first) return;
+    setFormationView(viewOf(first) === "guide" && first.formation?.built ? "rock" : "guide");
+  }
+  // The items whose guides the solid guide view draws.
+  let guideItemsCache: { rev: number; view: number; shown: EdModel; items: readonly EdItem[] } | null = null;
+  function shownGuideItems(): readonly EdItem[] {
+    const shown = shownModel();
+    if (guideItemsCache && guideItemsCache.rev === modelRev && guideItemsCache.view === formationViewRev && guideItemsCache.shown === shown) return guideItemsCache.items;
+    const items = shown.items.filter((i) => i.object === "formation" && guideShown(i));
+    guideItemsCache = { rev: modelRev, view: formationViewRev, shown, items };
+    return items;
+  }
+
+  // THE DECORATIONS WORKSPACE'S DOCK: the palette - pick a kind, click any
+  // generated rock - and growing every decoration that is out of date.
+  const decorationsDock = el("div", "ed-row ed-tools ed-ws-dock");
+  decorationsDock.setAttribute("role", "group");
+  decorationsDock.setAttribute("aria-label", "Decoration palette");
+  bar.appendChild(decorationsDock);
+  const paletteButtons = new Map<DecorationKind, HTMLButtonElement>();
+  for (const kind of Object.keys(DECORATION_LABELS) as DecorationKind[]) {
+    const b = button(DECORATION_LABELS[kind], () => {
+      decorations.arm(kind);
+      refreshWorkspaceDock();
+    });
+    b.title = PAINTED_DECORATIONS.includes(kind)
+      ? `Click a generated rock to start the ${DECORATION_LABELS[kind].toLowerCase()} there, then drag on the rock to paint it; it grows when you let go`
+      : `Click a generated rock to place ${DECORATION_LABELS[kind].toLowerCase()}; stays armed for the next click (Esc stops)`;
+    paletteButtons.set(kind, b);
+  }
+  const growStaleBtn = button("Grow", () => growStale());
+  growStaleBtn.classList.add("ed-ws-wide");
+  growStaleBtn.title = "Grow every decoration that is not grown yet or whose settings, paint or rock have changed since";
+  decorationsDock.append(toolGroup("Paint"), paletteButtons.get("moss")!, paletteButtons.get("ivy")!, toolGroup("Place"));
+  for (const [kind, b] of paletteButtons) if (!PAINTED_DECORATIONS.includes(kind)) decorationsDock.appendChild(b);
+  decorationsDock.append(toolGroup("Grow"), growStaleBtn);
+  // The collision outlines over the rocks, for reference while dressing
+  // them: drawn as 2D draws them, never picked (a click goes to the rock).
+  const collisionChk = checkbox("Collision", showCollisionOutlines, (v) => {
+    showCollisionOutlines = v;
+    writeViewSetting("collision", v);
+  });
+  collisionChk.title = "Draw the collision outlines over the rocks, for reference (they are edited in 2D)";
+  decorationsDock.append(toolGroup("Show"), collisionChk);
+
+  // What the two 3D docks offer right now: which shapes can be added, how
+  // many rocks and decorations are out of date, which kind is armed. Called
+  // whenever the inspector is rebuilt (every selection change and edit) and
+  // when a job moves.
+  function refreshWorkspaceDock(): void {
+    const solid = activeSolidFormation();
+    // The stack's own buttons only while there is a stack to add to.
+    for (const b of [stackGroup, ...shapeButtons, combineGroup, combineSeg]) b.style.display = solid ? "" : "none";
+    // Sculpt: offered with a solid guide selected; while on, the dock is its.
+    sculptBtn.style.display = solid && sculptCtl ? "" : "none";
+    formationsDock.classList.toggle("ed-sculpting", !!sculptCtl?.active);
+    if (sculptCtl?.active) sculptCtl.refreshDock();
+    // Combining belongs to the guide it was started on: selecting anything
+    // else ends it.
+    if (combine && solid?.id !== combine.target) {
+      combine = null;
+      combineRev++;
+    }
+    for (const [op, b] of combineBtns) {
+      b.classList.toggle("active", combine?.op === op);
+      b.setAttribute("aria-pressed", String(combine?.op === op));
+    }
+    const picked = combine?.picks.length ?? 0;
+    combineHint.textContent = combine
+      ? picked
+        ? `${picked} guide${picked === 1 ? "" : "s"} picked. Enter applies, Esc cancels.`
+        : "Click the guides to combine with this one (view or list), then Enter."
+      : "";
+    combineHint.style.display = combine ? "" : "none";
+    combineApply.style.display = combine ? "" : "none";
+    combineCancel.style.display = combine ? "" : "none";
+    combineApply.disabled = !picked;
+    const rocks = staleFormations().length;
+    generateStaleBtn.textContent = rocks ? `Generate ${rocks} out of date` : "All rocks up to date";
+    generateStaleBtn.disabled = !rocks;
+    generateStaleBtn.classList.toggle("ed-attention", rocks > 0);
+    const grown = staleDecorations().length;
+    growStaleBtn.textContent = grown ? `Grow ${grown} out of date` : "All decorations grown";
+    growStaleBtn.disabled = !grown;
+    growStaleBtn.classList.toggle("ed-attention", grown > 0);
+    // The selection's guide / rock view.
+    const formationSel = selectedFormations();
+    const view = formationSel[0] ? viewOf(formationSel[0]) : null;
+    for (const [v, b] of formationViewBtns) {
+      b.classList.toggle("active", v === view);
+      b.setAttribute("aria-pressed", String(v === view));
+      // A rock not generated has nothing to show but its guide.
+      b.disabled = !formationSel.length || (v !== "guide" && !formationSel.some((f) => f.formation?.built));
+    }
+    viewHint.style.display = formationSel.length ? "none" : "";
+    const armed = decorations.anyRock ? decorations.placing!.kind : null;
+    for (const [kind, b] of paletteButtons) {
+      b.classList.toggle("active", kind === armed);
+      b.setAttribute("aria-pressed", String(kind === armed));
+    }
+    // Arming, the brush and their ends all rebuild the inspector; a drag in
+    // progress owns the cursor until it lets go.
+    if (!drag) applyToolCursor();
+  }
+  // The formations in the level that are not generated, or are stale, and
+  // have no build of their recipe on its way.
+  function staleFormations(): EdItem[] {
+    return model.items.filter((i) => {
+      const f = i.object === "formation" ? i.formation : null;
+      if (!f || (f.built && !isStale(f))) return false;
+      const job = formationJobs.latest(formationHash(f));
+      return !(job && (job.state === "queued" || job.state === "running"));
+    });
+  }
+  function generateStale(): void {
+    for (const item of staleFormations()) requestFormationBuild(formationHost, item, "geometry");
+    refreshWorkspaceDock();
+  }
+  // The decorations that are not grown, or are stale, on a rock that is
+  // generated, with no growth of theirs on its way.
+  function staleDecorations(): EdItem[] {
+    return model.items.filter((i) => {
+      if (i.object !== "decoration" || !i.decoration || i.decoration.lost || !decorations.stale(i)) return false;
+      // A painted one with no paint yet has nothing to grow.
+      if (isPainted(i.decoration.kind) && !i.decoration.strokes?.length) return false;
+      const r = decorations.request(i);
+      if (!r) return false;
+      const job = formationJobs.latest(decorationHash(r));
+      return !(job && (job.state === "queued" || job.state === "running"));
+    });
+  }
+  function growStale(): void {
+    for (const d of staleDecorations()) decorations.grow(d);
+    refreshWorkspaceDock();
+  }
 
   // Layer list: which layer is being edited (Tab cycles), plus a visibility
   // toggle each. Visibility is independent of active — a hidden active layer
@@ -3649,15 +4409,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // all while it is locked. An armed tool the new state cannot draw falls back to
   // Select rather than lingering as a lit dead button.
   function refreshToolButtons(): void {
-    const tools: Tool[] = lockedLayers.has(activeLayer)
+    const tools: Tool[] = lockedLayers.has(activeLayer) || workspace !== "2d"
       ? ["select"]
       : LAYER_TOOLS[activeLayer];
     for (const [k, b] of Object.entries(toolBtns)) {
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
     mushroomButton.style.display = tools.includes("glow") ? "" : "none";
-    // Wherever lights and models are offered: it is a thing of the scene.
-    backdropButton.style.display = tools.includes("model") ? "" : "none";
+    // The headings are the scene layer's groups; another layer's handful of
+    // tools reads without them.
+    for (const h of toolGroups) h.style.display = tools.includes("rect") && activeLayer === "scene" ? "" : "none";
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
@@ -3808,14 +4569,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     resetViewBtn = button("Align camera to plane", resetView);
     resetViewBtn.title =
       "Face the gameplay plane head on (Numpad 1). Middle drag orbits, Shift + middle or right drag pans, the wheel dollies, F frames the selection, Home frames everything";
-    // The lens. One toggle rather than two buttons, because unlike the view
-    // modes these are not three jobs: it is one view, drawn with the perspective
-    // divide or without it, and what the button says is which.
-    projectionBtn = button("⧉ Ortho", () =>
-      setProjection(projection === "orthographic" ? "perspective" : "orthographic"),
-    );
-    projectionBtn.title =
-      "Orthographic view: no perspective, so geometry at any depth is drawn at the plane's scale and lines up exactly (O)";
+    // The lens is the view cube's (top right of the viewport, `viewCube`).
     // THE GAME'S CAMERA, in the Visuals workspace: what a player sees where the
     // view is looking, through the level's lens at the zoom its camera regions
     // rest at - where foreground decoration is judged (docs/formations.md).
@@ -3824,17 +4578,91 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     viewRow.append(
       viewBtns.overlay!,
       resetViewBtn,
-      projectionBtn,
       gameViewBtn,
     );
     setViewMode(viewMode);
     refreshOrbitBtn();
+    viewCube = new ViewCube({ face: swingView, projection: setProjection });
+    root.appendChild(viewCube.el);
     setProjection(projection);
   }
 
   // The scene canvas is shown whenever a scene is drawn.
   function refreshSceneCanvas(): void {
     if (sceneCanvas) sceneCanvas.style.display = sceneShown() ? "" : "none";
+  }
+
+  // --- workspaces (workspaces.ts) -------------------------------------------
+  // What each workspace's view was left turned to - its yaw, pitch and the
+  // depth it orbited about - so Formations comes back at the angle it was
+  // worked from. Where the view LOOKS and how close carry over from the
+  // workspace being left: the switch is to work on the same place another way.
+  const workspaceAngles = new Map<Workspace, { yaw: number; pitch: number; z: number }>();
+  function setWorkspace(ws: Workspace, boot = false): void {
+    if (!boot && (ws === workspace || mode !== "edit")) return;
+    const pose = visuals?.view ?? null;
+    if (!boot && pose) workspaceAngles.set(workspace, { yaw: pose.yaw, pitch: pose.pitch, z: pose.target.z });
+    workspace = ws;
+    writeWorkspace(ws);
+    // An asset is a rock: the Assets tab is Formations'. The decoration
+    // palette and brush are Decorations'.
+    if (ws !== "formations" && assetMode) openAssets(false);
+    if (ws !== "decorations") decorations.cancel();
+    // A grab in progress is placed where it is; combining is Formations'.
+    if (grab) endTransform(true);
+    if (ws !== "formations") cancelCombine();
+    // Nothing outside the workspace stays selected: it is neither drawn nor
+    // picked here, but a nudge, a field or a Delete would still reach it.
+    for (const id of [...selectedIds]) {
+      const it = itemOf(id);
+      if (!it || !inWs(it)) selectedIds.delete(id);
+    }
+    for (const id of [...selectedBodyIds]) if (!bodyMembers(model.items, id).some(inWs)) selectedBodyIds.delete(id);
+    if (ws !== "2d") {
+      selectedChainIds.clear();
+      selectedVineIds.clear();
+      selectedVerts.clear();
+      selectedBerry = null;
+      clearRouteSel();
+      cancelPolyDraft();
+      cancelRootDraft();
+    }
+    // The view: 2D is the plane head on wherever it was looking; a 3D
+    // workspace takes up the angle it was left at, over the same place.
+    if (visuals) {
+      visuals.headOnOnly = HEAD_ON_ONLY[ws];
+      if (pose && !boot) {
+        const angle = workspaceAngles.get(ws);
+        if (HEAD_ON_ONLY[ws]) {
+          if (orbited()) resetView();
+        } else if (angle) {
+          visuals.setView({ ...pose, yaw: angle.yaw, pitch: angle.pitch, target: { ...pose.target, z: angle.z } });
+          cameraFromPose();
+        }
+      }
+    }
+    resetViewBtn?.style.setProperty("display", HEAD_ON_ONLY[ws] ? "none" : "");
+    // 2D has the lens alone: its view has no other side to go to.
+    viewCube?.setCubeShown(!HEAD_ON_ONLY[ws]);
+    viewSwing++;
+    refreshOrbitBtn();
+    // The dock: the drawing tools and layers are 2D's; each 3D workspace has
+    // its own.
+    toolRow.style.display = ws === "2d" ? "" : "none";
+    layerList.style.display = ws === "2d" ? "" : "none";
+    formationsDock.style.display = ws === "formations" ? "" : "none";
+    decorationsDock.style.display = ws === "decorations" ? "" : "none";
+    if (assetsRow) assetsRow.style.display = ws === "formations" ? "" : "none";
+    for (const [w, b] of workspaceTabBtns) {
+      b.classList.toggle("active", w === ws);
+      b.setAttribute("aria-selected", String(w === ws));
+    }
+    root.dataset["workspace"] = ws;
+    refreshToolButtons();
+    outlinerRev = -1;
+    rebuildInspector();
+    syncGizmo();
+    applyToolCursor();
   }
 
   const title = el("div", "ed-title");
@@ -3965,10 +4793,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     chainRows.length = 0;
     vineRows.length = 0;
     outlinerBody.innerHTML = "";
-    const runs = bodyRuns(model.items.filter((i) => i.layer === "scene"));
-    outlinerTitle.textContent = `Bodies (${runs.length})`;
-    runs.forEach((members: EdItem[], index: number) => {
+    // The workspace's bodies, and in each only what it works on (`inWs`): the
+    // rocks and their guides' collision in Formations, the rocks and what
+    // grows on them in Decorations. Numbered as the level numbers them, so a
+    // body is the same number in every workspace.
+    const allRuns = bodyRuns(model.items.filter((i) => i.layer === "scene"));
+    const runs = allRuns
+      .map((m) => m.filter(inWs))
+      .filter((m) => (workspace === "2d" ? m.length > 0 : m.some((i) => i.object === "formation")));
+    const numberOf = new Map(allRuns.map((m, i) => [m[0]!.bodyId, i] as const));
+    outlinerTitle.textContent = `${workspace === "2d" ? "Bodies" : "Rocks"} (${runs.length})`;
+    runs.forEach((members: EdItem[]) => {
       const id = members[0]!.bodyId;
+      const index = numberOf.get(id) ?? 0;
       const open = expandedBodies.has(id);
       const row = el("div", "ed-out-row body");
       // EVERY body expands, including one holding a single object. A body and a
@@ -3989,7 +4826,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         refreshOutliner();
       });
       const label = el("span", "ed-out-label");
-      label.textContent = `${index}  ${bodyLabel(members)}`;
+      // Labelled as the whole body is (its kind and name), whatever the
+      // workspace lists of it.
+      label.textContent = `${index}  ${bodyLabel(bodyMembers(model.items, id))}`;
       const count = el("span", "ed-out-count");
       count.textContent = `${members.length}`;
       // Shown or hidden (H), as the layers' eyes say it; a click on it does
@@ -4015,6 +4854,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
+        // Combining guides: the row picks its body's guide instead.
+        if (combine) {
+          const f = members.find((m) => m.object === "formation");
+          if (f) toggleCombinePick(f.id);
+          return;
+        }
         if (e.shiftKey || e.ctrlKey || e.metaKey) toggleBodySelection(id);
         else setBodySelection(id);
       });
@@ -4048,6 +4893,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // rope on the canvas.
     const indexOfBodyRun = new Map<number, number>();
     runs.forEach((members, i) => indexOfBodyRun.set(members[0]!.bodyId, i));
+    if (workspace !== "2d") return;
     if (model.chains.length) buildChainRows(runs);
     if (model.vines.length) buildVineRows(indexOfBodyRun);
   }
@@ -4220,10 +5066,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
     // Every tool draws at any angle (its preview is the projected overlay's).
-    canvas.style.cursor = tool === "select" ? "default" : "crosshair";
+    // ...and a decoration armed from the palette, or the brush, aims too.
+    canvas.style.cursor = tool === "select" && !decorations.busy ? "default" : "crosshair";
   }
   function setTool(t: Tool): void {
     if (!LAYER_TOOLS[activeLayer].includes(t)) return;
+    // The draw tools are the 2D workspace's; the 3D ones select, and their
+    // own docks make what they make.
+    if (t !== "select" && workspace !== "2d") return;
     // A locked layer accepts no new geometry either, so its draw tools cannot be
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
@@ -6767,9 +7617,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addBodyProps(g, members);
     // The body's rock, generated in its frame (docs/formations.md): offered on
     // any body with a piece that encloses something, edited in place.
-    if (members.some((m) => m.object === "formation" || enclosingItem(m))) {
+    if (workspace === "formations" && members.some((m) => m.object === "formation" || enclosingItem(m))) {
       buildFormationSection(formationHost, section(g, "body/Formation", "Formation"), id);
     }
+    // What grows on its rock (the Decorations workspace's).
+    const rock = members.find((m) => m.object === "formation");
+    if (workspace === "decorations" && rock) decorations.buildList(section(g, "body/Decorations", "Decorations"), rock);
     // The buttons are not properties: they stay in view under the sections.
     appendGroupSection(g, title);
     appendActions(g);
@@ -8500,7 +9353,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(title);
     const transform = section(g, "formation/Transform", "Transform");
     addTransformFields(transform, groupNum(transform, items), items);
-    if (items.length === 1) buildFormationSection(formationHost, section(g, "formation/Formation", "Formation"), first.bodyId);
+    if (items.length === 1 && workspace === "formations") buildFormationSection(formationHost, section(g, "formation/Formation", "Formation"), first.bodyId);
+    if (items.length === 1 && workspace === "decorations") decorations.buildList(section(g, "formation/Decorations", "Decorations"), first);
     addGroupSection(g, title);
     addActionsRow(g);
     inspector.appendChild(g);
@@ -9005,8 +9859,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     } finally {
       // The builders open a section per concern before they know whether any
       // field of it applies; the ones left empty go here, whichever way the
-      // build returned.
-      pruneEmptySections(inspector);
+      // build returned - and the ones the workspace does not show.
+      pruneEmptySections(inspector, (key) => sectionShown(workspace, key));
+      refreshWorkspaceDock();
     }
   }
 
@@ -9091,13 +9946,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // layer is its help. A locked layer explains itself first: with nothing
       // pickable on it, the usual "click a body" help would read as the editor
       // being broken.
-      const locked = lockedLayers.has(activeLayer);
-      const line = fieldRow(locked ? `${activeLayer} layer locked` : "No selection", "div", "ed-field ed-hint");
+      // The 3D workspaces work on the scene layer whichever one 2D left active.
+      const layer = workspace === "2d" ? activeLayer : "scene";
+      const locked = lockedLayers.has(layer);
+      const line = fieldRow(locked ? `${layer} layer locked` : "No selection", "div", "ed-field ed-hint");
       describe(
         line,
         locked
-          ? `The ${activeLayer} layer is locked: it still draws, but nothing on it can be picked, drawn or edited. Use the padlock in the layer list to unlock it.`
-          : EMPTY_HINTS[activeLayer],
+          ? `The ${layer} layer is locked: it still draws, but nothing on it can be picked, drawn or edited. Use the padlock in the layer list (2D workspace) to unlock it.`
+          : workspace === "2d"
+            ? EMPTY_HINTS[activeLayer]
+            : WORKSPACE_EMPTY_HINTS[workspace],
       );
       inspector.appendChild(line);
       return;
@@ -11202,6 +12061,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   canvas.addEventListener("mousedown", (e) => {
     if (mode !== "edit") return;
+    // A grab ends on the next press: the left places, any other cancels.
+    if (grab) {
+      endTransform(e.button === 0);
+      e.preventDefault();
+      return;
+    }
     // The gizmo took this press. Its own listener is on `pointerdown`, which
     // fires first, so by now it has already decided whether a handle was hit -
     // and a press that grabs an arrow must not also select, pan or rubber-band
@@ -11219,6 +12084,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // pans, the wheel dollies. Without WebGL there is no pose, and the middle
     // and right buttons pan the 2D camera as they always did.
     if (visuals?.active && (e.button === 1 || e.button === 2)) {
+      // A swing to a cube face in flight gives way to the hand.
+      viewSwing++;
       visuals.beginView(e.button === 2 || e.shiftKey ? "pan" : "orbit", pointerScreen(e));
       drag = { mode: "view" };
       canvas.style.cursor = "grabbing";
@@ -11233,6 +12100,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if (e.button !== 0) return;
     const scr = pointerScreen(e);
+    // Sculpt mode's brush, or a cut's next corner: the left button is theirs.
+    if (sculptCtl && (sculptCtl.active || sculptCtl.cutting || sculptCtl.busy) && sculptCtl.press(scr, e)) {
+      e.preventDefault();
+      return;
+    }
+    // Combining guides: a click picks (or lets go) the guide under it, the
+    // nearest one drawn there, and selects nothing.
+    if (combine) {
+      const target = combine.target;
+      const hit = pickCandidatesAt(canvasWorld(scr), scr).find((i) => isSolidGuide(i) && i.id !== target);
+      if (hit) toggleCombinePick(hit.id);
+      e.preventDefault();
+      return;
+    }
     // A decoration being placed, painted or dragged along its rock (the
     // Visuals workspace's: docs/formations.md, "Decorations").
     if (visuals?.active && decorations.press(decorationHit(scr), model.items.filter((i) => selectedIds.has(i.id)))) {
@@ -11244,7 +12125,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // formation/solidStack.ts): picked for the gizmo by a click on it, as an
     // object is in any 3D editor. Only the selected formation's shapes are
     // there to be hit.
-    if (visuals?.active && solidView && scene3d && !e.shiftKey && !e.altKey) {
+    if (visuals?.active && workspace === "formations" && solidView && scene3d && !e.shiftKey && !e.altKey) {
       const shape = solidView.pickShape(visuals.ndc(scr), scene3d.camera);
       if (shape) {
         solidSel = shape;
@@ -11407,7 +12288,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // 3. Player spawn marker (small target — needs pointer within its radius),
     // at any angle: the marker is drawn with the rest of the overlay, and the
     // pointer is resolved on the plane it stands on.
+    // The spawn is gameplay: the 2D workspace's.
     const spawnHit =
+      workspace === "2d" &&
       world.distanceTo(model.player.pos) <= Math.max(model.player.radius, SMALL_MARK_PICK_PX * worldLine());
     if (spawnHit) {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
@@ -11646,12 +12529,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const picks3d = (): boolean => overlayLayers() === "outline" && sceneLevel !== null;
 
   // The items under the pointer in the 3D scene: each one's id and how far
-  // along the ray it is first met. Which of them a pick prefers is
-  // `pickCandidatesAt`'s rule; the distance is here for the one part of it
-  // that is about depth - things behind the gameplay plane, `behind` (see
-  // there). Null when the scene is not what is on screen, which is what leaves
-  // the 2D view untouched.
-  function raycastItems(scr: Vec2): { near: Map<number, number>; behind: Set<number> } | null {
+  // along the ray it is first met, and how far along it the gameplay plane is
+  // (null where the ray never meets it - the camera behind the plane, or
+  // looking along it), which is where everything drawn as an outline on the
+  // plane is met. `pickCandidatesAt` orders the lot by those distances. Null
+  // when the scene is not what is on screen, which leaves the 2D view as it
+  // was.
+  function raycastItems(scr: Vec2): { near: Map<number, number>; toPlane: number | null } | null {
     if (!picks3d()) return null;
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return null;
@@ -11664,15 +12548,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const id = itemOfSceneObject.get(pickTagOf(hit.object) as SceneTag);
       if (id !== undefined) meet(id, hit.distance);
     }
-    // ...and the solid guides: a backdrop not generated yet is only its guide,
-    // and a click on the guide is a click on the formation.
-    const behind = new Set<number>();
-    for (const g of solidView?.pickGuides(ndc, scene3d!.camera) ?? []) {
-      meet(g.id, g.distance);
-      if (g.behind) behind.add(g.id);
-    }
-    return { near, behind };
+    // ...and the solid guides drawn: a backdrop not generated yet is only its
+    // guide, and a click on the guide is a click on the formation.
+    for (const g of solidView?.pickGuides(ndc, scene3d!.camera) ?? []) meet(g.id, g.distance);
+    planeRay.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), scene3d!.camera);
+    return { near, toPlane: planeRay.ray.distanceToPlane(GAMEPLAY_PLANE) };
   }
+  const planeRay = new THREE.Raycaster();
 
   // Does a click at `world` land on this item? Everything is its own outline
   // except a LIGHT, which is its icon rather than its reach - see
@@ -11686,6 +12568,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // something else. It is reached by its chain's handle, or by its row in the
     // outliner.
     if (b.object === "anchor") return false;
+    // Whatever the scene DRAWS of an item is where a click on it lands, at any
+    // depth: a water body's surface, a piece's debug geometry, a rock.
+    if (ray?.has(b.id)) return true;
     // A model is its mesh wherever the scene is drawn (its pick tag names it,
     // `BodyVisual.mountModels`), and its marker on the plane the overlay draws.
     // A formation the same: its rock where the scene is drawn, its mark on the
@@ -11779,27 +12664,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // beside it, so the first candidate IS the pick and nothing can disagree.
   function pickCandidatesAt(world: Vec2, scr: Vec2): EdItem[] {
     const ray = raycastItems(scr);
-    const hit = pickOrder().filter((b) => hitsItem(b, world, ray?.near));
-    // DEPTH FIRST: a backdrop's guide met only beyond the gameplay plane is
-    // behind whatever the plane holds at that point, so it is a candidate
-    // after all of it - the rock in front is what the click lands on, and the
-    // backdrop is one more click into the stack (or the first, where the
-    // plane holds nothing).
+    // Where the ray never meets the plane, nothing drawn on it is under the
+    // pointer (and `world` is only the last place it did meet it).
+    const onPlane = !ray || ray.toPlane !== null;
+    const hit = pickOrder().filter((b) => hitsItem(b, world, ray?.near) && (onPlane || ray!.near.has(b.id)));
+    const inStackOrder = (items: EdItem[]): EdItem[] => {
+      const out: EdItem[] = [];
+      for (let best = bestHit(items); best; best = bestHit(items)) {
+        out.push(best);
+        items.splice(items.indexOf(best), 1);
+      }
+      return out;
+    };
+    if (!ray) return inStackOrder(hit);
+    // In 3D, THE NEAREST THING DRAWN UNDER THE POINTER: a rock, a model or a
+    // guide where the ray first meets it, an outline on the plane where the
+    // ray crosses the plane. That is the whole rule. The plane's own rules
+    // (which outline holds which, which is drawn over which) only settle ties,
+    // and the outlines on the plane are the only things that ever tie.
     //
-    // ...and among themselves, nearest first along the ray. Out there nothing
-    // is an outline on the plane, so neither the plane's stacking nor which box
-    // holds which says anything about what is in front: a rock standing in
-    // front of the back wall is the nearer surface, and the click lands on it.
-    const behind = ray?.behind ?? new Set<number>();
-    const left = hit.filter((b) => !behind.has(b.id));
-    const later = hit.filter((b) => behind.has(b.id)).sort((a, b) => ray!.near.get(a.id)! - ray!.near.get(b.id)!);
+    // ...with the active layer's items ahead of the other layers', as
+    // `pickOrder` has it: a fog region drawn over the pool must not swallow a
+    // click on a rock while the scene is the layer being edited.
+    const depth = (b: EdItem): number => ray.near.get(b.id) ?? ray.toPlane!;
+    const key = (b: EdItem): [number, number] => [b.layer === activeLayer ? 0 : 1, depth(b)];
+    const sorted = [...hit].sort((p, q) => key(p)[0] - key(q)[0] || key(p)[1] - key(q)[1]);
     const out: EdItem[] = [];
-    for (;;) {
-      const best = bestHit(left);
-      if (!best) return out.concat(later);
-      out.push(best);
-      left.splice(left.indexOf(best), 1);
+    while (sorted.length) {
+      const [layer, d] = key(sorted[0]!);
+      const tied = hit.filter((b) => sorted.includes(b) && key(b)[0] === layer && key(b)[1] === d);
+      for (const b of tied) sorted.splice(sorted.indexOf(b), 1);
+      out.push(...inStackOrder(tied));
     }
+    return out;
   }
 
   // One click, and what a REPEAT of it at the same point means.
@@ -11891,7 +12788,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // geometry-layer furniture, and a hidden or locked layer must not be editable
   // through them.
   function topmostChainAt(world: Vec2): EdChain | null {
-    if (!visibleLayers.has("scene") || lockedLayers.has("scene")) return null;
+    if (!planeFurniturePickable()) return null;
     const band = CHAIN_HIT_PX / (camera.zoom * PIXELS_PER_METER);
     let best: EdChain | null = null;
     let bestD = band;
@@ -11933,7 +12830,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // nearest first: within its radius, or a few pixels of its centre when it
   // is drawn small.
   function berryAt(world: Vec2): { vine: EdVine; index: number; fruit: Vec2 } | null {
-    if (!visibleLayers.has("scene") || lockedLayers.has("scene")) return null;
+    if (!planeFurniturePickable()) return null;
     const floor = SMALL_MARK_PICK_PX * worldLine();
     let best: { vine: EdVine; index: number; fruit: Vec2 } | null = null;
     let bestD = Infinity;
@@ -11954,7 +12851,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The vine nearest a world point, within the same band a chain is picked by,
   // measured against its drawn rest pose.
   function topmostVineAt(world: Vec2): EdVine | null {
-    if (!visibleLayers.has("scene") || lockedLayers.has("scene")) return null;
+    if (!planeFurniturePickable()) return null;
     const band = CHAIN_HIT_PX / (camera.zoom * PIXELS_PER_METER);
     let best: EdVine | null = null;
     let bestD = band;
@@ -12001,6 +12898,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (mode !== "edit") return;
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
+    if (grab) {
+      moveTransform(scr);
+      return;
+    }
+    // A sculpt stroke, a cut being drawn, a radius being set; the brush's
+    // cursor follows the pointer either way.
+    if (sculptCtl?.move(scr, e)) return;
     if (decorations.dragging) {
       decorations.move(decorationHit(scr));
       return;
@@ -12507,6 +13411,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   window.addEventListener("mouseup", (e) => {
+    // A sculpt stroke ends with the left button (a view drag with another
+    // button may end meanwhile and leave the stroke going).
+    if (e.button === 0) sculptCtl?.release();
     if (decorations.dragging) {
       decorations.release();
       rebuildInspector();
@@ -12618,6 +13525,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const scr = pointerScreen(e);
     // The one 3D view dollies toward what is under the pointer.
     if (visuals?.active) {
+      viewSwing++;
       visuals.wheel(scr, e.deltaY);
       cameraFromPose();
       refreshOrbitBtn();
@@ -12640,8 +13548,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
   window.addEventListener("keydown", (e) => {
+    // A grab owns the keyboard until it ends: Esc cancels, Enter places,
+    // X / Y / Z hold an axis, and nothing else may act on what is mid-move.
+    if (grab) {
+      if (e.code === "Escape") endTransform(false);
+      else if (e.code === "Enter" || e.code === "NumpadEnter") endTransform(true);
+      else if (e.code === "KeyX" || e.code === "KeyY" || e.code === "KeyZ") setTransformAxis(e.code === "KeyX" ? "x" : e.code === "KeyY" ? "y" : "z");
+      e.preventDefault();
+      return;
+    }
+    // Sculpt mode, and a cut's polygon, own the keyboard but for the view
+    // and the workspaces (editor/sculpt.ts).
+    if (mode === "edit" && sculptCtl) {
+      if (e.key === "Control" || e.key === "Shift") sculptCtl.modifiers(e);
+      if (sculptCtl.keydown(e)) {
+        e.preventDefault();
+        return;
+      }
+    }
     if (e.code === "Escape") {
       if (shapeMenu) closeShapeMenu();
+      // Combining guides ends, leaving the guides as they were.
+      else if (mode === "edit" && combine) cancelCombine();
       // Placing or painting a decoration ends before anything else does.
       else if (mode === "edit" && decorations.busy) decorations.cancel();
       else if (mode === "test") stopTest();
@@ -12721,6 +13649,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       e.preventDefault(); // don't scroll the page
       return;
     }
+    // Ctrl+Tab in Formations: Sculpt mode on the selected solid guide
+    // (Blender's mode switch; plain Tab is guide/rock). Leaving is Sculpt's.
+    if (e.code === "Tab" && e.ctrlKey && workspace === "formations") {
+      const f = activeSolidFormation();
+      if (f) enterSculpt(f);
+      e.preventDefault();
+      return;
+    }
     // Modifier combos first: the bare-key tool shortcuts share letters with
     // them (V/C), so Ctrl+V must not also switch tools.
     if (e.ctrlKey || e.metaKey) {
@@ -12751,11 +13687,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       e.preventDefault();
       return;
     }
-    if (e.code === "Tab") {
+    // 1, 2, 3: the workspaces, in the tabs' order.
+    const wsKey = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
+    if (wsKey >= 0 && !e.shiftKey && !e.altKey) {
+      setWorkspace(WORKSPACES[wsKey]!);
+      e.preventDefault();
+      return;
+    }
+    // Tab in Formations: the selection between its guide and its rock.
+    if (e.code === "Tab" && workspace === "formations") {
+      toggleFormationView();
+      e.preventDefault();
+      return;
+    }
+    if (e.code === "Tab" && workspace === "2d") {
       // Cycle the edit layer. Preventing the default keeps focus on the canvas
       // rather than walking the toolbar.
       const i = ED_LAYERS.indexOf(activeLayer);
       setLayer(ED_LAYERS[(i + 1) % ED_LAYERS.length]!);
+      e.preventDefault();
+      return;
+    }
+    if ((e.code === "Enter" || e.code === "NumpadEnter") && combine) {
+      applyCombine();
       e.preventDefault();
       return;
     }
@@ -12796,11 +13750,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // stack (formation/solidStack.ts), at the view's centre.
     if (e.code === "KeyA" && e.shiftKey && !e.ctrlKey && !e.metaKey) {
       const target = activeSolidFormation();
-      if (target) {
+      if (target || workspace === "formations") {
         showShapeMenu(target);
         e.preventDefault();
         return;
       }
+    }
+    // Blender's grab, rotate and scale. R and S only take the key when there
+    // is something to turn or size; otherwise they arm the Rect and
+    // Checkpoint tools below, as they always have.
+    const plainKey = !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && mode === "edit";
+    if (plainKey && (e.code === "KeyR" || e.code === "KeyS") && startTransform(e.code === "KeyR" ? "rotate" : "scale")) {
+      e.preventDefault();
+      return;
+    }
+    // C in Formations: Cut the selected solid guide to a polygon drawn on the
+    // view (editor/sculpt.ts; C is the Circle tool in 2D only).
+    if (e.code === "KeyC" && plainKey && workspace === "formations" && sculptCtl) {
+      const f = activeSolidFormation();
+      if (f) {
+        if (grab) endTransform(true);
+        sculptCtl.startCut(f);
+        e.preventDefault();
+        return;
+      }
+    }
+    if (e.code === "KeyG" && plainKey) {
+      startTransform("translate");
+      e.preventDefault();
+      return;
     }
     // Blender's hide: H hides the selected bodies, Shift+H every other one,
     // Alt+H shows them all again.
@@ -12851,6 +13829,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // undo step.
   window.addEventListener("keyup", (e) => {
     if (NUDGE_DIRS[e.code]) nudging = false;
+    // The brush's cursor says what a modifier does the moment it is let go.
+    if (e.key === "Control" || e.key === "Shift") sculptCtl?.modifiers(e);
   });
 
   // The chain being strung out, as the renderer wants it: the fixed anchor, the
@@ -13071,10 +14051,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         syncGizmo();
         // The solid guides (a key, so a frame where nothing changed redraws
         // nothing).
+        // Formations' alone: a guide is what that workspace edits, and in the
+        // others it is wireframe in the way of the rock.
         solidView?.sync(
-          shownModel().items,
+          workspace === "formations" ? shownGuideItems() : NO_ITEMS,
           currentSolidSel(),
-          new Set(model.items.filter((i) => i.object === "formation" && (selectedIds.has(i.id) || selectedBodyIds.has(i.bodyId))).map((i) => i.id)),
+          new Set([
+            ...model.items.filter((i) => i.object === "formation" && (selectedIds.has(i.id) || selectedBodyIds.has(i.bodyId))).map((i) => i.id),
+            // ...and the guides picked to combine with it, drawn as strongly.
+            ...(combine?.picks ?? []),
+          ]),
+          guideHex,
         );
         decorations.syncPreview();
         // The one 3D view: the pose drives the scene's camera, and the 2D
@@ -13083,14 +14070,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (visuals?.active) {
           visuals.apply();
           cameraFromPose();
+          // The cube turns with the view (redrawn only when it has).
+          const p = visuals.view;
+          if (p) viewCube?.setView(p.yaw, p.pitch);
         }
+        // Sculpt's working mesh follows its body and takes this frame's edits
+        // (and the mode ends if its guide left the selection or the workspace).
+        sculptCtl?.frame(workspace === "formations" && mode === "edit");
         if (sceneLevel) scene3d.render(sceneLevel, camera, 1, visuals?.active ? NO_ORBIT : orbit);
       }
       // Scene only: the overlay draws nothing at all, so what is on screen is
       // the level as it will be played. Selection chrome goes with it, which is
       // the point - this mode is for looking, and "3D + overlay" is for editing.
-      //
-      if (viewMode === "3d") {
+      // Sculpt mode draws no overlay either: its marks are its own cursor and
+      // the sculpt itself, as Blender's sculpt mode hides the overlays.
+      if (viewMode === "3d" || sculptCtl?.active) {
         attachProjector(camera, null);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -13121,7 +14115,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // corner, midpoint or knob may be drawn as if it would be grabbed.
         tool === "root" ? NO_IDS : selectedIds,
         marqueeBand(),
-        visibleLayers,
+        shownLayers(),
         polyDraft ? { ...polyDraft, cursor: pointerWorld() } : null,
         selectedChainIds,
         chainDraftView(),
@@ -13170,6 +14164,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
               from: rootDraft.from ? rootDraft.verts[0]! : null,
             }
           : null,
+        workspace === "formations" ? formationGuideView : null,
       );
     }
     requestAnimationFrame(frame);
@@ -13201,7 +14196,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       w.cam.yaw === orbit.yaw &&
       w.cam.pitch === orbit.pitch &&
       w.vis === (visuals?.view ?? null) &&
-      w.visualsActive === false &&
+      w.workspace === workspace &&
       w.ortho === (projection === "orthographic")
     );
   }
@@ -13216,8 +14211,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       level: currentName,
       cam: { x: camera.position.x, y: camera.position.y, zoom: camera.zoom, yaw: orbit.yaw, pitch: orbit.pitch },
       vis: visuals?.view ?? null,
-      // The workspaces are one view now; the pose (`vis`) is the view.
-      visualsActive: false,
+      workspace,
       ortho: projection === "orthographic",
     };
     const href = editorViewHref(location.href, view);
@@ -13236,13 +14230,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (urlView.ortho) setProjection("orthographic");
     // The pose is the view: the one the address wrote, else the 2D camera's
     // with the orbit an older address carried. The field of view is the
-    // level's lens, which is why the address does not carry it.
-    const lens = lensOf(model.camera);
+    // editor's lens, which is why the address does not carry it.
+    const lens = editorLens();
     if (vis && visuals) visuals.setView({ ...vis, fovYDeg: lens.fovYDeg });
     else if (cam && visuals) {
       const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, cam.pitch));
       visuals.setView(poseFromCamera(camera, lens, { yaw: cam.yaw, pitch }));
     }
+    // A turned address opened in 2D is the same place head on.
+    if (HEAD_ON_ONLY[workspace] && orbited()) resetView();
     refreshOrbitBtn();
     applyToolCursor();
   }
@@ -13260,7 +14256,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const l of layerPrefs.locked) setLayerLocked(l, true);
     layerPrefsLive = true;
   }
-  rebuildInspector();
+  setWorkspace(workspace, true);
   updateTitle();
   // Reopen the level this browser last had open (prefs.ts), once the list
   // says it is still on disk; a name that is gone is forgotten rather than

@@ -174,6 +174,11 @@ function top(surface: StillSurface): number {
 }
 
 // Whether `obj` is drawn: it and every ancestor visible.
+function inEditorLayer(obj: THREE.Object3D, layer: THREE.Object3D): boolean {
+  for (let o: THREE.Object3D | null = obj; o; o = o.parent) if (o === layer) return true;
+  return false;
+}
+
 function drawn(obj: THREE.Object3D): boolean {
   for (let o: THREE.Object3D | null = obj; o; o = o.parent) if (!o.visible) return false;
   return true;
@@ -1246,6 +1251,23 @@ export class Scene3D {
       if (tag === undefined || !hit.face || !accept(tag)) continue;
       const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
       return { tag, point: hit.point.clone(), normal };
+    }
+    return null;
+  }
+
+  // The nearest DRAWN surface under the pointer, tagged or not - the water, a
+  // rock, the scenery - as a world point in three's frame, or null where the
+  // ray meets nothing drawn. The editor's own chrome (`editorLayer`) is not a
+  // surface, and neither is anything invisible (a pick-only mesh). What the
+  // editor's wheel dollies toward: what the eye is looking at, rather than the
+  // gameplay plane, which is not drawn and which a dolly can never pass.
+  drawnSurfaceAt(x: number, y: number): THREE.Vector3 | null {
+    for (const hit of this.hitsAt(x, y)) {
+      if (!hit.face || inEditorLayer(hit.object, this.editorLayer)) continue;
+      const material = (hit.object as THREE.Mesh).material;
+      const materials = Array.isArray(material) ? material : [material];
+      if (!materials.some((m) => m?.visible)) continue;
+      return hit.point.clone();
     }
     return null;
   }

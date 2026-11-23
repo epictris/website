@@ -35,7 +35,7 @@ import {
 import { Guides, guidePlaneZ, type GuideDraft, type GuideView } from "./guides";
 import { isGuideTag, type GuideTag } from "./tags";
 import { dolly, frame, headOn, orbit, pan, type Ndc } from "./viewControls";
-import type { Vec3 } from "./viewPose";
+import { withLens, type Vec3 } from "./viewPose";
 
 // Orbit sensitivity, radians per screen pixel, for both workspaces' orbit: a
 // drag across a 1600 px window is a bit over a half turn, which is enough to
@@ -51,15 +51,15 @@ export const DOLLY_PER_WHEEL = 0.001;
 
 // The parts of `Scene3D` the workspace drives. A type rather than the class so
 // `cli render3d` can hand it a scene with no WebGL behind it.
-export type WorkspaceScene = Pick<Scene3D, "editorLayer" | "camera" | "setViewPose" | "pick" | "pickSurface">;
+export type WorkspaceScene = Pick<Scene3D, "editorLayer" | "camera" | "setViewPose" | "pick" | "pickSurface" | "drawnSurfaceAt">;
 
 export interface WorkspaceHost {
   readonly scene: WorkspaceScene;
   // The Level workspace's camera: what the pose is seeded from, and the
   // viewport the scene is drawn into (the canvas, in CSS pixels).
   camera2d(): Camera;
-  // The level's lens (`lensOf(model.camera)`), which the head-on pose is framed
-  // through.
+  // The lens the view is navigated through: the level's depth (`zOffset`) and
+  // the editor's own field of view (`EDITOR_FOV_Y_DEG`).
   lens(): SceneLens;
   // The canvas's size in CSS pixels, for turning a pointer into NDC.
   canvasSize(): { width: number; height: number };
@@ -200,6 +200,13 @@ export class VisualsWorkspace {
   // so it uses the workspace for its camera alone.
   showGuides = true;
 
+  // THE 2D WORKSPACE'S LOCK (editor/workspaces.ts): the view stays the plane
+  // head on. An orbit is a pan, the wheel zooms about the plane point under
+  // the pointer rather than a rock behind it, and framing keeps the target on
+  // the plane, so the view never leaves the head-on mapping the 2D camera
+  // draws and picks through.
+  headOnOnly = false;
+
   enter(): void {
     if (this.on) return;
     this.on = true;
@@ -256,7 +263,11 @@ export class VisualsWorkspace {
   // Frame a box (three's frame) from the current direction: **F**.
   frameBox(box: Box3): void {
     if (!this.pose) return;
-    this.pose = frame(this.pose, box, this.aspect());
+    const z = this.pose.target.z;
+    // Locked head on, the box is framed as its footprint on the plane: the
+    // target keeps its depth, so the view stays the head-on one.
+    const flat = this.headOnOnly ? { min: { ...box.min, z }, max: { ...box.max, z } } : box;
+    this.pose = frame(this.navigable(this.pose), flat, this.aspect());
     this.apply();
   }
 
@@ -336,14 +347,14 @@ export class VisualsWorkspace {
   moveView(scr: Vec2): void {
     const g = this.gesture;
     if (!g || !this.pose) return;
-    if (g.kind === "orbit") {
+    if (g.kind === "orbit" && !this.headOnOnly) {
       // The pointer drags the SCENE, as the Level workspace's orbit reads: a
       // drag right swings the level right (the camera left), a drag down tips
       // its far side down and the camera rises to look at it.
       const d = scr.sub(g.last);
-      this.pose = orbit(this.pose, -d.x * ORBIT_RADIANS_PER_PX, d.y * ORBIT_RADIANS_PER_PX);
+      this.pose = orbit(this.navigable(this.pose), -d.x * ORBIT_RADIANS_PER_PX, d.y * ORBIT_RADIANS_PER_PX);
     } else {
-      this.pose = pan(this.pose, this.aspect(), this.ndc(g.last), this.ndc(scr));
+      this.pose = pan(this.navigable(this.pose), this.aspect(), this.ndc(g.last), this.ndc(scr));
     }
     g.last = scr;
     this.apply();
@@ -353,20 +364,46 @@ export class VisualsWorkspace {
     this.gesture = null;
   }
 
-  // The wheel: a dolly toward what is under the pointer - the nearest model
-  // surface, else the gameplay plane, else straight along the view - so the
-  // point aimed at stays under the pointer and the eye never passes it.
+  // The wheel: a dolly toward what is under the pointer - the nearest DRAWN
+  // surface (`Scene3D.drawnSurfaceAt`), else the point of the pointer's ray at
+  // the target's depth - so the point aimed at stays under the pointer and the
+  // eye never passes it.
+  //
+  // Never the gameplay plane: it is not drawn, so over open water or a gap
+  // the eye homed in on a wall nobody can see - the plane's notes growing
+  // huge while the scene behind them barely moved, and no way through.
   wheel(scr: Vec2, deltaY: number): void {
     if (!this.pose) return;
-    const hit = this.surfaceAt(scr, () => true);
-    let toward: Vec3 | null = hit?.point ?? null;
+    const n = this.ndc(scr);
+    const scene = this.host.scene;
+    let toward: Vec3 | null = this.headOnOnly ? null : scene.drawnSurfaceAt(n.x, n.y);
     if (!toward) {
-      const p = this.planePoint(scr);
-      toward = p ? { x: p.x, y: threeY(p.y), z: 0 } : null;
+      const cam = scene.camera;
+      const forward = cam.getWorldDirection(this.forward);
+      const t = this.pose.target;
+      this.depthPlane.setFromNormalAndCoplanarPoint(forward, this.targetPoint.set(t.x, t.y, t.z));
+      this.raycaster.setFromCamera(this.ndcPoint.set(n.x, n.y), cam);
+      toward = this.raycaster.ray.intersectPlane(this.depthPlane, this.towardPoint);
     }
-    this.pose = dolly(this.pose, toward, Math.exp(deltaY * DOLLY_PER_WHEEL));
+    this.pose = dolly(this.navigable(this.pose), toward, Math.exp(deltaY * DOLLY_PER_WHEEL));
     this.apply();
   }
+
+  // The pose a gesture starts from: the one on screen, seen through the
+  // navigation lens (`WorkspaceHost.lens`) from where it stands. A view set
+  // through another lens - the Game camera's, the level's own - keeps it
+  // until it is moved, and the first move widens it about the eye rather than
+  // jumping the eye.
+  private navigable(pose: ViewPose): ViewPose {
+    return withLens(pose, this.host.lens().fovYDeg);
+  }
+
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly depthPlane = new THREE.Plane();
+  private readonly forward = new THREE.Vector3();
+  private readonly targetPoint = new THREE.Vector3();
+  private readonly towardPoint = new THREE.Vector3();
+  private readonly ndcPoint = new THREE.Vector2();
 
   private aspect(): number {
     const c = this.host.camera2d();

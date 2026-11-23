@@ -56,16 +56,7 @@ import { isRootItem, rootIndex, rootWidthAt } from "./rootEditing";
 import { curveLine, strokeCurve } from "../lib/stroke";
 import { pathNodesOf } from "../lib/path";
 import {
-  DEFAULT_PATH_FALLOFF_X,
-  DEFAULT_PATH_FALLOFF_Y,
-  DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
-  DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
-  DEFAULT_PATH_LOOKAHEAD_X,
-  DEFAULT_PATH_LOOKAHEAD_Y,
-  DEFAULT_PATH_RANGE_X,
-  DEFAULT_PATH_RANGE_Y,
   DEFAULT_ROOT_COLOR,
-  DEFAULT_VIEWPORT_SCALE,
   moveModeCloses,
   DEFAULT_SHELTER_FRONT,
 } from "../level/levelFormat";
@@ -90,7 +81,6 @@ import {
   buildCameraRules,
   pathHasBand,
   type CameraRule,
-  type PathKeyField,
 } from "../render/cameraController";
 import { pathCorridor } from "../render/pathCorridors";
 import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
@@ -167,6 +157,10 @@ const GROUP_MARK = "#7fd6a8";
 // says the opposite: these are what the selected body is made of, shown so the
 // body's extent is visible without the pieces being picked.
 export const BODY_MEMBER = "#4f9dff";
+// The guides picked to combine with the selected one (Formations' Union /
+// Subtract / Intersect): neither the selection nor its members, so a third
+// colour, the stack's cut red's warmer neighbour.
+export const COMBINE_PICK = "#e88a4f";
 // A model's mark (`drawModelMark`) and its label: the overlay's neutral
 // foreground, since a model has no colour of its own to show.
 const MODEL_MARK_COLOR = "#cbccc6";
@@ -825,10 +819,8 @@ function strokeCompoundOutline(
 
 // The depth handle: an up/down arrow beside the shape, in the gizmo's own blue
 // so the two ways of authoring the same axis read as the same axis. Dragging it
-// up is toward the camera, which is +z, and the value is drawn beside it in the
-// inspector's units - a handle for a quantity with no on-screen extent has to
-// say what it is at, or a drag has no feedback but the shading.
-function drawDepthHandle(ctx: CanvasRenderingContext2D, p: Vec2, z: number): void {
+// up is toward the camera, which is +z. Its value is the inspector's `z`.
+function drawDepthHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
   const r = HANDLE_SIZE_PX / 2 + 1;
   ctx.strokeStyle = BODY_MEMBER;
   ctx.fillStyle = HANDLE_FILL;
@@ -846,11 +838,6 @@ function drawDepthHandle(ctx: CanvasRenderingContext2D, p: Vec2, z: number): voi
     ctx.lineTo(p.x + 3, p.y + s * (r - 3));
   }
   ctx.stroke();
-  // Scene pixels, which is what the inspector's `z` field shows: two
-  // readouts of one number in two units is a number nobody trusts.
-  ctx.fillStyle = BODY_MEMBER;
-  ctx.textBaseline = "middle";
-  ctx.fillText(`z ${Math.round(z * PIXELS_PER_METER)}`, p.x + r + 4, p.y);
 }
 
 function square(ctx: CanvasRenderingContext2D, p: Vec2): void {
@@ -1105,7 +1092,7 @@ function decorationPoint(model: EdModel, d: EdItem): { x: number; y: number; z: 
   return { x: w.x, y: -w.y, z: w.z };
 }
 
-function drawFormationGuide(ctx: CanvasRenderingContext2D, f: EdItem, worldLine: number): void {
+function drawFormationGuide(ctx: CanvasRenderingContext2D, f: EdItem, worldLine: number, color: string, selected: boolean): void {
   const guide = f.formation?.guide;
   if (guide?.kind !== "collision") return;
   ctx.save();
@@ -1118,8 +1105,10 @@ function drawFormationGuide(ctx: CanvasRenderingContext2D, f: EdItem, worldLine:
     poly.forEach((q, k) => (k ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
     ctx.closePath();
   }
-  ctx.strokeStyle = FORMATION_MARK_COLOR;
-  ctx.lineWidth = worldLine * 1.5;
+  ctx.strokeStyle = color;
+  // The selected one's heavier, as the selected solid guide is drawn
+  // stronger.
+  ctx.lineWidth = worldLine * (selected ? 2.5 : 1.5);
   ctx.setLineDash([worldLine * 6, worldLine * 4]);
   ctx.stroke();
   ctx.setLineDash([]);
@@ -1160,109 +1149,6 @@ export function lightSwarms(l: EdItem): boolean {
 export function lightTrigger(l: EdItem): number {
   if (l.light.wake > 0) return l.light.wake;
   return l.light.fireflies > 0 ? DEFAULT_FIREFLY_NOTICE : 0;
-}
-
-// What a light does, for the screen-space label beside it. Only what was
-// authored away from the defaults, so an ordinary lamp reads as `light` and a
-// guttering shadow-casting spot says so.
-export function lightLabel(l: EdItem): string {
-  const parts: string[] = [l.light.kind];
-  parts.push(`${Number(l.light.intensity.toFixed(1))}cd`);
-  const px = (v: number) => Math.round(v * PIXELS_PER_METER);
-  if (l.shape.kind === "circle") parts.push(`${px(l.shape.r)}reach`);
-  if (l.light.z !== 0) {
-    parts.push(`z${px(l.light.z)}`);
-    // What that `z` costs, in the units the reach is authored in. A lamp off
-    // the plane reaches less of it, and a lamp further off than it reaches
-    // lights the level not at all - which is silent everywhere else.
-    const plane = lightPlaneReach(l);
-    parts.push(plane > 0 ? `${px(plane)}on plane` : "MISSES PLANE");
-  }
-  if (l.light.flicker > 0) parts.push(`flicker ${Number(l.light.flicker.toFixed(2))}`);
-  // Read only on a spot (see `LightObjectData.beam`), so labelled only there.
-  if (l.light.kind === "spot" && l.light.beam > 0) parts.push(`beam ${Number(l.light.beam.toFixed(2))}`);
-  if (l.light.kind === "spot" && l.light.dust > 0) parts.push(`dust ${Number(l.light.dust.toFixed(2))}`);
-  if (lightSwarms(l)) {
-    parts.push(`${l.light.fireflies} fireflies`, `notice ${px(lightTrigger(l))}`);
-    if (l.light.path !== null) parts.push(`path ${l.light.path}`);
-  }
-  else if (lightWakes(l)) parts.push(`wakes ${px(l.light.wake)}`);
-  // A waking light casts none whatever it says (see `LightRig`).
-  else if (l.light.castShadow) parts.push("shadows");
-  return parts.join(" · ");
-}
-
-export function cameraRegionLabel(r: EdItem): string {
-  const px = (v: number) => String(Math.round(v * PIXELS_PER_METER));
-  const parts: string[] = [];
-  if (r.shape.kind === "path") {
-    // A path's defaults are shown rather than omitted: `range` and `lookahead`
-    // ARE the tuning, so "not authored" and "authored at the default" have to
-    // read the same way while an author is comparing two paths by eye.
-    // A keyed field's path-level value is read nowhere, so it is not quoted
-    // as if it were; the keys are on the nodes, and the label says how many.
-    const nodeKeys = r.shape.keys;
-    const keyed = (f: PathKeyField): boolean => nodeKeys.some((k) => k[f] !== null);
-    parts.push(
-      keyed("rangeX") || keyed("rangeY")
-        ? "range keyed"
-        : `range ${px(r.cam.rangeX ?? DEFAULT_PATH_RANGE_X)},${px(r.cam.rangeY ?? DEFAULT_PATH_RANGE_Y)}`,
-    );
-    const fallX = r.cam.falloffX ?? DEFAULT_PATH_FALLOFF_X;
-    const fallY = r.cam.falloffY ?? DEFAULT_PATH_FALLOFF_Y;
-    if (keyed("falloffX") || keyed("falloffY")) parts.push("falloff keyed");
-    else if (fallX > 0 || fallY > 0) parts.push(`falloff ${px(fallX)},${px(fallY)}`);
-    const leadKeyed = keyed("lookaheadX") || keyed("lookaheadY");
-    const bufKeyed = keyed("lookaheadBufferX") || keyed("lookaheadBufferY");
-    parts.push(
-      `lead ${
-        leadKeyed
-          ? "keyed"
-          : `${px(r.cam.lookaheadX ?? DEFAULT_PATH_LOOKAHEAD_X)},${px(r.cam.lookaheadY ?? DEFAULT_PATH_LOOKAHEAD_Y)}`
-      } ±${
-        bufKeyed
-          ? "keyed"
-          : `${px(r.cam.lookaheadBufferX ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_X)},${px(r.cam.lookaheadBufferY ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_Y)}`
-      }`,
-    );
-    if (keyed("viewportScale")) parts.push("view keyed");
-    else if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
-      parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
-    }
-    if (r.cam.softness !== null) parts.push(`soft ${px(r.cam.softness)}`);
-    if (keyed("reactionTime")) parts.push("react keyed");
-    else if (r.cam.reactionTime !== null) parts.push(`react ${Number(r.cam.reactionTime.toFixed(2))}s`);
-    const keys = nodeKeys.filter(isKeyed).length;
-    if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
-    if (keyed("buffer")) parts.push("buf keyed");
-    else if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
-    if (keyed("windBuffer")) parts.push("wind keyed");
-    else if (r.cam.windBuffer !== null) parts.push(`wind ${px(r.cam.windBuffer)}`);
-    if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
-    return `path · ${parts.join(" · ")}`;
-  }
-  if (r.cam.offset.x !== 0 || r.cam.offset.y !== 0) {
-    parts.push(`off ${px(r.cam.offset.x)},${px(r.cam.offset.y)}`);
-  }
-  if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
-    parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
-  }
-  const lock = `${r.cam.lockX !== null ? "x" : ""}${r.cam.lockY !== null ? "y" : ""}`;
-  if (lock) parts.push(`lock ${lock}`);
-  const buf = cameraBufferMargin(r);
-  if (buf !== null) {
-    // Per side, the sides are named rather than left to a reading order nobody
-    // can guess from four numbers.
-    parts.push(
-      typeof buf === "number"
-        ? `buf ${px(buf)}`
-        : `buf l${px(buf.left)} r${px(buf.right)} t${px(buf.top)} b${px(buf.bottom)}`,
-    );
-  }
-  if (r.cam.falloff !== null) parts.push(`fade ${px(r.cam.falloff)}`);
-  if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
-  if (!r.cam.keepInFrame) parts.push("free frame");
-  return parts.length ? `cam · ${parts.join(" · ")}` : "cam · (no effect)";
 }
 
 // Where a locked axis pins the camera. Both axes locked is a point, so it draws
@@ -1474,15 +1360,6 @@ function drawFireflyPath(
   }
 }
 
-// What a firefly path's label says: its number, and which swarms follow it -
-// a path no swarm names is drawn for nothing, and that is worth seeing.
-export function fireflyPathLabel(item: EdItem, items: readonly EdItem[]): string {
-  const swarms = items.filter(
-    (i) => i.object === "light" && lightSwarms(i) && i.light.path === item.pathId,
-  ).length;
-  return `firefly path ${item.pathId} · ${swarms === 0 ? "no swarm" : `${swarms} swarm${swarms === 1 ? "" : "s"}`}`;
-}
-
 // A filled triangle centred at `at`, pointing along the unit vector `dir`.
 function drawPathArrow(ctx: CanvasRenderingContext2D, at: Vec2, dir: Vec2): void {
   const side = new Vec2(-dir.y, dir.x).mul(PATH_ARROW_LENGTH * 0.4);
@@ -1645,33 +1522,65 @@ function drawCheckpoint(
   ctx.stroke();
 }
 
-// A text note's body, drawn in screen space so the glyphs stay crisp, at a size
-// derived from the world glyph height so it still scales with the zoom. The box
-// is drawn in the world pass; this only fills it.
-function drawNoteText(ctx: CanvasRenderingContext2D, cam: Camera, item: EdItem): void {
-  const scale = cam.zoom * PIXELS_PER_METER;
-  const fontPx = item.note.size * scale;
-  if (fontPx < 4) return; // illegible at this zoom; the box still shows it is there
+// A text note's body, LYING ON THE GAMEPLAY PLANE like its box: a fixed size
+// in metres and the note's own orientation, so in a turned view it recedes,
+// foreshortens and turns with the plane rather than facing the camera at a
+// size the view's zoom picks. The box is drawn in the world pass; this fills
+// it.
+//
+// Glyph by glyph: each is placed at its own point of the plane and drawn
+// through the plane's local projection there (where a note-height step along
+// the note's x and y lands on screen), which is a perspective drawing of the
+// text to within a glyph. Head on that projection is the 2D camera's scale,
+// so the flat view draws exactly what it always has.
+const NOTE_REF_PX = 32; // the font size the glyphs are laid out at
+const NOTE_MIN_GLYPH_PX = 3; // smaller on screen than this, a glyph is not drawn
+function drawNoteText(ctx: CanvasRenderingContext2D, cam: Camera, item: EdItem, dpr: number): void {
+  const size = item.note.size;
+  if (size <= 0) return;
   const h = halfExtents(item);
-  const corner = worldToScreen(cam, toWorld(item, new Vec2(-h.x, -h.y)));
   const empty = item.note.text.trim() === "";
+  // Metres per layout pixel.
+  const k = size / NOTE_REF_PX;
+  const at = (x: number, y: number): Vec2 | null => {
+    const p = worldToScreen(cam, toWorld(item, new Vec2(x, y)));
+    // `worldToScreen`'s answer for a point behind the eye.
+    return Number.isFinite(p.x) && Number.isFinite(p.y) && p.x > -1e8 ? p : null;
+  };
   ctx.save();
-  ctx.translate(corner.x, corner.y);
-  ctx.rotate(item.rot);
-  ctx.font = `${fontPx}px monospace`;
+  ctx.font = `${NOTE_REF_PX}px monospace`;
   ctx.textBaseline = "top";
   ctx.fillStyle = NOTE_COLOR;
   ctx.globalAlpha *= empty ? 0.45 : 1;
-  const pad = NOTE_PADDING * scale;
   const lines = wrapNoteText(
     ctx,
     empty ? NOTE_EMPTY_PLACEHOLDER : item.note.text,
-    Math.max(1, h.x * 2 * scale - pad * 2),
+    Math.max(1, (h.x * 2 - NOTE_PADDING * 2) / k),
   );
-  let y = pad;
+  const widths = new Map<string, number>();
+  let y = -h.y + NOTE_PADDING;
   for (const line of lines) {
-    ctx.fillText(line, pad, y);
-    y += fontPx * NOTE_LINE_HEIGHT;
+    let advance = 0;
+    for (const ch of line) {
+      let w = widths.get(ch);
+      if (w === undefined) {
+        w = ctx.measureText(ch).width;
+        widths.set(ch, w);
+      }
+      const x = -h.x + NOTE_PADDING + advance * k;
+      advance += w;
+      if (ch === " ") continue;
+      const o = at(x, y);
+      const ex = at(x + size, y);
+      const ey = at(x, y + size);
+      if (!o || !ex || !ey || ey.distanceTo(o) < NOTE_MIN_GLYPH_PX) continue;
+      // Screen pixels per layout pixel along the note's x and y, here.
+      const jx = ex.sub(o).div(NOTE_REF_PX);
+      const jy = ey.sub(o).div(NOTE_REF_PX);
+      ctx.setTransform(dpr * jx.x, dpr * jx.y, dpr * jy.x, dpr * jy.y, dpr * o.x, dpr * o.y);
+      ctx.fillText(ch, 0, 0);
+    }
+    y += size * NOTE_LINE_HEIGHT;
   }
   ctx.restore();
 }
@@ -2169,6 +2078,11 @@ export function drawEditor(
     tip: number;
     from: Vec2 | null;
   } | null = null,
+  // The Formations workspace's guides (docs/editor.md, "Guides and rocks"):
+  // which formations' collision guides are drawn, selected or not, and each
+  // one's own colour. Null elsewhere: a guide only while its formation or
+  // body is selected, in the formation mark colour.
+  formationGuides: { shown: (f: EdItem) => boolean; color: (f: EdItem) => string } | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -2217,6 +2131,10 @@ export function drawEditor(
   const geometry = model.items.filter(
     (i) =>
       i.object === "collision" &&
+      // Each on its OWN layer's visibility: a note's box or a camera region is
+      // a collision-shaped item too, and gating the lot on the scene layer
+      // left them drawn with their layer hidden.
+      visibleLayers.has(i.layer) &&
       !(i.shape.kind === "path" && i.layer !== "scene") &&
       // A shelter is light, not stuff: its own pass below draws it, on its own
       // layer's visibility.
@@ -2224,9 +2142,7 @@ export function drawEditor(
       i.layer !== "fog" &&
       !isCheckpointNote(i),
   );
-  const ordered = visibleLayers.has("scene")
-    ? [...geometry].sort((a, b) => Number(!a.passable) - Number(!b.passable))
-    : [];
+  const ordered = [...geometry].sort((a, b) => Number(!a.passable) - Number(!b.passable));
   // Compound bodies draw as one object rather than as their pieces - union fill,
   // and a border only where a piece is not covered by a sibling. Drawn piece by
   // piece instead, the overlaps fill twice (a darker patch) and the joins get a
@@ -2794,13 +2710,19 @@ export function drawEditor(
     ? model.items.filter((i) => i.object === "formation" && i.formation?.guide.kind === "collision")
     : [];
   for (const f of formations) {
-    if (selectedIds.has(f.id) || selectedBodyIds.has(f.bodyId)) drawFormationGuide(ctx, f, worldLine);
+    const selected = selectedIds.has(f.id) || selectedBodyIds.has(f.bodyId);
+    if (formationGuides ? formationGuides.shown(f) : selected) {
+      drawFormationGuide(ctx, f, worldLine, formationGuides?.color(f) ?? FORMATION_MARK_COLOR, selected);
+    }
   }
-  // ...and what grows on them, at the point each is drawn at in 3D - on its
-  // rock, through its formation's frame (a 3D body's depth and tilt
-  // included), not that point carried onto the plane; a lost one in the
-  // warning colour.
-  for (const d of visibleLayers.has("scene") ? model.items.filter((i) => i.object === "decoration") : []) {
+  // ...and what grows on them, while SELECTED, at the point it is drawn at in
+  // 3D - on its rock, through its formation's frame (a 3D body's depth and
+  // tilt included), not that point carried onto the plane; a lost one in the
+  // warning colour. Only the selected: a mark on every decoration was a
+  // scatter of glyphs over the rocks that said nothing the growth itself does
+  // not (Tris, 2026-11-23), and a decoration is picked by what grew, never by
+  // its mark. Selected, it says where an ungrown one is.
+  for (const d of visibleLayers.has("scene") ? model.items.filter((i) => i.object === "decoration" && selectedIds.has(i.id)) : []) {
     const at = decorationPoint(model, d);
     const mark = at ? { ...d, pos: new Vec2(at.x, at.y) } : d;
     if (at) atDepth(ctx, at.z);
@@ -3028,79 +2950,8 @@ export function drawEditor(
 
   ctx.restore();
 
-  // Region labels in screen space: what a region does has to stay readable at
-  // any zoom, and a world-space label would shrink to nothing.
-  for (const r of regions) {
-    const h = halfExtents(r);
-    const anchor = worldToScreen(cam, r.pos.sub(h));
-    ctx.font = "11px monospace";
-    ctx.textBaseline = "bottom";
-    ctx.fillStyle = CAMERA_REGION_COLOR;
-    ctx.fillText(cameraRegionLabel(r), anchor.x + 2, anchor.y - 3);
-  }
-  // ...and the firefly paths', beside the start - the end a swarm waits at -
-  // on the side AWAY from where the path sets off, so the label never sits on
-  // the line it names.
-  for (const f of fireflyPaths) {
-    if (f.shape.kind !== "path" || f.shape.verts.length < 2) continue;
-    const start = worldToScreen(cam, toWorld(f, f.shape.verts[0]!));
-    const next = worldToScreen(cam, toWorld(f, f.shape.verts[1]!));
-    const clear = FIREFLY_PATH_MARK * cam.zoom * PIXELS_PER_METER + 6;
-    const leftward = next.x >= start.x;
-    ctx.font = "11px monospace";
-    ctx.textBaseline = "middle";
-    ctx.textAlign = leftward ? "right" : "left";
-    ctx.fillStyle = FIREFLY_PATH_COLOR;
-    ctx.fillText(fireflyPathLabel(f, model.items), start.x + (leftward ? -clear : clear), start.y);
-    ctx.textAlign = "left";
-  }
-  // ...and the lights', for the same reason: what a lamp does is numbers, and a
-  // world-space label would shrink to nothing as the level is zoomed out. Placed
-  // beside the source rather than at the edge of the reach, which is where the
-  // thing being labelled actually is.
-  //
-  // Clear of the burst: it is drawn `LIGHT_MARK_SIZE` metres across the plane
-  // (36 px at the default zoom), so a label at a fixed 8 px ran through its
-  // rays and read "·oint".
-  for (const l of lights) {
-    const anchor = worldToScreen(cam, l.pos);
-    const clear = lightPickRadius(1 / scale) * scale;
-    ctx.font = "11px monospace";
-    ctx.textBaseline = "bottom";
-    ctx.fillStyle = l.color;
-    ctx.fillText(lightLabel(l), anchor.x + clear + 4, anchor.y - 2);
-  }
-  // ...and the models' names, off their marks' lower right corner: the right
-  // edge's middle is the depth handle's, and above the top edge is the rotate
-  // knob's, both drawn while it is selected.
-  for (const m of models) {
-    const at = worldToScreen(cam, m.pos);
-    const half = (m.shape.kind === "rect" ? m.shape.w / 2 : 0) * scale;
-    ctx.font = "11px monospace";
-    ctx.textBaseline = "top";
-    ctx.fillStyle = MODEL_MARK_COLOR;
-    ctx.fillText(m.modelRef.name || "(no model)", at.x + half + 8, at.y + half - 4);
-  }
   for (const n of notes) {
-    if (n.note.kind === "text") drawNoteText(ctx, cam, n);
-    // A checkpoint's NAME is what it is used by, so it is drawn in screen space
-    // beside the marker like a light's readout: a world-space label would shrink
-    // to nothing at the zoom a level is laid out at, which is the zoom the
-    // question "which one is `vines`?" is asked at.
-    else if (n.note.kind === "checkpoint") {
-      const anchor = worldToScreen(cam, n.pos);
-      // Clear of the ring rather than a fixed offset from the centre: the ring
-      // is the avatar's size in WORLD metres, so a fixed offset puts the name
-      // inside it at any zoom worth reading the name at.
-      const ring = halfExtents(n).x * cam.zoom * PIXELS_PER_METER;
-      const named = n.note.text.trim();
-      ctx.font = "11px monospace";
-      ctx.textBaseline = "bottom";
-      ctx.fillStyle = NOTE_COLOR;
-      ctx.globalAlpha *= named ? 1 : 0.45;
-      ctx.fillText(named || "(unnamed)", anchor.x + ring + 6, anchor.y - ring - 4);
-      ctx.globalAlpha = 1;
-    }
+    if (n.note.kind === "text") drawNoteText(ctx, cam, n, dpr);
   }
 
   // Handles in screen space so they stay a constant on-screen size. They edit
@@ -3141,10 +2992,6 @@ export function drawEditor(
       ctx.beginPath();
       ctx.arc(handle.screen.x, handle.screen.y, handle.radius, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.font = "12px monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.fillText(String(handle.index + 1), handle.screen.x, handle.screen.y - handle.radius - 3);
       ctx.restore();
       if (picked) circleHandle(ctx, handle.rootScreen);
     }
@@ -3283,7 +3130,7 @@ export function drawEditor(
     // An arrow's endpoints are round, so they read as "drag me somewhere"
     // rather than as the corners of a box.
     if (hs.ends) for (const e of hs.ends) circleHandle(ctx, e);
-    if (hs.depth) drawDepthHandle(ctx, hs.depth, depthOf(selected));
+    if (hs.depth) drawDepthHandle(ctx, hs.depth);
   }
 
   // Rubber-band box, in screen space so its outline stays one pixel at any zoom.

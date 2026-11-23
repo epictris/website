@@ -64,8 +64,10 @@ const button = (text: string, onClick: () => void, title?: string): HTMLButtonEl
 const div = (cls: string, text = ""): HTMLDivElement => Object.assign(document.createElement("div"), { className: cls, textContent: text });
 
 export class DecorationController {
-  // A kind waiting for its first click on a formation's rock.
-  placing: { kind: DecorationKind; formationId: number } | null = null;
+  // A kind waiting for its first click on a formation's rock: the one whose
+  // list armed it, or (null, the Decorations workspace's palette) any rock
+  // that is generated.
+  placing: { kind: DecorationKind; formationId: number | null } | null = null;
   // The painted decoration the brush is on, and how it paints.
   painting: { itemId: number; radius: number; erase: boolean } | null = null;
   private drag: { mode: "move" | "paint"; itemId: number; last: THREE.Vector3 | null } | null = null;
@@ -97,6 +99,37 @@ export class DecorationController {
   // painted on, or the selected decoration's.
   target(selected: readonly EdItem[]): number | null {
     if (this.placing) return this.placing.formationId;
+    return this.selectedTarget(selected);
+  }
+
+  // Whether the next press may land on any generated rock (the palette's
+  // placing), rather than on `target`'s alone.
+  get anyRock(): boolean {
+    return this.placing !== null && this.placing.formationId === null;
+  }
+
+  // Whether an item is a rock a decoration can be put on: a formation that is
+  // generated.
+  isRock(id: number): boolean {
+    const f = this.item(id);
+    return f?.object === "formation" && !!f.formation?.built;
+  }
+
+  // Arm a kind for the next click on any generated rock (the Decorations
+  // workspace's palette). Clicking the armed kind again disarms it.
+  arm(kind: DecorationKind): void {
+    if (this.placing?.kind === kind && this.placing.formationId === null) {
+      this.cancel();
+      return;
+    }
+    this.placing = { kind, formationId: null };
+    this.painting = null;
+    this.previewKey = null;
+    this.syncPreview();
+    this.host.rebuildInspector();
+  }
+
+  private selectedTarget(selected: readonly EdItem[]): number | null {
     const d = this.painting ? this.item(this.painting.itemId) : selected.length === 1 && selected[0]!.object === "decoration" ? selected[0]! : null;
     return d ? (this.formationOf(d)?.id ?? null) : null;
   }
@@ -213,7 +246,9 @@ export class DecorationController {
       if (selected.length !== 1 || selected[0]!.id !== this.painting.itemId) this.cancel();
       return;
     }
-    if (this.placing) {
+    // The palette's placing is the workspace's tool, not the selection's: it
+    // stays armed until Esc, its button or a press off every rock.
+    if (this.placing && this.placing.formationId !== null) {
       const f = this.item(this.placing.formationId);
       if (!f || !(selectedBodies.has(f.bodyId) || selected.some((i) => i.bodyId === f.bodyId))) this.cancel();
     }
@@ -235,13 +270,17 @@ export class DecorationController {
     // any editor. Swallowing it instead left the editor unable to select
     // anything with no word as to why while a brush was still on.
     if (this.placing) {
-      const f = this.item(this.placing.formationId);
-      if (!hit || !f || hit.itemId !== f.id) {
+      const palette = this.placing.formationId === null;
+      const f = this.item(this.placing.formationId ?? hit?.itemId ?? -1);
+      if (!hit || !f || hit.itemId !== f.id || !this.isRock(f.id)) {
         this.cancel();
         return false;
       }
-      this.place(f, this.placing.kind, hit);
-      this.placing = null;
+      const kind = this.placing.kind;
+      // A placed kind from the palette stays armed, so a row of ferns is a
+      // row of clicks; a painted one goes straight to its brush.
+      if (!palette || isPainted(kind)) this.placing = null;
+      this.place(f, kind, hit);
       return true;
     }
     if (this.painting) {

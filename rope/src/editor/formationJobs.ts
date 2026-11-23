@@ -8,6 +8,7 @@
 
 import type { JobEvent, JobKind, JobResult, JobState } from "../server/formations";
 import type { FormationData } from "../level/levelFormat";
+import { meshesStored } from "./solidGuides";
 
 export type { JobResult, JobState };
 
@@ -60,6 +61,9 @@ export class FormationJobs {
 
   async ask(kind: JobKind, formation: FormationData, label: string): Promise<string | null> {
     this.connect();
+    // A guide's mesh stored a moment ago (a sculpt's commit, Apply, a cut) is
+    // named before its upload lands: the build reads it from the store.
+    await meshesStored();
     const res = await fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

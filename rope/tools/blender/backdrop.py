@@ -11,9 +11,6 @@ Every run writes the level's start camera and water onto the scene
     --adopt                 turn the meshes in `Backdrop sources` (the backdrop
                             before 2026-10-05) into solid formations, replacing
                             the rocks built from them
-    --import solids.json    seed guides from an Orthographic Studio export
-                            (scripts/ortho-solids.ts) for the pieces the scene
-                            does not have yet, or those --only names, and build
     --set NAME key=value,.. a formation's parameters (solidfit.PARAMS: seed,
                             stoneSize, knub, curveTurn)
     --render NAME key=value,..  its render settings (formations/render.py:
@@ -23,7 +20,11 @@ Every run writes the level's start camera and water onto the scene
     --rebuild changed|all|NAME,NAME   regenerate solid formations
     --list                  print every solid formation: guide, parameters,
                             render settings, whether it is pending
-    --only id,id            limits --import (and --adopt) to those pieces
+    --only id,id            limits --adopt to those pieces
+
+Seeding guides from an Orthographic Studio export (`--import`,
+scripts/ortho-solids.ts) was removed on 2026-11-23 with the rest of the
+orthographic authoring route (plans/sculpt-guides.md).
 
 NAME is a formation's object name (`backdrop.roof`) or its piece id (`roof`).
 Building runs the Formations worker (formations/worker.py), one headless
@@ -32,7 +33,6 @@ the backdrop is rebuilt. Saves only with --save.
 """
 
 import json
-import math
 import os
 import sys
 import time
@@ -40,13 +40,12 @@ import zlib
 
 import bmesh
 import bpy
-from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "boulders"))
 import formations  # noqa: E402
-from formations import core, fitted, render, slate, worker  # noqa: E402
+from formations import core, render, slate, worker  # noqa: E402
 from formations import params as params_module  # noqa: E402
 
 COLLECTION, SOURCES = "Backdrop", "Backdrop sources"
@@ -57,19 +56,9 @@ PIXELS_PER_METRE = 100  # the level format's
 # under its surface.
 POOL_DROP = 0.02
 POOL_COLOUR = "#1b4657"  # water.ts's deep stop
-# How far under the water the solids' feet are sunk, screen metres (`sink`).
-SINK = 0.4
-# Pieces whose ceiling runs forward to the foreground, and the world y it
-# runs to: the formations' back (the Terraces and dark rocks stand 0.5 either
-# side of the plane). `extend`.
-EXTEND = {"roof": 0.5}
-# The extension stands this far (screen metres) above the start frame's top.
-EXTEND_CLEAR = 0.1
 # On an extended piece's solid: the least scale its stones are cut at, the
 # piece's own before the sweep (its vertices' median depth over the plane's).
 FLOOR_PROP = "backdrop_floor"
-# Sections tried along the view for the one the extension is swept from.
-EXTEND_SECTIONS = 40
 
 
 def log(msg):
@@ -78,14 +67,14 @@ def log(msg):
 
 def args():
     argv = sys.argv[sys.argv.index("--") + 1:]
-    opts = {"only": None, "save": False, "import": None, "adopt": False, "rebuild": None, "list": False,
+    opts = {"only": None, "save": False, "adopt": False, "rebuild": None, "list": False,
             "set": [], "render": []}
     pos = []
     it = iter(argv)
     for a in it:
         if a == "--only":
             opts["only"] = set(next(it).split(","))
-        elif a in ("--import", "--rebuild"):
+        elif a == "--rebuild":
             opts[a[2:]] = next(it)
         elif a in ("--set", "--render"):
             opts[a[2:]].append((next(it), next(it)))
@@ -94,7 +83,7 @@ def args():
         else:
             pos.append(a)
     if len(pos) != 1:
-        raise SystemExit("usage: backdrop.py -- level.json [--adopt] [--import solids.json] [--set NAME k=v,..] "
+        raise SystemExit("usage: backdrop.py -- level.json [--adopt] [--set NAME k=v,..] "
                          "[--render NAME k=v,..] [--rebuild changed|all|NAME,..] [--list] [--only id,..] [--save]")
     return pos[0], opts
 
@@ -140,133 +129,6 @@ def water_top(level, eye, half_width):
     if best is None:
         raise SystemExit("no water under the start frame to stand the pool on")
     return best
-
-
-def mapping(solids, eye, tan_half):
-    """The studio's frame onto the game's: `place(points)`, and its numbers."""
-    cam = solids["camera"]
-    studio_eye = cam["position"]
-    studio_tan = math.tan(math.radians(cam["fov"]) / 2)
-    water = next(o for o in solids["objects"] if o["kind"] == "water")
-    studio_water = max(v[2] for v in water["verts"])
-    s = tan_half / studio_tan
-
-    def place(points, k):
-        return [(eye[0] + s * k * (p[0] - studio_eye[0]), eye[1] + k * (p[1] - studio_eye[1]),
-                 eye[2] + s * k * (p[2] - studio_eye[2])) for p in points]
-
-    return s, studio_eye[2] - studio_water, place
-
-
-def sink(points, water_z, eye, distance):
-    """Drop every point under the water to SINK (screen metres, times its
-    depth over the plane's) under it. The studio's solids stop a few
-    centimetres under their pool, and the weathering rounds a stone's foot
-    up by more than that, so the boulders hung above the water (Tris,
-    2026-10-04: "there should be no floating rocks"); sunk, every stone that
-    reaches the water runs on under it."""
-    return [(x, y, water_z - SINK * (y - eye[1]) / distance) if z < water_z else (x, y, z) for x, y, z in points]
-
-
-def _section(bm, y):
-    """The solid's section at depth `y`, filled, as its own bmesh."""
-    c = bm.copy()
-    cut = bmesh.ops.bisect_plane(c, geom=c.verts[:] + c.edges[:] + c.faces[:],
-                                 plane_co=(0, y, 0), plane_no=(0, 1, 0))
-    edges = [e for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
-    out = bmesh.new()
-    verts = {}
-    for e in edges:
-        for v in e.verts:
-            if v not in verts:
-                verts[v] = out.verts.new((v.co.x, y, v.co.z))
-    out_edges = [out.edges.new((verts[a], verts[b])) for a, b in (e.verts for e in edges) if verts[a] is not verts[b]]
-    c.free()
-    bmesh.ops.triangle_fill(out, use_beauty=True, use_dissolve=False, edges=out_edges, normal=(0, 1, 0))
-    return out
-
-
-def _volume(ob):
-    bm = bmesh.new()
-    bm.from_mesh(ob.data)
-    v = bm.calc_volume()
-    bm.free()
-    return v
-
-
-def _boolean(ob, other, operation):
-    mod = ob.modifiers.new(operation.lower(), "BOOLEAN")
-    mod.operation = operation
-    mod.object = other
-    mod.solver = "MANIFOLD"
-    fitted._apply_modifiers(ob)
-
-
-def extend(ob, to_y, eye, distance, tan_half):
-    """Run the piece's ceiling forward to `to_y` (Tris, 2026-10-04: the roof
-    arch should "extend out all the way to the foreground geometry"). The
-    studio's roof is a slab 25 m back with only its stem and right wall
-    reaching forward, so from the side the sky showed between it and the
-    level. Its largest section along the view is swept forward to `to_y`
-    and cut off under the start frame's top edge (a plane through the eye),
-    EXTEND_CLEAR above it: from the start camera nothing of the sweep shows
-    and the opening shot is the studio's as before; from anywhere else the
-    ceiling runs on overhead to the level's own rock."""
-    bm = bmesh.new()
-    bm.from_mesh(ob.data)
-    ys = [v.co.y for v in bm.verts]
-    lo, hi = min(ys), max(ys)
-    best = None
-    for i in range(1, EXTEND_SECTIONS):
-        sec = _section(bm, lo + (hi - lo) * i / EXTEND_SECTIONS)
-        area = sum(f.calc_area() for f in sec.faces)
-        if best is None or area > best[0]:
-            if best is not None:
-                best[1].free()
-            best = (area, sec, lo + (hi - lo) * i / EXTEND_SECTIONS)
-        else:
-            sec.free()
-    bm.free()
-    _, sweep, y_sec = best
-    grown = bmesh.ops.extrude_face_region(sweep, geom=sweep.faces[:])
-    bmesh.ops.translate(sweep, vec=(0, to_y - y_sec, 0),
-                        verts=[g for g in grown["geom"] if isinstance(g, bmesh.types.BMVert)])
-    bmesh.ops.recalc_face_normals(sweep, faces=sweep.faces)
-    if sweep.calc_volume(signed=True) < 0:
-        bmesh.ops.reverse_faces(sweep, faces=sweep.faces)
-    me = bpy.data.meshes.new("extension")
-    sweep.to_mesh(me)
-    sweep.free()
-    ext = bpy.data.objects.new("extension", me)
-    bpy.context.scene.collection.objects.link(ext)
-    # Above the start frame's top: a box standing on the plane through the
-    # eye, tilted up by EXTEND_CLEAR at the gameplay plane.
-    tilt = math.atan(tan_half + EXTEND_CLEAR / distance)
-    size = 200.0
-    box = bmesh.new()
-    bmesh.ops.create_cube(box, size=1.0)
-    frame = Matrix.Translation(eye) @ Matrix.Rotation(tilt, 4, "X")
-    bmesh.ops.transform(box, verts=box.verts,
-                        matrix=frame @ Matrix.Translation((0, 0, size / 2)) @ Matrix.Diagonal((size, size, size, 1)))
-    bme = bpy.data.meshes.new("above")
-    box.to_mesh(bme)
-    box.free()
-    above = bpy.data.objects.new("above", bme)
-    bpy.context.scene.collection.objects.link(above)
-    _boolean(ext, above, "INTERSECT")
-    # The union is made on the sweep and handed to the solid: the solid's
-    # collection is hidden, and the depsgraph does not evaluate a hidden
-    # object's modifiers (the union added nothing).
-    before = _volume(ob)
-    _boolean(ext, ob, "UNION")
-    ob.data, ext.data = ext.data, ob.data
-    if _volume(ob) <= before:
-        raise SystemExit(f"{ob.name}: the ceiling's sweep added nothing")
-    for o in (ext, above):
-        me = o.data
-        bpy.data.objects.remove(o)
-        bpy.data.meshes.remove(me)
-    log(f"{ob.get('backdrop_id')}: ceiling swept forward from y {y_sec:.2f} to {to_y:.2f}")
 
 
 def mesh_object(name, verts, faces, collection):
@@ -412,41 +274,6 @@ def adopt(opts):
         bpy.data.collections.remove(src)
 
 
-def seed_from_studio(solids_path, opts, eye, distance, tan_half, water_z):
-    """New guides from the studio's solids (docstring), built."""
-    solids = json.load(open(solids_path))
-    s, studio_height, place = mapping(solids, eye, tan_half)
-    k = (eye[2] - water_z) / (studio_height * s)
-    log(f"import {solids.get('source')}: s {s:.4f}, k {k:.4f}: across x{s * k:.3f}, along x{k:.3f}")
-    have = {piece_id(ob.name) for ob in solid_formations()}
-    tmp = bpy.data.collections.new("Backdrop import")
-    bpy.context.scene.collection.children.link(tmp)
-    try:
-        for o in solids["objects"]:
-            if o["kind"] != "rock":
-                continue
-            named = opts["only"] is not None and o["id"] in opts["only"]
-            if opts["only"] is not None and not named:
-                continue
-            if o["id"] in have and not named:
-                log(f"{o['id']}: kept the scene's formation")
-                continue
-            guide = mesh_object("guide", sink(place(o["verts"], k), water_z, eye, distance), o["tris"], tmp)
-            params = {"seed": zlib.crc32(o["id"].encode()) % 100000}
-            if o["id"] in EXTEND:
-                extend(guide, EXTEND[o["id"]], eye, distance, tan_half)
-            replace(PREFIX + o["id"])
-            ob = create(PREFIX + o["id"], guide, params)
-            ob["formation_import"] = json.dumps({"source": solids.get("source"), "object": o["id"],
-                                                 "mapping": {"across": s * k, "along": k}})
-    finally:
-        for ob in list(tmp.objects):
-            me = ob.data
-            bpy.data.objects.remove(ob)
-            bpy.data.meshes.remove(me)
-        bpy.data.collections.remove(tmp)
-
-
 def set_params(name, pairs):
     ob = find(name)
     if not params_module.editable(ob):
@@ -521,9 +348,6 @@ def main():
     built = False
     if opts["adopt"]:
         adopt(opts)
-        built = True
-    if opts["import"]:
-        seed_from_studio(opts["import"], opts, eye, distance, tan_half, water_z)
         built = True
     for name, pairs in opts["set"]:
         set_params(name, pairs)

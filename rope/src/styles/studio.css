@@ -349,3 +349,43 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-stack-intersect .ed-stack-mode { color: #e3b45c; border-color: #e3b45c; }
 .studio .ed-btn.ed-attention { border-color: var(--studio-warm); color: var(--studio-warm); }
 @media (max-width: 600px) { .studio .ed-jobs { right: 8px; bottom: 8px; width: min(34ch, calc(100vw - 16px)); } }
+/* Workspaces (editor/workspaces.ts): tabs centred in the command bar, as
+   Blender's run along its top bar; each workspace's dock groups its tools
+   under small headings. */
+.studio .ed-ws-tabs { display: flex; margin-inline: auto; border: 1px solid var(--studio-line); border-radius: 5px; overflow: hidden; }
+.studio .ed-ws-tabs .ed-btn { border: 0; border-radius: 0; min-width: 11ch; }
+.studio .ed-ws-tabs .ed-btn + .ed-btn { border-left: 1px solid var(--studio-line); }
+.studio .ed-ws-tabs .ed-btn.active { border-color: var(--studio-line); }
+.studio .ed-tool-group { grid-column: 1 / -1; color: var(--studio-muted); font-weight: 600; padding-top: .35lh; }
+.studio .ed-tools > .ed-tool-group:first-child { padding-top: 0; }
+.studio .ed-ws-dock > .ed-ws-hint { grid-column: 1 / -1; }
+.studio .ed-ws-dock > .ed-ws-wide { grid-column: 1 / -1; }
+/* Centred on the window where the file buttons leave room for it. */
+@media (min-width: 1400px) {
+  .studio .ed-ws-tabs { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); }
+  .studio .ed-ws-tabs .ed-btn { min-width: 13ch; }
+}
+.studio .ed-bar .ed-ws-dock { grid-template-columns: repeat(2,minmax(0,1fr)); }
+/* A row of mutually exclusive buttons (the Formations dock's Guide / Rock / Both). */
+.studio .ed-seg { display: flex; border: 1px solid var(--studio-line); border-radius: 5px; overflow: hidden; }
+.studio .ed-seg .ed-btn { flex: 1; border: 0; border-radius: 0; }
+.studio .ed-seg .ed-btn + .ed-btn { border-left: 1px solid var(--studio-line); }
+.studio .ed-seg .ed-btn.active { border-color: var(--studio-line); }
+/* Sculpt mode (editor/sculpt.ts): while it is on, the Formations dock is the
+   mode's alone; its controls are the dock's own grid cells. */
+.studio .ed-ws-dock > .ed-sculpt-dock { display: none; }
+.studio .ed-ws-dock.ed-sculpting > .ed-sculpt-dock { display: contents; }
+.studio .ed-ws-dock.ed-sculpting > :not(.ed-sculpt-dock) { display: none !important; }
+.studio .ed-sculpt-dock > :is(.ed-ws-wide,.ed-ws-hint) { grid-column: 1 / -1; }
+.studio .ed-sculpt-dock > .ed-inline { display: flex; align-items: center; justify-content: space-between; gap: 1ch; }
+.studio .ed-sculpt-dock > .ed-inline > .ed-num { width: 9ch; }
+/* The view cube and the lens (editor/viewCube.ts): over the viewport's top
+   right corner, clear of the inspector. */
+.studio .ed-viewnav { position: absolute; top: 116px; right: calc(var(--inspector-width) + 12px); display: flex; flex-direction: column; align-items: center; gap: .5lh; pointer-events: auto; }
+/* editor.html stacks its two full-window canvases with `canvas { position:
+   absolute; inset: 0 }`; the cube's is in the flow. */
+.studio .ed-viewnav .ed-viewcube { display: block; position: static; inset: auto; }
+.studio .ed-viewnav .ed-lens { background: var(--studio-panel); }
+.studio .ed-viewnav .ed-lens .ed-btn { min-width: 7ch; }
+@media (max-width: 850px) { .studio .ed-viewnav { top: 150px; } }
+@media (max-width: 600px) { .studio .ed-viewnav { top: 214px; right: 8px; } }

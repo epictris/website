@@ -207,6 +207,39 @@
           "min": 5,
           "max": 1000,
           "default": 60.0
+        },
+        {
+          "key": "edgeRadius",
+          "label": "Edge radius",
+          "description": "How far every convex edge of the guide is rounded over; 0 keeps its corners. Parts thinner than twice this go",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0,
+          "max": 10,
+          "softmax": 3,
+          "default": 0.525
+        },
+        {
+          "key": "mergeAngle",
+          "label": "Merge angle",
+          "description": "Degrees within which neighbouring faces merge into one flat facet; higher gives fewer, broader planes",
+          "type": "float",
+          "min": 1,
+          "max": 30,
+          "default": 8.0
+        },
+        {
+          "key": "bulgeSize",
+          "label": "Bulge size",
+          "description": "How broad the bulge's swells are: small dents each face, large leans whole faces",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.1,
+          "max": 20,
+          "softmax": 6,
+          "default": 0.7
         }
       ],
       "variants": [
@@ -215,7 +248,10 @@
           "label": "Boulder",
           "description": "Irregular polygon cells with the original boulder surface",
           "hidden": [
-            "jointAspect"
+            "bulgeSize",
+            "edgeRadius",
+            "jointAspect",
+            "mergeAngle"
           ],
           "labels": {}
         },
@@ -223,7 +259,11 @@
           "id": "cliff",
           "label": "Cliff",
           "description": "Directional fractures, anchored stones and crisp broad cleavage planes",
-          "hidden": [],
+          "hidden": [
+            "bulgeSize",
+            "edgeRadius",
+            "mergeAngle"
+          ],
           "labels": {}
         },
         {
@@ -231,8 +271,11 @@
           "label": "Wall",
           "description": "Overlapping vertical slabs fused over the guide into one continuous rock face",
           "hidden": [
+            "bulgeSize",
             "curveTurn",
-            "knub"
+            "edgeRadius",
+            "knub",
+            "mergeAngle"
           ],
           "labels": {
             "jointAspect": "Slab height / width"
@@ -243,9 +286,12 @@
           "label": "Stones",
           "description": "Whole stones packed into the guide, each a corner-cut, pillowed, chiselled box: recipe F, the cave sheets' rock-b (docs/cave-look.md)",
           "hidden": [
+            "bulgeSize",
             "curveTurn",
+            "edgeRadius",
             "jointAspect",
             "knub",
+            "mergeAngle",
             "surfaceRelief"
           ],
           "labels": {}

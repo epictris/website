@@ -19,7 +19,12 @@ const K = new Uint32Array([
 ]);
 
 export function sha256Hex(text: string): string {
-  const data = new TextEncoder().encode(text);
+  return sha256Bytes(new TextEncoder().encode(text));
+}
+
+// The same of raw bytes: a sculpted guide's stored mesh is named by it
+// (formation/meshBin.ts), a few megabytes in some tens of milliseconds.
+export function sha256Bytes(data: Uint8Array): string {
   const bits = data.length * 8;
   const padded = new Uint8Array(((data.length + 9 + 63) >> 6) << 6);
   padded.set(data);

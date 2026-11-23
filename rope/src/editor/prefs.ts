@@ -19,6 +19,12 @@ export interface EditorViewSettings {
   water: boolean;
   roots: boolean;
   scene: boolean;
+  // The Formations workspace's "Guides" and "Rocks" (docs/editor.md).
+  guides: boolean;
+  rocks: boolean;
+  // The Decorations workspace's "Collision": the collision outlines drawn
+  // over the rocks, for reference (docs/editor.md).
+  collision: boolean;
 }
 
 export const VIEW_SETTINGS_KEY = "rope.editor.view";
@@ -32,6 +38,9 @@ const DEFAULTS: EditorViewSettings = {
   water: true,
   roots: true,
   scene: true,
+  guides: true,
+  rocks: true,
+  collision: false,
 };
 
 export function readViewSettings(): EditorViewSettings {

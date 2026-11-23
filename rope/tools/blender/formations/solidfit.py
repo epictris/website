@@ -149,9 +149,14 @@ UNFOLD_MAX, UNFOLD_KEEP = 60, 0.95
 # - jointed: hierarchical cleavage instead of the earlier polygon cells;
 # - jointAspect: primary vertical fracture length relative to its width;
 # - wall: the Wall variant (wall.py); stones: the Stones variant (stones.py);
-#   faceted: the Faceted variant (faceted.py).
+#   faceted: the Faceted variant (faceted.py);
+# - edgeRadius, mergeAngle, bulgeSize: the Faceted variant's edge rounding
+#   (metres), planar dissolve (degrees) and bulge period (metres); at their
+#   defaults a Facet size 0.5 rock (9 of ball.json's 11 Faceted rocks) is
+#   rounded as it was before they existed (1.5 and 2 facets).
 PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0, "surfaceRelief": 0.5,
-          "jointed": True, "jointAspect": 2.8, "wall": False, "stones": False, "faceted": False}
+          "jointed": True, "jointAspect": 2.8, "wall": False, "stones": False, "faceted": False,
+          "edgeRadius": 0.525, "mergeAngle": 8.0, "bulgeSize": 0.7}
 
 
 def resolved(params):

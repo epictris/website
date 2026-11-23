@@ -10,12 +10,11 @@ import * as THREE from "three";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { Vec2 } from "../engine/vec2";
 import { showToast } from "../render/toast";
-import { solidMesh } from "../formation/solid";
-import { insertPoint, newPrimitive, nodeAt, nodeLabel, pointsOf, removePoint, replaceAt, threeOutlinePreset } from "../formation/solidTree";
+import { meshLeafTree, needsApply, newPrimitive, nodeAt, nodeLabel, replaceAt } from "../formation/solidTree";
 import { appendEntry, isGroup, moveEntry, removeEntry, setMode, stackOf } from "../formation/solidStack";
 import { MESHES_API } from "../formation/store";
 import { scaleLevelData, type LevelData, type SolidNode, type SolidPrim } from "../level/levelFormat";
-import { guideBounds, loadedMeshes, requestMeshes, type SolidSel } from "./solidGuides";
+import { guideBounds, guideMesh, requestMeshes, storeMesh, type SolidSel } from "./solidGuides";
 import { formationHash, generatorsFor, isStale, newFormationId, resolvedParams, variantOf, visibleFields, FORMATION_SCHEMA } from "../formation/recipe";
 import { metaFile, type FormationMeta } from "../formation/store";
 import type { FormationGenerator, SolidVariant } from "../level/levelFormat";
@@ -28,8 +27,6 @@ import { describe, fieldRow } from "./panelUi";
 export interface FormationHost {
   model(): EdModel;
   jobs: FormationJobs;
-  // The decorations on a formation, listed in its section.
-  decorations?: { buildList(parent: HTMLElement, f: EdItem): void };
   // The solid guide's node the panel has picked, which the gizmo moves.
   solidSel(): SolidSel | null;
   setSolidSel(sel: SolidSel | null): void;
@@ -38,6 +35,10 @@ export interface FormationHost {
   rebuildInspector(): void;
   // A label for the body in the jobs panel.
   bodyName(bodyId: number): string;
+  // Sculpt mode on this formation's guide (editor/sculpt.ts), where the
+  // editor has it, and the formation item being sculpted now.
+  sculpt?(item: EdItem): void;
+  sculpting?(): number | null;
 }
 
 // What the store says of a built formation, by hash: fetched once each.
@@ -98,8 +99,9 @@ const div = (cls: string, text = ""): HTMLDivElement => {
   return d;
 };
 
-// Ask for a build of `item`'s formation as it stands.
-function ask(host: FormationHost, item: EdItem, kind: "geometry" | "bake"): void {
+// Ask for a build of `item`'s formation as it stands (also the Formations
+// workspace's "Generate N out of date").
+export function requestFormationBuild(host: FormationHost, item: EdItem, kind: "geometry" | "bake"): void {
   const f = item.formation!;
   host.jobs.ask(kind, { ...f }, host.bodyName(item.bodyId)).then(
     () => host.rebuildInspector(),
@@ -327,12 +329,12 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
   const gen = button(f.built ? "Regenerate" : "Generate", () => {
     // A draft goes into the level first, with the recipe as it was set.
     const target = isDraft ? commitDraft(outerHost, bodyId, item) : item;
-    ask(outerHost, target, "geometry");
+    requestFormationBuild(outerHost, target, "geometry");
     if (isDraft) outerHost.rebuildInspector();
   }, "Build the rock from the guide and the parameters as they stand. Fast: the iteration look, no bake.");
   gen.classList.toggle("ed-attention", stale);
   const baked = !!f.built && !stale && f.built.tiers.length > 0;
-  const bake = button(baked ? "Baked" : "Bake", () => ask(host, item, "bake"),
+  const bake = button(baked ? "Baked" : "Bake", () => requestFormationBuild(host, item, "bake"),
     "Bake the rock's textures (Cycles, on the GPU) and its lower tiers: the finished look. One bake runs at a time, and none while ▶ Test runs.");
   bake.disabled = baked || stale || !f.built;
   actions.append(gen);
@@ -370,14 +372,6 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
     row.appendChild(pick);
     describe(row, "Which tier of the bake the game loads. Automatic chooses by how far behind the play plane the rock stands.");
     parent.appendChild(row);
-  }
-
-  // What grows on it.
-  if (host.decorations) {
-    const head = div("ed-hint", "Decorations");
-    head.style.marginTop = "0.5lh";
-    parent.appendChild(head);
-    host.decorations.buildList(parent, item);
   }
 
   if (f.guide.kind === "solid") {
@@ -504,8 +498,6 @@ export function olderFormations(model: EdModel, fingerprint: string): EdItem[] {
   return model.items.filter((i) => i.object === "formation" && i.formation?.built && i.formation.built.generatorHash !== fingerprint);
 }
 
-export { ask as askFormationJob };
-
 // --- solid guides -------------------------------------------------------------
 
 const DEG = 180 / Math.PI;
@@ -513,7 +505,12 @@ const DEG = 180 / Math.PI;
 // A new body behind the play plane holding nothing but a formation on a solid
 // guide (a background guide: docs/formations.md), at `at` in the level, made
 // through the editor's own load so it is a body like any other.
-export function createBackdrop(host: FormationHost, at: { x: number; y: number }): EdItem | null {
+//
+// `shape` (the Formations dock's Primitives, Shift+A with nothing selected)
+// makes the guide that one primitive at the body's origin, and `at.z` stands
+// the body at that depth: the primitive appears where the view is looking.
+// Without it, the default backdrop: a box 2.5 m behind the plane.
+export function createBackdrop(host: FormationHost, at: { x: number; y: number; z?: number }, shape?: SolidPrim): EdItem | null {
   const model = host.model();
   const taken = new Set(model.items.flatMap((i) => (i.formation ? [i.formation.id] : [])));
   const data: LevelData = {
@@ -530,7 +527,7 @@ export function createBackdrop(host: FormationHost, at: { x: number; y: number }
         generator: lastRecipe("solid")?.generator ?? "solid",
         variant: lastRecipe("solid")?.variant ?? "cliff",
         params: lastRecipe("solid")?.params ?? {},
-        guide: { kind: "solid", tree: { op: "union", of: [{ prim: "box", size: [3, 2, 2], pos: [0, 1, -2.5] }] } },
+        guide: { kind: "solid", tree: { op: "union", of: [shape ?? { prim: "box", size: [3, 2, 2], pos: [0, 1, -2.5] }] } },
       },
     }],
   };
@@ -542,7 +539,7 @@ export function createBackdrop(host: FormationHost, at: { x: number; y: number }
   // A backdrop is a 3D body (`LevelBodyData.space`): only drawn, so free to
   // stand off the plane and tilt, its frame stated where it was made.
   model.bodyFrames.set(made.bodyId, { pos: new Vec2(at.x, at.y), rot: 0 });
-  model.bodies3d.set(made.bodyId, { z: 0, tilt: [0, 0] });
+  model.bodies3d.set(made.bodyId, { z: at.z ?? 0, tilt: [0, 0] });
   host.markDirty();
   return made;
 }
@@ -565,15 +562,40 @@ export function addShapeToGuide(host: FormationHost, item: EdItem, shape: SolidN
   const r = appendEntry(guide.tree, shape, "add");
   item.formation = { ...item.formation!, guide: { kind: "solid", tree: r.tree } };
   host.markDirty();
-  host.setSolidSel({ itemId: item.id, path: stackOf(r.tree)[r.index]?.path ?? [], point: null });
+  host.setSolidSel({ itemId: item.id, path: stackOf(r.tree)[r.index]?.path ?? [] });
+}
+
+// APPLY (Blender's "apply the modifiers", plans/sculpt-guides.md): the whole
+// stack meshed into one stored mesh, and the tree replaced by that one mesh
+// leaf, as sculpting needs (a sculpt edits a mesh, not a tree). Destructive
+// and one undo step, as Union/Subtract/Intersect are. True once the guide is
+// a single mesh leaf; false (with a notice) when it cannot be: the tree makes
+// nothing, or a mesh it names is still loading.
+export function applyGuide(host: FormationHost, item: EdItem): boolean {
+  const guide = item.formation?.guide;
+  if (guide?.kind !== "solid") return false;
+  const tree = guide.tree;
+  if (!needsApply(tree)) return true;
+  if (requestMeshes(tree, () => host.rebuildInspector())) {
+    showToast("The guide's meshes are still loading; Apply again in a moment.", "warn");
+    return false;
+  }
+  const meshed = guideMesh(tree);
+  if (!meshed.mesh) {
+    showToast(`Nothing to apply: ${meshed.error ?? "the guide makes no solid"}.`, "warn");
+    return false;
+  }
+  host.beginAction();
+  item.formation = { ...item.formation!, guide: { kind: "solid", tree: meshLeafTree(storeMesh(meshed.mesh).name) } };
+  host.markDirty();
+  host.setSolidSel(null);
+  return true;
 }
 
 // The shapes Shift+A and the panel offer, by label.
 export const SHAPE_KINDS = [
   { label: "Box", kind: "box" },
-  { label: "Ellipsoid", kind: "ellipsoid" },
-  { label: "Hull", kind: "hull" },
-  { label: "Outline", kind: "extrude" },
+  { label: "Cylinder", kind: "cylinder" },
 ] as const;
 
 function buildSolidGuideSection(host: FormationHost, parent: HTMLElement, item: EdItem): void {
@@ -593,8 +615,16 @@ function buildSolidGuideSection(host: FormationHost, parent: HTMLElement, item: 
     setTree(next, select);
   };
 
-  // Whether the tree makes a solid at all, live.
-  const meshed = solidMesh(tree, loadedMeshes());
+  // Being sculpted: the stack is the sculpt's until it is left (an edit here
+  // would be a second author of the guide).
+  if (host.sculpting?.() === item.id) {
+    parent.appendChild(div("ed-hint", "Sculpting this guide: Draw (D), Grab (G), Cut (C). Done or Esc leaves and saves it; the stack is editable again then."));
+    return;
+  }
+
+  // Whether the tree makes a solid at all, live (kept per tree: the panel is
+  // rebuilt on every selection change, and a sculpt is costly to mesh).
+  const meshed = guideMesh(tree);
   const missing = requestMeshes(tree, () => host.rebuildInspector());
   parent.appendChild(div(meshed.mesh ? "ed-hint" : "ed-hint ed-formation-status ed-stale",
     meshed.mesh
@@ -606,12 +636,12 @@ function buildSolidGuideSection(host: FormationHost, parent: HTMLElement, item: 
   // so the gizmo); its badge cycles the mode; drag a row to reorder.
   const stack = stackOf(tree);
   const pathOfIndex = (t: SolidNode, i: number): number[] => stackOf(t)[i]?.path ?? [];
-  const pickIndex = (t: SolidNode, i: number): SolidSel => ({ itemId: item.id, path: pathOfIndex(t, i), point: null });
+  const pickIndex = (t: SolidNode, i: number): SolidSel => ({ itemId: item.id, path: pathOfIndex(t, i) });
   const list = div("ed-solid-tree ed-stack");
   let dragged: number | null = null;
   stack.forEach((entry, i) => {
     const row = div(`ed-solid-row ed-stack-row ed-stack-${entry.mode}`);
-    const on = picked !== null && picked.path.join(",") === entry.path.join(",") && picked.point === null;
+    const on = picked !== null && picked.path.join(",") === entry.path.join(",");
     row.classList.toggle("sel", on);
     // The mode: the base is what everything below works on, so it has none.
     const badge = document.createElement("button");
@@ -669,15 +699,24 @@ function buildSolidGuideSection(host: FormationHost, parent: HTMLElement, item: 
   const adds = div("ed-row");
   adds.append(
     button("+ Box", () => add(newPrimitive("box", centre))),
-    button("+ Ellipsoid", () => add(newPrimitive("ellipsoid", centre))),
-    button("+ Hull", () => add(newPrimitive("hull", centre)), "A handful of points dragged in 3D: leaning slabs, wedges, boulders."),
-    button("+ Outline", () => add(newPrimitive("extrude", centre)), "An outline pushed through a depth, with an optional taper."),
-    button("+ Three outlines", () => add(threeOutlinePreset([3, 2, 2], centre)),
-      "The Orthographic Studio's solid: the intersection of a front, a top and a side outline, each edited in its own plane."),
+    button("+ Cylinder", () => add(newPrimitive("cylinder", centre))),
     button("Import mesh…", () => importMesh((name) => add({ prim: "mesh", file: name, pos: [0, 0, 0] })),
-      "A fixed closed mesh (.glb or .gltf), placed, turned and scaled here and reshaped only in Blender."),
+      "A fixed closed mesh (.glb or .gltf), placed, turned and scaled here, and sculpted like any guide once applied."),
   );
   parent.appendChild(adds);
+  // Apply, and Sculpt (which applies first when it has to).
+  const shaping = div("ed-row");
+  const apply = button("Apply", () => applyGuide(host, item),
+    "Mesh the whole stack into one sculptable mesh (Blender's Apply): the shapes become one, as one undo step");
+  apply.disabled = !needsApply(tree) || !meshed.mesh;
+  shaping.appendChild(apply);
+  if (host.sculpt) {
+    const sculpt = button("Sculpt", () => host.sculpt!(item),
+      "Sculpt this guide: Draw (D), Grab (G), Cut (C); Ctrl+Tab, Esc or Done leaves. Applies the stack first.");
+    sculpt.disabled = !meshed.mesh;
+    shaping.appendChild(sculpt);
+  }
+  parent.appendChild(shaping);
 
   const node = picked ? nodeAt(tree, picked.path) : null;
   if (!picked || !node) return;
@@ -725,7 +764,7 @@ function buildSolidGuideSection(host: FormationHost, parent: HTMLElement, item: 
     s[k] = Math.max(0.01, v);
     return { ...current(), scale: s };
   }));
-  if (node.prim === "box" || node.prim === "ellipsoid") {
+  if (node.prim === "box" || node.prim === "cylinder") {
     (["x", "y", "z"] as const).forEach((axis, k) => num(`size ${axis} (m)`, () => (current() as { size: number[] }).size[k]!, (v) => {
       const c = current() as Extract<SolidPrim, { size: unknown }>;
       const s: [number, number, number] = [...c.size];
@@ -733,34 +772,6 @@ function buildSolidGuideSection(host: FormationHost, parent: HTMLElement, item: 
       return { ...c, size: s };
     }));
   }
-  if (node.prim === "extrude") {
-    num("depth (m)", () => (current() as { length: number }).length, (v) => ({ ...(current() as Extract<SolidPrim, { prim: "extrude" }>), length: Math.max(0.01, v) }));
-    num("taper", () => (current() as { taper?: number }).taper ?? 0, (v) => ({ ...(current() as Extract<SolidPrim, { prim: "extrude" }>), taper: Math.max(0, Math.min(1, v)) }), 0.05);
-  }
-
-  // Its points: picked to drag with the gizmo; added and taken away here.
-  const points = pointsOf(node);
-  if (!points) return;
-  const pts = div("ed-solid-tree");
-  points.forEach((p, k) => {
-    const row = div("ed-solid-row");
-    row.textContent = `point ${k + 1}: ${p.map((c) => c.toFixed(2)).join(", ")}`;
-    row.classList.toggle("sel", picked.point === k);
-    row.addEventListener("click", () => host.setSolidSel({ itemId: item.id, path, point: k }));
-    pts.appendChild(row);
-  });
-  parent.appendChild(pts);
-  const pointActions = div("ed-row");
-  const k = picked.point;
-  const plus = button("+ Point", () => edit(replaceAt(tree, path, (n) => insertPoint(n as SolidPrim, k ?? points.length - 1)), { itemId: item.id, path, point: (k ?? points.length - 1) + 1 }),
-    "A point after the picked one, between it and the next.");
-  const minus = button("− Point", () => k !== null && edit(replaceAt(tree, path, (n) => removePoint(n as SolidPrim, k)), { itemId: item.id, path, point: null }));
-  minus.disabled = k === null;
-  pointActions.append(plus, minus);
-  parent.appendChild(pointActions);
-  parent.appendChild(div("ed-hint", node.prim === "extrude"
-    ? "Pick a point and drag it with the gizmo: it stays in the outline's plane."
-    : "Pick a point and drag it with the gizmo in 3D."));
 }
 
 // Read a .glb or .gltf the author picks, weld it, and keep it in the store as
