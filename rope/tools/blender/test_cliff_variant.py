@@ -82,10 +82,18 @@ with tempfile.TemporaryDirectory(prefix='cliff-variant-test-') as folder:
     rock['formation_recipe'] = json.dumps(built)
     params.load(rock)
     assert rock.formation_params.variant == 'stones' and not params.changed(rock)
+    named = dict(recipe, variant='faceted', params=dict(settings, stones=True))
+    worker.prepare(named, folder)
+    built = json.loads((folder/'recipe.json').read_text())
+    assert built['variant'] == 'faceted' and built['params']['faceted']
+    assert not built['params']['stones'] and not built['params']['wall'] and not built['params']['jointed']
+    rock['formation_recipe'] = json.dumps(built)
+    params.load(rock)
+    assert rock.formation_params.variant == 'faceted' and not params.changed(rock)
     try:
         worker.prepare(dict(recipe, variant='unknown'), folder)
     except ValueError:
         pass
     else:
         raise AssertionError('Unknown variant was silently accepted')
-print('SOLID_VARIANTS_OK: Boulder/Cliff/Wall/Stones UI, legacy compatibility, named recipes, unchanged geometry', flush=True)
+print('SOLID_VARIANTS_OK: Boulder/Cliff/Wall/Stones/Faceted UI, legacy compatibility, named recipes, unchanged geometry', flush=True)

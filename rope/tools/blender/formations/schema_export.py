@@ -37,7 +37,7 @@ VARIANT_FIELDS = params.VARIANT_FIELDS
 # the Blender test.
 _KEY = {field: key for key, field in params.FIELDS["solid"].items()}
 HIDDEN = {variant: {_KEY[field] for field in fields} for variant, fields in params.HIDDEN.items()}
-LABELS = {"wall": {"jointAspect": "Slab height / width"}}
+LABELS = {variant: {_KEY[field]: label for field, label in labels.items()} for variant, labels in params.LABELS.items()}
 
 
 def prop_of(name):

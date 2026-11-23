@@ -46,6 +46,49 @@ def log(msg):
     print(f"[formation_export] {msg}", flush=True)
 
 
+def tessellate(bm, mesh):
+    """Triangulate `bm`, just loaded from `mesh`, along `mesh`'s own loop
+    triangles: the split Blender's tessellation makes, which the glTF exporter
+    ships (the baked rock) and the growths grow on (stampbrush host_world).
+
+    A solid rock's faces are planar dissolves, n-gons up to the dissolve's
+    angle out of plane (a Faceted rock's: 8 degrees, 5.8 cm across a metre
+    facet), so two triangulations of one are two surfaces. bmesh's own
+    (`bmesh.ops.triangulate`, BEAUTY) split 161 of a Faceted rock's 380
+    triangles the other way, and the editor drew a rock that stood through the
+    moss grown on it (2026-11-23: rock-coloured triangles cut out of a texture
+    moss, its shell 3 mm over the tessellation and 6 cm under the drawn one).
+    Each n-gon is cut along its loop triangles' diagonals (`face_split` keeps
+    the face's attributes on both pieces)."""
+    mesh.calc_loop_triangles()
+    n = len(mesh.loop_triangles)
+    corners = np.empty(3 * n, np.int32)
+    mesh.loop_triangles.foreach_get("vertices", corners)
+    owner = np.empty(n, np.int32)
+    mesh.loop_triangles.foreach_get("polygon_index", owner)
+    corners = corners.reshape(-1, 3)
+    bm.verts.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    faces = list(bm.faces)  # in the mesh's polygon order, as from_mesh loads them
+    for pi in np.unique(owner):
+        face = faces[pi]
+        if len(face.verts) == 3:
+            continue
+        ring = [v.index for v in face.verts]
+        rim = {frozenset(e) for e in zip(ring, ring[1:] + ring[:1])}
+        cuts = {frozenset(e) for a, b, c in corners[owner == pi].tolist() for e in ((a, b), (b, c), (c, a))} - rim
+        pieces = [face]
+        for cut in cuts:
+            va, vb = (bm.verts[i] for i in cut)
+            inside = [f for f in pieces if va in f.verts and vb in f.verts]
+            if len(inside) != 1:
+                raise RuntimeError(f"face {pi}: its loop triangles' diagonal {sorted(cut)} lies in {len(inside)} of its pieces")
+            new, _loop = bmesh.utils.face_split(inside[0], va, vb)
+            pieces.append(new)
+    if any(len(f.verts) != 3 for f in bm.faces):
+        raise RuntimeError("tessellate left a face that is not a triangle")
+
+
 def section_loops(mesh):
     """The closed loops where `mesh` (object space) crosses Blender y = 0, each
     a list of [x, z]. The rock is a closed manifold, so every crossing closes;
@@ -54,7 +97,7 @@ def section_loops(mesh):
     bm = bmesh.new()
     try:
         bm.from_mesh(mesh)
-        bmesh.ops.triangulate(bm, faces=bm.faces[:])
+        tessellate(bm, mesh)
         cut = bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-7,
                                      plane_co=(0, 0, 0), plane_no=(0, 1, 0))
         edges = [e for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
@@ -132,12 +175,13 @@ def edge_attributes(mesh):
               rock turns convex there and negative where it is concave; the
               same at all three corners.
 
-    The mesh is triangulated first (a face attribute is copied to the pieces).
+    The mesh is triangulated first, as Blender tessellates it (`tessellate`;
+    a face attribute is copied to the pieces).
     Edges shared by two faces of one plane, and boundary edges, are 0."""
     bm = bmesh.new()
     try:
         bm.from_mesh(mesh)
-        bmesh.ops.triangulate(bm, faces=bm.faces[:])
+        tessellate(bm, mesh)
         bm.normal_update()
         bm.faces.ensure_lookup_table()
         n = len(bm.faces)
@@ -372,4 +416,5 @@ def main():
     print("FORMATION_EXPORT_OK", flush=True)
 
 
-main()
+if __name__ == "__main__":
+    main()

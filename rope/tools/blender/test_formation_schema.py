@@ -71,6 +71,7 @@ class Settings:
         self.jointed = variant == "cliff"
         self.wall = variant == "wall"
         self.stones = variant == "stones"
+        self.faceted = variant == "faceted"
 
 
 key_of = {g: {prop: key for key, prop in fields.items()} for g, fields in params.FIELDS.items()}

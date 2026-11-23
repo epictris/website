@@ -32,19 +32,25 @@ FIELDS = {
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
                  "edgeBevelWidth": "edge_bevel"},
     "solid": {"seed": "seed", "stoneSize": "stone_size", "surfaceRelief": "surface_relief",
-              "jointed": "jointed", "wall": "wall", "stones": "stones", "jointAspect": "joint_aspect", "knub": "knub",
-              "curveTurn": "curve_turn"},
+              "jointed": "jointed", "wall": "wall", "stones": "stones", "faceted": "faceted",
+              "jointAspect": "joint_aspect", "knub": "knub", "curveTurn": "curve_turn"},
 }
 # The solid fields the variant sets, never shown as themselves.
-VARIANT_FIELDS = {"jointed", "wall", "stones"}
+VARIANT_FIELDS = {"jointed", "wall", "stones", "faceted"}
 # The solid fields a variant does not use, by its field name.
 HIDDEN = {"wall": {"knub", "curve_turn"}, "boulder": {"joint_aspect"},
-          "stones": {"knub", "curve_turn", "joint_aspect", "surface_relief"}}
+          "stones": {"knub", "curve_turn", "joint_aspect", "surface_relief"},
+          "faceted": {"knub", "curve_turn", "joint_aspect"}}
+# The label a solid field takes under a variant, by its field name.
+LABELS = {"wall": {"joint_aspect": "Slab height / width"},
+          "faceted": {"stone_size": "Facet size", "surface_relief": "Bulge"}}
 FITTED = GENERATORS["fitted"]
 SOLID = GENERATORS["solid"]
 
 
 def _variant_get(settings):
+    if settings.faceted:
+        return 4
     if settings.stones:
         return 3
     if settings.wall:
@@ -56,6 +62,7 @@ def _variant_set(settings, value):
     settings.jointed = value == 1
     settings.wall = value == 2
     settings.stones = value == 3
+    settings.faceted = value == 4
 
 
 class FormationParams(bpy.types.PropertyGroup):
@@ -108,6 +115,7 @@ class FormationParams(bpy.types.PropertyGroup):
                          description="Long primary fractures and clustered secondary breaks in one rock mass")
     wall: BoolProperty(default=False, description="Build overlapping vertical slabs on the guide")
     stones: BoolProperty(default=False, description="Pack whole recipe F stones into the guide")
+    faceted: BoolProperty(default=False, description="Round the guide and cut it into broad planes")
     variant: EnumProperty(name="Variant", items=SOLID_VARIANTS,
                           get=_variant_get, set=_variant_set,
                           description="Rock generation style; existing size and relief settings are retained")
@@ -148,8 +156,9 @@ def draw(layout, settings, solid):
             continue
         if solid and field in HIDDEN.get(variant, ()):
             continue
-        if field == 'joint_aspect' and settings.wall:
-            layout.prop(settings, field, text='Slab height / width')
+        label = LABELS.get(variant, {}).get(field) if solid else None
+        if label:
+            layout.prop(settings, field, text=label)
         else:
             layout.prop(settings, field)
 

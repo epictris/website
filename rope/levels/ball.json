@@ -4018,6 +4018,53 @@
           "id": 154,
           "x": 352.76546869845225,
           "y": 850.6462361486288
+        },
+        {
+          "type": "decoration",
+          "id": "ivy-ied8d",
+          "kind": "ivy",
+          "formation": "jrj0s8yr",
+          "anchor": {
+            "p": [
+              486.3907581682529,
+              -911.8684687567344,
+              4.693524638164859
+            ],
+            "n": [
+              -0.7973203525398299,
+              -0.603556339893602,
+              0
+            ]
+          },
+          "onRock": {
+            "p": [
+              482.80238711026027,
+              -914.5847973880595,
+              4.693524638164859
+            ],
+            "n": [
+              -0.7002904241276181,
+              -0.7132987445561744,
+              0.028252838613961242
+            ]
+          },
+          "seed": 81796,
+          "built": {
+            "hash": "666a5ad14f71b988a7d4e2e5d663f5db344a683613654b73d3e3853769714077",
+            "host": "530d4c79f079deba7ad3e0ca6bc6b8eeed9776494c54de9359e5d4e40493df87",
+            "at": {
+              "p": [
+                482.80238711026027,
+                -914.5847973880595,
+                4.693524638164859
+              ],
+              "n": [
+                -0.7002904241276181,
+                -0.7132987445561744,
+                0.028252838613961242
+              ]
+            }
+          }
         }
       ]
     },
@@ -5802,7 +5849,7 @@
         {
           "type": "collision",
           "x": 44.780654264799516,
-          "y": 135.87528167454064,
+          "y": 135.87528167454073,
           "rot": -0.5235987755982983,
           "shape": {
             "kind": "curve",
@@ -9425,10 +9472,10 @@
         "x": -1633.4611892700195,
         "y": -669.2327499389648,
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "faceted",
         "params": {
           "seed": 37994,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -9443,6 +9490,13 @@
             "prim": "mesh",
             "file": "7fb9d87e497d36c0ccaa354c55804687fcdb8189c960b112b4662d7fb2f11d15"
           }
+        },
+        "built": {
+          "hash": "be95e9cacbea251d18d8d678c6db8e141560578870b25f6cbaade3adfb2be5ee",
+          "front": -13.6281,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": [
@@ -9463,6 +9517,7 @@
               0.8373706060204665
             ]
           },
+          "lost": true,
           "settings": {
             "seed": 0,
             "detail": "LEAVES",
@@ -9501,81 +9556,6 @@
             "vine_count": 0,
             "build_ms": 115.37033081054688
           }
-        },
-        {
-          "type": "decoration",
-          "id": "moss-nc1g",
-          "kind": "moss",
-          "formation": "t5sioawn",
-          "anchor": {
-            "p": [
-              1256.9358825683594,
-              -671.861457824707,
-              -1478.8427352905273
-            ],
-            "n": [
-              -0.15924836681356042,
-              0.9852403393767051,
-              0.06278081977872402
-            ]
-          },
-          "settings": {
-            "kind": "TEXTURE",
-            "seed": 0,
-            "detail": 0.30000001192092896,
-            "resolution": 0.05000000074505806,
-            "threshold": 0.3499999940395355,
-            "dab_min": 0.03200000151991844,
-            "dab_max": 0.05000000074505806,
-            "layers": 5,
-            "shrink": 0.9200000166893005,
-            "buffer": 0.03500000014901161,
-            "first_buffer": 0.012000000104308128,
-            "min_clump": 6,
-            "ref_depth": 0.41999998688697815,
-            "steps_deep": 5,
-            "erode_scale": 14,
-            "field_mix": 0.550000011920929,
-            "curve": 1.2999999523162842,
-            "mottle": 0.6000000238418579,
-            "mottle_scale": 4,
-            "levels": 8,
-            "emission_strength": 0,
-            "emission_threshold": 0.6499999761581421,
-            "floor": 0.0010000000474974513,
-            "lift": 0.09000000357627869,
-            "up_floor": 0.30000001192092896,
-            "height_blur": 0.027000000700354576,
-            "rim": 0.10000000149011612,
-            "drape": 1,
-            "edge_kind": "PRINT",
-            "edge_apron": 0.029999999329447746,
-            "edge_round": 0.012000000104308128,
-            "overhang": 0.004000000189989805,
-            "edge_detail": 0.006000000052154064,
-            "strays": 4,
-            "stray_reach": 0.07999999821186066,
-            "grass": 6,
-            "grass_height": 0.04500000178813934,
-            "grass_blades": 10,
-            "min_patch": 0.0020000000949949026,
-            "mound_density": 400,
-            "texel": 0.004999999888241291,
-            "max_texture": "4096",
-            "print_edge": 0.0020000000949949026,
-            "triangles": 85119,
-            "dabs": 4344,
-            "layer_dabs": "1443 1126 1096 517 138 24",
-            "heights": "",
-            "texture": 512,
-            "texel_used": 0.018575415015220642,
-            "area": 21.470670700073242,
-            "apron": -1,
-            "in_rock": 0,
-            "reused": false,
-            "build_ms": 14707.7177734375,
-            "built_key": "6c8f871ae4e31eade2bb8a102c2ce64a0118aa80"
-          }
         }
       ]
     },
@@ -9588,10 +9568,10 @@
       "formation": {
         "id": "ped13qf9",
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "faceted",
         "params": {
           "seed": 97975,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "knub": 0.3,
           "curveTurn": 60,
           "floor": 0,
@@ -9603,6 +9583,13 @@
             "prim": "mesh",
             "file": "099c54763056578f1b6c7cb4f8c303530792e9281aab666278b2c5d4fd41d19f"
           }
+        },
+        "built": {
+          "hash": "240a787e41441ffe17dd3d949ff469c991dc39f92b73d08df69e31b85e7a2626",
+          "front": -29.15,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": []
@@ -9610,18 +9597,16 @@
     {
       "kind": "static",
       "name": "backdrop.central-rock",
-      "x": 1039.6339416503906,
-      "y": 733.9149951934814,
+      "x": 0,
+      "y": 0,
       "rot": 0,
       "formation": {
         "id": "mew6u9oc",
-        "x": -1039.6339416503906,
-        "y": -733.9149951934814,
         "generator": "solid",
-        "variant": "stones",
+        "variant": "faceted",
         "params": {
           "seed": 95585,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -9638,107 +9623,21 @@
           }
         },
         "built": {
-          "hash": "13fe59e65f0bd2d95990fcd75fd2bdbb86fbaeb6d3c9542dfab698743df87adc",
-          "front": -13.1094,
-          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
+          "hash": "88e70f610557210cb1eafbb9fd0b33dbc84578579256deed688e4ce6fbbe119c",
+          "front": -12.7069,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
           "recipeVersion": 2,
-          "tiers": []
+          "tiers": [
+            {
+              "triangles": 696,
+              "colour": 2048,
+              "normal": 1024,
+              "bytes": 132200
+            }
+          ]
         }
       },
-      "objects": [
-        {
-          "type": "decoration",
-          "id": "moss-7nk1b",
-          "kind": "moss",
-          "formation": "mew6u9oc",
-          "anchor": {
-            "p": [
-              1039.6339416503906,
-              -733.9149951934814,
-              -1503.2357215881348
-            ],
-            "n": [
-              -0.83610680874139,
-              0.5481738264210798,
-              0.020757177148164992
-            ]
-          },
-          "lost": true,
-          "settings": {
-            "kind": "TEXTURE",
-            "seed": 0,
-            "detail": 0.30000001192092896,
-            "resolution": 0.05000000074505806,
-            "threshold": 0.3499999940395355,
-            "dab_min": 0.03200000151991844,
-            "dab_max": 0.05000000074505806,
-            "layers": 5,
-            "shrink": 0.9200000166893005,
-            "buffer": 0.03500000014901161,
-            "first_buffer": 0.012000000104308128,
-            "min_clump": 6,
-            "ref_depth": 0.41999998688697815,
-            "steps_deep": 5,
-            "erode_scale": 14,
-            "field_mix": 0.550000011920929,
-            "curve": 1.2999999523162842,
-            "mottle": 0.6000000238418579,
-            "mottle_scale": 4,
-            "levels": 8,
-            "emission_strength": 0,
-            "emission_threshold": 0.6499999761581421,
-            "floor": 0.0010000000474974513,
-            "lift": 0.09000000357627869,
-            "up_floor": 0.30000001192092896,
-            "height_blur": 0.027000000700354576,
-            "rim": 0.10000000149011612,
-            "drape": 1,
-            "edge_kind": "PRINT",
-            "edge_apron": 0.029999999329447746,
-            "edge_round": 0.012000000104308128,
-            "overhang": 0.004000000189989805,
-            "edge_detail": 0.006000000052154064,
-            "strays": 4,
-            "stray_reach": 0.07999999821186066,
-            "grass": 6,
-            "grass_height": 0.04500000178813934,
-            "grass_blades": 10,
-            "min_patch": 0.0020000000949949026,
-            "mound_density": 400,
-            "texel": 0.004999999888241291,
-            "max_texture": "4096",
-            "print_edge": 0.0020000000949949026,
-            "triangles": 39401,
-            "dabs": 851,
-            "layer_dabs": "437 207 170 30 7",
-            "heights": "",
-            "texture": 512,
-            "texel_used": 0.018613850697875023,
-            "area": 10.328076362609863,
-            "apron": -1,
-            "in_rock": 0,
-            "reused": false,
-            "build_ms": 4718.087890625,
-            "built_key": "acd19d1ad793ad1a135a12b148c367067bfebd56"
-          },
-          "built": {
-            "hash": "a4553b7b3c5b9f4fe6d42f4faa5364b7177b3a96b5e88bdbf9cb669967c43499",
-            "host": "0fab0dd7d5c3d6414998941ed9f19e3f7b4f8fa75f41ddeae472bbf15e093256",
-            "at": {
-              "p": [
-                1039.6339416503906,
-                -733.9149951934814,
-                -1503.2357215881348
-              ],
-              "n": [
-                -0.83610680874139,
-                0.5481738264210798,
-                0.020757177148164992
-              ]
-            }
-          }
-        }
-      ]
+      "objects": []
     },
     {
       "kind": "static",
@@ -10259,10 +10158,10 @@
         "x": -760.4983329772949,
         "y": -867.4125671386719,
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "faceted",
         "params": {
           "seed": 67441,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10277,6 +10176,13 @@
             "prim": "mesh",
             "file": "4177b78bad7c87c4d9807209e3bc08ee86b1bc6bd1763f07f015bc73010228dd"
           }
+        },
+        "built": {
+          "hash": "fa862fd05e8394f27f6ebbef3b002cfdb1f7f7fbd52ac62be5e84c0057de5aa7",
+          "front": -11.9434,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": [
@@ -10334,6 +10240,22 @@
             "leaves": 4,
             "vine_count": 0,
             "build_ms": 32.87389373779297
+          },
+          "built": {
+            "hash": "22a90fbf7a13a785a1d07b0ec831138ff28b363bb1a53e6e173a9d269bccdb95",
+            "host": "fa862fd05e8394f27f6ebbef3b002cfdb1f7f7fbd52ac62be5e84c0057de5aa7",
+            "at": {
+              "p": [
+                760.4983329772949,
+                -867.4125671386719,
+                -1650.4846572875977
+              ],
+              "n": [
+                0.8840515145639586,
+                0.3247056729592674,
+                0.3361832023543715
+              ]
+            }
           }
         }
       ]
@@ -10347,10 +10269,10 @@
       "formation": {
         "id": "ndsoqwoc",
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "faceted",
         "params": {
           "seed": 31606,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10365,6 +10287,13 @@
             "prim": "mesh",
             "file": "6043443fd17f0c8eb35d6e31e65f2c22e208ae63e89017287b473817dea489e2"
           }
+        },
+        "built": {
+          "hash": "041676bab51a528500f12136b6553863f326c127a8b762acf98a8e0eaa374f50",
+          "front": -19.3404,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": []
@@ -10372,15 +10301,13 @@
     {
       "kind": "static",
       "name": "backdrop.mid-ledge",
-      "x": 923.799991607666,
-      "y": 857.4089050292969,
+      "x": 0,
+      "y": 0,
       "rot": 0,
       "formation": {
         "id": "99cfigu5",
-        "x": -923.799991607666,
-        "y": -857.4089050292969,
         "generator": "solid",
-        "variant": "stones",
+        "variant": "faceted",
         "params": {
           "seed": 6501,
           "stoneSize": 1,
@@ -10400,123 +10327,30 @@
           }
         },
         "built": {
-          "hash": "e41897ab1162da8680f0af19d4ed1a7a090500cc889e3bcbf94a688112d8d627",
-          "front": -11.7935,
-          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
+          "hash": "eb0d54d46880a0ee4c889dc6e5b63017e22ce1f05a4a4c91f4fe9c59e2a29f2a",
+          "front": -11.593,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
           "recipeVersion": 2,
           "tiers": []
         }
       },
-      "objects": [
-        {
-          "type": "decoration",
-          "id": "moss-trzh5",
-          "kind": "moss",
-          "formation": "99cfigu5",
-          "anchor": {
-            "p": [
-              923.799991607666,
-              -857.4089050292969,
-              -1217.0464515686035
-            ],
-            "n": [
-              -0.6745521153930764,
-              0.4557695502854478,
-              0.5807353619776624
-            ]
-          },
-          "lost": true,
-          "settings": {
-            "kind": "TEXTURE",
-            "seed": 0,
-            "detail": 0.30000001192092896,
-            "resolution": 0.05000000074505806,
-            "threshold": 0.3499999940395355,
-            "dab_min": 0.03200000151991844,
-            "dab_max": 0.05000000074505806,
-            "layers": 5,
-            "shrink": 0.9200000166893005,
-            "buffer": 0.03500000014901161,
-            "first_buffer": 0.012000000104308128,
-            "min_clump": 6,
-            "ref_depth": 0.41999998688697815,
-            "steps_deep": 5,
-            "erode_scale": 14,
-            "field_mix": 0.550000011920929,
-            "curve": 1.2999999523162842,
-            "mottle": 0.6000000238418579,
-            "mottle_scale": 4,
-            "levels": 8,
-            "emission_strength": 0,
-            "emission_threshold": 0.6499999761581421,
-            "floor": 0.0010000000474974513,
-            "lift": 0.09000000357627869,
-            "up_floor": 0.30000001192092896,
-            "height_blur": 0.027000000700354576,
-            "rim": 0.10000000149011612,
-            "drape": 1,
-            "edge_kind": "PRINT",
-            "edge_apron": 0.029999999329447746,
-            "edge_round": 0.012000000104308128,
-            "overhang": 0.004000000189989805,
-            "edge_detail": 0.006000000052154064,
-            "strays": 4,
-            "stray_reach": 0.07999999821186066,
-            "grass": 6,
-            "grass_height": 0.04500000178813934,
-            "grass_blades": 10,
-            "min_patch": 0.0020000000949949026,
-            "mound_density": 400,
-            "texel": 0.004999999888241291,
-            "max_texture": "4096",
-            "print_edge": 0.0020000000949949026,
-            "triangles": 23479,
-            "dabs": 1366,
-            "layer_dabs": "457 348 332 182 40 7",
-            "heights": "",
-            "texture": 1024,
-            "texel_used": 0.007729289121925831,
-            "area": 6.408124923706055,
-            "apron": -1,
-            "in_rock": 0,
-            "reused": false,
-            "build_ms": 3658.209228515625,
-            "built_key": "b724236e7eb96f3e6b5e97d80af49351e9465f47"
-          },
-          "built": {
-            "hash": "1a8b733a248d3ef305cce9a577f9e062a7487116482a73dbe89f4a193f87a994",
-            "host": "ad609200ed9d64247c622531e685145484238ba08acea665eeab9bf2fe279d20",
-            "at": {
-              "p": [
-                923.799991607666,
-                -857.4089050292969,
-                -1217.0464515686035
-              ],
-              "n": [
-                -0.6745521153930764,
-                0.4557695502854478,
-                0.5807353619776624
-              ]
-            }
-          }
-        }
-      ]
+      "objects": []
     },
     {
       "kind": "static",
       "name": "backdrop.right-ledge",
-      "x": 1530.3685188293457,
-      "y": 864.6749496459961,
+      "x": 1530.9831698234132,
+      "y": 871.866853979108,
       "rot": 0,
       "formation": {
         "id": "3lsu79xj",
-        "x": -1530.3685188293457,
-        "y": -864.6749496459961,
+        "x": -1530.9831698234132,
+        "y": -871.866853979108,
         "generator": "solid",
-        "variant": "stones",
+        "variant": "faceted",
         "params": {
           "seed": 87265,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10533,9 +10367,9 @@
           }
         },
         "built": {
-          "hash": "7660b2f2723381669f42bc71f434d256b180592a1015b2b014894bbb5e53e926",
-          "front": -12.1505,
-          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
+          "hash": "fd064f13fc3fc0fe646a5776a1548f3c0c983425adfc2cb238f87231f4b7d377",
+          "front": -12.1605,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
           "recipeVersion": 2,
           "tiers": []
         }
@@ -10543,92 +10377,47 @@
       "objects": [
         {
           "type": "decoration",
-          "id": "moss-ocuzi",
+          "id": "moss-7diha",
           "kind": "moss",
           "formation": "3lsu79xj",
           "anchor": {
             "p": [
-              1530.3685188293457,
-              -864.6749496459961,
-              -1370.201301574707
+              1530.9831698234132,
+              -881.2511444091797,
+              -1287.3828506105792
             ],
             "n": [
-              0.015369174796625433,
-              0.9990799293541568,
-              -0.040038521797936676
+              0,
+              1,
+              0
             ]
           },
-          "lost": true,
-          "settings": {
-            "kind": "TEXTURE",
-            "seed": 0,
-            "detail": 0.30000001192092896,
-            "resolution": 0.05000000074505806,
-            "threshold": 0.3499999940395355,
-            "dab_min": 0.03200000151991844,
-            "dab_max": 0.05000000074505806,
-            "layers": 5,
-            "shrink": 0.9200000166893005,
-            "buffer": 0.03500000014901161,
-            "first_buffer": 0.012000000104308128,
-            "min_clump": 6,
-            "ref_depth": 0.41999998688697815,
-            "steps_deep": 5,
-            "erode_scale": 14,
-            "field_mix": 0.550000011920929,
-            "curve": 1.2999999523162842,
-            "mottle": 0.6000000238418579,
-            "mottle_scale": 4,
-            "levels": 8,
-            "emission_strength": 0,
-            "emission_threshold": 0.6499999761581421,
-            "floor": 0.0010000000474974513,
-            "lift": 0.09000000357627869,
-            "up_floor": 0.30000001192092896,
-            "height_blur": 0.027000000700354576,
-            "rim": 0.10000000149011612,
-            "drape": 1,
-            "edge_kind": "PRINT",
-            "edge_apron": 0.029999999329447746,
-            "edge_round": 0.012000000104308128,
-            "overhang": 0.004000000189989805,
-            "edge_detail": 0.006000000052154064,
-            "strays": 4,
-            "stray_reach": 0.07999999821186066,
-            "grass": 6,
-            "grass_height": 0.04500000178813934,
-            "grass_blades": 10,
-            "min_patch": 0.0020000000949949026,
-            "mound_density": 400,
-            "texel": 0.004999999888241291,
-            "max_texture": "4096",
-            "print_edge": 0.0020000000949949026,
-            "triangles": 98204,
-            "dabs": 5113,
-            "layer_dabs": "1651 1303 1288 672 169 30",
-            "heights": "",
-            "texture": 1024,
-            "texel_used": 0.013489436358213425,
-            "area": 25.123310089111328,
-            "apron": -1,
-            "in_rock": 0,
-            "reused": false,
-            "build_ms": 15912.7900390625,
-            "built_key": "ad5c3c7269784b4f742bcea3b7d135538a81f5d2"
+          "onRock": {
+            "p": [
+              1530.9831698234132,
+              -871.866853979108,
+              -1287.3828506105792
+            ],
+            "n": [
+              -0.05211019932873316,
+              0.988444772134275,
+              0.14234275382449676
+            ]
           },
+          "seed": 5768,
           "built": {
-            "hash": "bc7446595b2f08811d8ebf5fcbad8cf4afdb3883052b6c30ea4cfc17acded546",
-            "host": "9141734b9b6811210bf962141db06fa748df33e1f7baeba422bc0645ac4bcce5",
+            "hash": "1a9bd6fb781fb7ce2dcdd06d49604fd580dbcfe67a24d1418f2976acaa66b610",
+            "host": "fd064f13fc3fc0fe646a5776a1548f3c0c983425adfc2cb238f87231f4b7d377",
             "at": {
               "p": [
-                1530.3685188293457,
-                -864.6749496459961,
-                -1370.201301574707
+                1530.9831698234132,
+                -871.866853979108,
+                -1287.3828506105792
               ],
               "n": [
-                0.015369174796625433,
-                0.9990799293541568,
-                -0.040038521797936676
+                -0.05211019932873316,
+                0.988444772134275,
+                0.14234275382449676
               ]
             }
           }
@@ -10644,10 +10433,10 @@
       "formation": {
         "id": "2739fnil",
         "generator": "solid",
-        "variant": "stones",
+        "variant": "faceted",
         "params": {
           "seed": 53208,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10664,11 +10453,18 @@
           }
         },
         "built": {
-          "hash": "3c747d2dc0a7a25eaeb892353683a7653167ba9976250ab25094a952da1c2746",
-          "front": -9.329,
-          "generatorHash": "2afec94a6189e3f4a12de0e09f43d401980baf393246a27ca3f4c0b6b00f1902",
+          "hash": "d6ac65e262588cf0fcafa2b18ca1e62a5ba9e7379cc1d5e1bb15b88896501a3c",
+          "front": -9.3505,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
           "recipeVersion": 2,
-          "tiers": []
+          "tiers": [
+            {
+              "triangles": 172,
+              "colour": 2048,
+              "normal": 1024,
+              "bytes": 89876
+            }
+          ]
         }
       },
       "objects": []
@@ -10682,7 +10478,7 @@
       "formation": {
         "id": "l0hsjzq8",
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "faceted",
         "params": {
           "seed": 41346,
           "stoneSize": 0.5,
@@ -10702,9 +10498,9 @@
           }
         },
         "built": {
-          "hash": "98a0e268dddc0accde55a7e2eca9bbdcac82f58f81a12c4fd3bae765a08f0af1",
-          "front": -9.3106,
-          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "hash": "50383c9e20ae84a511fa30b4ed1bb65fa644bf5efd9e03bdfbdc5fcf6e202367",
+          "front": -9.3738,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
           "recipeVersion": 2,
           "tiers": []
         }
@@ -10751,10 +10547,10 @@
       "formation": {
         "id": "hlpnm6yg",
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "faceted",
         "params": {
           "seed": 63571,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "facets": 0.55,
           "chisel": 0.25,
           "knub": 0.3,
@@ -10771,9 +10567,9 @@
           }
         },
         "built": {
-          "hash": "c39c3d567d6463c51a5b5fd2d65a66de542e2ab664dae345fca33f082883a4de",
-          "front": -7.4061,
-          "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+          "hash": "b1e6487791636954ab6e70e178742fbe31b937b4165719ae467e9dafeeeec2bc",
+          "front": -7.9572,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
           "recipeVersion": 2,
           "tiers": []
         }
@@ -13039,10 +12835,10 @@
       "formation": {
         "id": "hvl9g6ae",
         "generator": "solid",
-        "variant": "boulder",
+        "variant": "faceted",
         "params": {
           "seed": 31,
-          "stoneSize": 1,
+          "stoneSize": 0.5,
           "knub": 0.3,
           "curveTurn": 60,
           "floor": 3,
@@ -13054,6 +12850,13 @@
             "prim": "mesh",
             "file": "edb0ce614c24a0f32ac64258c7d40b9a8f8c514ea49108d7e21edaebc3ed8642"
           }
+        },
+        "built": {
+          "hash": "fc477afb4948a5a9ef9764f3b0d56ff3b046e9afe87d470651c1df5a82fd1883",
+          "front": -2.1149,
+          "generatorHash": "10b6db4bfcf5894d911b942efdbb32598fe98eb5f72ddfec753279f421544c86",
+          "recipeVersion": 2,
+          "tiers": []
         }
       },
       "objects": []

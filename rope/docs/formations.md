@@ -132,6 +132,8 @@ Where it is drawn (`onRock`) is the anchor carried along the normal onto the roc
 - **Placed** (a fern, a vine, mushrooms, orbs, glow flora): grown once where it stands, then only moved: dragging it moves the anchor over the guide and lands it on the rock every frame, moved in place without rebuilding the scene.
 - **Painted** (moss, ivy): its strokes are painted and erased on the rock and kept in the level's paint; it grows again when the brush lets go.
   While the brush is on, what the paint covers is drawn as the Blender stamp brush draws it: a field of dots over the rock where the composited paint reaches the grower's threshold (`src/editor/paintCoverage.ts`, a port of stampbrush's `Coverage` and `composite`, matched to it at 6.5e-8), so the region on screen is the region that grows, erasing included.
+  The dots are the brush's and nothing else's: the brush ends with Done, Esc, a press off the rock, or the selection moving off its decoration (`DecorationController.followSelection`, checked once a frame; placing ends likewise when the selection leaves the formation's body).
+  Before 2026-11-23 a change of selection left the brush on with no panel to say so, and Esc or a press off the rock ended it but left its dots drawn (the preview's "stale" key was the same `""` as its "nothing to show" key).
 - **After a regenerate** every anchor on that guide is carried onto the new rock; a painted one's strokes are carried too and it is grown again.
   One that finds no rock within 0.75 m of its guide point, or would move further than 0.5 m, is flagged lost and left as it was.
   A large edit to a guide means placing its decorations again.
@@ -141,6 +143,8 @@ A value at its default is not written; colours are kept linear, as Blender's are
 
 Growth (`scripts/decoration-build.ts`) prepares a `.blend` (`tools/blender/decoration_prepare.py`): the formation's rock as it is drawn, named `formation` and hidden from the render; `guide.camera` at the level's lens for the detail budget; the decoration made through its add-on (`create_moss`, `create_ivy`, `create_plant`) with its settings and seed; a placed one landed on the rock by a ray along its normal.
 The scene exporter then grows and exports it exactly as it grows a level's, so what the editor shows is what an export of the same paint would ship.
+A solid rock's faces are n-gons up to its dissolve angle out of plane (a Faceted rock's 8 degrees is 5.8 cm across a metre facet), so every path that triangulates one must split it the same way: the growths (`loop_triangles`), the glTF exporter (the baked rock) and `formation_export.py` (the iteration mesh and the section, through `tessellate`) all use Blender's tessellation.
+Until 2026-11-23 the iteration mesh was bmesh's BEAUTY split, which turned 161 of a Faceted rock's 380 triangles the other way, and the rock stood through a texture moss's 3 mm shell in rock-coloured triangles.
 Depth is the rock's own Blender y (the body frame's play plane is y = 0) and the camera direction is Blender -y, which the add-ons already assume.
 A plant grown alone avoids no plant before it.
 A texture-only moss ships as a thin shell 3 mm off the rock wearing its own print (`SCENE_EXPORT_MOSS_SHELL`), since there is no rock map to paint it into.

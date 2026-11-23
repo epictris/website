@@ -13035,6 +13035,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // only on selection. It is a revision check and a class toggle per row
       // unless the model actually moved.
       refreshOutliner();
+      // A decoration's brush or placing ends once the selection leaves what it
+      // belongs to (`followSelection`): checked here, once a frame, rather than
+      // at each of the many places the selection changes.
+      if (decorations.busy) decorations.followSelection(model.items.filter((i) => selectedIds.has(i.id)), selectedBodyIds);
       // The scene first, then the editor's own canvas over it. Both are driven
       // from the SAME free camera through `space.ts`, so an outline drawn on top
       // lands on the geometry it describes underneath at any pan or zoom - which

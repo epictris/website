@@ -71,7 +71,11 @@ export class DecorationController {
   private drag: { mode: "move" | "paint"; itemId: number; last: THREE.Vector3 | null } | null = null;
   // What the paint covers, drawn over the rock while the brush is on.
   readonly preview = new THREE.Group();
-  private previewKey = "";
+  // What the preview was last built for; null means stale, build again. Not
+  // "": that is also the key of "nothing to show", so resetting to it made
+  // the next sync match and keep the dots (2026-11-23: Esc or a click off the
+  // rock ended the brush and left its coverage drawn).
+  private previewKey: string | null = "";
   // The coverage of the rock being painted, kept while the same rock and
   // decoration are, so a dab composites only its own stamp.
   private coverage: { rock: THREE.Object3D; itemId: number; field: PaintCoverage } | null = null;
@@ -197,12 +201,30 @@ export class DecorationController {
     return this.placing !== null || this.painting !== null;
   }
 
+  // Placing and painting belong to what is selected: the brush to its painted
+  // decoration, selected alone (its panel holds Painting… and Done), placing
+  // to the formation's body. A selection that moves anywhere else ends the
+  // mode, as leaving a tool's object ends the tool. Before 2026-11-23 only
+  // Esc, Done or a click off the rock did: picking another item in the
+  // outliner left the brush on with no panel to say so, its coverage dots
+  // drawn over the rock and a click on the rock still painting.
+  followSelection(selected: readonly EdItem[], selectedBodies: ReadonlySet<number>): void {
+    if (this.painting) {
+      if (selected.length !== 1 || selected[0]!.id !== this.painting.itemId) this.cancel();
+      return;
+    }
+    if (this.placing) {
+      const f = this.item(this.placing.formationId);
+      if (!f || !(selectedBodies.has(f.bodyId) || selected.some((i) => i.bodyId === f.bodyId))) this.cancel();
+    }
+  }
+
   // Out of placing and painting, the panel saying so.
   cancel(): void {
     if (!this.busy) return;
     this.placing = null;
     this.painting = null;
-    this.previewKey = "";
+    this.previewKey = null;
     this.syncPreview();
     this.host.rebuildInspector();
   }
@@ -339,7 +361,7 @@ export class DecorationController {
   syncPreview(): void {
     const d = this.painting ? this.item(this.painting.itemId) : null;
     const f = d ? this.formationOf(d) : null;
-    const rock = f ? rockOf(f, () => (this.previewKey = "")) : null;
+    const rock = f ? rockOf(f, () => (this.previewKey = null)) : null;
     const strokes = d?.decoration?.strokes ?? [];
     const threshold = Number(d?.decoration?.settings?.["threshold"] ?? DEFAULT_THRESHOLD);
     // Placed every frame: a 3D body's depth and tilt move it with no item

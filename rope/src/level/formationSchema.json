@@ -249,6 +249,20 @@
             "surfaceRelief"
           ],
           "labels": {}
+        },
+        {
+          "id": "faceted",
+          "label": "Faceted",
+          "description": "The guide rounded and cut into a few dozen broad planes: simple geometry for background rocks",
+          "hidden": [
+            "curveTurn",
+            "jointAspect",
+            "knub"
+          ],
+          "labels": {
+            "stoneSize": "Facet size",
+            "surfaceRelief": "Bulge"
+          }
         }
       ]
     }

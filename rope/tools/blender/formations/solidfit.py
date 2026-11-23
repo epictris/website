@@ -148,9 +148,10 @@ UNFOLD_MAX, UNFOLD_KEEP = 60, 0.95
 # - surfaceRelief: cleavage depth as a share of stoneSize;
 # - jointed: hierarchical cleavage instead of the earlier polygon cells;
 # - jointAspect: primary vertical fracture length relative to its width;
-# - wall: the Wall variant (wall.py); stones: the Stones variant (stones.py).
+# - wall: the Wall variant (wall.py); stones: the Stones variant (stones.py);
+#   faceted: the Faceted variant (faceted.py).
 PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0, "surfaceRelief": 0.5,
-          "jointed": True, "jointAspect": 2.8, "wall": False, "stones": False}
+          "jointed": True, "jointAspect": 2.8, "wall": False, "stones": False, "faceted": False}
 
 
 def resolved(params):
@@ -1367,7 +1368,10 @@ def build_from_recipe(recipe, collection):
     solid = bpy.data.objects.new("Guide", me)
     collection.objects.link(solid)
     parameters = worker.solid_parameters(recipe)
-    if parameters.get('stones'):
+    if parameters.get('faceted'):
+        from .faceted import build as build_faceted
+        piece, parts, scale, report = build_faceted(solid, None, parameters, collection)
+    elif parameters.get('stones'):
         from .stones import build as build_stones
         piece, parts, scale, report = build_stones(solid, None, parameters, collection)
     elif parameters.get('wall'):

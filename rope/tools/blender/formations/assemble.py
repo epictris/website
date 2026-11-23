@@ -178,8 +178,9 @@ def clean(obj):
 
 clean(obj)
 # A Stones rock (stones.py) is already faceted stone by stone, as the study
-# faceted rock-b; a second dissolve over the whole would only blur that.
-if generator == 'solid' and not recipe['params'].get('stones'):
+# faceted rock-b, and a Faceted one (faceted.py) is nothing but its facets; a
+# second dissolve over the whole would only blur that.
+if generator == 'solid' and not (recipe['params'].get('stones') or recipe['params'].get('faceted')):
     # The adaptive remesh supplies a sampling grid, not the painted facets.
     # Join shallow folds into the existing slate's broad planes before tone
     # assignment, so arbitrary remesh triangles do not become colour patches.
@@ -196,6 +197,10 @@ if generator == 'solid' and recipe['params'].get('jointed'):
     # The straight fracture boundaries are intentional. Export must not
     # reintroduce the broad crease bows that melted their plane transitions.
     recipe['surfaceFinish'] = ['export_creases']
+    obj['formation_recipe'] = json.dumps(recipe, separators=(',', ':'))
+if generator == 'solid' and recipe['params'].get('faceted'):
+    # A background rock is its broad planes: straight edges, no chips.
+    recipe['surfaceFinish'] = ['export_creases', 'export_chips']
     obj['formation_recipe'] = json.dumps(recipe, separators=(',', ':'))
 
 for piece in list(src.objects):
