@@ -997,6 +997,13 @@ export interface DecorationObjectData extends ObjectPlacement {
   anchor: DecorationAnchor;
   // Where it is drawn: the anchor carried onto the rock that is drawn now.
   onRock?: DecorationAnchor;
+  // A placed one's own turn and size, about where it stands and on top of
+  // the anchor's frame (`anchorFrame`: its normal as z), so it keeps them as
+  // it is moved over the rock: a quaternion [x, y, z, w] and a factor per
+  // axis of its turned frame. Drawn, never grown: a turn or a size regrows
+  // nothing. Absent is unturned and full size.
+  turn?: [number, number, number, number];
+  scale?: [number, number, number];
   // The anchor could not be carried onto the rock after its last change.
   lost?: boolean;
   seed?: number;
@@ -3618,8 +3625,9 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.path !== undefined ? { path: o.path } : {}),
     };
   }
-  // A decoration's anchor points are lengths; normals, the seed, the
-  // add-on's settings (its own units) and a store hash are not.
+  // A decoration's anchor points are lengths; normals, its turn and size (a
+  // quaternion and factors), the seed, the add-on's settings (its own units)
+  // and a store hash are not.
   if (o.type === "decoration") {
     const anchor = (a: DecorationAnchor): DecorationAnchor => ({ p: [a.p[0] * factor, a.p[1] * factor, a.p[2] * factor], n: [...a.n] });
     return {
@@ -3630,6 +3638,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...placed,
       anchor: anchor(o.anchor),
       ...(o.onRock ? { onRock: anchor(o.onRock) } : {}),
+      ...(o.turn ? { turn: [...o.turn] } : {}),
+      ...(o.scale ? { scale: [...o.scale] } : {}),
       ...(o.lost ? { lost: true } : {}),
       ...(o.seed !== undefined ? { seed: o.seed } : {}),
       ...(o.settings ? { settings: { ...o.settings } } : {}),

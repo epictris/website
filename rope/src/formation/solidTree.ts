@@ -86,6 +86,58 @@ export function scaleTree(tree: SolidNode, centre: [number, number, number], f: 
   };
 }
 
+// The rows of a pose's rotation, R = Rx Ry Rz (Euler XYZ radians, as three
+// and `poseMatrix` read `rot`): column j is the leaf's own axis j in the
+// tree's frame.
+export function rotationRows(rot: readonly [number, number, number] | undefined): number[][] {
+  const [x, y, z] = rot ?? [0, 0, 0];
+  const a = Math.cos(x), b = Math.sin(x);
+  const c = Math.cos(y), d = Math.sin(y);
+  const e = Math.cos(z), f = Math.sin(z);
+  const ae = a * e, af = a * f, be = b * e, bf = b * f;
+  return [
+    [c * e, -c * f, d],
+    [af + be * d, ae - bf * d, -b * c],
+    [bf - ae * d, be + af * d, a * c],
+  ];
+}
+
+// The whole tree sized by a factor PER AXIS of its own frame about `centre`:
+// each leaf's position moved out from the centre axis by axis, and each of
+// its own axes sized by the factor of the frame axis it lies along. Exact
+// only for a leaf turned by right angles (or not at all), whose axes each lie
+// along one of the frame's; null when any leaf is turned otherwise, since
+// sizing it along a frame axis would be a shear no pose can hold. **S X** on
+// a guide's body (editor.ts).
+export function scaleTreeAxes(tree: SolidNode, centre: [number, number, number], f: [number, number, number]): SolidNode | null {
+  if ("op" in tree) {
+    const of: SolidNode[] = [];
+    for (const c of tree.of) {
+      const s = scaleTreeAxes(c, centre, f);
+      if (!s) return null;
+      of.push(s);
+    }
+    return { ...tree, of };
+  }
+  const r = rotationRows(tree.rot);
+  const s = tree.scale ?? [1, 1, 1];
+  const scale: [number, number, number] = [0, 0, 0];
+  for (let j = 0; j < 3; j++) {
+    // The frame axis the leaf's axis j lies along: the one its column is
+    // all in.
+    const col = [r[0]![j]!, r[1]![j]!, r[2]![j]!];
+    const k = col.findIndex((v) => Math.abs(Math.abs(v) - 1) < 1e-6);
+    if (k < 0) return null;
+    scale[j] = s[j]! * f[k]!;
+  }
+  const p = tree.pos ?? [0, 0, 0];
+  return {
+    ...tree,
+    pos: [centre[0] + (p[0] - centre[0]) * f[0], centre[1] + (p[1] - centre[1]) * f[1], centre[2] + (p[2] - centre[2]) * f[2]],
+    scale,
+  };
+}
+
 // The primitives a new node can be, as the editor offers them, each a size a
 // metre or two across centred on `at`: the starting shapes a guide is then
 // sculpted from (plans/sculpt-guides.md). The outline, three-outline, hull

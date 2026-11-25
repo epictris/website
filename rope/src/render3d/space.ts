@@ -231,7 +231,9 @@ export type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 export interface ViewPose {
   readonly target: { readonly x: number; readonly y: number; readonly z: number };
   // Radians: yaw about +y (positive swings the camera out toward +x), pitch
-  // about the camera's right (positive raises it). Both zero is head-on.
+  // about the camera's right (positive raises it). Both zero is head-on. The
+  // pitch is in (-pi, pi]: past +-pi/2 the view has gone on over a pole and
+  // is upside down, which only the editor's SpaceMouse does.
   readonly yaw: number;
   readonly pitch: number;
   // Metres, at the target's depth (see above). Positive.
@@ -335,7 +337,10 @@ export function applyPose(threeCam: ViewCamera, pose: ViewPose, aspect: number):
   // Orbited: the camera swings around the point it was looking at, at exactly
   // the dolly distance the zoom asks for, so turning the view neither zooms it
   // nor slides what it is centred on.
-  const pitch = Math.max(-MAX_VIEW_PITCH, Math.min(MAX_VIEW_PITCH, pose.pitch));
+  // Any pitch: past +-90 degrees the view has gone on over the top and is
+  // upside down (the editor's SpaceMouse takes it there), and the up below
+  // turns over with it.
+  const pitch = pose.pitch;
   const cp = Math.cos(pitch);
   threeCam.position.set(
     x + dist * Math.sin(pose.yaw) * cp,
@@ -344,7 +349,8 @@ export function applyPose(threeCam: ViewCamera, pose: ViewPose, aspect: number):
   );
   // World up, as ever, short of the poles; beyond, the pose's own up
   // (`poseBasis`'s: -sin(p)·(sin yaw, 0, cos yaw) + cos(p)·y), which is the
-  // same direction there and the only one defined at the pole itself.
+  // same direction there, the only one defined at the pole itself, and past
+  // it the one pointing down that turns the view over.
   if (Math.abs(pitch) <= MAX_ORBIT_PITCH) threeCam.up.set(0, 1, 0);
   else {
     const sp = Math.sin(pitch);

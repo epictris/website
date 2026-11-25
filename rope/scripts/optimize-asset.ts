@@ -81,6 +81,12 @@
 // and colour blotches; the measurements are in `encode-textures.mjs`.
 // `scene-export.ts` always passes it.
 //
+// `--keep-attributes` keeps every vertex attribute, read by a material or not
+// (`optimize --prune-attributes false`). A formation's bake carries the rock's
+// paint UV as TEXCOORD_0, read by the game's texture layers and by no
+// material in the file, and the prune took it out and renumbered the bake's
+// own UV in its place (2026-11-25).
+//
 // `--texture-cache DIR` keeps each map's encode in DIR and takes it from there
 // next time its source, rule and encoder are unchanged (encode-textures.mjs).
 // It changes no byte of the output; `scene-export.ts` passes one per scene.
@@ -98,7 +104,7 @@ const argv = process.argv.slice(2);
 // `--center`, `--keep-nodes` and `--keep-hierarchy` are bare flags, so they come
 // out of the argument list before anything positional is read; everything below
 // then sees exactly the arguments it saw before the flags existed.
-const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy", "--lossless-normals", "--baked-maps"]);
+const BARE = new Set(["--center", "--keep-nodes", "--keep-hierarchy", "--lossless-normals", "--baked-maps", "--keep-attributes"]);
 // `--texture-cache DIR` (encode-textures.mjs's `--cache`) comes out with its
 // value, the same way; guarded on the flag being there (see `--simplify`).
 const textureCacheAt = argv.indexOf("--texture-cache");
@@ -109,6 +115,7 @@ const keepNodes = argv.includes("--keep-nodes");
 const keepHierarchy = argv.includes("--keep-hierarchy");
 const losslessNormals = argv.includes("--lossless-normals");
 const bakedMaps = argv.includes("--baked-maps");
+const keepAttributes = argv.includes("--keep-attributes");
 const ownEncoding = losslessNormals || bakedMaps;
 const simplifyAt = args.indexOf("--simplify");
 // Pulled out of the positionals so the two paths take the same `<in> <out>`.
@@ -229,6 +236,7 @@ const r = spawnSync(
     // the root at its world pose, which keeps the pose and loses the ride, so
     // it is off here - it only exists to feed the join, which is off already.
     ...(keepHierarchy ? ["--flatten", "false"] : []),
+    ...(keepAttributes ? ["--prune-attributes", "false"] : []),
     ...(simplify === null
       ? ["--simplify", "false"]
       : [

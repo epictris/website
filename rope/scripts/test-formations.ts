@@ -27,13 +27,18 @@ import { fitSection, isSimple } from "../src/formation/fit";
 import { formationHash } from "../src/formation/recipe";
 import { sha256Hex } from "../src/formation/sha256";
 import type { FormationMeta } from "../src/formation/store";
-import { isCollisionObject, scaleLevelData, type FormationData, type LevelData, type RawLevelData } from "../src/level/levelFormat";
+import { isCollisionObject, scaleLevelData, type DecorationObjectData, type FormationData, type LevelData, type RawLevelData } from "../src/level/levelFormat";
+import { decorationDelta } from "../src/render3d/formations";
 import { alignCollisionToGuide, collisionMatchesGuide, formationItemOf, guideFromCollision } from "../src/editor/formationEdit";
 import { modelFromDisk, modelToDisk } from "../src/editor/model";
-import { PaintCoverage } from "../src/editor/paintCoverage";
+import { PaintCoverage, samplesOf } from "../src/editor/paintCoverage";
+import { PaintCursor } from "../src/editor/paintCursor";
 import { isGroup, moveEntry, setMode, stackOf, treeOf } from "../src/formation/solidStack";
 import type { SolidNode } from "../src/level/levelFormat";
 import * as THREE from "three";
+import { NodeIO } from "@gltf-transform/core";
+import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
+import { MeshoptDecoder } from "meshoptimizer";
 
 let failed = 0;
 function check(name: string, pass: boolean, detail = ""): void {
@@ -236,6 +241,43 @@ const level: LevelData = {
   const cleared = Math.PI * (0.43 * 0.15) ** 2 / 0.012 ** 2;
   check("erasing takes away the disc it clears", Math.abs(one - cov.coveredCount(0.35) - cleared) / cleared < 0.3, `${one} -> ${cov.coveredCount(0.35)}, about ${cleared.toFixed(0)} cleared expected`);
   check("paint undone past what was composited asks to start over", cov.update([dab], 0.35) === false);
+
+  // The brush's cursor (paintCursor.ts) draws the points a dab there would
+  // paint: the same points, over an edge too, and none on a face turned away.
+  const cursor = new PaintCursor();
+  const at = (p: [number, number, number]) => ({ frame: new THREE.Matrix4(), p: new THREE.Vector3(...p), n: new THREE.Vector3(...up), r: 0.3, erase: false, samples: samplesOf(rock) });
+  cursor.set(at([0, 0.5, 0]));
+  const painted = new PaintCoverage(rock);
+  painted.update([dab], 1e-12);
+  check("the cursor's footprint is what a dab there paints", cursor.footprint === painted.coveredCount(1e-12) && cursor.footprint > 0, `${cursor.footprint} drawn, ${painted.coveredCount(1e-12)} painted`);
+  cursor.set(at([0.5, 0.5, 0]));
+  const pts = samplesOf(rock).points;
+  let side = 0;
+  samplesOf(rock).reach({ p: [0.5, 0.5, 0], n: up, r: 0.3 }, (i) => {
+    if (pts[i * 3]! > 0.5) side++;
+  });
+  check("at an edge the footprint wraps onto the side", side > 0 && cursor.footprint > side, `${side} of ${cursor.footprint} on the side`);
+  cursor.set(at([0, -0.5, 0]));
+  check("a cursor facing up draws nothing on the underside", cursor.footprint === 0, `${cursor.footprint} drawn`);
+}
+
+// 4c. A placed decoration's own turn and size (`turn`, `scale`): kept by the
+// disk unscaled - neither is a length - and drawn about where it stands, on
+// top of the move from where it grew. 2026-11-25: the disk's field list
+// dropped both, so a fern turned by its gizmo was back as it was on reload.
+{
+  const at = { p: [0.1, 0.2, 0.3] as [number, number, number], n: [0, 1, 0] as [number, number, number] };
+  const turn: [number, number, number, number] = [0, 0, Math.sin(Math.PI / 6), Math.cos(Math.PI / 6)];
+  const dec: DecorationObjectData = { type: "decoration", id: "fern-t", kind: "fern", formation: "f1", anchor: at, onRock: at, turn, scale: [2, 2, 2], built: { hash: "h", host: "f", at } };
+  const disk = scaleLevelData({ ...level, bodies: [{ ...level.bodies[0]!, objects: [dec] }] }, PIXELS_PER_METER) as RawLevelData;
+  const back = scaleLevelData(disk, PX).bodies[0]!.objects[0] as DecorationObjectData;
+  check("a decoration's turn and size cross the disk unscaled", JSON.stringify(back.turn) === JSON.stringify(turn) && JSON.stringify(back.scale) === "[2,2,2]", JSON.stringify(back));
+  // Grown where it stands, so the move is nothing: the root stays put, and a
+  // point a unit up its normal (the frame's z) ends up twice as far, turned.
+  const delta = decorationDelta(dec);
+  const root = new THREE.Vector3(...at.p).applyMatrix4(delta);
+  const up = new THREE.Vector3(...at.p).add(new THREE.Vector3(0, 1, 0)).applyMatrix4(delta);
+  check("a turn and a size are drawn about the root", root.distanceTo(new THREE.Vector3(...at.p)) < 1e-9 && Math.abs(up.distanceTo(root) - 2) < 1e-9, `root ${root.toArray()}, up ${up.toArray()}`);
 }
 
 // 5. Coordinates, through the real build.
@@ -277,6 +319,36 @@ if (!process.argv.includes("--no-blender")) {
         Math.abs(b.min[0] - minX) < 0.2 && Math.abs(b.max[0] - maxX) < 0.2 && Math.abs(b.max[1] + minY) < 0.3 && Math.abs(b.min[1] + maxY) < 0.3 && b.min[2] < 0 && b.max[2] > 0,
         JSON.stringify(b),
       );
+      // The paint UV (formation_export.paint_unwrap): the iteration mesh's
+      // first UV map, every corner inside the map, islands that do not lie
+      // over each other (their UV area no more than the map's), and a fair
+      // share of the map used.
+      await MeshoptDecoder.ready;
+      const doc = await new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ "meshopt.decoder": MeshoptDecoder }).read(join(store, hash, "geometry.glb"));
+      const prim = doc.getRoot().listMeshes()[0]!.listPrimitives()[0]!;
+      const uv = prim.getAttribute("TEXCOORD_0");
+      const pos = prim.getAttribute("POSITION")!;
+      let inside = true;
+      let uvArea = 0;
+      if (uv) {
+        const idx = prim.getIndices();
+        const n = idx ? idx.getCount() : pos.getCount();
+        const at = (i: number): number => (idx ? idx.getScalar(i) : i);
+        const a = [0, 0];
+        const b = [0, 0];
+        const c = [0, 0];
+        for (let i = 0; i < uv.getCount(); i++) {
+          uv.getElement(i, a);
+          if (!(a[0]! >= 0 && a[0]! <= 1 && a[1]! >= 0 && a[1]! <= 1)) inside = false;
+        }
+        for (let t = 0; t + 2 < n; t += 3) {
+          uv.getElement(at(t), a);
+          uv.getElement(at(t + 1), b);
+          uv.getElement(at(t + 2), c);
+          uvArea += Math.abs((b[0]! - a[0]!) * (c[1]! - a[1]!) - (c[0]! - a[0]!) * (b[1]! - a[1]!)) / 2;
+        }
+      }
+      check("the rock carries its paint UV, inside the map and packed", !!uv && inside && uvArea > 0.3 && uvArea <= 1.0001, `TEXCOORD_0 ${uv ? "present" : "MISSING"}, inside ${inside}, UV area ${uvArea.toFixed(3)}`);
     }
   } finally {
     rmSync(store, { recursive: true, force: true });

@@ -2617,21 +2617,14 @@ def cut_at_print(corners, uvs, alpha, in_rock=None):
     return kept
 
 
-def paint_map(px, uv_px, tri_pos, layers, p):
-    """Paint a texture-only moss into a rock's colour map, in place. `px` is
-    the map (H, W, 4; sRGB-encoded colour, as a byte image's pixels read,
-    row 0 at the bottom), its alpha over 0.5 where a texel was baked; `uv_px`
-    (T, 3, 2) the rock's triangles in texels of the map and `tri_pos` (T, 3, 3)
-    the same triangles in the world. Every baked texel of a triangle the dabs
-    can reach takes the dabs' colour by their coverage. A texel counts for a
-    triangle within MAP_DILATE texels of it, positions extrapolated, so the
-    texels the bake rasterised on a triangle's edge are painted too; the map's
-    background fill then carries the moss into the seams. Returns how many
-    texels the moss covers."""
-    dabs = [d for layer in layers for d in layer]
-    if not dabs or len(tri_pos) == 0:
-        return 0
-    h, w = px.shape[:2]
+def _map_texels(uv_px, tri_pos, dabs, p, h, w, mask=None):
+    """The texels of a map (`h` x `w`) on the triangles the dabs can reach:
+    their rows, columns, world points and face normals. `uv_px` (T, 3, 2) is
+    the triangles in texels, `tri_pos` (T, 3, 3) in the world. A texel counts
+    for a triangle within MAP_DILATE texels of it, positions extrapolated, so
+    the texels a bake rasterised on a triangle's edge count too; a texel two
+    triangles claim is taken once, from the first. `mask` (h, w), when given,
+    keeps only the texels it holds. None when there are none."""
     reach = max(d.rmax for d in dabs) + p.print_edge + MOUND_LIFT_ROOM
     kd = kdtree(np.array([d.c[:] for d in dabs]))
     centre = tri_pos.mean(1)
@@ -2660,7 +2653,9 @@ def paint_map(px, uv_px, tri_pos, layers, p):
         corners = uv_px[f]
         edge = np.array([np.linalg.norm(corners[(i + 2) % 3] - corners[(i + 1) % 3]) for i in range(3)])
         dist = lam * (abs(den) / np.maximum(edge, 1e-12))
-        inside = (dist >= -MAP_DILATE).all(-1) & (px[yy, xx, 3] > 0.5)
+        inside = (dist >= -MAP_DILATE).all(-1)
+        if mask is not None:
+            inside &= mask[yy, xx]
         if not inside.any():
             continue
         ys.append(yy[inside])
@@ -2668,11 +2663,33 @@ def paint_map(px, uv_px, tri_pos, layers, p):
         ps.append(lam[inside] @ tri_pos[f])
         ns.append(np.broadcast_to(fn[f], (int(inside.sum()), 3)))
     if not ys:
-        return 0
+        return None
     ys, xs, ps, ns = (np.concatenate(a) for a in (ys, xs, ps, ns))
-    # a texel two triangles claim is painted once, from the first
     _u, first = np.unique(ys * w + xs, return_index=True)
-    ys, xs, ps, ns = ys[first], xs[first], ps[first], ns[first]
+    return ys[first], xs[first], ps[first], ns[first]
+
+
+def _srgb_array(linear):
+    return np.where(linear <= 0.0031308, linear * 12.92, 1.055 * np.power(linear, 1 / 2.4) - 0.055)
+
+
+def paint_map(px, uv_px, tri_pos, layers, p):
+    """Paint a texture-only moss into a rock's colour map, in place. `px` is
+    the map (H, W, 4; sRGB-encoded colour, as a byte image's pixels read,
+    row 0 at the bottom), its alpha over 0.5 where a texel was baked; `uv_px`
+    (T, 3, 2) the rock's triangles in texels of the map and `tri_pos` (T, 3, 3)
+    the same triangles in the world. Every baked texel of a triangle the dabs
+    can reach takes the dabs' colour by their coverage (`_map_texels`); the
+    map's background fill then carries the moss into the seams. Returns how
+    many texels the moss covers."""
+    dabs = [d for layer in layers for d in layer]
+    if not dabs or len(tri_pos) == 0:
+        return 0
+    h, w = px.shape[:2]
+    got = _map_texels(uv_px, tri_pos, dabs, p, h, w, px[:, :, 3] > 0.5)
+    if got is None:
+        return 0
+    ys, xs, ps, ns = got
     col, cov = paint_texels(layers, p, ps, ns)
     hit = cov > 0
     if not hit.any():
@@ -2681,8 +2698,64 @@ def paint_map(px, uv_px, tri_pos, layers, p):
     s = np.clip(px[ys, xs, :3].astype(np.float64), 0.0, 1.0)
     base = np.where(s <= 0.04045, s / 12.92, ((s + 0.055) / 1.055) ** 2.4)
     out = np.clip(base + (col - base) * cov[:, None], 0.0, 1.0)
-    px[ys, xs, :3] = np.where(out <= 0.0031308, out * 12.92, 1.055 * np.power(out, 1 / 2.4) - 0.055)
+    px[ys, xs, :3] = _srgb_array(out)
     return int(len(ys))
+
+
+# How far (texels) a layer map's colour is carried past its coverage, and
+# both past its islands into the gaps between them, so a bilinear or mipmap
+# read at an edge never mixes in a texel that holds nothing.
+LAYER_BLEED = 4
+
+
+def layer_map(uv_px, tri_pos, layers, p, h, w):
+    """A texture-only moss as a LAYER MAP of its own, for the game to lay over
+    the rock's colour (docs/formations.md, "Texture layers"): (h, w, 4), row
+    0 at the bottom, the dabs' colour sRGB-encoded in rgb and their coverage
+    in alpha, straight (not premultiplied). `uv_px` and `tri_pos` are as
+    `paint_map` has them, in the rock's paint UV. The colour is carried
+    LAYER_BLEED texels past the coverage and the coverage past the islands
+    (`_bleed`). Returns (map, texels covered)."""
+    px = np.zeros((h, w, 4), np.float32)
+    dabs = [d for layer in layers for d in layer]
+    if not dabs or len(tri_pos) == 0:
+        return px, 0
+    got = _map_texels(uv_px, tri_pos, dabs, p, h, w)
+    if got is None:
+        return px, 0
+    ys, xs, ps, ns = got
+    island = np.zeros((h, w), bool)
+    island[ys, xs] = True
+    col, cov = paint_texels(layers, p, ps, ns)
+    hit = cov > 0
+    px[ys[hit], xs[hit], :3] = _srgb_array(np.clip(col[hit], 0.0, 1.0))
+    px[ys[hit], xs[hit], 3] = np.clip(cov[hit], 0.0, 1.0)
+    painted = np.zeros((h, w), bool)
+    painted[ys[hit], xs[hit]] = True
+    _bleed(px, painted, island)
+    return px, int(hit.sum())
+
+
+def _bleed(px, painted, island):
+    """Carry the colour of the `painted` texels to their neighbours, and the
+    coverage of the `island` texels (the rock's surface) into the texels off
+    it, LAYER_BLEED rings deep: each ring takes the mean of the rings before
+    it in its four neighbours. In place."""
+    for known, channels in ((painted, slice(0, 3)), (island, slice(3, 4))):
+        known = known.copy()
+        for _ in range(LAYER_BLEED):
+            total = np.zeros(px.shape[:2] + (px[:, :, channels].shape[2],), np.float64)
+            count = np.zeros(px.shape[:2], np.float64)
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                src = np.roll(np.roll(known, dy, 0), dx, 1)
+                vals = np.roll(np.roll(px[:, :, channels], dy, 0), dx, 1)
+                total += vals * src[:, :, None]
+                count += src
+            new = ~known & (count > 0)
+            if not new.any():
+                break
+            px[new, channels] = (total[new] / count[new][:, None]).astype(np.float32)
+            known |= new
 
 
 class _TexelHash:

@@ -306,6 +306,8 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
         "bun",
         [
           "run", join(ROOT, "scripts", "optimize-asset.ts"), raw, optimised, "--keep-nodes", "--keep-hierarchy", "--baked-maps",
+          // A formation's paint UV is read by the game, not by its material.
+          ...(opts.kind === "formation" ? ["--keep-attributes"] : []),
           ...(opts.noCache ? [] : ["--texture-cache", join(ROOT, ".cache", `${opts.kind}-encode`, name)]),
         ],
         (line) => {

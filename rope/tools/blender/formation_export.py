@@ -19,6 +19,12 @@ rock-local X right, Z up, metres; the play plane is Blender y = 0). Writes
                             (`scene_export.py --all-seen`): colour at most
                             --map-max in one map, normal half of it
     OUT_DIR/stats.json      triangles before and after, the bounds, the area
+    OUT_DIR/rock.blend      saved back with the rock's PAINT UV (`paint_unwrap`),
+                            which the decoration builds paint texture layers in
+
+Every mesh written carries the PAINT UV as its FIRST UV map, so it is
+TEXCOORD_0 in geometry.gltf and in the bake's tiers alike (the bake adds its
+own unwrap after it, and the glTF exporter writes UV maps in order).
 
 Progress goes out as `[scene_step] {"step": ..., "note": ...}` lines, the
 convention `scene_export.py` set, for the job runner's bar.
@@ -347,6 +353,43 @@ def triangles(mesh):
     return len(mesh.loop_triangles)
 
 
+# The rock's own unwrap for PAINTED TEXTURE LAYERS (a texture-only moss, and
+# what else is painted into the rock's look rather than grown over it:
+# docs/formations.md, "Texture layers"). Made once, here, at Generate, so the
+# iteration mesh and every tier of the bake carry the same one and a layer
+# grown on either lands on both; the bake's own unwrap (`scene_export.unwrap`,
+# its maps, which faces it sees) is decided by the bake and cannot be shared.
+# Its name is `scene_export.PAINT_UV`.
+
+
+def paint_unwrap(ob):
+    """Give `ob`'s mesh the paint UV map (`scene_export.PAINT_UV`), first of its UV maps: the bake's
+    unwrap (welded, Smart UV Project, the native packer) at one colour map's
+    side (`render.colour_maps`, every face seen, as a formation's bake has
+    it), so a layer is painted at the bake's own texel. Returns that side."""
+    import scene_export
+    from formations import render
+    me = ob.data
+    # Leftover authoring UVs go, as the bake drops them; one a material reads
+    # (none on a slate rock) is put back after the paint UV, which comes first.
+    scene_export.remove_unused_uvs(me)
+    kept = []
+    for uv in list(me.uv_layers):
+        data = np.empty(2 * len(me.loops), np.float32)
+        uv.data.foreach_get("uv", data)
+        kept.append((uv.name, data))
+        me.uv_layers.remove(uv)
+    area = np.empty(len(me.polygons))
+    me.polygons.foreach_get("area", area)
+    side = render.colour_maps(ob, float(area.sum()))[0]
+    scene_export.unwrap(ob, np.ones(len(me.polygons), bool), [side], [side])
+    me.uv_layers[scene_export.BAKE_UV].name = scene_export.PAINT_UV
+    for name, data in kept:
+        me.uv_layers.new(name=name).data.foreach_set("uv", data)
+    me.uv_layers.active = me.uv_layers[scene_export.PAINT_UV]
+    return side
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:]
     out = Path(argv[0])
@@ -363,14 +406,33 @@ def main():
     # The shape the bake will ship: the export bows the rock's long straight
     # creases (scene_export.straight_creases, then curve.bend after its maps),
     # and the iteration mesh and the section must be that shape, or the editor
-    # draws and fits to a rock the bake then moves. The rock itself is saved
-    # straight below: the bake does this to its own copy.
-    step("finish", "creases")
-    finished = ob.data.copy()
+    # draws and fits to a rock the bake then moves.
+    #
+    # The bake's caps first (one colour map at most `map_max`, the normal half
+    # of it, formations/render.py `map_size`; every face counted as seen, the
+    # caller passes --all-seen), set on the rock itself so the export reads
+    # them as the object's own (render.setting).
+    ob["export_map_max"] = map_max
+    ob["export_maps"] = 1
     import scene_export
     from formations import curve, render
+    # The crease rebuild is done here, ON THE ROCK, once (since 2026-11-25),
+    # and its bows written on it (`scene_export.REBUILT_BOWS`), so the bake
+    # and a decoration's build take this mesh as it is rather than rebuilding
+    # it (a rebuild re-triangulates the creases' planes, and could carry no
+    # UV through). The paint UV is made after it, on the mesh every later copy
+    # starts from: the saved rock, the bake's and the iteration mesh.
+    step("finish", "creases")
+    bows = None
     if render.slate_rock(ob) and render.setting(ob, "export_creases"):
-        bows = scene_export.straight_creases(ob, finished)
+        bows = scene_export.straight_creases(ob, ob.data)
+        scene_export.keep_bows(ob, bows)
+    step("paint-uv")
+    paint_side = paint_unwrap(ob)
+    log(f"paint uv: one {paint_side} map")
+    bpy.ops.wm.save_as_mainfile(filepath=str(out / "rock.blend"), copy=True)
+    finished = ob.data.copy()
+    if bows is not None:
         log(curve.bend(finished, bows))
     full = triangles(finished)
 
@@ -382,12 +444,6 @@ def main():
         + ("" if all(l["closed"] for l in loops) else ", SOME OPEN"))
 
     step("prepare-bake")
-    # The bake's caps: one colour map at most `map_max` (the normal is half,
-    # formations/render.py `map_size`), every face counted as seen (the
-    # caller passes --all-seen). Set on the rock itself, so the export reads
-    # them as the object's own (render.setting).
-    ob["export_map_max"] = map_max
-    ob["export_maps"] = 1
     bpy.ops.wm.save_as_mainfile(filepath=str(out / "bake.blend"), copy=True)
 
     step("geometry", f"{full:,} triangles")
@@ -417,7 +473,7 @@ def main():
         o.select_set(o is geo)
     bpy.context.view_layer.objects.active = geo
     kwargs = dict(filepath=str(out / "geometry.gltf"), export_format="GLTF_SEPARATE", use_selection=True,
-                  export_apply=True, export_yup=True, export_normals=True, export_texcoords=False,
+                  export_apply=True, export_yup=True, export_normals=True, export_texcoords=True,
                   export_tangents=False, export_materials="NONE", export_cameras=False, export_lights=False,
                   export_animations=False, export_skins=False, export_morph=False, export_extras=False,
                   export_attributes=True, export_draco_mesh_compression_enable=False)
@@ -437,6 +493,8 @@ def main():
         warnings.append(f"the rock fills {openings[1] * 100:.0f}% of the opening its guide has seen from the front "
                         f"(the {recipe.get('variant', '')} variant builds over it); try another variant")
     stats = {"warnings": warnings, "triangles": full, "geometryTriangles": tris, "facet": has_facet,
+             # The paint UV's map side (`paint_unwrap`): a texture layer is painted at it.
+             "paintMap": paint_side,
              # Blender's frame (x right, y away from the camera, z up).
              "bounds": {"min": vs.min(0).round(4).tolist(), "max": vs.max(0).round(4).tolist()},
              "area": round(area, 4), "seconds": round(time.time() - t0, 2)}

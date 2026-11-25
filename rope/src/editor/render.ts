@@ -300,6 +300,12 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
   // authored (see `checkpointBox`), so there is no corner to drag and no angle
   // to turn. It is moved, and that is all it has.
   if (isCheckpointNote(body)) return { ...none, body };
+  // A decoration is what grew, on its rock in 3D: its placeholder rect has no
+  // corner or angle anyone means, and the handles stood on its point carried
+  // onto the plane, not where its mark is drawn. A placed one is moved,
+  // turned and sized by its own 3D gizmo (`DecorationController.gizmo`) or
+  // dragged over the rock; a painted one by painting.
+  if (body.object === "decoration") return { ...none, body };
   // Knob sits above the shape's top edge, along the body's own up axis.
   const up = new Vec2(0, -1).rotated(body.rot).normalized();
   if (body.shape.kind === "circle") {

@@ -224,6 +224,10 @@ export function prepareSlateGeometry(mesh: THREE.Mesh, toRock: THREE.Matrix4): b
     out.setAttribute("normal", n);
   }
   out.setAttribute("aFacet", floats(facet));
+  // The paint UV (formation_export.py `paint_unwrap`), which texture layers
+  // are laid out by (paintLayers.ts); a rock generated before it has none.
+  const uv = g.getAttribute("uv");
+  if (uv) out.setAttribute("uv", floats(uv));
   const edge = g.getAttribute("_edge");
   const crease = g.getAttribute("_crease");
   out.setAttribute("aEdge", edge ? floats(edge) : new THREE.BufferAttribute(new Float32Array(position.count * 3).fill(1e3), 3));

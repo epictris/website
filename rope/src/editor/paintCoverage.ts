@@ -45,19 +45,15 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-export class PaintCoverage {
-  private readonly points: Float32Array;
-  private readonly normals: Float32Array;
-  // The points sorted by x, and their sorted x: a stamp visits only the
-  // points within its radius in x.
+// Points sampled evenly over a rock's surface, each with its face's normal,
+// sorted by x so a stamp visits only the points within its radius in x. Kept
+// per rock (a decoded rock is one object until it is regenerated), shared by
+// the coverage and the brush's cursor, so hovering a rock samples it once.
+export class RockSamples {
+  readonly points: Float32Array;
+  readonly normals: Float32Array;
   private readonly order: Uint32Array;
   private readonly xs: Float32Array;
-  // The paint at each point, 0 to 1.
-  private readonly m: Float32Array;
-  // Stamps composited so far.
-  private done = 0;
-  readonly object: THREE.Points;
-  private readonly geometry = new THREE.BufferGeometry();
 
   // `rock` is the formation's drawn rock, its world frame the formation's.
   constructor(rock: THREE.Object3D) {
@@ -131,50 +127,16 @@ export class PaintCoverage {
     const order = Array.from({ length: points }, (_, i) => i).sort((i, j) => this.points[i * 3]! - this.points[j * 3]!);
     this.order = Uint32Array.from(order);
     this.xs = Float32Array.from(order, (i) => this.points[i * 3]!);
-    this.m = new Float32Array(points);
-    this.object = new THREE.Points(
-      this.geometry,
-      new THREE.PointsMaterial({ color: COLOR, size: DOT_PX, sizeAttenuation: false, transparent: true, opacity: OPACITY, depthTest: true, depthWrite: false }),
-    );
-    this.object.name = "paint-coverage";
-    this.object.raycast = () => {};
   }
 
-  get sampleCount(): number {
-    return this.m.length;
+  get count(): number {
+    return this.xs.length;
   }
 
-  // Composite the stamps not yet seen and redraw the covered points. False
-  // when the paint was not appended to (erased whole, undone): the caller
-  // starts a new coverage, as the brush does.
-  update(stamps: readonly PaintStamp[], threshold: number): boolean {
-    if (stamps.length < this.done) return false;
-    if (stamps.length === this.done && this.geometry.getAttribute("position")) return true;
-    for (let i = this.done; i < stamps.length; i++) this.composite(stamps[i]!);
-    this.done = stamps.length;
-    const covered: number[] = [];
-    for (let i = 0; i < this.m.length; i++) {
-      if (this.m[i]! >= threshold) covered.push(this.points[i * 3]!, this.points[i * 3 + 1]!, this.points[i * 3 + 2]!);
-    }
-    this.geometry.setAttribute("position", new THREE.Float32BufferAttribute(covered, 3));
-    this.geometry.computeBoundingSphere();
-    return true;
-  }
-
-  // How many points are covered at `threshold` (for the cases).
-  coveredCount(threshold: number): number {
-    let n = 0;
-    for (const v of this.m) if (v >= threshold) n++;
-    return n;
-  }
-
-  dispose(): void {
-    this.geometry.dispose();
-    (this.object.material as THREE.Material).dispose();
-  }
-
-  // One stamp onto the coverage, as `composite` in stampbrush/geometry.py.
-  private composite(s: PaintStamp): void {
+  // Every point a stamp reaches, with the weight it lays there before its
+  // strength (`composite` in stampbrush/geometry.py): a smooth falloff to
+  // its rim, and nothing on a face turned away from the stamp's normal.
+  reach(s: Pick<PaintStamp, "p" | "n" | "r">, visit: (i: number, w: number) => void): void {
     const [cx, cy, cz] = s.p;
     const r = s.r;
     const nl = Math.hypot(s.n[0], s.n[1], s.n[2]) || 1;
@@ -193,10 +155,96 @@ export class PaintCoverage {
       let w = smoothstep(0, 1, 1 - d / r);
       // A stamp on a ledge's top does not paint the ledge's underside.
       w *= smoothstep(-0.2, 0.35, this.normals[i * 3]! * nx + this.normals[i * 3 + 1]! * ny + this.normals[i * 3 + 2]! * nz);
-      const aw = Math.abs(s.s) * w;
-      if (s.s >= 0) this.m[i] = this.m[i]! + (1 - this.m[i]!) * aw;
-      else this.m[i] = this.m[i]! * (1 - aw);
+      if (w > 0) visit(i, w);
     }
+  }
+}
+
+const sampled = new WeakMap<THREE.Object3D, RockSamples>();
+export function samplesOf(rock: THREE.Object3D): RockSamples {
+  let s = sampled.get(rock);
+  if (!s) sampled.set(rock, (s = new RockSamples(rock)));
+  return s;
+}
+
+export class PaintCoverage {
+  private readonly samples: RockSamples;
+  // The paint at each point, 0 to 1.
+  private readonly m: Float32Array;
+  // Stamps composited so far, and the threshold last drawn at.
+  private done = 0;
+  private threshold = DEFAULT_THRESHOLD;
+  readonly object: THREE.Points;
+  private readonly geometry = new THREE.BufferGeometry();
+
+  constructor(rock: THREE.Object3D) {
+    this.samples = samplesOf(rock);
+    this.m = new Float32Array(this.samples.count);
+    this.object = new THREE.Points(
+      this.geometry,
+      new THREE.PointsMaterial({ color: COLOR, size: DOT_PX, sizeAttenuation: false, transparent: true, opacity: OPACITY, depthTest: true, depthWrite: false }),
+    );
+    this.object.name = "paint-coverage";
+    this.object.raycast = () => {};
+  }
+
+  get sampleCount(): number {
+    return this.m.length;
+  }
+
+  // Composite the stamps not yet seen and redraw the covered points. False
+  // when the paint was not appended to (erased whole, undone): the caller
+  // starts a new coverage, as the brush does.
+  update(stamps: readonly PaintStamp[], threshold: number): boolean {
+    if (stamps.length < this.done) return false;
+    // Nothing new to composite and the same threshold: what is drawn stands.
+    // (A threshold changed with no new stamp redraws: before 2026-11-25 it
+    // returned here, and the dots kept the old threshold's region.)
+    if (stamps.length === this.done && threshold === this.threshold && this.geometry.getAttribute("position")) return true;
+    for (let i = this.done; i < stamps.length; i++) this.composite(stamps[i]!);
+    this.done = stamps.length;
+    this.threshold = threshold;
+    const points = this.samples.points;
+    const covered: number[] = [];
+    for (let i = 0; i < this.m.length; i++) {
+      if (this.m[i]! >= threshold) covered.push(points[i * 3]!, points[i * 3 + 1]!, points[i * 3 + 2]!);
+    }
+    this.geometry.setAttribute("position", new THREE.Float32BufferAttribute(covered, 3));
+    this.geometry.computeBoundingSphere();
+    return true;
+  }
+
+  // Whether a stamp would reach paint of this coverage: any point it lays
+  // weight on that is covered (at the threshold last drawn at). So a dab at
+  // the edge of a patch touches it, and one where it was erased does not.
+  touches(s: Pick<PaintStamp, "p" | "n" | "r">): boolean {
+    let hit = false;
+    this.samples.reach(s, (i) => {
+      if (this.m[i]! >= this.threshold) hit = true;
+    });
+    return hit;
+  }
+
+  // How many points are covered at `threshold` (for the cases).
+  coveredCount(threshold: number): number {
+    let n = 0;
+    for (const v of this.m) if (v >= threshold) n++;
+    return n;
+  }
+
+  dispose(): void {
+    this.geometry.dispose();
+    (this.object.material as THREE.Material).dispose();
+  }
+
+  // One stamp onto the coverage, as `composite` in stampbrush/geometry.py.
+  private composite(s: PaintStamp): void {
+    const m = this.m;
+    this.samples.reach(s, (i, w) => {
+      const aw = Math.abs(s.s) * w;
+      if (s.s >= 0) m[i] = m[i]! + (1 - m[i]!) * aw;
+      else m[i] = m[i]! * (1 - aw);
+    });
   }
 }
 

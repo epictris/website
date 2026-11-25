@@ -49,6 +49,30 @@ export function clampPitch(pitch: number): number {
   return Math.max(-MAX_VIEW_PITCH, Math.min(MAX_VIEW_PITCH, pitch));
 }
 
+// OVER THE POLES (the SpaceMouse, 2026-11-25): a pitch past +-90 degrees is
+// the view carried on over the top, upside down - pitch pi is the plane seen
+// from behind with the sky at the foot of the screen. Kept in (-pi, pi], and
+// returned untouched when it already is.
+export function wrapPitch(pitch: number): number {
+  if (pitch > Math.PI) return pitch - 2 * Math.PI;
+  if (pitch <= -Math.PI) return pitch + 2 * Math.PI;
+  return pitch;
+}
+
+// Whether the view is upside down: carried over a pole, so the camera's up
+// points below the horizon.
+export function upsideDown(pitch: number): boolean {
+  return Math.abs(pitch) > MAX_VIEW_PITCH;
+}
+
+// What a gesture's new pitch becomes. The mouse's orbit stops at the poles
+// (`clampPitch`) from an upright view; a view the SpaceMouse turned over is
+// orbited on round, since clamping it would snap it upright, and stops at the
+// poles again once it is back.
+export function nextPitch(from: number, to: number, overPoles: boolean): number {
+  return overPoles || upsideDown(from) ? wrapPitch(to) : clampPitch(to);
+}
+
 // The pose standing `distance` metres from its target, clamped, and nothing
 // else changed. The view is sized by `halfHeight` (see `ViewPose`), so this is
 // the one conversion back from the quantity a person thinks in.
@@ -60,19 +84,21 @@ export function withDistance(pose: ViewPose, distance: number): ViewPose {
 
 // The camera's own axes, unit length: `right` and `up` span the image plane and
 // `back` points from the target to the eye (three's camera looks down -z, so
-// `back` is its +z). Head on they are the world's axes exactly. The pitch is
-// clamped as `applyPose` clamps it, since the camera that is drawn is the
-// clamped one.
+// `back` is its +z). Head on they are the world's axes exactly. Any pitch, as
+// `applyPose` takes any: past a pole (`upsideDown`) `up` points below the
+// horizon, and `right` stays the same level axis, so the basis turns over the
+// top continuously.
 export function poseBasis(pose: ViewPose): { right: Vec3; up: Vec3; back: Vec3 } {
   if (pose.yaw === 0 && pose.pitch === 0) {
     return { right: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 }, back: { x: 0, y: 0, z: 1 } };
   }
-  const pitch = clampPitch(pose.pitch);
+  const pitch = pose.pitch;
   const sy = Math.sin(pose.yaw);
   const cy = Math.cos(pose.yaw);
   const sp = Math.sin(pitch);
   const cp = Math.cos(pitch);
-  // `lookAt` with a world-up of +y: right is level (no roll), up is back x right.
+  // The pitch is a turn about the level `right`: right is level (no roll),
+  // up is back x right.
   return {
     right: { x: cy, y: 0, z: -sy },
     up: { x: -sp * sy, y: cp, z: -sp * cy },

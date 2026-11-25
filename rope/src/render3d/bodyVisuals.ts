@@ -57,6 +57,7 @@ import {
   isDecorationObject,
   type BeltLook,
   type CollisionObjectData,
+  type DecorationObjectData,
   type LevelBodyData,
 } from "../level/levelFormat";
 import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
@@ -75,7 +76,8 @@ import { orientTo, placeAt, placeBody3d, threeY } from "./space";
 import { decodedFile, loadExportFile, loadModelFile, mountExport, noShadowBehindPlane } from "./sceneDressing";
 import { modelFile } from "./models";
 import { decodedFormationFile, decorationDelta, formationFile, loadFormationFile } from "./formations";
-import { decorationFile } from "../formation/decoration";
+import { exposePaintUv, layered, paintLayerTexture, type PaintLayer } from "./paintLayers";
+import { decorationFile, decorationLayerFile, isTextureLayer } from "../formation/decoration";
 
 // The floor an authored colour's brightness is lifted to before it tints a
 // generated surface. A belt's `color` was authored for a flat 2D renderer, where
@@ -571,9 +573,15 @@ export class BodyVisual {
     holder.visible = this.modelsShown;
     this.modelHolders.push(holder);
     const solid = data.objects.some(isCollisionObject);
+    // Its TEXTURE LAYERS (paintLayers.ts): the grown texture-only mosses on
+    // it, in the body's order, worn by the rock's own materials.
+    const layers = data.objects
+      .filter((o): o is DecorationObjectData => isDecorationObject(o) && o.formation === f.id && !!o.built && isTextureLayer(o))
+      .map((o) => ({ texture: paintLayerTexture(decorationLayerFile(o.built!.hash)), tag: o }));
     const land = (loaded: THREE.Object3D | null, late: boolean): void => {
       if (!loaded || this.disposed) return;
       const node = mountExport(loaded);
+      if (layers.length) this.wearLayers(node, layers, which.baked);
       holder.add(node);
       node.updateWorldMatrix(true, true);
       if (!solid) noShadowBehindPlane(node);
@@ -583,6 +591,23 @@ export class BodyVisual {
     const ready = decodedFormationFile(which);
     if (ready !== undefined) land(ready, false);
     else void loadFormationFile(which).then((loaded) => land(loaded, true));
+  }
+
+  // A rock's materials, each a copy with the layers over its colour, on every
+  // mesh that has the paint UV (a rock generated before it shows none).
+  private wearLayers(node: THREE.Object3D, layers: readonly PaintLayer[], baked: boolean): void {
+    const copies = new Map<THREE.Material, THREE.Material>();
+    node.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || Array.isArray(mesh.material) || !exposePaintUv(mesh.geometry, baked)) return;
+      let copy = copies.get(mesh.material);
+      if (!copy) {
+        copy = layered(mesh.material, layers);
+        copies.set(mesh.material, copy);
+        this.ownedMaterials.push(copy);
+      }
+      mesh.material = copy;
+    });
   }
 
   // The body's DECORATIONS (`DecorationObjectData`, docs/formations.md): each
@@ -598,7 +623,8 @@ export class BodyVisual {
     const local = localPlacement(this.built!, f);
     const solid = data.objects.some(isCollisionObject);
     for (const o of data.objects) {
-      if (!isDecorationObject(o) || o.formation !== f.id || !o.built) continue;
+      // A texture layer grows no mesh: its rock wears it (`mountFormation`).
+      if (!isDecorationObject(o) || o.formation !== f.id || !o.built || isTextureLayer(o)) continue;
       const holder = this.piece(local.pos.x, local.pos.y, local.rot, o);
       holder.name = `decoration:${o.id}`;
       holder.visible = this.modelsShown;

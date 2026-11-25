@@ -209,6 +209,7 @@ import {
   type SceneTag,
 } from "./model";
 import { pickTagOf } from "../render3d/bodyVisuals";
+import { paintLayerAt } from "../render3d/paintLayers";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { FormationJobs, mountJobsPanel } from "./formationJobs";
 import { addShapeToGuide, applyJobResult, buildFormationSection, createBackdrop, guideCentre, requestFormationBuild, SHAPE_KINDS, type FormationHost } from "./formationPanel";
@@ -222,7 +223,7 @@ import { guideColor, guideCss } from "./guideColors";
 import { CUBE_FACES, ViewCube, type CubeFace } from "./viewCube";
 import { headOn } from "./visuals/viewControls";
 import { DECORATION_LABELS, DecorationController, type SurfaceHit } from "./decorationPanel";
-import { newPrimitive, nodeAt, replaceAt, scaleTree, type PrimitiveKind } from "../formation/solidTree";
+import { newPrimitive, nodeAt, replaceAt, scaleTree, scaleTreeAxes, type PrimitiveKind } from "../formation/solidTree";
 import { PAINTED_DECORATIONS, scaleLevelData, type DecorationKind, type PaintStamp, type RawLevelData, type SolidNode, type SolidPrim } from "../level/levelFormat";
 import { PAINT_API } from "../formation/store";
 import {
@@ -338,6 +339,7 @@ import {
 } from "./visuals/workspace";
 import { guidePlaneZ } from "./visuals/guides";
 import { EDITOR_FOV_Y_DEG } from "./visuals/viewPose";
+import { NdofInput } from "./ndof";
 import { surfacePlacement } from "./visuals/surfaceDrop";
 import { describe, fieldRow, heading, PANEL_UI_CSS, pruneEmptySections, revealInSection, section, setDefaultOpen } from "./panelUi";
 import {
@@ -766,6 +768,30 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // is drawn through the pose at any angle (projectedCanvas.ts). So a press is
   // resolved by the one path, and a turned view is simply `orbited`.
   let visuals: VisualsWorkspace | null = null;
+  // THE SPACEMOUSE (editor/ndof.ts, docs/editor.md "SpaceMouse"): read once a
+  // frame and flown through the pose (`VisualsWorkspace.ndof`). Its right side
+  // button (spacenavd's 1; the left is 0, unbound) presses Escape: a real
+  // keydown dispatched where the focus is, so it reaches every Escape handler
+  // a key would - a draft, a transform, a picker, a menu.
+  const NDOF_ESCAPE_BUTTON = 1;
+  const ndof = new NdofInput((button) => {
+    if (button !== NDOF_ESCAPE_BUTTON) return;
+    const target = document.activeElement ?? document.body;
+    for (const type of ["keydown", "keyup"] as const) {
+      target.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
+    }
+  });
+  let ndofLast = -1;
+  function flyNdof(now: number): void {
+    const dt = ndofLast < 0 ? 0 : Math.min(0.1, (now - ndofLast) / 1000);
+    ndofLast = now;
+    if (!visuals?.active || mode !== "edit" || dt <= 0) return;
+    if (!visuals.ndof(ndof.axes, dt, projection === "orthographic")) return;
+    // A cube swing in flight gives way to the cap, as it does to the wheel.
+    viewSwing++;
+    cameraFromPose();
+    refreshOrbitBtn();
+  }
   // Is a scene drawn this frame? Whenever there is WebGL to draw one.
   const sceneShown = (): boolean => scene3d !== null && viewMode !== "2d";
   // How much of the scene the 2D overlay is responsible for. With a scene under
@@ -926,9 +952,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             addPrimitive(kind);
             return;
           }
-          const guide = f.formation?.guide;
-          if (guide?.kind !== "solid") return;
-          addShapeToGuide(formationHost, f, newPrimitive(kind, guideCentre(guide.tree)));
+          addShapeShown(f, kind);
         }),
       );
     }
@@ -950,12 +974,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const flat: EdItem[] = [];
     for (const it of items) {
       const solid = it.object === "formation" ? solidView?.boxOf(it.id) : null;
+      // A decoration is what grew, where it grew: its mark on the plane is a
+      // 15 cm glyph at the wrong depth, so F on a fern came in to a few
+      // centimetres of its root (2026-11-25).
+      const drawn = !solid && it.object === "decoration" ? drawnBox(it.id) : null;
       if (solid) box.union(solid);
+      else if (drawn) box.union(drawn);
       else flat.push(it);
     }
     const rest = itemsBox(flat);
     if (rest) box.union(new THREE.Box3(new THREE.Vector3(rest.min.x, rest.min.y, rest.min.z), new THREE.Vector3(rest.max.x, rest.max.y, rest.max.z)));
     return box.isEmpty() ? null : { min: { x: box.min.x, y: box.min.y, z: box.min.z }, max: { x: box.max.x, y: box.max.y, z: box.max.z } };
+  }
+  // What the scene draws of an item, as a box in three's world: every object
+  // carrying its pick tag (`pickTagOf`). Null when nothing is drawn of it.
+  function drawnBox(id: number): THREE.Box3 | null {
+    const tag = sceneObjectOfItem.get(id);
+    if (tag === undefined || !scene3d) return null;
+    const box = new THREE.Box3();
+    scene3d.scene.traverse((o) => {
+      if (o.userData["pickTag"] === tag) box.union(new THREE.Box3().setFromObject(o));
+    });
+    return box.isEmpty() ? null : box;
   }
   // The view taken to the game's camera at rest where it is looking
   // (`gameFogCameraZ` is the same camera, asked for its depth).
@@ -1358,7 +1398,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     },
     lens: () => model.camera?.focalLength,
   });
-  if (scene3d) scene3d.editorLayer.add(decorations.preview);
+  if (scene3d) scene3d.editorLayer.add(decorations.preview, decorations.cursor.object);
   // Where a decoration gesture lands: the formation's rock under the pointer.
   // The palette's placing (`decorations.anyRock`) lands on whichever generated
   // rock is under the pointer.
@@ -2574,7 +2614,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // body turns about the centre of mass the engine mounts it at; a selection is
   // an arrangement, and what an arrangement has is a place and an angle.
   type GizmoTarget =
-    | { kind: "item" | "body"; id: number }
+    | { kind: "item" | "body" | "decoration"; id: number }
     | { kind: "selection"; ids: number[] }
     | { kind: "berry"; vineId: number; index: number }
     | { kind: "solid"; key: string };
@@ -2708,11 +2748,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (node && !("op" in node)) return { kind: "solid", key: JSON.stringify(solid) };
     }
     if (selectedBodyIds.size === 1) return { kind: "body", id: [...selectedBodyIds][0]! };
-    if (selectedIds.size === 1) return { kind: "item", id: [...selectedIds][0]! };
+    if (selectedIds.size === 1) {
+      const id = [...selectedIds][0]!;
+      // A decoration is what grew, in 3D, not its mark on the plane: a placed
+      // one has handles of its own on it (`DecorationController.gizmo`), and
+      // a painted one none - it is moved by painting, and the object handles
+      // on its mark moved nothing but the mark.
+      const dec = itemOf(id)?.decoration;
+      if (dec) return isPainted(dec.kind) ? null : { kind: "decoration", id };
+      return { kind: "item", id };
+    }
     // Whatever Delete, Duplicate and a nudge would act on (`operandItems`), so
     // the gizmo and the keyboard move the same things: selected BODIES mean
     // every object in them, and selected objects mean themselves.
-    const ids = operandItems().map((i) => i.id);
+    const operands = operandItems();
+    // Decorations alone have nothing the shared handles could move: those
+    // would move their marks on the plane, not what grew.
+    if (operands.every((i) => i.object === "decoration")) return null;
+    const ids = operands.map((i) => i.id);
     return ids.length > 1 ? { kind: "selection", ids } : null;
   }
 
@@ -2741,7 +2794,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ? berryHandlers(spec.vineId, spec.index)
         : spec.kind === "solid"
           ? solidHandlers()
-          : spec.kind === "body"
+          : spec.kind === "decoration"
+            ? (decorations.gizmo(spec.id) ?? objectHandlers(spec.id))
+            : spec.kind === "body"
             ? model.bodies3d.has(spec.id)
               ? pivoted(body3dHandlers(spec.id), () => solidCentre(bodyMembers(model.items, spec.id)))
               : bodyHandlers(spec.id)
@@ -2750,10 +2805,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // THE MODAL TRANSFORMS (Blender's **G**, **R** and **S**): what the gizmo
   // would move, turn or size follows the pointer until a click or Enter
-  // places it, or Esc or a right click puts it back. X, Y or Z holds it to
-  // that axis (again frees it). Driven through the gizmo's own handlers
-  // (`handlersFor`), so each does exactly what the matching handle drag would,
-  // as one undo step, and a cancel leaves no step behind.
+  // places it, or Esc or a right click puts it back. Driven through the
+  // gizmo's own handlers (`handlersFor`), so each does exactly what the
+  // matching handle drag would, as one undo step, and a cancel leaves no step
+  // behind.
   //
   // - Grab moves in the plane facing the camera through where the target
   //   stood (in a plane parallel to the gameplay plane for a target with no
@@ -2766,9 +2821,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //   screen against where it started, on every axis the target sizes along;
   //   an axis sizes along that one of the target's own (the gizmo's boxes are
   //   local too).
+  //
+  // CONSTRAINTS. X, Y or Z holds it to that axis; Shift+X, Y or Z to the
+  // plane of the other two (a turn: about the axis left out, as Blender's).
+  // The same key again frees it.
+  //
+  // NUMBERS (Blender's numeric input). Digits typed make it exact: metres for
+  // a grab, degrees for a turn, a factor for a size. While a number is typed
+  // the pointer is ignored; Backspace takes it back a character at a time
+  // (Ctrl+Backspace all of it), and with nothing typed the pointer leads
+  // again. Minus negates. One number per free axis, Tab stepping to the next
+  // (X, then Y, then Z); a size's one number sizes every free axis until Tab
+  // is pressed. A typed amount is not snapped to the grid.
   type XformKind = "translate" | "rotate" | "scale";
   type XformAxis = "x" | "y" | "z";
-  let grab: {
+  const XFORM_AXES: readonly XformAxis[] = ["x", "y", "z"];
+  // The smallest factor a size is taken to: a solid sized to nothing is no
+  // solid at all.
+  const MIN_SCALE_FACTOR = 1e-3;
+  interface Xform {
     kind: XformKind;
     h: GizmoHandlers;
     axes: NonNullable<GizmoAxes>;
@@ -2776,8 +2847,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     quat: THREE.Quaternion;
     plane: THREE.Plane;
     hit0: THREE.Vector3 | null;
-    // The target's centre on screen, and where the pointer started from it
-    // (rotate and scale).
+    // The target's centre on screen, and where the pointer started (rotate
+    // and scale measure from the centre; a grab held to a plane from the
+    // start).
     centre: Vec2;
     start: Vec2;
     // Rotate: the pointer's angle last frame, and the turn so far (unwrapped,
@@ -2785,18 +2857,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lastAngle: number;
     turn: number;
     axis: XformAxis | null;
-    // A guide sized as a whole (`guideScaleHandlers`): uniform only.
+    // With `axis`: held to the plane of the other two instead (Shift).
+    planeLock: boolean;
+    // A guide sized as a whole whose shapes are turned off its axes
+    // (`guideScaleHandlers`): evenly only.
     uniform: boolean;
+    // The numbers typed, one per field (`fieldCount`): each one's digits and
+    // sign, the field being typed into, and whether Tab has been pressed (a
+    // size's first number then stops sizing every axis).
+    typed: string[];
+    neg: boolean[];
+    field: number;
+    tabbed: boolean;
     // The undo step `begin` pushed, so a cancel takes back that one only.
     step: EdModel | undefined;
-  } | null = null;
+  }
+  let grab: Xform | null = null;
   const XFORM_NAMES: Record<XformKind, string> = { translate: "Grab", rotate: "Rotate", scale: "Scale" };
+  const unitAxis = (a: XformAxis): THREE.Vector3 => new THREE.Vector3(a === "x" ? 1 : 0, a === "y" ? 1 : 0, a === "z" ? 1 : 0);
   const grabRay = new THREE.Raycaster();
-  function grabPoint(scr: Vec2): THREE.Vector3 | null {
-    if (!grab || !visuals || !scene3d) return null;
+  // Where the pointer's ray meets a plane.
+  function rayOnPlane(plane: THREE.Plane, scr: Vec2): THREE.Vector3 | null {
+    if (!visuals || !scene3d) return null;
     const n = visuals.ndc(scr);
     grabRay.setFromCamera(new THREE.Vector2(n.x, n.y), scene3d.camera);
-    return grabRay.ray.intersectPlane(grab.plane, new THREE.Vector3());
+    return grabRay.ray.intersectPlane(plane, new THREE.Vector3());
   }
   // A world point on the canvas (CSS pixels).
   function screenOfWorld(p: THREE.Vector3): Vec2 {
@@ -2805,21 +2890,97 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   // The pointer's angle about the centre, counterclockwise on screen.
   const screenAngle = (g: { centre: Vec2 }, scr: Vec2): number => Math.atan2(-(scr.y - g.centre.y), scr.x - g.centre.x);
-  // Start one. False when the selection offers nothing of this kind (no
-  // target, or a light that has no size), so the key can mean what it means
-  // without a selection (R and S arm the Rect and Checkpoint tools in 2D).
+  // The axes a grab moves along or a size sizes along: the one held, the two
+  // of a held plane, or every one the target has.
+  function freeAxes(g: Xform): XformAxis[] {
+    const want = !g.axis ? XFORM_AXES : g.planeLock ? XFORM_AXES.filter((a) => a !== g.axis) : [g.axis];
+    return want.filter((a) => g.axes[a]);
+  }
+  // How many numbers can be typed: one angle for a turn, one factor for a
+  // guide sized evenly, else one per free axis.
+  const fieldCount = (g: Xform): number => (g.kind === "rotate" || g.uniform ? 1 : Math.max(1, freeAxes(g).length));
+  const isTyping = (g: Xform): boolean => g.typed.some((t, i) => t !== "" || g.neg[i]);
+  // Field i's number; an empty one changes nothing (0, or a factor of 1).
+  function typedValue(g: Xform, i: number): number {
+    const t = g.typed[i] ?? "";
+    const v = t === "" || t === "." ? (g.kind === "scale" ? 1 : 0) : Number(t);
+    return g.neg[i] ? -v : v;
+  }
+  // THE READOUT, Blender's header: what a transform is doing, over the
+  // viewport's top left for as long as it lasts. Not the title bar's notice,
+  // which sits under the dock's tools, out of sight in Formations. Made on
+  // first use, when the editor's root is there to hold it.
+  let xformReadoutEl: { box: HTMLElement; amount: HTMLElement; hint: HTMLElement } | null = null;
+  // An amount: plain text, and the number being typed (drawn with its caret).
+  type ReadoutPart = string | { typing: string };
+  function xformReadout(amount: readonly ReadoutPart[] | null, hint: string, warn = false): void {
+    if (!xformReadoutEl) {
+      const box = el("div", "ed-xform");
+      const a = el("div", "ed-xform-amount");
+      const h = el("div", "ed-xform-hint");
+      box.append(a, h);
+      box.setAttribute("role", "status");
+      root.appendChild(box);
+      xformReadoutEl = { box, amount: a, hint: h };
+    }
+    const r = xformReadoutEl;
+    if (amount !== null) {
+      r.amount.replaceChildren(
+        ...amount.map((p) => {
+          if (typeof p === "string") return document.createTextNode(p);
+          const f = el("span", "ed-xform-field");
+          f.textContent = p.typing;
+          return f;
+        }),
+      );
+    }
+    r.hint.textContent = hint;
+    r.hint.classList.toggle("ed-xform-warn", warn);
+    r.box.hidden = false;
+  }
+  // Something it cannot do, said where the eye is.
+  function xformWarn(text: string): void {
+    xformReadout(null, text, true);
+  }
+  // What it is held to, and the amount on each free axis (`vals`, in metres,
+  // degrees or a factor): the typed text in place of each amount while
+  // typing, the field being typed into marked.
+  function xformNotice(g: Xform, vals: readonly number[]): void {
+    const typing = isTyping(g);
+    const free = freeAxes(g);
+    const unit = g.kind === "translate" ? " m" : g.kind === "rotate" ? "°" : "";
+    const pre = g.kind === "scale" ? "×" : "";
+    const amount = (i: number): ReadoutPart[] => {
+      if (!typing) return [`${pre}${g.kind === "rotate" ? Math.round(vals[i] ?? 0) : (vals[i] ?? 0).toFixed(2)}${unit}`];
+      const s = `${g.neg[i] ? "-" : ""}${g.typed[i] ?? ""}`;
+      return i === g.field ? [pre, { typing: s }, unit] : [`${pre}${s || (g.kind === "scale" ? "1" : "0")}${unit}`];
+    };
+    const held =
+      !g.axis ? "" : g.kind === "rotate" ? ` about ${g.axis.toUpperCase()}` : ` along ${free.map((a) => a.toUpperCase()).join(" and ")}`;
+    // One number when there is one field, or a size's one number sizing
+    // every free axis (until Tab).
+    const one = fieldCount(g) === 1 || (g.kind === "scale" && !g.tabbed);
+    const amounts = one ? amount(0) : free.flatMap((a, i) => [...(i ? [" · "] : []), `${a.toUpperCase()} `, ...amount(i)]);
+    const keys = typing
+      ? `${fieldCount(g) > 1 ? "Tab next axis · " : ""}Backspace · Enter places · Esc cancels`
+      : "type a number · X Y Z axis · Shift+X Y Z plane · click or Enter places · Esc cancels";
+    xformReadout([`${XFORM_NAMES[g.kind]}${held}: `, ...amounts], keys);
+  }
   // **S** on a body holding a solid guide: a body has no size, so the guide
-  // is what is sized - every shape of it, uniformly, about its middle
-  // (`scaleTree`). Uniform only: a per-axis factor on a turned shape would be
-  // a shear. Null for a body with no solid guide.
-  function guideScaleHandlers(spec: GizmoTarget): GizmoHandlers | null {
+  // is what is sized - every shape of it, about its middle. Along one axis
+  // of the guide's frame only while every shape lies along its axes
+  // (`scaleTreeAxes`: sizing a turned shape along an axis would be a shear),
+  // else evenly (`scaleTree`). Null for a body with no solid guide.
+  function guideScaleHandlers(spec: GizmoTarget): { h: GizmoHandlers; perAxis: boolean } | null {
     if (spec.kind !== "body") return null;
     const f = bodyMembers(model.items, spec.id).find((m) => m.object === "formation" && m.formation?.guide.kind === "solid");
     if (!f) return null;
+    const g0 = f.formation!.guide;
+    const perAxis = g0.kind === "solid" && scaleTreeAxes(g0.tree, [0, 0, 0], [1, 1, 1]) !== null;
     const base = handlersFor(spec);
     let tree0: SolidNode | null = null;
     let centre: [number, number, number] = [0, 0, 0];
-    return {
+    const h: GizmoHandlers = {
       pose: () => base.pose(),
       axes: (m) => (m === "scale" ? { x: true, y: true, z: true } : base.axes(m)),
       begin() {
@@ -2830,8 +2991,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
       apply(_m, _pos, _quat, scale) {
         if (!tree0) return;
-        const k = Math.max(0.01, scale.x);
-        f.formation = { ...f.formation!, guide: { kind: "solid", tree: scaleTree(tree0, centre, k) } };
+        const k = (v: number): number => Math.max(MIN_SCALE_FACTOR, v);
+        const even = scale.x === scale.y && scale.y === scale.z;
+        const tree = even || !perAxis ? scaleTree(tree0, centre, k(scale.x)) : scaleTreeAxes(tree0, centre, [k(scale.x), k(scale.y), k(scale.z)]);
+        if (!tree) return;
+        f.formation = { ...f.formation!, guide: { kind: "solid", tree } };
         markDirty();
       },
       end() {
@@ -2839,13 +3003,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         rebuildInspector();
       },
     };
+    return { h, perAxis };
   }
+  // Start one. False when the selection offers nothing of this kind (no
+  // target, or a light that has no size), so the key can mean what it means
+  // without a selection (R and S arm the Rect and Checkpoint tools in 2D).
   function startTransform(kind: XformKind): boolean {
     if (mode !== "edit" || !scene3d || !visuals || grab) return false;
     const spec = gizmoSpec();
     if (!spec) return false;
     const guideScale = kind === "scale" ? guideScaleHandlers(spec) : null;
-    const h = guideScale ?? handlersFor(spec);
+    const h = guideScale?.h ?? handlersFor(spec);
     const axes = h.axes(kind);
     if (!axes || !(axes.x || axes.y || axes.z)) return false;
     const { pos, quat } = h.pose();
@@ -2856,8 +3024,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // parallel to it; anything else in the plane facing the camera.
     const normal = kind !== "translate" || axes.z ? scene3d.camera.getWorldDirection(new THREE.Vector3()) : new THREE.Vector3(0, 0, 1);
     const pointer = lastPointerScreen ?? new Vec2(cssW / 2, cssH / 2);
-    const centre = screenOfWorld(pos);
-    grab = {
+    const g: Xform = {
       kind,
       h,
       axes,
@@ -2865,64 +3032,118 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       quat: quat.clone(),
       plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, pos),
       hit0: null,
-      centre,
+      centre: screenOfWorld(pos),
       start: pointer,
       lastAngle: 0,
       turn: 0,
       axis: null,
-      uniform: guideScale !== null,
+      planeLock: false,
+      uniform: guideScale !== null && !guideScale.perAxis,
+      typed: ["", "", ""],
+      neg: [false, false, false],
+      field: 0,
+      tabbed: false,
       step: top !== before ? top : undefined,
     };
-    grab.hit0 = grabPoint(pointer);
-    grab.lastAngle = screenAngle(grab, pointer);
+    grab = g;
+    g.hit0 = rayOnPlane(g.plane, pointer);
+    g.lastAngle = screenAngle(g, pointer);
     syncGizmo();
-    flashNotice(`${XFORM_NAMES[kind]}: move the pointer · X / Y / Z holds an axis · click or Enter places · Esc or right click cancels`);
+    xformNotice(g, kind === "rotate" ? [0] : freeAxes(g).map(() => (kind === "scale" ? 1 : 0)));
     canvas.style.cursor = kind === "translate" ? "move" : "crosshair";
     return true;
   }
+  // How far the pointer has carried a grab, on its free axes only. Held to a
+  // plane, the pointer's ray is met with that plane through where the target
+  // stood, unless it is seen nearly edge on; otherwise with the plane facing
+  // the camera, and the axes it may not move along dropped.
+  function grabDelta(g: Xform, scr: Vec2): THREE.Vector3 | null {
+    let d: THREE.Vector3 | null = null;
+    if (g.axis && g.planeLock && scene3d) {
+      const n = unitAxis(g.axis);
+      if (Math.abs(n.dot(scene3d.camera.getWorldDirection(new THREE.Vector3()))) > 0.2) {
+        const held = new THREE.Plane().setFromNormalAndCoplanarPoint(n, g.pos0);
+        const from = rayOnPlane(held, g.start);
+        const to = rayOnPlane(held, scr);
+        if (from && to) d = to.sub(from);
+      }
+    }
+    if (!d) {
+      const hit = rayOnPlane(g.plane, scr);
+      if (!hit) return null;
+      if (!g.hit0) g.hit0 = hit.clone();
+      d = hit.sub(g.hit0);
+    }
+    const free = freeAxes(g);
+    for (const a of XFORM_AXES) if (!free.includes(a)) d[a] = 0;
+    return d;
+  }
+  // The pointer moved: a turn keeps count of how far it has gone round (even
+  // while a number is typed, so the pointer takes over again where it is).
   function moveTransform(scr: Vec2): void {
     const g = grab;
-    if (!g || !scene3d) return;
-    const one = new THREE.Vector3(1, 1, 1);
-    if (g.kind === "translate") {
-      const hit = grabPoint(scr);
-      if (!hit) return;
-      if (!g.hit0) g.hit0 = hit.clone();
-      const d = hit.sub(g.hit0);
-      if (g.axis) {
-        const keep = d[g.axis];
-        d.set(0, 0, 0);
-        d[g.axis] = keep;
-      }
-      g.h.apply("translate", g.pos0.clone().add(d), g.quat, one);
-    } else if (g.kind === "rotate") {
+    if (!g) return;
+    if (g.kind === "rotate") {
       const a = screenAngle(g, scr);
       let d = a - g.lastAngle;
       if (d > Math.PI) d -= 2 * Math.PI;
       if (d < -Math.PI) d += 2 * Math.PI;
       g.turn += d;
       g.lastAngle = a;
+    }
+    if (!isTyping(g)) applyTransform();
+  }
+  // Puts the target where the pointer, or the typed number, says.
+  function applyTransform(): void {
+    const g = grab;
+    if (!g || !scene3d) return;
+    const typing = isTyping(g);
+    const scr = lastPointerScreen ?? g.start;
+    const one = new THREE.Vector3(1, 1, 1);
+    const free = freeAxes(g);
+    // A typed amount is exact: the handlers' grid snap would round it.
+    const run = (apply: () => void): void => {
+      if (!typing) return apply();
+      const was = snapOn;
+      snapOn = false;
+      try {
+        apply();
+      } finally {
+        snapOn = was;
+      }
+    };
+    if (g.kind === "translate") {
+      const d = typing ? new THREE.Vector3() : grabDelta(g, scr);
+      if (!d) return;
+      if (typing) free.forEach((a, i) => (d[a] = typedValue(g, i)));
+      run(() => g.h.apply("translate", g.pos0.clone().add(d), g.quat, one));
+      xformNotice(g, free.map((a) => d[a]));
+    } else if (g.kind === "rotate") {
       // Counterclockwise on screen is a right-handed turn about the axis
-      // pointing at the viewer; about a world axis, by which way it faces.
+      // pointing at the viewer; about a world axis, by which way it faces. A
+      // typed angle is right-handed about the axis itself, as Blender's.
       const back = scene3d.camera.getWorldDirection(new THREE.Vector3()).negate();
-      const free = g.axes.x && g.axes.y && g.axes.z;
-      const axis = g.axis
-        ? new THREE.Vector3(g.axis === "x" ? 1 : 0, g.axis === "y" ? 1 : 0, g.axis === "z" ? 1 : 0)
-        : free
-          ? back.clone()
-          : new THREE.Vector3(0, 0, 1);
-      const facing = axis.dot(back);
-      const sign = Math.abs(facing) < 1e-6 ? 1 : Math.sign(facing);
-      let angle = g.turn * sign;
-      if (snapOn) angle = Math.round(angle / ANGLE_STEP) * ANGLE_STEP;
+      const axis = g.axis ? unitAxis(g.axis) : g.axes.x && g.axes.y && g.axes.z ? back.clone() : new THREE.Vector3(0, 0, 1);
+      let angle: number;
+      if (typing) angle = (typedValue(g, 0) * Math.PI) / 180;
+      else {
+        const facing = axis.dot(back);
+        angle = g.turn * (Math.abs(facing) < 1e-6 ? 1 : Math.sign(facing));
+        if (snapOn) angle = Math.round(angle / ANGLE_STEP) * ANGLE_STEP;
+      }
       const q = new THREE.Quaternion().setFromAxisAngle(axis, angle).multiply(g.quat);
-      g.h.apply("rotate", g.pos0, q, one);
-      flashNotice(`Rotate ${Math.round((angle * 180) / Math.PI)}°${g.axis ? ` about ${g.axis.toUpperCase()}` : ""}`);
+      run(() => g.h.apply("rotate", g.pos0, q, one));
+      xformNotice(g, [(angle * 180) / Math.PI]);
     } else {
       const f = scr.distanceTo(g.centre) / Math.max(1, g.start.distanceTo(g.centre));
-      const along = (k: XformAxis): number => (g.axes[k] && (!g.axis || g.axis === k) ? f : 1);
-      g.h.apply("scale", g.pos0, g.quat, new THREE.Vector3(along("x"), along("y"), along("z")));
-      flashNotice(`Scale ×${f.toFixed(2)}${g.axis ? ` along its ${g.axis.toUpperCase()}` : ""}`);
+      const factor = (a: XformAxis): number => {
+        const i = free.indexOf(a);
+        if (i < 0) return 1;
+        if (!typing) return f;
+        return Math.max(MIN_SCALE_FACTOR, typedValue(g, g.tabbed ? i : 0));
+      };
+      run(() => g.h.apply("scale", g.pos0, g.quat, new THREE.Vector3(factor("x"), factor("y"), factor("z"))));
+      xformNotice(g, free.map(factor));
     }
     syncGizmo();
   }
@@ -2930,6 +3151,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const g = grab;
     if (!g) return;
     grab = null;
+    if (xformReadoutEl) xformReadoutEl.box.hidden = true;
     if (!keep) g.h.apply(g.kind, g.pos0, g.quat, new THREE.Vector3(1, 1, 1));
     g.h.end(g.kind);
     if (!keep && g.step && history[history.length - 1] === g.step) {
@@ -2943,21 +3165,63 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     syncGizmo();
     applyToolCursor();
   }
-  function setTransformAxis(axis: XformAxis): void {
+  // X, Y or Z (`planeLock`: with Shift) pressed mid-transform.
+  function setTransformAxis(axis: XformAxis, planeLock: boolean): void {
     const g = grab;
     if (!g) return;
+    const A = axis.toUpperCase();
     if (g.uniform) {
-      flashNotice("Scale: a whole guide sizes evenly; to size one shape along an axis, pick it in the guide's stack first");
+      xformWarn("This guide has shapes turned off its axes, so it sizes evenly; to size one shape along an axis, pick it in the guide's stack first");
       return;
     }
-    if (!g.axes[axis]) {
-      flashNotice(`${XFORM_NAMES[g.kind]}: this has no ${axis.toUpperCase()} to ${g.kind === "translate" ? "move along" : g.kind === "rotate" ? "turn about" : "size along"}`);
+    const verb = g.kind === "translate" ? "move along" : g.kind === "rotate" ? "turn about" : "size along";
+    // A turn held to a plane turns about the axis it leaves out.
+    const ok = planeLock && g.kind !== "rotate" ? XFORM_AXES.some((a) => a !== axis && g.axes[a]) : g.axes[axis];
+    if (!ok) {
+      xformWarn(`This has ${planeLock && g.kind !== "rotate" ? `nothing but ${A}` : `no ${A}`} to ${verb}`);
       return;
     }
-    g.axis = g.axis === axis ? null : axis;
-    if (!g.axis) flashNotice(`${XFORM_NAMES[g.kind]}: free`);
-    else if (g.kind === "translate") flashNotice(`Grab along ${axis.toUpperCase()} (${axis.toUpperCase()} again frees it)`);
-    if (lastPointerScreen) moveTransform(lastPointerScreen);
+    const lock = planeLock && g.kind !== "rotate";
+    const same = g.axis === axis && g.planeLock === lock;
+    g.axis = same ? null : axis;
+    g.planeLock = !same && lock;
+    g.field = Math.min(g.field, fieldCount(g) - 1);
+    applyTransform();
+  }
+  // A key typed into the transform's number (Blender's numeric input); false
+  // when it is not one.
+  function typeTransformKey(e: KeyboardEvent): boolean {
+    const g = grab;
+    if (!g) return false;
+    const i = g.field;
+    const digit = /^(?:Digit|Numpad)([0-9])$/.exec(e.code);
+    if (digit && !e.ctrlKey && !e.altKey && !e.metaKey) g.typed[i] += digit[1];
+    else if (e.code === "Period" || e.code === "NumpadDecimal" || e.code === "Comma") {
+      if (!g.typed[i]!.includes(".")) g.typed[i] += ".";
+    } else if (e.code === "Minus" || e.code === "NumpadSubtract") {
+      if (g.kind === "scale") {
+        xformWarn("A negative factor would turn it inside out; type a factor above 0");
+        return true;
+      }
+      g.neg[i] = !g.neg[i];
+    } else if (e.code === "Backspace") {
+      if (e.ctrlKey) {
+        g.typed = ["", "", ""];
+        g.neg = [false, false, false];
+        g.field = 0;
+        g.tabbed = false;
+      } else if (g.typed[i]) g.typed[i] = g.typed[i]!.slice(0, -1);
+      else if (g.neg[i]) g.neg[i] = false;
+      else if (g.field > 0) g.field--;
+    } else if (e.code === "Tab") {
+      const n = fieldCount(g);
+      if (n > 1) {
+        g.field = (g.field + (e.shiftKey ? n - 1 : 1)) % n;
+        g.tabbed = true;
+      }
+    } else return false;
+    applyTransform();
+    return true;
   }
 
   function syncGizmo(): void {
@@ -3978,9 +4242,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const shapeButtons = SHAPE_KINDS.map(({ label, kind }) => {
     const b = button(`+ ${label}`, () => {
       const f = activeSolidFormation();
-      const guide = f?.formation?.guide;
-      if (!f || guide?.kind !== "solid") return;
-      addShapeToGuide(formationHost, f, newPrimitive(kind, guideCentre(guide.tree)));
+      if (f) addShapeShown(f, kind);
     });
     b.title = `Add a ${label.toLowerCase()} to the selected guide's stack, in its middle, to add to, cut or intersect it (Shift+A in the view)`;
     return b;
@@ -4089,7 +4351,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const t = visuals?.view?.target;
     const at = t ? { x: t.x, y: threeY(t.y), z: t.z } : { x: camera.position.x, y: camera.position.y, z: 0 };
     const made = createBackdrop(formationHost, at, newPrimitive(kind, [0, 0, 0]));
-    if (made) setBodySelection(made.bodyId);
+    if (!made) return;
+    revealGuide(made);
+    setBodySelection(made.bodyId);
+  }
+  // A guide just made, or just added a shape to, is drawn whatever Show ->
+  // Guides says: it was made to be worked on, and with it hidden the add
+  // would look like nothing happened. Its own override (`formationView`), so
+  // the next Show setting takes it back with the rest; its rock keeps
+  // whatever it showed.
+  function revealGuide(f: EdItem): void {
+    if (guideShown(f)) return;
+    formationView.set(f.id, rockShown(f) ? "both" : "guide");
+    formationViewRev++;
+    refreshWorkspaceDock();
+  }
+  // A shape added to a guide's stack, the guide shown.
+  function addShapeShown(f: EdItem, kind: PrimitiveKind): void {
+    const guide = f.formation?.guide;
+    if (guide?.kind !== "solid") return;
+    addShapeToGuide(formationHost, f, newPrimitive(kind, guideCentre(guide.tree)));
+    revealGuide(f);
   }
 
   // What is drawn: every guide and every rock in the level (each setting
@@ -4210,14 +4492,46 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       refreshWorkspaceDock();
     });
     b.title = PAINTED_DECORATIONS.includes(kind)
-      ? `Click a generated rock to start the ${DECORATION_LABELS[kind].toLowerCase()} there, then drag on the rock to paint it; it grows when you let go`
-      : `Click a generated rock to place ${DECORATION_LABELS[kind].toLowerCase()}; stays armed for the next click (Esc stops)`;
+      ? `Drag on a generated rock to paint ${DECORATION_LABELS[kind].toLowerCase()} onto it (the ring under the pointer is the brush); right-click grows it, right-click again stops`
+      : `Click a generated rock to place ${DECORATION_LABELS[kind].toLowerCase()}; stays armed for the next click (right-click or Esc stops)`;
     paletteButtons.set(kind, b);
   }
   const growStaleBtn = button("Grow", () => growStale());
   growStaleBtn.classList.add("ed-ws-wide");
   growStaleBtn.title = "Grow every decoration that is not grown yet or whose settings, paint or rock have changed since";
-  decorationsDock.append(toolGroup("Paint"), paletteButtons.get("moss")!, paletteButtons.get("ivy")!, toolGroup("Place"));
+  // Select: the dock's own tool whenever no kind is armed - a click on what
+  // grew (moss, ivy, a fern...) selects that decoration, not its rock's body
+  // first. Picking it disarms the palette, as Esc does.
+  const decoSelectBtn = button("Select", () => {
+    decorations.cancel();
+    refreshWorkspaceDock();
+  });
+  decoSelectBtn.classList.add("ed-ws-wide");
+  decoSelectBtn.title = "Click a decoration (moss, ivy, a fern...) to select it; a click on bare rock selects the rock (Esc)";
+  // The palette brush's own settings, shown while moss or ivy is armed: it
+  // selects nothing, so they cannot live in a decoration's panel.
+  const brushPaintBtn = button("Paint", () => {
+    decorations.setBrushErases(false);
+    refreshWorkspaceDock();
+  });
+  brushPaintBtn.title = "Lay paint where you drag";
+  const brushEraseBtn = button("Erase", () => {
+    decorations.setBrushErases(true);
+    refreshWorkspaceDock();
+  });
+  brushEraseBtn.title = "Take paint away where you drag";
+  const brushRadiusRow = el("label", "ed-inline ed-ws-wide ed-brush-radius");
+  brushRadiusRow.title = "The brush's radius on the rock, metres";
+  brushRadiusRow.appendChild(document.createTextNode("Radius m"));
+  const brushRadiusInput = Object.assign(document.createElement("input"), { type: "number", className: "ed-num", step: "0.05", min: "0.02" });
+  brushRadiusInput.addEventListener("input", () => decorations.setBrushRadius(Number(brushRadiusInput.value)));
+  brushRadiusRow.appendChild(brushRadiusInput);
+  const brushHint = el("div", "ed-hint ed-ws-hint");
+  brushHint.textContent = "Drag on a rock to paint. Right-click grows what you painted; right-click again to stop.";
+  const brushSeg = el("div", "ed-seg ed-ws-wide");
+  brushSeg.append(brushPaintBtn, brushEraseBtn);
+  const brushControls = [brushSeg, brushRadiusRow, brushHint];
+  decorationsDock.append(decoSelectBtn, toolGroup("Paint"), paletteButtons.get("moss")!, paletteButtons.get("ivy")!, ...brushControls, toolGroup("Place"));
   for (const [kind, b] of paletteButtons) if (!PAINTED_DECORATIONS.includes(kind)) decorationsDock.appendChild(b);
   decorationsDock.append(toolGroup("Grow"), growStaleBtn);
   // The collision outlines over the rocks, for reference while dressing
@@ -4284,6 +4598,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       b.classList.toggle("active", kind === armed);
       b.setAttribute("aria-pressed", String(kind === armed));
     }
+    decoSelectBtn.classList.toggle("active", armed === null);
+    decoSelectBtn.setAttribute("aria-pressed", String(armed === null));
+    const brushOn = armed !== null && PAINTED_DECORATIONS.includes(armed);
+    for (const c of brushControls) c.style.display = brushOn ? "" : "none";
+    const erases = decorations.brushErases;
+    brushPaintBtn.classList.toggle("active", !erases);
+    brushPaintBtn.setAttribute("aria-pressed", String(!erases));
+    brushEraseBtn.classList.toggle("active", erases);
+    brushEraseBtn.setAttribute("aria-pressed", String(erases));
+    if (document.activeElement !== brushRadiusInput) brushRadiusInput.value = String(decorations.brushRadius);
     // Arming, the brush and their ends all rebuild the inspector; a drag in
     // progress owns the cursor until it lets go.
     if (!drag) applyToolCursor();
@@ -4593,15 +4917,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // --- workspaces (workspaces.ts) -------------------------------------------
-  // What each workspace's view was left turned to - its yaw, pitch and the
-  // depth it orbited about - so Formations comes back at the angle it was
-  // worked from. Where the view LOOKS and how close carry over from the
-  // workspace being left: the switch is to work on the same place another way.
-  const workspaceAngles = new Map<Workspace, { yaw: number; pitch: number; z: number }>();
   function setWorkspace(ws: Workspace, boot = false): void {
     if (!boot && (ws === workspace || mode !== "edit")) return;
-    const pose = visuals?.view ?? null;
-    if (!boot && pose) workspaceAngles.set(workspace, { yaw: pose.yaw, pitch: pose.pitch, z: pose.target.z });
     workspace = ws;
     writeWorkspace(ws);
     // An asset is a rock: the Assets tab is Formations'. The decoration
@@ -4627,19 +4944,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cancelPolyDraft();
       cancelRootDraft();
     }
-    // The view: 2D is the plane head on wherever it was looking; a 3D
-    // workspace takes up the angle it was left at, over the same place.
+    // The view STAYS WHERE IT IS: the switch is to work on the same place
+    // another way, so the camera keeps its position and direction (Tris,
+    // 2026-11-25; each 3D workspace used to come back at the angle it was left
+    // at, which moved the camera on every switch between Formations and
+    // Decorations). Only 2D moves it, since its lock is the plane head on:
+    // turned there, it faces the plane where the view was looking.
     if (visuals) {
       visuals.headOnOnly = HEAD_ON_ONLY[ws];
-      if (pose && !boot) {
-        const angle = workspaceAngles.get(ws);
-        if (HEAD_ON_ONLY[ws]) {
-          if (orbited()) resetView();
-        } else if (angle) {
-          visuals.setView({ ...pose, yaw: angle.yaw, pitch: angle.pitch, target: { ...pose.target, z: angle.z } });
-          cameraFromPose();
-        }
-      }
+      if (!boot && HEAD_ON_ONLY[ws] && orbited()) resetView();
     }
     resetViewBtn?.style.setProperty("display", HEAD_ON_ONLY[ws] ? "none" : "");
     // 2D has the lens alone: its view has no other side to go to.
@@ -12059,6 +12372,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return null;
   }
 
+  // Where a right press with the paint brush on began (see `apply` on mouseup).
+  let brushRightPress: Vec2 | null = null;
+  // Off the canvas, the paint brush's cursor is not over anything it would paint.
+  canvas.addEventListener("mouseleave", () => {
+    if (!decorations.dragging) decorations.hover(null);
+  });
   canvas.addEventListener("mousedown", (e) => {
     if (mode !== "edit") return;
     // A grab ends on the next press: the left places, any other cancels.
@@ -12083,6 +12402,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // navigation, on the pose: middle drag orbits, Shift + middle or right drag
     // pans, the wheel dollies. Without WebGL there is no pose, and the middle
     // and right buttons pan the 2D camera as they always did.
+    // A right press while a kind is armed or a brush is on may be a click,
+    // which grows the paint or, with nothing to grow, ends the tool
+    // (`decorations.apply`), or the start of a pan, as ever: told apart when
+    // it is let go.
+    brushRightPress = e.button === 2 && decorations.busy ? pointerScreen(e) : null;
     if (visuals?.active && (e.button === 1 || e.button === 2)) {
       // A swing to a cube face in flight gives way to the hand.
       viewSwing++;
@@ -12344,6 +12668,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // cannot disagree about what was under the pointer.
     const cands = pickCandidatesAt(world, scr);
     const hit = cands[0] ?? null;
+    // 3a. THE DECORATIONS WORKSPACE'S SELECT: a click on what grew selects
+    // that decoration, not its rock's body first - what grows is what that
+    // workspace edits, and a second click to drill into the body was a click
+    // nobody meant (2026-11-25). A press still pans until it is let go, as
+    // any unselected thing's does; Shift and Alt keep their usual meaning.
+    if (workspace === "decorations" && hit?.object === "decoration" && !selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
+      drag = {
+        mode: "panPick",
+        lastScreen: scr,
+        travel: 0,
+        pick: () => {
+          pickCycle = null;
+          setSelection([hit.id]);
+        },
+      };
+      return;
+    }
     // 3b. DROP ON SURFACE: Shift-drag of the selected light, wherever it is in
     // the stack under the pointer - the gesture is about the selected thing,
     // which is plainly what was pressed on.
@@ -12547,6 +12888,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const hit of scene3d!.hitsAt(ndc.x, ndc.y)) {
       const id = itemOfSceneObject.get(pickTagOf(hit.object) as SceneTag);
       if (id !== undefined) meet(id, hit.distance);
+      // A texture layer (a texture-only moss) is drawn by its rock's own
+      // material, so a click on it is a hit on the rock: where the layer
+      // covers the point hit, it is the layer's, just in front of its rock.
+      const layer = paintLayerAt((hit.object as THREE.Mesh).material, hit.uv);
+      const layerId = layer === undefined ? undefined : itemOfSceneObject.get(layer as SceneTag);
+      if (layerId !== undefined) meet(layerId, hit.distance - 1e-4);
     }
     // ...and the solid guides drawn: a backdrop not generated yet is only its
     // guide, and a click on the guide is a click on the formation.
@@ -12667,7 +13014,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Where the ray never meets the plane, nothing drawn on it is under the
     // pointer (and `world` is only the last place it did meet it).
     const onPlane = !ray || ray.toPlane !== null;
-    const hit = pickOrder().filter((b) => hitsItem(b, world, ray?.near) && (onPlane || ray!.near.has(b.id)));
+    const all = pickOrder().filter((b) => hitsItem(b, world, ray?.near) && (onPlane || ray!.near.has(b.id)));
     const inStackOrder = (items: EdItem[]): EdItem[] => {
       const out: EdItem[] = [];
       for (let best = bestHit(items); best; best = bestHit(items)) {
@@ -12676,7 +13023,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       return out;
     };
-    if (!ray) return inStackOrder(hit);
+    // LINES FIRST: a line drawn on the plane off the scene layer (a camera
+    // path, a firefly path, a note's arrow) that the click lands on comes
+    // ahead of everything else, whichever layer is active, as a chain or a
+    // vine does. It is a stroke a few pixels wide, so a click on it can
+    // hardly mean anything else, and it cannot swallow the clicks around it
+    // as an area on another layer would (the reason the active layer leads
+    // otherwise); behind the active layer, a path over water or a wall took
+    // three to five clicks to reach. A collision curve, on the scene layer, is
+    // a bar with a width and keeps the ordinary rules.
+    const lines = all.filter((b) => b.layer !== "scene" && b.shape.kind === "path");
+    const first = inStackOrder([...lines]);
+    const hit = lines.length ? all.filter((b) => !lines.includes(b)) : all;
+    if (!ray) return [...first, ...inStackOrder(hit)];
     // In 3D, THE NEAREST THING DRAWN UNDER THE POINTER: a rock, a model or a
     // guide where the ray first meets it, an outline on the plane where the
     // ray crosses the plane. That is the whole rule. The plane's own rules
@@ -12686,13 +13045,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // ...with the active layer's items ahead of the other layers', as
     // `pickOrder` has it: a fog region drawn over the pool must not swallow a
     // click on a rock while the scene is the layer being edited.
-    const depth = (b: EdItem): number => ray.near.get(b.id) ?? ray.toPlane!;
-    const key = (b: EdItem): [number, number] => [b.layer === activeLayer ? 0 : 1, depth(b)];
-    const sorted = [...hit].sort((p, q) => key(p)[0] - key(q)[0] || key(p)[1] - key(q)[1]);
-    const out: EdItem[] = [];
+    //
+    // ...except in the 2D workspace, where THE PLANE COMES FIRST: what is hit
+    // on the plane (an outline, a marker, an icon) is ahead of anything only
+    // the ray meets, however near. Head on, the plane is what is being worked
+    // on and the overlay draws it over everything, while a rock on a 2D body
+    // bulges out in front of it and a model stands proud of its marker, so
+    // by depth they took the click on the outline drawn over them. Everything
+    // hit on the plane is taken at the plane's own depth, so the plane's
+    // rules settle it among them as they do in the 2D editor; what only the
+    // ray meets follows, nearest first, reached by clicking again.
+    const planeFirst = workspace === "2d" && ray.toPlane !== null;
+    const onPlane2d = new Set(planeFirst ? hit.filter((b) => hitsItem(b, world)) : []);
+    const depth = (b: EdItem): number => (onPlane2d.has(b) ? ray.toPlane! : (ray.near.get(b.id) ?? ray.toPlane!));
+    const key = (b: EdItem): [number, number, number] => [b.layer === activeLayer ? 0 : 1, planeFirst && !onPlane2d.has(b) ? 1 : 0, depth(b)];
+    const sorted = [...hit].sort((p, q) => key(p)[0] - key(q)[0] || key(p)[1] - key(q)[1] || key(p)[2] - key(q)[2]);
+    const out: EdItem[] = [...first];
     while (sorted.length) {
-      const [layer, d] = key(sorted[0]!);
-      const tied = hit.filter((b) => sorted.includes(b) && key(b)[0] === layer && key(b)[1] === d);
+      const [layer, off, d] = key(sorted[0]!);
+      const tied = hit.filter((b) => {
+        const k = key(b);
+        return sorted.includes(b) && k[0] === layer && k[1] === off && k[2] === d;
+      });
       for (const b of tied) sorted.splice(sorted.indexOf(b), 1);
       out.push(...inStackOrder(tied));
     }
@@ -12905,9 +13279,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A sculpt stroke, a cut being drawn, a radius being set; the brush's
     // cursor follows the pointer either way.
     if (sculptCtl?.move(scr, e)) return;
-    if (decorations.dragging) {
-      decorations.move(decorationHit(scr));
-      return;
+    // The paint brush's cursor follows the pointer over the canvas, and a
+    // stroke goes on wherever the pointer is.
+    if (decorations.busy || decorations.dragging) {
+      const hit = decorations.dragging || e.target === canvas ? decorationHit(scr) : null;
+      decorations.hover(hit);
+      if (decorations.dragging) {
+        decorations.move(hit);
+        return;
+      }
     }
     if (!drag) return;
     // Resolved in the plane the dragged thing is drawn in (see `move`'s
@@ -13414,7 +13794,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A sculpt stroke ends with the left button (a view drag with another
     // button may end meanwhile and leave the stroke going).
     if (e.button === 0) sculptCtl?.release();
-    if (decorations.dragging) {
+    // A right-click with the paint brush on (a press the pointer did not pan
+    // away from) grows the paint.
+    if (e.button === 2 && brushRightPress) {
+      const press = brushRightPress;
+      brushRightPress = null;
+      if (pointerScreen(e).distanceTo(press) < CLICK_SLOP_PX && decorations.apply()) {
+        rebuildInspector();
+        refreshWorkspaceDock();
+      }
+    }
+    if (decorations.dragging && e.button === 0) {
       decorations.release();
       rebuildInspector();
       return;
@@ -13549,11 +13939,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   window.addEventListener("keydown", (e) => {
     // A grab owns the keyboard until it ends: Esc cancels, Enter places,
-    // X / Y / Z hold an axis, and nothing else may act on what is mid-move.
+    // X / Y / Z hold an axis (Shift: a plane), digits type an exact amount,
+    // and nothing else may act on what is mid-move.
     if (grab) {
       if (e.code === "Escape") endTransform(false);
       else if (e.code === "Enter" || e.code === "NumpadEnter") endTransform(true);
-      else if (e.code === "KeyX" || e.code === "KeyY" || e.code === "KeyZ") setTransformAxis(e.code === "KeyX" ? "x" : e.code === "KeyY" ? "y" : "z");
+      else if (e.code === "KeyX" || e.code === "KeyY" || e.code === "KeyZ") setTransformAxis(e.code === "KeyX" ? "x" : e.code === "KeyY" ? "y" : "z", e.shiftKey);
+      else typeTransformKey(e);
       e.preventDefault();
       return;
     }
@@ -14007,6 +14399,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         testSlime,
       );
     } else {
+      flyNdof(now);
       syncViewUrl(now);
       // The next ▶ Test's level, while nothing is moving.
       prebuildTest(now);

@@ -14,10 +14,11 @@
 import type { Camera } from "../../render/camera";
 import { NO_ORBIT, poseDistance, poseFromCamera, type SceneLens } from "../../render3d/space";
 import {
-  clampPitch,
   MAX_VIEW_DISTANCE,
   MIN_VIEW_DISTANCE,
+  nextPitch,
   poseBasis,
+  wrapPitch,
   type Vec3,
   type ViewPose,
 } from "./viewPose";
@@ -36,11 +37,11 @@ export const FRAME_MIN_RADIUS = 0.5;
 
 // Turn the view about its target by `dYaw` and `dPitch` radians. The target
 // stays at the centre of the frame and the camera at its distance, so the
-// gesture is a turn and nothing else. The pitch is clamped short of the poles
-// as the Level workspace's orbit is (`MAX_ORBIT_PITCH`), where the up vector
-// degenerates and the view would roll.
-export function orbit(pose: ViewPose, dYaw: number, dPitch: number): ViewPose {
-  return { ...pose, yaw: pose.yaw + dYaw, pitch: clampPitch(pose.pitch + dPitch) };
+// gesture is a turn and nothing else. The pitch stops at the poles
+// (`nextPitch`), unless `overPoles` (the SpaceMouse) carries it on over the
+// top into an upside-down view, or the view is already upside down.
+export function orbit(pose: ViewPose, dYaw: number, dPitch: number, overPoles = false): ViewPose {
+  return { ...pose, yaw: pose.yaw + dYaw, pitch: nextPitch(pose.pitch, pose.pitch + dPitch, overPoles) };
 }
 
 // Slide the view in its own image plane as the pointer moves from `from` to
@@ -92,6 +93,53 @@ export function dolly(pose: ViewPose, toward: Vec3 | null, factor: number): View
     ...pose,
     target: { x: h.x + (t.x - h.x) * k, y: h.y + (t.y - h.y) * k, z: h.z + (t.z - h.z) * k },
     halfHeight: pose.halfHeight * k,
+  };
+}
+
+// FLY (the SpaceMouse, editor/ndof.ts): the eye moves `move` metres in its own
+// frame - x along `right`, y along `up`, z along `back` - and then turns about
+// itself, `dYaw` radians about the world's up and `dPitch` in the pose's own
+// sense (positive tips the view down, as a raised orbit looks down). The
+// pitch goes on over the poles (`wrapPitch`): a fly can turn upside down.
+// `dYaw` is as seen on screen, positive turning the view left: upside down the
+// world's up points to the foot of the screen, so the same on-screen turn is
+// the other way about it.
+//
+// The target is carried at the same distance in front of the eye, so the
+// distance and with it the view's size are unchanged: a fly is a camera moving
+// through the scene, not an orbit about a point in it, and it passes between
+// and through things.
+export function fly(pose: ViewPose, move: Vec3, dYaw: number, dPitch: number): ViewPose {
+  const d = poseDistance(pose);
+  const { right, up, back } = poseBasis(pose);
+  const t = pose.target;
+  const eye = {
+    x: t.x + back.x * d + right.x * move.x + up.x * move.y + back.x * move.z,
+    y: t.y + back.y * d + right.y * move.x + up.y * move.y + back.y * move.z,
+    z: t.z + back.z * d + right.z * move.x + up.z * move.y + back.z * move.z,
+  };
+  const yaw = up.y < 0 ? -dYaw : dYaw;
+  const turned = { ...pose, yaw: pose.yaw + yaw, pitch: wrapPitch(pose.pitch + dPitch) };
+  const b = poseBasis(turned).back;
+  return { ...turned, target: { x: eye.x - b.x * d, y: eye.y - b.y * d, z: eye.z - b.z * d } };
+}
+
+// The same view with its target `distance` metres in front of the eye: the
+// eye, the direction and the lens are kept, so the picture does not change
+// (through a perspective lens), and only what an orbit pivots about, what a
+// pan holds under the pointer and how big the view is said to be do. What a
+// fly does with the surface it is looking at. Clamped as `withDistance` is.
+export function refocus(pose: ViewPose, distance: number): ViewPose {
+  const d = poseDistance(pose);
+  const wanted = Math.max(MIN_VIEW_DISTANCE, Math.min(MAX_VIEW_DISTANCE, distance));
+  const { back } = poseBasis(pose);
+  const t = pose.target;
+  const s = d - wanted;
+  const fovY = (pose.fovYDeg * Math.PI) / 180;
+  return {
+    ...pose,
+    target: { x: t.x + back.x * s, y: t.y + back.y * s, z: t.z + back.z * s },
+    halfHeight: wanted * Math.tan(fovY / 2),
   };
 }
 

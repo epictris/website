@@ -87,7 +87,7 @@ const GEOMETRY_SLOTS = 3;
 // Finished jobs kept for the panel.
 const KEEP_FINISHED = 40;
 
-const STORE_FILES = /^(geometry\.glb|meta\.json|tier-\d+\.glb|decoration\.glb)$/;
+const STORE_FILES = /^(geometry\.glb|meta\.json|tier-\d+\.glb|decoration\.glb|layer\.png)$/;
 
 export function formationService(): Plugin {
   return {
@@ -138,7 +138,8 @@ export function formationService(): Plugin {
         const path = join(store, hash, file);
         stat(path).then(
           (info) => {
-            res.setHeader("Content-Type", file.endsWith(".json") ? "application/json" : file.endsWith(".bin") ? "application/octet-stream" : "model/gltf-binary");
+            const type = file.endsWith(".json") ? "application/json" : file.endsWith(".bin") ? "application/octet-stream" : file.endsWith(".png") ? "image/png" : "model/gltf-binary";
+            res.setHeader("Content-Type", type);
             res.setHeader("Content-Length", info.size);
             res.setHeader("Cache-Control", "no-store");
             if (req.method === "HEAD") res.end();
@@ -356,10 +357,37 @@ class JobRunner {
   private readonly holds = new Set<string>();
   private next = 1;
 
+  // The generators' fingerprint now (`fingerprint`), refreshed with every
+  // build asked for: a store entry built by another is not an answer.
+  private current: string | null = null;
+
   constructor(
     private readonly root: string,
     private readonly store: string,
-  ) {}
+  ) {
+    this.refreshFingerprint();
+  }
+
+  private refreshFingerprint(): void {
+    this.fingerprint().then(
+      (fp) => (this.current = fp),
+      () => {},
+    );
+  }
+
+  // A store entry for `hash` built by an older generator than the code now:
+  // asked for, it is built again (`--force`), as the panel's "Built by an
+  // older generator: Regenerate builds it with the current code" promises.
+  // Until 2026-11-25 the store's entry answered and nothing was rebuilt.
+  private olderBuild(hash: string): boolean {
+    if (!this.current) return false;
+    try {
+      const meta = JSON.parse(readFileSync(join(this.store, hash, META_FILE), "utf8")) as FormationMeta;
+      return meta.generatorHash !== this.current;
+    } catch {
+      return false;
+    }
+  }
 
   // Grow a decoration, or join the job already growing it, or answer at once
   // from the store.
@@ -390,13 +418,14 @@ class JobRunner {
     // for it in advance.
     if (kind === "asset") return null;
     if (kind === "decoration") {
-      return existsSync(join(this.store, hash, "decoration.glb"))
+      // A grown mesh, or a texture layer's map (decoration-build.ts).
+      return existsSync(join(this.store, hash, "decoration.glb")) || existsSync(join(this.store, hash, "layer.png"))
         ? { hash, front: 0, generatorHash: "", recipeVersion: 0, tiers: [], warnings: [] }
         : null;
     }
     const dir = join(this.store, hash);
     const have = [GEOMETRY_FILE, META_FILE, ROCK_FILE].every((f) => existsSync(join(dir, f)));
-    if (!have) return null;
+    if (!have || this.olderBuild(hash)) return null;
     try {
       const meta = JSON.parse(readFileSync(join(dir, META_FILE), "utf8")) as FormationMeta;
       if (kind === "bake" && (!meta.tiers.length || !existsSync(join(dir, tierFileName(0))))) return null;
@@ -414,6 +443,7 @@ class JobRunner {
   }
 
   ask(kind: JobKind, formation: FormationData | null, label: string, asset?: string): JobState {
+    this.refreshFingerprint();
     const hash = kind === "asset" ? `asset:${asset}` : formationHash(formation!);
     for (const j of this.jobs.values()) {
       if (j.state.hash === hash && j.state.kind === kind && (j.state.state === "queued" || j.state.state === "running")) return j.state;
@@ -549,7 +579,12 @@ class JobRunner {
       const recipe = join(dir, `${s.id}.json`);
       const { generator, variant, params, guide } = job.formation!;
       writeFileSync(recipe, JSON.stringify({ generator, ...(variant ? { variant } : {}), params, guide }));
-      argv = [join(this.root, "scripts", "formation-build.ts"), recipe, ...(s.kind === "bake" ? ["--bake"] : [])];
+      argv = [
+        join(this.root, "scripts", "formation-build.ts"),
+        recipe,
+        ...(s.kind === "bake" ? ["--bake"] : []),
+        ...(this.olderBuild(s.hash) ? ["--force"] : []),
+      ];
     }
     s.log = `.cache/formation-jobs/${s.id}.log`;
     s.state = "running";

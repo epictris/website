@@ -33,13 +33,24 @@ export function anchorFrame(a: DecorationAnchor): THREE.Matrix4 {
   return new THREE.Matrix4().makeBasis(x, y, z).setPosition(...a.p);
 }
 
+// A placed decoration's frame in its formation's: its anchor's, turned and
+// sized by its own `turn` and `scale`.
+export function placedFrame(d: Pick<DecorationObjectData, "anchor" | "onRock" | "turn" | "scale">): THREE.Matrix4 {
+  const own = new THREE.Matrix4().compose(
+    new THREE.Vector3(),
+    d.turn ? new THREE.Quaternion(...d.turn).normalize() : new THREE.Quaternion(),
+    d.scale ? new THREE.Vector3(...d.scale) : new THREE.Vector3(1, 1, 1),
+  );
+  return anchorFrame(d.onRock ?? d.anchor).multiply(own);
+}
+
 // Where a decoration's grown mesh is drawn, in its formation's frame: a placed
-// one carried from where it was grown to where it lands now; a painted one,
-// grown on the rock where it is, left alone.
+// one carried from where it was grown (unturned, full size) to where it
+// stands now, turned and sized; a painted one, grown on the rock where it is,
+// left alone.
 export function decorationDelta(d: DecorationObjectData): THREE.Matrix4 {
   if (!d.built || isPainted(d.kind)) return new THREE.Matrix4();
-  const now = d.onRock ?? d.anchor;
-  return anchorFrame(now).multiply(anchorFrame(d.built.at).invert());
+  return placedFrame(d).multiply(anchorFrame(d.built.at).invert());
 }
 
 export interface FormationFile {

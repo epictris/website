@@ -303,6 +303,8 @@ Until 2026-10-10 `sceneDressing.ts` took an alpha-cut `.moss` mesh for an ivy fr
 
 ## Texture only
 
+In the level editor a texture-only moss is a texture layer of its rock, painted into the rock's paint UV and laid over its colour by the game ([formations](formations.md#texture-layers)); what follows is the add-on in a Blender scene.
+
 **Kind** at the top of a moss's box is **Mound** (everything above) or **Texture Only** (since 2026-10-05, the owner: "a moss painting option that exclusively paints texture onto the rock ... no actual moss geometry - it's just a texture that gets baked onto the rock on export").
 A texture-only moss grows the same dabs, layers and tones from the same paint and settings (steps 1-6); there is no mound, so the Height panel is hidden.
 

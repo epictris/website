@@ -144,7 +144,7 @@ Tooling
 Editor and levels
 
 - [levels](docs/levels.md) - the difficulty select (after the load), `meta` and the listing rules, the finish line and the crossing, the completion panel (time, Retry/Next Level/Menu, the feedback half) and where what players say is kept, the level hash.
-- [editor](docs/editor.md) - the workspaces (2D, Formations, Decorations), gestures, selection, vertex editing, the 3D view, orbit, the lens, the gizmo, the depth handle, ▶ Test.
+- [editor](docs/editor.md) - the workspaces (2D, Formations, Decorations), gestures, selection, vertex editing, the 3D view, orbit, the lens, the SpaceMouse fly, the gizmo, the depth handle, ▶ Test.
 - [editor-visuals](docs/editor-visuals.md) - the Visuals workspace, merged into the one 3D view on 2026-11-22: the free view's pose and gestures (current), the guides and their routing (retired).
 - [generators](docs/generators.md) - retired 2026-09-29: the editor's boulder and mushroom generator service, and what survives of it in Blender.
 - [editor-model](docs/editor-model.md) - layers, the body outliner, decoration, notes, compound bodies.

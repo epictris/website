@@ -379,6 +379,8 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-sculpt-dock > :is(.ed-ws-wide,.ed-ws-hint) { grid-column: 1 / -1; }
 .studio .ed-sculpt-dock > .ed-inline { display: flex; align-items: center; justify-content: space-between; gap: 1ch; }
 .studio .ed-sculpt-dock > .ed-inline > .ed-num { width: 9ch; }
+.studio .ed-ws-dock > .ed-brush-radius { display: flex; align-items: center; justify-content: space-between; gap: 1ch; }
+.studio .ed-ws-dock > .ed-brush-radius > .ed-num { width: 9ch; }
 /* The view cube and the lens (editor/viewCube.ts): over the viewport's top
    right corner, clear of the inspector. */
 .studio .ed-viewnav { position: absolute; top: 116px; right: calc(var(--inspector-width) + 12px); display: flex; flex-direction: column; align-items: center; gap: .5lh; pointer-events: auto; }
@@ -389,3 +391,14 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-viewnav .ed-lens .ed-btn { min-width: 7ch; }
 @media (max-width: 850px) { .studio .ed-viewnav { top: 150px; } }
 @media (max-width: 600px) { .studio .ed-viewnav { top: 214px; right: 8px; } }
+/* The G / R / S readout (editor.ts `xformReadout`): over the viewport's top
+   left while a transform lasts, as Blender's header shows it. */
+.studio .ed-xform { position: absolute; top: 116px; left: calc(var(--rail-width) + 12px); max-width: calc(100vw - var(--rail-width) - var(--inspector-width) - 200px); padding: .4lh 1.5ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 4px; pointer-events: none; }
+.studio .ed-xform[hidden] { display: none; }
+.studio .ed-xform-amount { color: var(--studio-text); white-space: nowrap; }
+.studio .ed-xform-hint { color: var(--studio-muted); }
+/* The number being typed, its caret after it. */
+.studio .ed-xform-field { color: var(--studio-accent); border-right: 1px solid currentColor; padding-right: 1px; }
+.studio .ed-xform-hint.ed-xform-warn { color: var(--studio-warm); }
+@media (max-width: 850px) { .studio .ed-xform { top: 150px; } }
+@media (max-width: 600px) { .studio .ed-xform { top: 214px; left: 8px; max-width: calc(100vw - 150px); } }

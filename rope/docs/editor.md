@@ -312,6 +312,13 @@ What the ray can meet, and what each answers with (`pickTagOf`):
 - in the Visuals workspace, a **guide** answers with its guide tag.
 
 `pickOrder`'s rules (the active layer, then a collision object winning over a light whose reach it sits inside) still decide which of the things under the pointer wins, so **click the body, then click into it, then into what is behind it** cycles exactly as before.
+**In the 2D workspace the plane comes first** (`pickCandidatesAt`, 2026-11-24): within the active layer, whatever is hit on the plane itself (an outline, a model's marker, a light's icon) is ahead of anything only the ray meets, however near, and the plane's own rules settle it among them.
+Before, the nearest thing drawn won there too, so a rock on a 2D body, which bulges out in front of the plane, took the click on the collision outline drawn over it: on a copy of `ball.json` seen from its spawn, 79 of 364 grid points drilled into the rock instead of the collision piece.
+The rock is still reached by clicking again (body, its collision, its rock, then what is behind).
+**A line off the scene layer comes before all of it** (2026-11-24): a click on a camera path, a firefly path or a note's arrow picks it first, whichever layer is active, as a chain or a vine is picked.
+It is a stroke a few pixels wide, so it cannot swallow the clicks around it as an area on another layer would, which is why the active layer leads otherwise; behind it, the river's camera path over water or a backdrop rock took three to five clicks, or more than the cycle reached.
+A collision curve, on the scene layer, is a bar with a width and keeps the ordinary rules.
+Once a path is selected a press on its line may land on its own handles (a node, a grip, an edge midpoint, which inserts a node), so to reach what is under a selected path, click just beside the line.
 The chain tool still asks the plane, because an anchor is placed on a body's collision outline.
 
 The chain from a mesh under the pointer back to a row in the outliner is three links: `BodyVisual` (or `dressScene`) stamps the drawn group with the authored object it stands for, `toLevelData` records which ITEM wrote each object it writes, and the editor rebuilds that map with the scene so it can never name an item the picture was not built from.
@@ -433,13 +440,15 @@ The section a workspace's work is done in (`PRIMARY_SECTIONS`: Formation, Decora
 
 **The 2D view is locked head on** (`VisualsWorkspace.headOnOnly`): the middle drag pans instead of orbiting, the wheel zooms about the plane point under the pointer (never a rock behind it, which would move the target off the plane), and **F** frames the selection's footprint with the target kept on the plane.
 Entering 2D turns a turned view back to the plane over the same place; "Align camera to plane" is not offered there, since there is nothing to align.
-**Each 3D workspace keeps its angle**: leaving one stores its yaw, pitch and the depth it orbited about, and coming back applies them over wherever the view now looks, at the current distance - so 2D and Formations can be swapped over one ledge without the view jumping to another part of the level.
+**A switch never moves the camera** except into 2D: Formations, Decorations and back keep the camera's position and direction exactly, and leaving 2D keeps its head-on view (Tris, 2026-11-25).
+Until then each 3D workspace came back at the yaw, pitch and depth it was left at, which moved the camera on every switch between Formations and Decorations.
 
 **Guides and rocks** (Formations, 2026-11-23).
 Every guide is drawn in its own bright colour (`guideColor` in `src/editor/guideColors.ts`): a hue hashed from the formation's id, so it is "random" but keeps its colour through a reload, an undo or a regenerate, and the solid guides' volumes and edges and the collision guides' dashed outlines (`drawFormationGuide`) wear it alike.
 The dock's **Show** has two globals, **Guides** and **Rocks**, remembered by the browser (`guides`, `rocks` in `prefs.ts`): every guide in the level drawn or not, every generated rock drawn or not.
 **Selected** switches the selected formations between **Guide** (the rock hidden), **Rock** (the guide hidden) and **Both**; **Tab** swaps guide and rock, as Blender's Tab swaps object and edit mode.
 A per-formation choice (`formationView`) overrides the globals until either global is set again, which clears them all, so a global always means every formation in the level.
+A guide just made (**+ Box**, **+ Cylinder**, Shift+A) or just added a shape to is shown whatever **Guides** says (`revealGuide`, 2026-11-24): it is given its own override (Guide, or Both where its rock shows), since an add that draws nothing reads as an add that did nothing.
 A rock not generated has nothing but its guide, so Rock and Both are offered only for one that is.
 A hidden rock is hidden as an H-hidden body is (`Scene3D.setHidden`, from `syncHighlight`), so it is not picked either; a hidden guide is not handed to `SolidGuideView` at all.
 Outside Formations the rocks are always drawn and the guides are not.
@@ -459,13 +468,23 @@ It is destructive and one undo step: the picked guides leave the level, with the
 The picked guides are drawn in front and tinted (`COMBINE_PICK`) while it is chosen; selecting anything else ends it.
 
 **Grab, Rotate, Scale** (**G**, **R**, **S**, any workspace, 2026-11-23, Blender's modal transforms): what the gizmo would move, turn or size follows the pointer - a body, a 3D body, a guide's picked shape, a multi-selection - through the gizmo's own handlers (`handlersFor`), so each does exactly what the matching handle drag would, as one undo step (`startTransform` and friends in editor.ts).
-A click or **Enter** places; **Esc** or a right click puts it back and takes the undo step away again; **X**, **Y**, **Z** hold it to that axis (again frees it).
+A click or **Enter** places; **Esc** or a right click puts it back and takes the undo step away again; **X**, **Y**, **Z** hold it to that axis, and **Shift+X**, **Y**, **Z** to the plane of the other two (the same key again frees it; a turn held to a plane turns about the axis left out, as Blender's does).
 The gizmo is put away meanwhile, so the placing click cannot land on a handle.
+A readout over the viewport's top left says what it is doing and which keys apply (`xformReadout`), as Blender's header does; the title bar's notice sits under the dock's tools, out of sight in Formations.
+
+**Typed amounts** (2026-11-24, Blender's numeric input): digits make it exact, **metres** for a grab, **degrees** for a turn, a **factor** for a size (Tris's choice over metres of size: Blender's meaning).
+**S 1 0** sizes by 10 on every axis, **S X 5** by 5 along X, **S Shift+Y 1 2** by 12 along X and Z; **G X 5** moves 5 m along X; **R Z 9 0** turns 90° about Z, right-handed (counterclockwise seen head on), and **R 9 0** about the view axis the same way.
+While a number is typed the pointer is ignored; **Backspace** takes it back a character at a time (**Ctrl+Backspace** all of it), and with nothing typed the pointer leads again.
+**-** negates (refused for a size: a negative factor turns a solid inside out); a size is held above `MIN_SCALE_FACTOR`.
+There is one number per free axis, **Tab** (**Shift+Tab** back) stepping between them, so **G 1 Tab 2 Tab 3** moves by (1, 2, 3); a size's first number sizes every free axis until Tab is pressed.
+The axis may be chosen before or after the number.
+A typed amount is applied with the grid snap off (`applyTransform`), since the handlers' snap would round it: G X 0.05 on a 0.1 m grid moves 0.05.
 
 - **G** moves in the plane facing the camera through where the target stood, or in a plane parallel to the gameplay plane for a target that cannot leave it; an axis is a world axis.
 - **R** turns by the pointer's angle round the target's centre on screen (counterclockwise on screen turns it counterclockwise as seen), about the view axis, or the world z for a target that turns only in the plane; an axis is a world axis. It snaps to 15° while snap is on, as the rings do.
 - **S** sizes by the pointer's distance from the target's centre on screen over the distance it started at; an axis is one of the target's own (the scale boxes are local too).
-  A body has no size, so **S** on a body holding a solid guide sizes the guide: every shape, about its middle, evenly (`guideScaleHandlers`, `scaleTree`), since a per-axis factor on a turned shape is a shear no pose can hold; pick one shape in the stack to size it along an axis.
+  A body has no size, so **S** on a body holding a solid guide sizes the guide: every shape, about its middle (`guideScaleHandlers`).
+  Along an axis of the guide's frame too, as long as every shape lies along its axes, turned by right angles or not at all (`scaleTreeAxes`: each shape's own axis takes the factor of the frame axis it lies along); a guide holding a shape turned any other way sizes evenly only (`scaleTree`), since a per-axis factor on such a shape is a shear no pose can hold, and X / Y / Z say so; pick one shape in the stack to size it along an axis then.
 
 **R** and **S** take the key only when the selection has something to turn or size; otherwise they arm the Rect and Checkpoint tools in 2D as before.
 
@@ -473,8 +492,10 @@ The gizmo is put away meanwhile, so the placing click cannot land on a handle.
 It is three's own move-centre handle (`XYZ`) drawn as a box (`reshapeHandle` in `gizmo.ts`); the uniform-scale box that held the centre until then is gone, and a model's one-number scale follows any one axis box.
 
 **The palette** (`DecorationController.arm`) arms a kind for the next click on any generated rock; before, a decoration was started from a button in one rock's panel and landed on that rock only.
-A placed kind stays armed, so a row of ferns is a row of clicks; a painted one (moss, ivy) goes straight to its brush on the rock clicked.
-Esc, its button again, or a press off every rock disarms it.
+A kind stays armed and selects nothing it makes (since 2026-11-25): a row of ferns is a row of clicks, and moss or ivy is a brush that paints whichever rock it is pressed on and grows on a right-click, its Paint / Erase and radius under the palette ([formations](formations.md#decorations)).
+While a painted kind is armed or its brush is on, the brush's ring and footprint follow the pointer over the rock.
+Esc, its button again, **Select**, a press off every rock, or a right-click with nothing left to grow disarms it.
+**Select**, the dock's tool whenever nothing is armed, picks what grew: a click on moss, ivy or a fern selects that decoration, not its rock's body first.
 
 **Collision** (Decorations' dock, Show, 2026-11-23): the collision outlines drawn over the rocks, as 2D draws them, for reference while dressing; never picked, so a click still lands on the rock (`referenceOutline` in `shownModel`, outside `inWorkspace`).
 Off by default, remembered by the browser (`collision` in `prefs.ts`).
@@ -547,6 +568,44 @@ The level's fog is hidden while authoring unless the Environment panel's **show 
 That camera is the one the game settles at for the place the editor is looking at.
 ▶ Test draws the fog from its own camera, which is the game's.
 See [lighting-and-surfaces](lighting-and-surfaces.md#light-and-air) for how.
+
+## SpaceMouse
+
+Since 2026-11-25 a 3Dconnexion SpaceMouse flies the view (`src/editor/ndof.ts`, `VisualsWorkspace.ndof`).
+It is a camera flying through the scene, not an orbit about a point: the cap moves the eye and turns it about itself, so it passes between and through rocks.
+
+| Cap | Free 3D (perspective) | 2D, or Ortho |
+|---|---|---|
+| push away / pull back | fly forward / back | zoom in / out about the target |
+| slide right, left, lift, press down | fly that way in the view's own frame | pan |
+| twist anticlockwise / clockwise (from above) | turn right / left about the world's up | Ortho: orbit about the target; 2D: nothing |
+| tilt back / forward | look down / up, on over the poles into an upside-down view | Ortho: orbit about the target, over the poles too; 2D: nothing |
+| roll | nothing (a level view has no roll) | nothing |
+| right side button | Escape, as the key (a keydown and keyup dispatched where the focus is) | the same |
+| left side button | nothing yet | nothing yet |
+
+The turns are the cap moving the scene, not the camera: Tris found the camera-like senses (twist anticlockwise turns left, tilt back looks up) inverted on the first play, 2026-11-25.
+
+**Upside down** (2026-11-25): the cap's tilt carries the view on over a pole, so it can loop right round.
+The pose has no roll, so upside down is a pitch past ±90 degrees (`ViewPose.pitch` in (-π, π], `wrapPitch`); `poseBasis` and `applyPose` take any pitch, their up pointing below the horizon past a pole and the level `right` turning over continuously.
+Upside down the world's up points to the foot of the screen, so the twist is applied the other way about it (`fly`) and still turns the view the same way on screen.
+The mouse's orbit still stops at the poles from an upright view (`nextPitch`); from a view the cap turned over it orbits on round rather than snapping upright, and stops at the poles again once it is back.
+
+**A fixed speed.**
+Full deflection flies 8 m/s (`FLY_SPEED_M_PER_S`; 4 on the first play was too slow) and turns a quarter turn a second (`FLY_TURN_RAD_PER_S`); both are linear below full deflection, as Blender's NDOF is.
+The first version scaled the speed by the distance to the surface in the middle of the view, and Tris had it removed the same day.
+The 2D and Ortho views are plans, so there the pan is screen-relative (a view height a second) and push/pull zooms (`FLY_ZOOM_PER_S`).
+When the cap comes to rest after a flight, the view's target is put on the surface in the middle of the view (`refocus`: one centre ray, `Scene3D.drawnSurfaceAt`; the eye and so the picture are kept), so the middle-drag orbit afterwards pivots on what was being looked at.
+Over open space the ray meets nothing and the target stays where it was.
+
+**How the cap reaches the page.**
+On Linux the device belongs to `spacenavd` (the daemon Blender listens to too; it grabs the evdev node).
+A page cannot open its UNIX socket, so the dev server does: `src/server/ndof.ts` connects on the first editor's `ndof:hello` and forwards the cap's motion and its buttons over Vite's HMR WebSocket (`ndof:motion`, `ndof:button`), retrying every 3 s while the daemon is missing.
+That needs no udev rule and no browser permission prompt (WebHID would need both), and spacenavd's own sensitivity, dead zone and axis settings (`spnavcfg`, `/etc/spnavrc`) apply here as they do in Blender.
+The axes are converted to the view's as Blender converts them (`GHOST_NDOFManagerUnix`: `t = (x, y, -z)`, `r = (-rx, -ry, rz)`), normalised by 350 counts at full deflection.
+Every tab hears the cap; only the focused, visible one flies, and a tab that loses focus drops the cap to rest (the release would otherwise go unheard).
+It is a dev-server feature: the production editor has no bridge and ignores the device.
+`SPNAV_SOCKET` points the bridge at another socket, which is how it was driven headless (a fake daemon writing protocol-0 packets).
 
 ## The transform gizmo
 

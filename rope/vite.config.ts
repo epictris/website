@@ -23,6 +23,7 @@ import { sceneService } from "./src/server/scenes";
 import { formationService } from "./src/server/formations";
 import { soundService } from "./src/server/sounds";
 import { soundLayerService } from "./src/server/soundLayers";
+import { ndofBridge } from "./src/server/ndof";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -633,6 +634,7 @@ export default defineConfig({
     formationService(),
     soundService(),
     soundLayerService(),
+    ndofBridge(),
     exportsInBuild(),
   ],
 });

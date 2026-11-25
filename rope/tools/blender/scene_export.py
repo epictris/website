@@ -230,6 +230,11 @@ def procedural_normals(mat):
 
 # The UV map the bake unwraps each target into; its images read through it.
 BAKE_UV = "SceneBake"
+# A formation's own unwrap for painted texture layers, made at Generate
+# (formation_export.paint_unwrap), first of the rock's UV maps: kept through
+# the bake, which reads nothing of it, so every tier carries it as TEXCOORD_0
+# and a layer painted in it lands on the baked rock as on the unbaked one.
+PAINT_UV = "PaintLayer"
 # The painted slate's edge line (a Bevel node) and crevices (Ambient
 # Occlusion) are ray traced, so the bake is a render: at 4 samples the edge line
 # came out as speckle that drew hairy and blurred once magnified. 32 is clean;
@@ -1002,10 +1007,23 @@ def remove_unused_uvs(mesh):
     for material in mesh.materials:
         if material and material.use_nodes:
             scan(material.node_tree)
+    # The paint UV is read by the game, not by any shader here.
+    used.add(PAINT_UV)
     removed = [uv.name for uv in mesh.uv_layers if uv.name not in used]
     for name in removed:
         mesh.uv_layers.remove(mesh.uv_layers[name])
     return removed
+
+
+# A formation's rock whose creases its Generate already rebuilt
+# (formation_export.py): the bows it found, [[a, b, offset, reach], ...] as
+# JSON, so `straight_creases` hands them back without rebuilding the mesh again
+# (which would re-triangulate it under its paint UV, `PAINT_UV`).
+REBUILT_BOWS = "formation_rebuilt_bows"
+
+
+def keep_bows(ob, bows):
+    ob[REBUILT_BOWS] = json.dumps([[list(a), list(b), list(off), float(reach)] for a, b, off, reach in bows])
 
 
 def straight_creases(ob, mesh):
@@ -1013,9 +1031,14 @@ def straight_creases(ob, mesh):
     unwrap, and return the bows to bend them by. Every map is baked on the
     straight rock, which the detail high poly matches exactly, and the rock is
     bent after (`curve.bend`). A formation's geometry stage
-    (formation_export.py) runs this and bends at once, so the editor draws and
-    fits to the shape the bake will ship."""
+    (formation_export.py) runs this on the rock itself and keeps the bows on it
+    (`keep_bows`); its mesh is then already split, and only the bows come back."""
     from formations import crease_cleanup, curve
+    if REBUILT_BOWS in ob:
+        bows = curve.BowList()
+        bows.extend((Vector(a), Vector(b), Vector(off), reach) for a, b, off, reach in json.loads(ob[REBUILT_BOWS]))
+        log(f"curve {ob.name}: rebuilt at Generate, {len(bows)} creases to bow")
+        return bows
     removed_uvs = remove_unused_uvs(mesh)
     if removed_uvs:
         log(f"curve {ob.name}: discarded unused authoring UVs {', '.join(removed_uvs)} on export copy")

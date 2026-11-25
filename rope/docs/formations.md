@@ -58,7 +58,8 @@ An editor's undo history can still name a removed build, so sweep with the edito
 
 1. **Geometry.**
    `tools/blender/formations/worker.py` builds `rock.blend` from the worker recipe.
-   `tools/blender/formation_export.py` bows the long creases as the export will (`scene_export.straight_creases` and `curve.bend`, so the editor draws and fits to the shape the bake ships), cuts the section at the play plane, writes `geometry.gltf` with the iteration look's attributes, measures what a solid variant does to its guide's openings, and saves the rock with the caps.
+   `tools/blender/formation_export.py` rebuilds the long creases on the rock itself and keeps the bows it found on it (`scene_export.keep_bows`, `formation_rebuilt_bows`), gives the rock its paint UV ([Texture layers](#texture-layers)), saves `rock.blend` back, bows a copy as the export will (`curve.bend`, so the editor draws and fits to the shape the bake ships), cuts the section at the play plane, writes `geometry.gltf` with the iteration look's attributes and the paint UV, measures what a solid variant does to its guide's openings, and saves the rock with the caps.
+   The bake and a decoration's build take the rebuilt rock as it is: `straight_creases` hands back the kept bows rather than rebuilding it again (since 2026-11-25; a second rebuild re-triangulates the creases' planes, under the paint UV).
    The optimiser packs the mesh.
 2. **Bake** (`--bake`).
    The scene exporter bakes `rock.blend` as a model (`blendExport.ts`, kind `formation`, every face seen, colour at most 2048 and normal at most 1024), and `scripts/formation-tiers.mjs` derives the lower tiers: a quarter of the triangles each (meshoptimizer; normals dropped, welded by position and UV, simplified, split again and given face normals) and half the maps' side, AVIF 4:4:4 at quality 90, down to a 128 colour map or 400 triangles.
@@ -121,6 +122,8 @@ The tier the game loads is chosen per formation: automatic picks tier k where th
 
 A formation built by an older generator than the one in the tree is marked so; Regenerate builds it with the current code.
 Nothing goes stale when generator code changes.
+The job runner (`src/server/formations.ts`) treats a store entry built by another fingerprint as a miss, so asking for it builds it again (`--force`); until 2026-11-25 the store's entry answered, and Regenerate rebuilt nothing.
+The fingerprint (`worker.fingerprint`) covers `formation_export.py` since then too: it builds the geometry, the crease rebuild and the paint UV.
 
 ## Sculpting
 
@@ -204,9 +207,26 @@ A decoration is tied to its formation's guide, which a regenerate leaves where i
 Where it is drawn (`onRock`) is the anchor carried along the normal onto the rock that is drawn now (`src/editor/decorations.ts`).
 The overlay marks a decoration's point on its rock only while it is selected (since 2026-11-23; a mark on every one was a scatter of glyphs that told nothing the growth does not, and a decoration is picked by what grew, never by its mark).
 Decorations are made and edited in the **Decorations workspace** ([editor](editor.md#workspaces-2d-formations-decorations)): its palette arms a kind for a click on any generated rock, a rock's panel lists what grows on it (with a `+` per kind for that rock alone), and **Grow N out of date** grows every stale one.
+Its dock's **Select** (on whenever no kind is armed; picking it disarms, as Esc does) is how one is picked: a click on what grew selects that decoration, not its rock's body first as the editor's click-the-body-then-into-it would (since 2026-11-25); a click on bare rock selects the rock.
 
 - **Placed** (a fern, a vine, mushrooms, orbs, glow flora): grown once where it stands, then only moved: dragging it moves the anchor over the guide and lands it on the rock every frame, moved in place without rebuilding the scene.
-- **Painted** (moss, ivy): its strokes are painted and erased on the rock and kept in the level's paint; it grows again when the brush lets go.
+  **Its gizmo** (since 2026-11-25, `DecorationController.gizmo`) stands on it in 3D, turned as it is; before, it had the 2D object's handles, on its mark carried onto the gameplay plane, and moved only the mark.
+  Its move slides it over the rock (the handles' point landed on the rock as a drag lands it); its turn and its size are the decoration's own `turn` (a quaternion) and `scale` (a factor per axis), on top of the anchor's frame, about its root.
+  They are drawn, never grown (`placedFrame` in `render3d/formations.ts`, through `decorationDelta`), so turning or sizing one regrows nothing and it keeps both as it moves over the rock; **G**, **R** and **S** do the same through the same handlers.
+  The disk keeps them unscaled (`scaleLevelData` lists a decoration's fields, and dropped both until a case in `test-formations.ts` caught it).
+  A painted one has no gizmo, nor the 2D rect's corner and turn handles any decoration had (`computeHandles`): it is moved by painting.
+  **F** frames what grew (`drawnBox`: every scene object carrying its pick tag), not its 15 cm mark.
+- **Painted** (moss, ivy): its strokes are painted and erased on the rock and kept in the level's paint; it grows on a **right-click** while the brush is on (`DecorationController.apply`; a right drag still pans).
+  Letting the left button go only ends the stroke, so several strokes, with the view moved between them, wait on one growth (since 2026-11-25; before, every release grew it and the next stroke waited on that).
+  **The palette's brush** (moss or ivy armed in the dock) is a tool of the workspace, not of the selection: a press paints the rock it lands on, adding to that rock's paint of the kind (`paintedOn`: the last made, unless lost) or starting it there, selects nothing (since 2026-11-25; selecting the new moss put its panel and gizmo over the rock being painted), and stays armed; its Paint / Erase and radius are in the dock under the palette, and a right-click grows everything it painted since it was armed.
+  A right-click with nothing left to grow ends it, back to Select (since 2026-11-25), so painting ends right-click, right-click; "nothing left" is judged by the growth last asked for (`apply` keeps each one's request hash), since a growth on its way still reads as stale and judging by `stale` would ask for it again instead of ending.
+  The same holds for the panel's brush and for an armed placed kind (a fern: right-click stops it).
+  The coverage dots follow the rock under the pointer, so what is there shows before the first press; an eraser on a rock with none of the paint does nothing.
+  **Painting over another patch combines them** (since 2026-11-25; two patches on one stretch of rock were two growths through each other): a press starts on the patch under the brush (or the rock's own), and every other patch of the kind a dab reaches (its coverage covers a point the dab lays weight on: `PaintCoverage.touches`) is taken in, its strokes appended after the painted one's and the patch taken out of the level, in the stroke's undo step (`DecorationController.absorb`).
+  Its growth goes with it until the right-click grows the combined patch; the dots show the whole of it meanwhile.
+  A decoration's own panel keeps its Paint, Erase and Done, a brush tied to that decoration being selected.
+  **The brush's cursor** (`src/editor/paintCursor.ts`, since 2026-11-25) is drawn under the pointer while a painted kind is armed or its brush is on: the Blender stamp brush's ring (its radius on the plane facing the surface, green to paint, red to erase, no depth test) and the dab's footprint, the coverage's own sample points (`RockSamples`, shared and kept per rock) as strong as the weight the dab lays there, so it wraps over an edge and leaves out a face turned away, as the paint does.
+  The footprint draws over the coverage (its group's `renderOrder` 40 against the coverage's 12: three sorts a group's children by the group's order, so at 0 an erase's footprint was hidden under the green it would clear).
   While the brush is on, what the paint covers is drawn as the Blender stamp brush draws it: a field of dots over the rock where the composited paint reaches the grower's threshold (`src/editor/paintCoverage.ts`, a port of stampbrush's `Coverage` and `composite`, matched to it at 6.5e-8), so the region on screen is the region that grows, erasing included.
   The dots are the brush's and nothing else's: the brush ends with Done, Esc, a press off the rock, or the selection moving off its decoration (`DecorationController.followSelection`, checked once a frame; placing ends likewise when the selection leaves the formation's body).
   Before 2026-11-23 a change of selection left the brush on with no panel to say so, and Esc or a press off the rock ended it but left its dots drawn (the preview's "stale" key was the same `""` as its "nothing to show" key).
@@ -223,7 +243,8 @@ A solid rock's faces are n-gons flattened after the dissolve (`fitted.flatten`),
 Until 2026-11-23 the iteration mesh was bmesh's BEAUTY split, which turned 161 of a Faceted rock's 380 triangles the other way, and the rock stood through a texture moss's 3 mm shell in rock-coloured triangles.
 Depth is the rock's own Blender y (the body frame's play plane is y = 0) and the camera direction is Blender -y, which the add-ons already assume.
 A plant grown alone avoids no plant before it.
-A texture-only moss ships as a thin shell 3 mm off the rock wearing its own print (`SCENE_EXPORT_MOSS_SHELL`), since there is no rock map to paint it into.
+A texture-only moss is a [texture layer](#texture-layers): a map in its rock's paint UV, not a mesh.
+Until 2026-11-25 it shipped as a thin shell 3 mm off the rock wearing its own print (`SCENE_EXPORT_MOSS_SHELL`, still what a rock generated before the paint UV would need), and the rock stood through it in holes wherever the shell and the drawn rock were triangulated apart.
 
 Measured 2026-11-22 on a 3.9 m boulder rock: a fern 1.8 s, ivy 2.1 s, a texture moss shell 2.8 s, a mound moss of ten strokes 80 s (79,309 triangles).
 
@@ -231,6 +252,24 @@ The paint is `levels/paint/<level>.json`, one stroke a line, written with every 
 
 The **Game camera** button (Numpad 0) shows the level through the game's camera where the view is looking: the level's lens at the zoom its camera regions rest at there.
 A ▶ Test is drawn as the game draws it: the depth of field at the player's saved setting, and none of the editor's marks (the paint, the solid guides).
+
+## Texture layers
+
+A texture layer is paint that becomes part of the rock's look rather than a growth over it: today a texture-only moss (`isTextureLayer`: moss with Kind `TEXTURE`), and the dirt brush to come.
+Tris, 2026-11-25: "include the moss texture as part of the rock texture not as a shell on top".
+
+- **The paint UV.** Generate unwraps the rock once (`formation_export.paint_unwrap`, the bake's own unwrap code at one colour map's side, every face seen) into the UV map `PaintLayer` (`scene_export.PAINT_UV`), the rock's first.
+  So it is TEXCOORD_0 of `geometry.glb` and of every tier of the bake (the bake adds its own unwrap after it as TEXCOORD_1, and keeps it: `remove_unused_uvs` spares it, and `optimize-asset.ts --keep-attributes` stops the optimiser's prune, which took it out and renumbered the bake's UV in its place).
+  The bake's unwrap cannot be shared: it is decided by the bake (which faces the camera sees, how many maps).
+  Measured on a fitted L: tiers 0 and 1 carry the paint UV of the unbaked mesh exactly at every point they share; tier 2 is simplified and carries it through.
+- **The build.** `decoration-build.ts` sends a layer to `tools/blender/decoration_layer.py` instead of the scene export: the moss add-on grows the dabs as the export does for a rock map (`moss.texture_paints`) and `moss.build.layer_map` paints them into `layer.png` at the rock's colour texel, colour sRGB and coverage in straight alpha, the colour carried four texels past the coverage and the coverage past the islands (`_bleed`), so filtering never pulls in an empty texel.
+  A layer's request carries `layer: true`, so it never shares a hash with the shell it was; a moss grown before is stale until grown again.
+  On a rock generated before the paint UV the build fails with "Generate it again to paint one on it".
+  About 3 s on a small rock (the shell was 2.8 s).
+- **The game.** The rock wears its layers (`BodyVisual.wearLayers`, `src/render3d/paintLayers.ts`): each of its materials, slate or baked, is copied with up to four layer maps mixed into its colour by their coverage once the colour is final; nothing else of the rock changes.
+  The paint UV is read as `aPaintUv`, an alias of `uv` (a baked tier's only with `uv1` beside it: a tier from before has no paint UV).
+  A click on a layer picks it (`paintLayerAt`: the hit's paint UV read in the map's alpha, at least 0.3), just in front of its rock, since it has no mesh of its own.
+- **Not shipped yet.** Nothing carries a decoration's build to production (neither `decoration.glb` nor `layer.png` is in the build's or the publish's lists); that gap is older than the layers.
 
 ## The Assets tab
 

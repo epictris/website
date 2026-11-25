@@ -15,6 +15,7 @@
 import { type Manifold, manifold } from "./manifold";
 import type { FormationData, SolidNode, SolidPose, SolidPrim } from "../level/levelFormat";
 import { formationRecipe } from "./recipe";
+import { rotationRows } from "./solidTree";
 import type { SolidMesh } from "./meshBin";
 
 export type { SolidMesh, StoredMesh } from "./meshBin";
@@ -36,18 +37,8 @@ const CYLINDER_SEGMENTS = 32;
 // `makeRotationFromEuler`), then translation.
 export function poseMatrix(p: SolidPose): number[] {
   const [sx, sy, sz] = p.scale ?? [1, 1, 1];
-  const [x, y, z] = p.rot ?? [0, 0, 0];
   const [tx, ty, tz] = p.pos ?? [0, 0, 0];
-  const a = Math.cos(x), b = Math.sin(x);
-  const c = Math.cos(y), d = Math.sin(y);
-  const e = Math.cos(z), f = Math.sin(z);
-  const ae = a * e, af = a * f, be = b * e, bf = b * f;
-  // Rows of R = Rx Ry Rz.
-  const r = [
-    [c * e, -c * f, d],
-    [af + be * d, ae - bf * d, -b * c],
-    [bf - ae * d, be + af * d, a * c],
-  ];
+  const r = rotationRows(p.rot);
   return [
     r[0]![0]! * sx, r[1]![0]! * sx, r[2]![0]! * sx, 0,
     r[0]![1]! * sy, r[1]![1]! * sy, r[2]![1]! * sy, 0,

@@ -34,8 +34,9 @@ import {
 } from "../model";
 import { Guides, guidePlaneZ, type GuideDraft, type GuideView } from "./guides";
 import { isGuideTag, type GuideTag } from "./tags";
-import { dolly, frame, headOn, orbit, pan, type Ndc } from "./viewControls";
-import { withLens, type Vec3 } from "./viewPose";
+import { dolly, fly, frame, headOn, orbit, pan, refocus, type Ndc } from "./viewControls";
+import { poseEye, upsideDown, withLens, type Vec3 } from "./viewPose";
+import { atRest, type NdofAxes } from "../ndof";
 
 // Orbit sensitivity, radians per screen pixel, for both workspaces' orbit: a
 // drag across a 1600 px window is a bit over a half turn, which is enough to
@@ -47,6 +48,21 @@ export const ORBIT_RADIANS_PER_PX = 0.006;
 // at (`exp(-deltaY * 0.001)`), so a notch of the wheel is the same step in
 // either workspace.
 export const DOLLY_PER_WHEEL = 0.001;
+
+// THE SPACEMOUSE'S FLY (editor/ndof.ts), all at full deflection of the cap and
+// linear below it, as Blender's NDOF is. Feel knobs, unplayed.
+//
+// Flying speed, metres per second: the same everywhere, whatever is near
+// (Tris, 2026-11-25: the speed scaled by the distance to the surface ahead was
+// removed).
+export const FLY_SPEED_M_PER_S = 8;
+// Turning, radians per second: a quarter turn a second.
+export const FLY_TURN_RAD_PER_S = Math.PI / 2;
+// The 2D and Ortho views' zoom, natural log of the view's size per second: a
+// full push halves or doubles the view in about 0.7 s. Their pan is screen
+// relative (a view height a second), since a fixed speed in metres is a
+// crawl zoomed out and a blur zoomed in on a plan.
+export const FLY_ZOOM_PER_S = 1;
 
 
 // The parts of `Scene3D` the workspace drives. A type rather than the class so
@@ -388,6 +404,67 @@ export class VisualsWorkspace {
     this.pose = dolly(this.navigable(this.pose), toward, Math.exp(deltaY * DOLLY_PER_WHEEL));
     this.apply();
   }
+
+  // One frame of the SpaceMouse (`dt` seconds): the camera flies in its own
+  // frame and turns about itself (`fly`), at a fixed speed. False when nothing
+  // moved.
+  //
+  // - Free 3D, perspective: push/pull and slide move the eye, tilt and twist
+  //   turn it (roll is not a thing a level view has). When the cap comes to
+  //   rest the target is put on the surface in the middle of the view
+  //   (`refocus`, one ray), so the mouse's orbit afterwards pivots on what
+  //   was being looked at.
+  // - Locked head on (2D), or orthographic: there is no depth to fly through,
+  //   so push/pull zooms about the target and the slide pans; the 2D lock
+  //   turns nothing at all.
+  ndof(axes: NdofAxes, dt: number, orthographic: boolean): boolean {
+    if (!this.pose) return false;
+    const flat = this.headOnOnly || orthographic;
+    if (atRest(axes)) {
+      if (!this.flown) return false;
+      this.flown = false;
+      if (flat) return false;
+      const hit = this.host.scene.drawnSurfaceAt(0, 0);
+      if (!hit) return false;
+      const eye = poseEye(this.pose);
+      this.pose = refocus(this.pose, Math.hypot(hit.x - eye.x, hit.y - eye.y, hit.z - eye.z));
+      this.apply();
+      return true;
+    }
+    this.flown = true;
+    let pose = this.navigable(this.pose);
+    const { t, r } = axes;
+    // Both turns are the cap moving the SCENE rather than the camera (Tris,
+    // 2026-11-25: the camera-like senses read inverted): tilting the cap's
+    // top back toward the person (r.x > 0) tips the view down, a positive pose
+    // pitch, and twisting it anticlockwise seen from above (r.y > 0) turns the
+    // view right, a negative yaw.
+    const tilt = r.x;
+    const twist = -r.y;
+    if (flat) {
+      pose = dolly(pose, null, Math.exp(t.z * FLY_ZOOM_PER_S * dt));
+      // A view height a second at full deflection: NDC spans 2 per height.
+      pose = pan(pose, this.aspect(), { x: 0, y: 0 }, {
+        x: (-t.x * 2 * dt) / this.aspect(),
+        y: -t.y * 2 * dt,
+      });
+      if (!this.headOnOnly) {
+        // Over the poles as the fly goes, the twist as seen on screen (`fly`).
+        const onScreen = upsideDown(pose.pitch) ? -twist : twist;
+        pose = orbit(pose, onScreen * FLY_TURN_RAD_PER_S * dt, tilt * FLY_TURN_RAD_PER_S * dt, true);
+      }
+    } else {
+      const step = FLY_SPEED_M_PER_S * dt;
+      const turn = FLY_TURN_RAD_PER_S * dt;
+      pose = fly(pose, { x: t.x * step, y: t.y * step, z: t.z * step }, twist * turn, tilt * turn);
+    }
+    this.pose = pose;
+    this.apply();
+    return true;
+  }
+  // Whether the cap has moved the view since it was last at rest: the rest
+  // after a flight refocuses once.
+  private flown = false;
 
   // The pose a gesture starts from: the one on screen, seen through the
   // navigation lens (`WorkspaceHost.lens`) from where it stands. A view set

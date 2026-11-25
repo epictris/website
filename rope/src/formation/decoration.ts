@@ -21,6 +21,10 @@ export interface DecorationRequest {
   // A placed one: where it is grown. A painted one: its strokes.
   at?: DecorationAnchor;
   stamps?: PaintStamp[];
+  // A texture layer (`isTextureLayer`): built as a map in its rock's paint UV,
+  // not a mesh, so never the same build as the shell it was before
+  // 2026-11-25.
+  layer?: true;
 }
 
 export function isPainted(kind: DecorationKind): boolean {
@@ -43,6 +47,7 @@ export function decorationRequest(
     ...(d.settings ? { settings: d.settings } : {}),
     ...(lens !== undefined ? { lens } : {}),
     ...(isPainted(d.kind) ? { stamps: strokes ?? [] } : { at: d.onRock ?? d.anchor }),
+    ...(isTextureLayer(d) ? { layer: true } : {}),
   }) as DecorationRequest;
 }
 
@@ -52,4 +57,16 @@ export function decorationHash(r: DecorationRequest): string {
 
 export function decorationFile(hash: string): string {
   return `/generated/${hash}/decoration.glb`;
+}
+
+// A TEXTURE LAYER (docs/formations.md, "Texture layers"): a painted
+// decoration that grows no mesh but a map in its rock's paint UV, which the
+// game lays over the rock's colour - a texture-only moss today. Its build is
+// `layer.png` (`decorationLayerFile`), not `decoration.glb`.
+export function isTextureLayer(d: Pick<DecorationObjectData, "kind" | "settings">): boolean {
+  return d.kind === "moss" && d.settings?.["kind"] === "TEXTURE";
+}
+
+export function decorationLayerFile(hash: string): string {
+  return `/generated/${hash}/layer.png`;
 }
