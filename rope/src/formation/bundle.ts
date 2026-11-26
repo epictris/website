@@ -19,6 +19,7 @@
 // same bytes and the same pin.
 
 import type { FormationData, LevelData } from "../level/levelFormat";
+import { formationDataOf, lookNodes } from "../level/nodes";
 import { chosenTierOf } from "./tiers";
 import { geometryFile, tierFile } from "./store";
 
@@ -73,14 +74,18 @@ export function unpackBundle(bytes: Uint8Array): BundleFile[] {
   return index.files.map((f) => ({ name: f.name, bytes: bytes.subarray(base + f.offset, base + f.offset + f.length) }));
 }
 
-// The region a body stands in.
+// The region a rock stands in.
 export function regionOf(x: number): number {
   return Math.floor(x / REGION_WIDTH);
 }
 
-// Every built formation of a level (metres), with its body's region.
+// Every built formation of a level (metres), with the region it stands in by
+// its own world position. Read from the level's tree, which is where the look
+// lives (the sim's bodies carry none of it, `compileLevel`).
 export function levelFormations(data: LevelData): { formation: FormationData; region: number }[] {
-  return data.bodies.flatMap((b) => (b.formation?.built ? [{ formation: b.formation, region: regionOf(b.x) }] : []));
+  return lookNodes(data.tree ?? []).flatMap((p) =>
+    p.node.type === "Formation3D" && p.node.built ? [{ formation: formationDataOf(p.node), region: regionOf(p.world.t[0]) }] : [],
+  );
 }
 
 // The one file of a built formation the game loads, as a store path: the tier

@@ -32,7 +32,7 @@ import type { BallLevel } from "../level/ballLevel";
 import type { BallPlayer } from "../classes/ballPlayer";
 import type { SceneChain } from "../level/chains";
 import type { TieChain } from "../engine/ties";
-import type { RawLevelData } from "../level/levelFormat";
+import type { LevelSource } from "../level/levelFormat";
 import type { SelfReplayVerdict } from "./selfReplay";
 import type { RunMeta } from "../playtest/protocol";
 import type { InputTraceBundle } from "../input/inputTrace";
@@ -92,9 +92,12 @@ export interface Recording {
   selfReplay?: SelfReplayVerdict;
   // Self-contained bundles (e.g. exported from the level editor, whose level
   // isn't in the registry) embed their geometry + controller here. When
-  // present, replay builds from `data` instead of looking `level` up.
+  // present, replay builds from `data` instead of looking `level` up. A
+  // bundle recorded since the node tree embeds the tree, prefabs expanded
+  // (`embeddedLevelOf`); an older one, the flat level; both read through the
+  // one gate.
   controller?: "grapple" | "ball";
-  data?: RawLevelData;
+  data?: LevelSource;
   // The named spawn this run started from (`?checkpoint=`, see
   // `CheckpointData`). The level is resolved by NAME here, so without it a run
   // played from a checkpoint would replay from the level's own spawn and diverge

@@ -31,8 +31,8 @@
 // its line as thin as the gate it stands in, and the lint has nothing to say
 // about the size of one.
 
-import { collides, flatLevelOf, isCollisionObject, isModelObject, loadLevelTree, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
-import { prefabLibrary, validateTree } from "./nodes";
+import { collides, flatLevelOf, loadLevelTree, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
+import { formationDataOf, lookNodes, nodePath, prefabLibrary, validateTree } from "./nodes";
 import { rootProblems } from "./roots";
 import { PX } from "../engine/units";
 import { LEVELS, listedLevels } from "./registry";
@@ -144,40 +144,39 @@ export function runLevelChecks(formationStored?: (hash: string) => boolean): Lev
   // spelling; and its size is a positive factor, since a scale of 0 or below
   // draws nothing (or the model turned inside out) with nothing to say why.
   // Whether the model is exported and published is `cli assets`' question.
+  // Read from the level's tree (expanded, so a placed prefab's are held to it
+  // too): the look is not in the sim's bodies (`compileLevel`).
   const models: string[] = [];
   for (const [id, spec] of Object.entries(LEVELS)) {
-    normalizeLevelData(spec.data).bodies.forEach((b, i) => {
-      for (const o of b.objects) {
-        if (!isModelObject(o)) continue;
-        if (!isModelName(o.model)) models.push(`${id}: body ${i}: "${o.model}" is not a model name (lower-case letters, digits and dashes)`);
-        if (o.scale !== undefined && !(o.scale > 0 && Number.isFinite(o.scale))) models.push(`${id}: body ${i}: model "${o.model}" has scale ${o.scale}`);
-      }
-    });
+    const tree = normalizeLevelData(spec.data).tree ?? [];
+    for (const { node: o } of lookNodes(tree)) {
+      if (o.type !== "Model3D") continue;
+      const at = nodePath(tree, o.id) ?? o.id;
+      if (!isModelName(o.model)) models.push(`${id}: ${at}: "${o.model}" is not a model name (lower-case letters, digits and dashes)`);
+      if (o.scale !== undefined && !(o.scale > 0 && Number.isFinite(o.scale))) models.push(`${id}: ${at}: model "${o.model}" has scale ${o.scale}`);
+    }
   }
-  // FORMATIONS (docs/formations.md): a decoration names the guide it sits on
-  // by its formation's id, so ids are unique within a level; a guide offers
-  // only its own kind's generators (an outline is not a solid); and what a
-  // formation says it built is in the store, or the level draws nothing there.
+  // FORMATIONS (docs/formations.md): a guide offers only its own kind's
+  // generators (an outline is not a solid), and what a formation says it built
+  // is in the store, or the level draws nothing there. (Its id is its node's,
+  // unique in the file by the tree's own rule.)
   const formations: string[] = [];
   let built = 0;
   for (const [id, spec] of Object.entries(LEVELS)) {
-    const ids = new Map<string, number>();
-    normalizeLevelData(spec.data).bodies.forEach((b, i) => {
-      const f = b.formation;
-      if (!f) return;
-      const first = ids.get(f.id);
-      if (first !== undefined) formations.push(`${id}: bodies ${first} and ${i} share formation id "${f.id}"`);
-      else ids.set(f.id, i);
-      if (!f.id) formations.push(`${id}: body ${i}: a formation with no id`);
-      if (!(FORMATION_SCHEMA.generators as Record<string, unknown>)[f.generator]) formations.push(`${id}: body ${i}: no generator "${f.generator}"`);
-      else if (!generatorsFor(f.guide).includes(f.generator)) formations.push(`${id}: body ${i}: a ${f.guide.kind} guide cannot use the ${f.generator} generator`);
+    const tree = normalizeLevelData(spec.data).tree ?? [];
+    for (const { node } of lookNodes(tree)) {
+      if (node.type !== "Formation3D") continue;
+      const f = formationDataOf(node);
+      const at = nodePath(tree, node.id) ?? node.id;
+      if (!(FORMATION_SCHEMA.generators as Record<string, unknown>)[f.generator]) formations.push(`${id}: ${at}: no generator "${f.generator}"`);
+      else if (!generatorsFor(f.guide).includes(f.generator)) formations.push(`${id}: ${at}: a ${f.guide.kind} guide cannot use the ${f.generator} generator`);
       if (f.built) {
         built++;
         if (formationStored && !formationStored(f.built.hash)) {
-          formations.push(`${id}: body ${i}: built ${f.built.hash.slice(0, 12)} is not in the store (regenerate it in the editor, or fetch the published bundles)`);
+          formations.push(`${id}: ${at}: built ${f.built.hash.slice(0, 12)} is not in the store (regenerate it in the editor, or fetch the published bundles)`);
         }
       }
-    });
+    }
   }
   checks.push({
     name: "levels: every formation has its own id, a generator its guide offers, and what it built in the store",
@@ -206,21 +205,6 @@ export function runLevelChecks(formationStored?: (hash: string) => boolean): Lev
     name: "levels: every root branch grows out of its root",
     pass: roots.length === 0,
     detail: roots.length === 0 ? "every branch starts on its junction" : roots.join("; "),
-  });
-
-  // A 3D BODY IS ONLY DRAWN (`LevelBodyData.space`): it may stand off the
-  // gameplay plane and tilt only because nothing in it collides. A collision
-  // object in one would be built in the plane while drawn elsewhere.
-  const solid3d: string[] = [];
-  for (const [id, spec] of Object.entries(LEVELS)) {
-    scaleLevelData(spec.data, PX).bodies.forEach((b, i) => {
-      if (b.space === "3d" && b.objects.some(isCollisionObject)) solid3d.push(`${id}: body ${i}${b.name ? ` (${b.name})` : ""}`);
-    });
-  }
-  checks.push({
-    name: "levels: a 3D body holds nothing that collides",
-    pass: solid3d.length === 0,
-    detail: solid3d.length === 0 ? "every 3D body is drawn only" : solid3d.join("; "),
   });
 
   // The NODE TREE's rules (plans/node-tree.md "States the editor refuses"),

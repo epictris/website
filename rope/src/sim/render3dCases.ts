@@ -19,7 +19,7 @@
 
 import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
-import { setPrefab, TREE_FORMAT, type LevelNode, type LevelTree } from "../level/nodes";
+import { findNode, formationDataOf, lookNodes, poseOfFrame, scaleLevelTree, setPrefab, TREE_FORMAT, type LevelNode, type LevelTree, type LightNode, type ModelNode } from "../level/nodes";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import { BALL_ZOOM, worldToScreen, type Camera } from "../render/camera";
 import { beginWorld, ProjectedContext, ViewProjector } from "../editor/projectedCanvas";
@@ -113,6 +113,9 @@ import {
   DEFAULT_SHELTER_FRONT,
   SHELTER_THICKNESS,
   LEVEL_FORMAT,
+  loadLevelTree,
+  scaleNormalized,
+  type LevelSource,
 } from "../level/levelFormat";
 import { TreeLook } from "../render3d/treeLook";
 import { BodyVisual, pickTagOf } from "../render3d/bodyVisuals";
@@ -1812,12 +1815,18 @@ function visualRoundTrip(): CaseResult[] {
   // authored literal: `scaleLevelData` rebuilds objects field by field, so it
   // also fixes their key order, and a key-order difference is not a lost field.
   // What is being asserted is that every value survives the trip.
+  // The way back is the conversion alone (`scaleNormalized`, the tree with it):
+  // the level is through the gate already, and the look is in its tree, not
+  // in the bodies a second trip through the gate would rebuild it from.
   const a = flattened(scaleLevelData(authored, 1));
-  const b = flattened(scaleLevelData(scaleLevelData(authored, PX), PIXELS_PER_METER));
+  const b = flattened(scaleNormalized(scaleLevelData(authored, PX), PIXELS_PER_METER));
   const inMetres = scaleLevelData(authored, PX);
   const kinds = inMetres.bodies.map((body) => body.objects.map((o) => o.type).join("+"));
+  // The derived light is the look, so it is in the tree, not the sim's bodies.
+  const derivedLights = lookNodes(inMetres.tree ?? []).filter((p) => p.node.type === "Light3D").length;
   const lookless =
-    kinds.join(",") === "collision+light,collision" &&
+    kinds.join(",") === "collision,collision" &&
+    derivedLights === 1 &&
     inMetres.bodies.every((body) => body.objects.every((o) => (o.type as string) !== "geometry"));
   return [
     {
@@ -1828,7 +1837,7 @@ function visualRoundTrip(): CaseResult[] {
     {
       name: "level format: a legacy level keeps its collision and its derived light, and nothing of its look",
       pass: lookless,
-      detail: `bodies ${JSON.stringify(kinds)}`,
+      detail: `bodies ${JSON.stringify(kinds)}, lights in the tree ${derivedLights}`,
     },
   ];
 }
@@ -1935,10 +1944,14 @@ function editorRoundTrip(): CaseResult[] {
       },
     ],
   };
-  const reopened = modelToFlatDisk(modelFromDisk(drawn));
+  const reopenedModel = modelFromDisk(drawn);
+  const reopened = modelToFlatDisk(reopenedModel);
+  // A look is the tree's, not the body's, so "invented a look" is a look node
+  // anywhere in the saved tree.
+  const lookWritten = lookNodes(modelToDisk(reopenedModel).nodes).map((p) => p.node.type);
   const stayedBare =
     JSON.stringify(reopened.bodies[0]!.objects) ===
-    JSON.stringify([{ type: "collision", shape: { kind: "rect", w: 80, h: 80 } }]);
+      JSON.stringify([{ type: "collision", shape: { kind: "rect", w: 80, h: 80 } }]) && lookWritten.length === 0;
 
   return [
     {
@@ -2148,7 +2161,10 @@ function vertexEditMoves(): CaseResult[] {
 
   const saved = modelToFlatDisk(model).bodies[0]!;
   const collision = saved.objects.find(isCollisionObject)!;
-  const light = saved.objects.find(isLightObject)!;
+  // The lamp is the look, so it is read from the saved tree: a `Light3D`
+  // node's own x, y are its placement in its parent's frame, which on a body
+  // is the body's, the frame the flat fixture authored it in.
+  const light = lookNodes(modelToDisk(model).nodes).find((p) => p.node.type === "Light3D")!.node as LightNode;
   // An absent x/y IS zero on disk, which is what "it never moved" looks like
   // here - the body's own origin included.
   const still =
@@ -2203,15 +2219,17 @@ function vertexEditMoves(): CaseResult[] {
 // raycasting it rather than by testing an outline on the gameplay plane, and the
 // whole chain from a mesh under the pointer back to a row in the outliner is:
 // the drawn piece carries the authored object it was built from (`BodyVisual`'s
-// pick tag - a collision object, whose debug geometry it is, or the model or
-// decoration it draws), and `toLevelData` is the only thing that knows
-// which ITEM wrote that object.
+// pick tag - a collision object, whose debug geometry it is), and `toLevelData`
+// is the only thing that knows which ITEM wrote that object. The look (a lamp,
+// a model, a decoration) is not in the flat level at all: it is drawn from the
+// tree and answers a pick with its node's id, which is an item's `node`.
 //
 // That second half is what is asserted here, because it is the half that can
 // break silently. `toLevelData` writes one scene object per item, in item order,
 // and a future edit that skips one, writes two, or reorders them leaves a level
 // that saves, loads and renders exactly as before while every click past the
-// mistake selects the wrong thing - or nothing.
+// mistake selects the wrong thing - or nothing. The lamp in the fixture sits
+// between the pieces, so an index that still counted it would be off by one.
 function pickIndex(): CaseResult[] {
   const authored: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
@@ -2241,6 +2259,9 @@ function pickIndex(): CaseResult[] {
 
   const written = data.bodies.reduce((n, b) => n + b.objects.length, 0);
   const missed = data.bodies.flatMap((b) => b.objects).filter((o) => !itemOf.has(o));
+  // ...and every piece of the look drawn from the tree names its item by node.
+  const looks = lookNodes(data.tree ?? []);
+  const lookMissed = looks.filter((p) => !model.items.some((i) => i.node === p.node.id));
 
   // Every collision object resolves to the collision item that authored it, told
   // apart by its size - a mapping that is off by one still answers with a
@@ -2259,11 +2280,11 @@ function pickIndex(): CaseResult[] {
   return [
     {
       name: "pick: every scene object written names the item that wrote it",
-      pass: missed.length === 0 && itemOf.size === written,
+      pass: missed.length === 0 && itemOf.size === written && looks.length === 1 && lookMissed.length === 0,
       detail:
-        missed.length === 0 && itemOf.size === written
-          ? `${written} objects, ${itemOf.size} indexed`
-          : `${missed.length} of ${written} unindexed (${itemOf.size} indexed)`,
+        missed.length === 0 && itemOf.size === written && looks.length === 1 && lookMissed.length === 0
+          ? `${written} objects, ${itemOf.size} indexed; the lamp's node names its item`
+          : `${missed.length} of ${written} unindexed (${itemOf.size} indexed); ${lookMissed.length} of ${looks.length} look node(s) name no item`,
     },
     {
       name: "pick: a collision object resolves to the collision item that authored it",
@@ -2428,21 +2449,23 @@ function lightRoundTrip(): CaseResult[] {
       { x: -400, y: 60 },
     ],
   };
+  // Back by the conversion alone (`scaleNormalized`): the lamps are the
+  // look, in the tree a second trip through the gate would not rebuild.
   const a = JSON.stringify(scaleLevelData(authored, 1));
-  const b = JSON.stringify(scaleLevelData(scaleLevelData(authored, PX), PIXELS_PER_METER));
+  const b = JSON.stringify(scaleNormalized(scaleLevelData(authored, PX), PIXELS_PER_METER));
 
   const inMetres = scaleLevelData(authored, PX);
-  // The retired top-level light list migrates to a body containing nothing but
-  // the light, which is what a light with no visible source is. The body carries
-  // the placement and the object carries the rest.
-  const litBody = inMetres.bodies.find((b) => b.objects.some(isLightObject))!;
-  const lit = litBody.objects.find(isLightObject)!;
+  // The retired top-level light list migrates to a lamp with no body above it,
+  // which is what a light with no visible source is: a `Light3D` node of the
+  // level's tree (the look is not the sim's, so not in its bodies).
+  const litPlaced = lookNodes(inMetres.tree ?? []).find((p) => p.node.type === "Light3D")!;
+  const lit = litPlaced.node as LightNode;
   // The lengths converted, the candela did not. `shadowNear` is a length like
   // `range` - the shadow camera's near plane - and forgetting its line in
   // `scaleObject` is silent everywhere else: the light still lights, and the
   // near plane is simply a hundred times too deep.
   const scaled =
-    lit.range === 7.5 && lit.z === 0.6 && litBody.x === 2.4 && lit.shadowNear === 0.3;
+    lit.range === 7.5 && lit.z === 0.6 && Math.abs(litPlaced.world.t[0] - 2.4) < 1e-12 && lit.shadowNear === 0.3;
   const unscaled = lit.intensity === 22 && lit.angle === 24 && lit.penumbra === 0.6;
 
   // The environment block rides along, and this is the sharp half of the case.
@@ -2460,14 +2483,30 @@ function lightRoundTrip(): CaseResult[] {
   const envKept = JSON.stringify(envBack.environment) === JSON.stringify(withEnv.environment);
 
   const back = modelToFlatDisk(modelFromDisk(authored));
-  const ea = flattened(scaleLevelData(authored, 1));
-  const eb = flattened(scaleLevelData(back, 1));
+  // The lamps are the look, so the save is compared as the tree: every lamp's
+  // fields as written, at its world placement (keys sorted, placement rounded,
+  // as `flattened` does for the bodies), so a lamp the editor files under a
+  // different parent has not changed, and a dropped field has.
+  const round = (v: number) => Math.round(v * 1e6) / 1e6;
+  const lamps = (nodes: readonly LevelNode[]): string =>
+    JSON.stringify(
+      lookNodes(nodes)
+        .filter((p) => p.node.type === "Light3D")
+        .map((p) => {
+          const { x: _x, y: _y, rot: _r, ...fields } = p.node as LightNode;
+          const w = poseOfFrame(p.world);
+          const flat: Record<string, unknown> = { ...fields, x: round(w.x), y: round(w.y), rot: round(w.rot) };
+          return Object.fromEntries(Object.keys(flat).sort().map((k) => [k, flat[k]]));
+        }),
+    );
+  const ea = flattened(scaleLevelData(authored, 1)) + lamps(loadLevelTree(authored).nodes);
+  const eb = flattened(scaleLevelData(back, 1)) + lamps(modelToDisk(modelFromDisk(authored)).nodes);
   // A level with no lights must gain no `lights` key, or every level authored
   // before the field stops being byte-identical the first time it is opened.
-  // A level with no lights must gain none, which now means no body carrying a
-  // light object rather than an absent top-level key.
-  const none = modelToFlatDisk(modelFromDisk({ ...authored, lights: undefined })).bodies.every(
-    (b) => !b.objects.some(isLightObject),
+  // A level with no lights must gain none, which now means no `Light3D` node
+  // in the saved tree rather than an absent top-level key.
+  const none = !lookNodes(modelToDisk(modelFromDisk({ ...authored, lights: undefined })).nodes).some(
+    (p) => p.node.type === "Light3D",
   );
 
   return [
@@ -2482,7 +2521,7 @@ function lightRoundTrip(): CaseResult[] {
       detail:
         scaled && unscaled
           ? "range/z/x in metres, intensity in candela"
-          : `range ${lit.range}, z ${lit.z}, x ${litBody.x}, intensity ${lit.intensity}, angle ${lit.angle}`,
+          : `range ${lit.range}, z ${lit.z}, x ${litPlaced.world.t[0]}, intensity ${lit.intensity}, angle ${lit.angle}`,
     },
     {
       name: "editor: a level with lights saves back byte-identical",
@@ -2836,8 +2875,12 @@ function modelOnBody(): CaseResult[] {
     m.geometry.computeBoundingBox();
     return m.geometry.boundingBox!.getCenter(new THREE.Vector3()).applyMatrix4(m.matrixWorld);
   };
-  const object = data.bodies[0]!.objects[1] as ModelObjectData;
-  const world = worldPlacement(data.bodies[0]!, object);
+  // The model as the level's tree holds it (the look is not in the sim's
+  // bodies), at its world placement: the body's frame composed with its own.
+  const placedModel = lookNodes(data.tree ?? []).find((p) => p.node.type === "Model3D")!;
+  const object = placedModel.node as ModelNode;
+  const worldPose = poseOfFrame(placedModel.world);
+  const world = { pos: new Vec2(worldPose.x, worldPose.y), rot: worldPose.rot };
   const want = new THREE.Vector3(0.1, 0.05, 0.02)
     .multiplyScalar(2)
     .applyEuler(new THREE.Euler(0.5, -0.4, -world.rot, "ZYX"))
@@ -2845,7 +2888,7 @@ function modelOnBody(): CaseResult[] {
   const got = meshes[0] ? centreOf(meshes[0]) : new THREE.Vector3(NaN, NaN, NaN);
   // To a micron: the box's vertices are float32.
   const placed = meshes.length === 1 && got.distanceTo(want) < 1e-6;
-  const tagged = meshes.length === 1 && pickTagOf(meshes[0]!) === built.data.objects[1]!.node;
+  const tagged = meshes.length === 1 && pickTagOf(meshes[0]!) === object.id;
   const casts = meshes[0]?.castShadow === true;
 
   // Carried: the body moves, and so does the model, with nothing re-placed.
@@ -2856,8 +2899,10 @@ function modelOnBody(): CaseResult[] {
   look.dispose();
   visual.dispose();
 
-  // Not loaded yet: nothing mounted, nothing thrown.
-  const pending = scaleLevelData({ ...raw, bodies: [{ ...(raw.bodies[0] as LevelBodyData), objects: [{ type: "model", model: "__model-case-unloaded" }] }] }, PX);
+  // Not loaded yet: nothing mounted, nothing thrown. On the same body, so it
+  // is a body the model rides (one holding nothing but the model would be a
+  // frame, not a body).
+  const pending = scaleLevelData({ ...raw, bodies: [{ ...(raw.bodies[0] as LevelBodyData), objects: [(raw.bodies[0] as LevelBodyData).objects[0]!, { type: "model", model: "__model-case-unloaded" }] }] }, PX);
   const pendingBuilt = buildLevelBodies(new World(), pending, () => {}).bodies[0]!;
   const pendingVisual = new BodyVisual(pendingBuilt.body, pendingBuilt);
   const pendingBody = pending.bodies[0]!.node!.id;
@@ -2869,14 +2914,17 @@ function modelOnBody(): CaseResult[] {
   pendingLook.dispose();
   pendingVisual.dispose();
 
-  const scaled = scaleLevelData(raw, 0.5).bodies[0]!.objects[1] as ModelObjectData;
+  const scaled = lookNodes(scaleLevelData(raw, 0.5).tree ?? []).find((p) => p.node.type === "Model3D")!.node as ModelNode;
   const units = scaled.z === 10 && scaled.scale === 2 && scaled.rotX === 0.5 && scaled.rotY === -0.4 && scaled.x === 20;
 
-  const back = modelToFlatDisk(modelFromDisk(raw)).bodies[0]!.objects.find((o) => o.type === "model");
+  // Written back as the saved tree's `Model3D` node, whose own x, y, rot are
+  // its placement in its parent's frame - the body's, the frame the flat
+  // object was authored in - and whose `z` is its depth.
+  const back = lookNodes(modelToDisk(modelFromDisk(raw)).nodes).find((p) => p.node.type === "Model3D")?.node as ModelNode | undefined;
   const want0 = (raw.bodies[0] as LevelBodyData).objects[1]!;
   const near = (a: number | undefined, b: number | undefined): boolean => Math.abs((a ?? 0) - (b ?? 0)) < 1e-6;
   const roundTrip =
-    back?.type === "model" && want0.type === "model" && back.model === name &&
+    back !== undefined && want0.type === "model" && back.model === name &&
     near(back.x, want0.x) && near(back.y, want0.y) && near(back.rot, want0.rot) &&
     near(back.z, want0.z) && back.rotX === 0.5 && back.rotY === -0.4 && back.scale === 2;
 
@@ -3053,11 +3101,13 @@ function lightShadowRadius(): CaseResult[] {
       },
     ],
   });
-  const lampOf = (data: RawLevelData) => (data.bodies[0] as LevelBodyData).objects.find(isLightObject)!;
-  const inMetres = lampOf(scaleLevelData(disk(true), PX)).shadowRadius;
-  const saved = lampOf(modelToFlatDisk(modelFromDisk(disk(true)))).shadowRadius;
+  // The lamp is read from the tree, in metres and as saved: the look is not
+  // in the sim's bodies.
+  const lampOf = (nodes: readonly LevelNode[]) => lookNodes(nodes).find((p) => p.node.type === "Light3D")!.node as LightNode;
+  const inMetres = lampOf(scaleLevelData(disk(true), PX).tree ?? []).shadowRadius;
+  const saved = lampOf(modelToDisk(modelFromDisk(disk(true))).nodes).shadowRadius;
   // Read only while the light casts, so written only then, like `shadowNear`.
-  const unlit = lampOf(modelToFlatDisk(modelFromDisk(disk(false)))).shadowRadius;
+  const unlit = lampOf(modelToDisk(modelFromDisk(disk(false))).nodes).shadowRadius;
   const diskOk = inMetres === 2.5 && saved === 2.5 && unlit === undefined;
   return [
     {
@@ -3116,11 +3166,17 @@ function bodyFrame(): CaseResult[] {
   // The light is 2 m along the body's own +y, which the quarter turn sends to
   // -2 m in x. That is where `worldPlacement` says it is, and where
   // `localPlacement` has to put it relative to whatever the engine chose.
-  const light = data.bodies[0]!.objects.find(isLightObject)!;
+  // The lamp is the look (the tree's, not the sim's bodies'): its placement in
+  // the body's frame is its node's, and the tree's own world placement of it
+  // (`lookNodes`) has to be the same point.
+  const placedLight = lookNodes(data.tree ?? []).find((p) => p.node.type === "Light3D")!;
+  const light = { type: "light", x: placedLight.node.x, y: placedLight.node.y } as SceneObjectData;
   const w = worldPlacement(data.bodies[0]!, light);
   const local = localPlacement(b, light);
   const resolved = engine.globalPosition.add(local.pos.rotated(engine.globalRotation));
-  const agrees = Math.abs(w.pos.x - 1) < 1e-9 && Math.abs(w.pos.y - -1) < 1e-9;
+  const agrees =
+    Math.abs(w.pos.x - 1) < 1e-9 && Math.abs(w.pos.y - -1) < 1e-9 &&
+    Math.abs(placedLight.world.t[0] - w.pos.x) < 1e-9 && Math.abs(placedLight.world.t[1] - w.pos.y) < 1e-9;
   const round = resolved.distanceTo(w.pos) < 1e-9;
   return [
     {
@@ -3301,22 +3357,31 @@ function propEmission(): CaseResult[] {
 // The level arrives through the registry's own import rather than off disk, so
 // this case keeps `cli render3d` pure - no filesystem, no canvas, no GPU.
 function realLevelRoundTrip(): CaseResult[] {
-  const tally = (d: LevelData) => ({
-    bodies: d.bodies.length,
-    objects: d.bodies.reduce((n, b) => n + b.objects.length, 0),
-    collision: d.bodies.reduce((n, b) => n + b.objects.filter(isCollisionObject).length, 0),
-    lights: d.bodies.reduce((n, b) => n + b.objects.filter(isLightObject).length, 0),
-    chains: d.chains?.length ?? 0,
-  });
-  const before = tally(normalizeLevelData(BALL_LEVEL as RawLevelData));
-  const after = tally(modelToFlatDisk(modelFromDisk(BALL_LEVEL as RawLevelData)));
+  // What the sim is given, and the look (the tree's: rocks, decorations,
+  // models, lamps), each counted as the game reads the level.
+  const tally = (d: LevelData) => {
+    const look = lookNodes(d.tree ?? []);
+    const count = (type: string): number => look.filter((p) => p.node.type === type).length;
+    return {
+      bodies: d.bodies.length,
+      objects: d.bodies.reduce((n, b) => n + b.objects.length, 0),
+      collision: d.bodies.reduce((n, b) => n + b.objects.filter(isCollisionObject).length, 0),
+      chains: d.chains?.length ?? 0,
+      lights: count("Light3D"),
+      models: count("Model3D"),
+      formations: count("Formation3D"),
+      decorations: count("Decoration3D"),
+    };
+  };
+  const before = tally(normalizeLevelData(BALL_LEVEL as LevelSource));
+  const after = tally(normalizeLevelData(modelToDisk(modelFromDisk(BALL_LEVEL as LevelSource))));
   const same = JSON.stringify(before) === JSON.stringify(after);
   return [
     {
       name: "editor: the authored ball level survives a save with nothing dropped",
       pass: same,
       detail: same
-        ? `${before.bodies} bodies, ${before.objects} objects (${before.collision} collision, ${before.lights} lights), ${before.chains} chains`
+        ? `${before.bodies} bodies, ${before.objects} objects (${before.collision} collision), ${before.chains} chains; ${before.formations} rocks, ${before.decorations} decorations, ${before.models} models, ${before.lights} lamps`
         : `\n  before ${JSON.stringify(before)}\n  after  ${JSON.stringify(after)}`,
     },
   ];
@@ -4674,20 +4739,28 @@ function beamCases(): CaseResult[] {
       },
     ],
   };
-  const inMetres = scaleLevelData(authored, PX);
-  const lit = inMetres.bodies[0]!.objects.find(isLightObject)!;
+  // The lamp is the look, so it is the tree's (not the sim's bodies'): read
+  // and round-tripped as the tree.
+  const treePx = loadLevelTree(authored);
+  const treeM = scaleLevelTree(treePx, PX);
+  const lit = lookNodes(treeM.nodes).find((p) => p.node.type === "Light3D")!.node as LightNode;
   const unscaled = lit.beam === 0.6 && lit.dust === 0.5 && lit.range === 10;
-  const a = JSON.stringify(scaleLevelData(authored, 1));
-  const b = JSON.stringify(scaleLevelData(inMetres, PIXELS_PER_METER));
-  const saved = modelToFlatDisk(modelFromDisk(authored)).bodies[0]!.objects.find(isLightObject);
+  const a = JSON.stringify(treePx.nodes);
+  const b = JSON.stringify(scaleLevelTree(treeM, PIXELS_PER_METER).nodes);
+  // The editor's save is its tree, where the lamp is a `Light3D` node.
+  const lampOf = (nodes: readonly LevelNode[]) =>
+    lookNodes(nodes).find((p) => p.node.type === "Light3D")?.node as LightNode | undefined;
+  const saved = lampOf(modelToDisk(modelFromDisk(authored)).nodes);
   const kept = saved?.beam === 0.6 && saved?.dust === 0.5;
   // On a point light the fields mean nothing, so the editor does not write them.
-  const pointed = modelToFlatDisk(
-    modelFromDisk({
-      ...authored,
-      bodies: [{ ...authored.bodies[0]!, objects: [{ type: "light", beam: 0.6, dust: 0.5 }] }],
-    } as RawLevelData),
-  ).bodies[0]!.objects.find(isLightObject);
+  const pointed = lampOf(
+    modelToDisk(
+      modelFromDisk({
+        ...authored,
+        bodies: [{ ...authored.bodies[0]!, objects: [{ type: "light", beam: 0.6, dust: 0.5 }] }],
+      } as RawLevelData),
+    ).nodes,
+  );
   const pointDropped = pointed !== undefined && pointed.beam === undefined && pointed.dust === undefined;
   out.push({
     name: "format: a spot's beam and dust pass px -> m unscaled and survive an editor save",
@@ -5034,8 +5107,9 @@ function glowCases(): CaseResult[] {
       player: { x: 0, y: 0, radius: 20 },
       bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
     });
+    // The save is the editor's tree, where the lamp is a `Light3D` node.
     const saved = (light: LightObjectData) =>
-      modelToFlatDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
+      lookNodes(modelToDisk(modelFromDisk(level(light))).nodes).find((p) => p.node.type === "Light3D")!.node as LightNode;
     const full = saved({ type: "light", range: 400, wake: 300, wakeDelay: 0.25, wakeRise: 0.4, wakeFall: 2 });
     const bare = saved({ type: "light", range: 400, wake: 250 });
     const spot = saved({ type: "light", kind: "spot", range: 400, wake: 300, wakeDelay: 0.25 });
@@ -5270,9 +5344,14 @@ function glowCases(): CaseResult[] {
       ],
       fireflyPaths: [{ id: 3, x: 50, y: 60, rot: 0.5, verts: [{ x: 0, y: 0 }, { x: 400, y: 0, inX: -100, inY: 40 }] }],
     };
-    const disk = modelToFlatDisk(modelFromDisk(raw));
-    const [swarm, lamp] = disk.bodies[0]!.objects.filter(isLightObject);
+    const model = modelFromDisk(raw);
+    const disk = modelToFlatDisk(model);
+    // The lamps are the look, so they are read from the saved tree, where a
+    // swarm names its path by the `FireflyPath2D` node's id.
+    const tree = modelToDisk(model).nodes;
+    const [swarm, lamp] = lookNodes(tree).filter((q) => q.node.type === "Light3D").map((q) => q.node as LightNode);
     const p = disk.fireflyPaths?.[0];
+    const named = swarm?.path !== undefined ? findNode(tree, swarm.path) : null;
     const ok =
       disk.fireflyPaths?.length === 1 &&
       p!.id === 3 &&
@@ -5285,12 +5364,12 @@ function glowCases(): CaseResult[] {
       near(p!.verts[1]!.inY!, 40) &&
       Object.keys(p!.verts[1]!).length === 4 &&
       disk.cameraPaths === undefined &&
-      swarm!.path === 3 &&
+      named?.type === "FireflyPath2D" &&
       lamp!.path === undefined;
     out.push({
       name: "editor: firefly paths and a swarm's `path` survive a save; only a swarm writes `path`",
       pass: ok,
-      detail: `paths ${JSON.stringify(disk.fireflyPaths)}; camera paths ${JSON.stringify(disk.cameraPaths)}; swarm path ${swarm!.path}; lamp path ${lamp!.path}`,
+      detail: `paths ${JSON.stringify(disk.fireflyPaths)}; camera paths ${JSON.stringify(disk.cameraPaths)}; swarm path ${swarm?.path} (names a ${named?.type ?? "missing node"}); lamp path ${lamp?.path}`,
     });
   }
 
@@ -5303,8 +5382,9 @@ function glowCases(): CaseResult[] {
       player: { x: 0, y: 0, radius: 20 },
       bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
     });
+    // The save is the editor's tree, where the lamp is a `Light3D` node.
     const saved = (light: LightObjectData) =>
-      modelToFlatDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
+      lookNodes(modelToDisk(modelFromDisk(level(light))).nodes).find((p) => p.node.type === "Light3D")!.node as LightNode;
     const swarm = saved({ type: "light", fireflies: 9, wake: 300, wakeRise: 0.4 });
     const spot = saved({ type: "light", kind: "spot", fireflies: 9 });
     const tinted = saved({ type: "light", fireflies: 9, color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY });
@@ -5682,13 +5762,19 @@ function retiredGeometry(): CaseResult[] {
       },
     ],
   } as unknown as RawLevelData;
+  // The fold is of the flat form, so idempotence is asked of the flat part;
+  // the lamp is the look, kept in the tree (one `Light3D`), not in a body.
   const once = normalizeLevelData(raw);
-  const twice = normalizeLevelData(once);
+  const { tree: onceTree, ...onceFlat } = once;
+  const { tree: _twiceTree, ...twiceFlat } = normalizeLevelData(once);
+  const lamps = lookNodes(onceTree ?? []).filter((p) => p.node.type === "Light3D").length;
   const types = once.bodies.map((b) => b.objects.map((o) => o.type).join("+"));
   const band = once.bodies[2]!.objects[0]!;
   const shape = band.type === "collision" && band.shape.kind === "belt" ? band.shape : null;
+  const idempotent = JSON.stringify(twiceFlat) === JSON.stringify(onceFlat);
   const ok =
-    types.join(",") === "collision,collision,collision,light" &&
+    types.join(",") === "collision,collision,collision" &&
+    lamps === 1 &&
     once.bodies[0]!.waterZ === 25 &&
     once.bodies[0]!.waterDepth === 150 &&
     once.bodies[1]!.waterDepth === 90 &&
@@ -5697,12 +5783,12 @@ function retiredGeometry(): CaseResult[] {
     shape.texture === "rubber" &&
     shape.tileScale === 0.5 &&
     shape.color === "#34373d" &&
-    JSON.stringify(twice) === JSON.stringify(once);
+    idempotent;
   return [
     {
       name: "level format: a retired geometry object is dropped, water keeps its slab and a belt its band, a body of nothing else goes, and the fold is idempotent",
       pass: ok,
-      detail: `bodies ${JSON.stringify(types)}; water ${JSON.stringify({ z: once.bodies[0]!.waterZ, depth: once.bodies[0]!.waterDepth })}, authored depth kept ${once.bodies[1]!.waterDepth}; belt ${JSON.stringify(shape)}; idempotent ${JSON.stringify(twice) === JSON.stringify(once)}`,
+      detail: `bodies ${JSON.stringify(types)}, lamps in the tree ${lamps}; water ${JSON.stringify({ z: once.bodies[0]!.waterZ, depth: once.bodies[0]!.waterDepth })}, authored depth kept ${once.bodies[1]!.waterDepth}; belt ${JSON.stringify(shape)}; idempotent ${idempotent}`,
     },
   ];
 }

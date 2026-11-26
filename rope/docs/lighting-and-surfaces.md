@@ -62,14 +62,12 @@ The patch for that was to **derive** a light from the glowing shape, out of seve
 All of it is gone.
 A light object in the same body as the fitting is a **child of the group that body is drawn in**, so it rides that body's pose for nothing at all: a lantern welded into a swinging crate swings with its light, and there is no per-frame transform in the light rig. One authored thing cannot disagree with itself, and this time that is structural rather than derived.
 
-**Emissive scenery uses Cycles mesh emission.**
-Cycles Rendered shading is the Blender reference. `just scene` bakes emission
-onto static scenery and into a lighting field for the player, roots and vines.
-There are no generated point-light proxies or independent spill multipliers.
-See [Blender scenes](blender-scenes.md#emissive-lighting) for authoring, the
-export format and limitations. Three.js still has no runtime mesh-emission
-GI: the game approximates the reference using baked textures and probes. Editor lights remain useful
-for waking and flickering sources and authored shadows. Existing lights are retained.
+**Emissive scenery used Cycles mesh emission, through the retired scene export.**
+Cycles Rendered shading was the Blender reference, and until 2026-11-26 `just scene` baked emission onto static scenery and into a lighting field for the player, roots and vines.
+There were no generated point-light proxies or independent spill multipliers.
+See [Blender scenes](blender-scenes.md#emissive-lighting) for that authoring, the export format and its limitations.
+`just scene` was retired with the Blender scenes on 2026-11-26 ([blender-scenes](blender-scenes.md)), and no current build runs the emission bake: `tools/blender/scene_export.py` keeps it behind `SCENE_EXPORT_EMISSION`, which only the retired scene export set, so a model, a formation or a decoration ships its emissive surfaces glowing but lighting nothing.
+Three.js has no runtime mesh-emission GI, so light around a glowing surface is an editor light: lights remain the way to light rocks, roots, vines and the player, and to wake, flicker and cast authored shadows.
 
 Two things follow for authoring, and both are the light's own fields rather than a second spelling of them.
 A **spot** is what a wall fitting wants: it has a real **distance**, so `range` is a hard edge and the light ends where the author says the room does (an area light has no cutoff at all, and a point light's is a sphere in every direction, including back through the wall the lamp is bolted to), and its shadow is **one render** where a point light's is a cube of six - which is why a lamp can occlude at all.
@@ -351,7 +349,7 @@ A lamp just above the frame is what makes a shaft enter the picture narrow and f
 
 A dark level is lit by the world itself rather than by anything the player carries: persistent glowing lichen, and mushrooms that come alight as the player approaches, lighting the ball and the rock around it together.
 The mushroom is a **waking light**: a point light object with a `wake` distance, whose body's glowing shapes follow it (`render3d/glow.ts` for the law, `render3d/lights.ts` for the pool).
-There is no new object type: the lantern pattern (a glowing object and a light object in one body - since 2026-09-29 the glowing object is the body's dressing in the level's Blender scene) is already how the format says "this thing is a source", and a mushroom is that pattern with a light that starts dark.
+There is no new object type: the lantern pattern (a glowing object and a light object in one body - from 2026-09-29 until the scenes were retired on 2026-11-26 the glowing object was the body's dressing in the level's Blender scene, and now it is a model or a glowing decoration) is already how the format says "this thing is a source", and a mushroom is that pattern with a light that starts dark.
 A separate `glow` type was rejected because it would be every editor touchpoint for lights again, and a source that could disagree with its own light.
 Lichen is the same light without `wake`.
 
@@ -548,7 +546,7 @@ Judge that by playing on a real GPU, not off a headless still.
 ## Surfaces
 
 The surfaces here are what the GAME wears: the ball and chain's (`painted steel`), a conveyor band's (`BeltLook.texture`), and the flat fill of a shape's debug geometry.
-A level's own surfaces are materials in its Blender scene (see [blender-scenes](blender-scenes.md)), and since 2026-09-29 the authored manifest holds only `painted steel`; the rest of this section is still how either kind resolves, whichever sets are in it.
+A level's own surfaces are its formations' and its models' ([formations](formations.md), [blender-models](blender-models.md)); until 2026-11-26 they were materials in its Blender scene (see [blender-scenes](blender-scenes.md), retired), and since 2026-09-29 the authored manifest holds only `painted steel`; the rest of this section is still how either kind resolves, whichever sets are in it.
 
 A surface comes from one of two places and a level cannot tell which, because both are keyed into **one namespace** that `surfaceFor` looks up authored-first:
 

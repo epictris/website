@@ -59,13 +59,22 @@ export const enclosingItem = (i: EdItem): boolean =>
   i.object === "collision" && (i.shape.kind === "rect" || i.shape.kind === "circle" || i.shape.kind === "poly");
 
 // The body as it would be saved: its data, and which item wrote each object.
+// A rock with no body above it has none (nothing of it is the sim's): an
+// empty body at the origin, which has no pieces to take a guide from.
 function bodyData(model: EdModel, unit: string): { body: LevelBodyData; itemOf: Map<SceneTag, number> } {
-  // The unit as the level compiles it: its body, or the body a rock with none
-  // above it is gathered into (`compileLevel`), which carries its node's id.
   const itemOf = new Map<SceneTag, number>();
   const data = toLevelData(model, itemOf);
   const body = data.bodies.find((b) => b.node?.id === unit) ?? { kind: "static" as const, x: 0, y: 0, rot: 0, objects: [] };
   return { body, itemOf };
+}
+
+// The body's rock's placement in the body's frame: its item's world
+// placement measured from the body's. (The rock is the look, so it is not in
+// the compiled body; the model holds it.)
+function rockInBody(model: EdModel, unit: string, body: LevelBodyData): Placement {
+  const rock = formationItemOf(model, unit);
+  if (!rock) return local({});
+  return compose(inverse(local(body)), { pos: rock.pos, rot: rock.rot });
 }
 
 // The body's enclosing collision pieces as a guide in the formation's frame,
@@ -73,7 +82,7 @@ function bodyData(model: EdModel, unit: string): { body: LevelBodyData; itemOf: 
 // is the indices into those pieces to take.
 export function guideFromCollision(model: EdModel, unit: string, subset?: readonly number[]): CollisionGuide {
   const { body } = bodyData(model, unit);
-  const toFormation = inverse(local(body.formation ?? {}));
+  const toFormation = inverse(rockInBody(model, unit, body));
   const pieces = body.objects.filter(isCollisionObject).filter(encloses);
   const taken = subset ? pieces.filter((_, k) => subset.includes(k)) : pieces;
   return {

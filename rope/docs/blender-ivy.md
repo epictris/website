@@ -1,5 +1,13 @@
 # Ivy in Blender
 
+**The by-hand workflow is retired** (2026-11-26, with the Blender scenes, [blender-scenes](blender-scenes.md)): ivy is no longer painted into a level's `.blend` in Blender and shipped by `just scene <level>`, which is gone.
+An ivy is now a `Decoration3D` child of its rock, painted in the level editor's Decorations workspace and grown headless by `scripts/decoration-build.ts` ([formations](formations.md#decorations)).
+That job still runs this add-on's code, so the add-on lives on as a library.
+`tools/blender/decoration_prepare.py` makes the ivy with `ivy.ops.create_ivy` and stores the editor's strokes through `stampbrush`, and `tools/blender/scene_export.py` grows and exports it with `ivy.ops` (side by side through `growth_pool.py`), wearing the materials and atlases of `ivy/mesh_io.py`.
+The editor's Decoration panel shows the add-on's own settings, read off its registered properties by `just decoration-schema`.
+So what is grown, the material, the leaf stamps and the numbers that chose them are current.
+The panel, the brush, the vine placer and the origin tool in Blender, `just ivy-install` and the export of a level's scene describe the retired workflow, and are kept for the reasoning behind them.
+
 ## Automatic depth-of-field LOD
 
 Moss and ivy rebuilds (including export) now budget generated detail for the
@@ -39,8 +47,9 @@ near/far ivy geometry and materials, and moss cache invalidation and generation.
 
 
 Since 2026-09-28 ivy is **painted onto a scene in Blender** and grown as real geometry: since 2026-09-30 an ivy carpet of flat leaves wherever it is painted, grown out from one origin point, and a vine of the same leaves wherever one is placed.
-It is a Blender add-on, `tools/blender/ivy/`, and it lives entirely in Blender: the paint, the origin, the vine anchors and the settings are saved in the `.blend`, the grown mesh is exported by `just scene <level>` like any other scenery, and nothing outside Blender edits it.
-See [blender-scenes](blender-scenes.md) for the scene pipeline it rides on.
+It is a Blender add-on, `tools/blender/ivy/`, and until 2026-11-26 it lived entirely in Blender: the paint, the origin, the vine anchors and the settings were saved in the `.blend`, the grown mesh was exported by `just scene <level>` (retired) like any other scenery, and nothing outside Blender edited it.
+See [blender-scenes](blender-scenes.md) for the scene pipeline it rode on.
+Now the paint and the settings are the level's (a `Decoration3D` node, its strokes in `levels/paint/<level>.json`), and a decoration build hands them to the same exporter.
 
 ## Named moss until 2026-10-02
 
@@ -62,9 +71,13 @@ just ivy-install      # once per machine; links the add-on into Blender and enab
 
 `tools/blender/addon_install.py` links `tools/blender/ivy` into Blender's `user_default` extension repository (so an edit in the repo is what Blender runs after a restart), enables it and saves the preferences.
 The add-on is packaged as a Blender 4.2+ extension (`blender_manifest.toml`), which is Blender's name for an add-on; it has nothing to do with the level editor.
-The scene exporter does not need it installed: it imports the package from the repo.
+The scene exporter does not need it installed: it imports the package from the repo, and so does the decoration build that runs it now.
+Retired with the by-hand workflow (2026-11-26): the install only puts the panel and the brush in an interactive Blender, which nothing needs now.
 
 ## Painting
+
+Retired 2026-11-26: ivy is painted with the editor's brush, a port of the stamp brush's coverage ([formations](formations.md#decorations)).
+The Blender panel and brush below are kept as they stood, for the reasons behind the brush the editor ported.
 
 The **Ivy** tab in the 3D viewport's sidebar (N) has **Paint Ivy** and **Erase Ivy**.
 While the brush runs, left-drag paints on whatever mesh is under the cursor, Ctrl+left-drag erases, `[` and `]` shrink and grow the brush, and Escape, right-click or Enter end it; the middle mouse, the wheel and the numpad still navigate.
@@ -94,6 +107,9 @@ The ivy object finds its rocks by **name** (`ivy.host`, `ivy.joined`) and sits i
 
 ## Placing vines
 
+Retired 2026-11-26 with the by-hand workflow: an ivy decoration carries its strokes and settings only (`decoration_prepare.py`), so an ivy grown from the editor has no placed vines.
+The placer below is kept as it stood.
+
 Since 2026-09-30 nothing places a vine but the artist; the grower used to scatter them along the paint's front edge, and the owner wanted them "explicitly placed in the scene".
 The Vines panel's **Place Vines** runs like the brush: a click on a mesh hangs a vine of the selected ivy from that point (and joins the mesh to it), Ctrl+click on an anchor removes it, Escape ends it.
 With no ivy selected the first click creates one, so a bare rock can wear a vine.
@@ -109,6 +125,7 @@ Anchors are empties, so the exporter skips them as it skips every non-mesh.
 Since 2026-09-30 the carpet is ivy that has **grown out from one point**: every leaf points away from the origin and lies over the leaf beyond it, the way runners lay their leaves.
 The Carpet panel's **Set Origin** runs like the vine placer: a click puts the selected ivy's origin there (a small sphere Empty, `<ivy>.origin`, in the `Ivy` collection, parented to the ivy, carrying `ivy_origin`), Ctrl+click removes it, Escape ends it; afterwards the origin is moved with G and deleted with X like any object, and the same watcher that regrows an ivy for its vines regrows it for its origin.
 An ivy with no origin grows from the **top of its paint**, as ivy that came over the crown of the rock does.
+That is how every ivy grown from the editor grows: Set Origin was part of the by-hand workflow, retired 2026-11-26, and a decoration carries no origin.
 
 The origin only orients and layers the leaves.
 **The paint alone decides where ivy grows**: the origin may sit anywhere, even off the paint, and nothing grows toward it or around it.
@@ -184,7 +201,7 @@ Everything else - paint, origin, outline, underlay, colour, the decal and the ga
 One mesh, **one material**, `Ivy` (or `IvyClumps`, see above): the atlas's colour times the vertex colour, alpha cut at 0.35, both sides drawn. Blender shades a back face with the normal flipped toward the viewer, where the game keeps the hull normal, so a back seen in Blender can read darker than in the game.
 The shadow decal is a second mesh with a second material, `IvyShadow`: white times the vertex colour, with the vertex colour's **alpha** as the opacity and no texture, blended (`surface_render_method` BLENDED, back faces culled, no transparent back). The exporter writes it as `alphaMode BLEND` with a four-component `COLOR_0`, the optimiser keeps the alpha through its quantisation (checked: 0 to 0.6 before and after), and three's GLTFLoader draws it transparent without writing depth, depth-tested under the leaves. Its material links the vertex colour's alpha, which is what makes the exporter write four components; the ivy mesh's own `COLOR_0` stays three.
 The underlay and the stems wear it too, sampling the centre of a round blob cell (alpha 1 there, and with no UV derivative the sampler reads mip 0); the stems are wound to face the camera.
-Each node is one the exporter carries to glTF - `baseColorTexture x COLOR_0`, `alphaMode MASK` with `alphaCutoff`, no `doubleSided` - so `just scene` prints no warning, and three's GLTFLoader builds a `MeshStandardMaterial` with `alphaTest 0.35`, `FrontSide` and `vertexColors`.
+Each node is one the exporter carries to glTF - `baseColorTexture x COLOR_0`, `alphaMode MASK` with `alphaCutoff`, no `doubleSided` - so the export (`just scene` until 2026-11-26, a decoration build now) prints no warning, and three's GLTFLoader builds a `MeshStandardMaterial` with `alphaTest 0.35`, `FrontSide` and `vertexColors`.
 The cutoff sits below 0.5 because mipmapping eats alpha-tested leaves at a distance.
 
 **Why one material.** Until 2026-09-30 there were three slots (`MossBlobs`, `MossUnder`, `MossStem`), and the underlay reached the game white.
@@ -222,6 +239,7 @@ A repainted stamp sheet takes a bump of both atlas versions (and `STAMPS` edited
 ## Export
 
 `scene_export.py` grows every ivy object again before it selects anything, so the ivy that ships is grown from the paint against the rock as it is now, never the preview saved in the file.
+Since 2026-11-26 the file it reads is the one a decoration build prepares (one ivy on its formation's rock, the rock hidden from the render), not a level's scene, and the regrowth is the same; the rest of this section describes the export of a scene as it stood, and **Bake to Plain Mesh** belonged to the retired by-hand workflow.
 An ivy whose rock is gone is hidden from the export with a warning.
 Each ivy's triangle, blob and vine count and build time is printed as a `[scene_export] ivy` line; the vine anchors themselves are empties and are skipped like every non-mesh.
 The ivy node stays a child of its rock through the optimiser (`--keep-hierarchy`), so ivy on a rock that dresses a body rides the body.
@@ -229,6 +247,9 @@ The ivy node stays a child of its rock through the optimiser (`--keep-hierarchy`
 **Bake to Plain Mesh** copies an ivy into an ordinary mesh to hand-edit, and hides the ivy object from the render so only the copy exports; the copy is never regrown.
 
 ## Verified, and not
+
+The records below are dated and kept as written.
+Where one lists "a `just scene` export" as not yet done, that step no longer exists (retired 2026-11-26); its place is a growth in the editor's Decorations workspace, which runs the same exporter.
 
 2026-10-04, painted leaf stamps: both atlases drawn headless in Blender 5.2 from the 29-stamp sheet (1.8 s and 0.6 s, the stamps read and turned once) and checked as images, each stamp tip up with its notch at the base; `river.blend` opened headless (never saved), every ivy regrown in 4.4 s, and `Terrace.002.ivy` and `backdrop.arch.ivy` rendered in Eevee before and after.
 The stamps' directions in `STAMPS` were read off the sheet by eye; on the round ones the base is the notch.

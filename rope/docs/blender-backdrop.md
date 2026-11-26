@@ -2,12 +2,12 @@
 
 **Retired 2026-11-26 with the Blender scenes** ([blender-scenes](blender-scenes.md)): no level is dressed by a scene any more, and a backdrop is made in the level editor as top-level `Formation3D` nodes ([formations](formations.md#in-the-editor)); this page is kept for its lessons.
 
-**Current workflow (2026-11-21):** solid formations now build full-detail masters without camera-dependent stone sizes, depth floors or construction LOD. Assemble them in the authoring scene and use [Build Export Scene](blender-formations.md#asset-masters-and-export-scenes) to derive simpler geometry or baked wall surfaces. The depth-budget sections below record the previous implementation. Existing meshes remain as authored until explicitly regenerated.
+**The workflow from 2026-11-21 until the retirement:** solid formations now build full-detail masters without camera-dependent stone sizes, depth floors or construction LOD. Assemble them in the authoring scene and use [Build Export Scene](blender-formations.md#asset-masters-and-export-scenes) to derive simpler geometry or baked wall surfaces. The depth-budget sections below record the previous implementation. Existing meshes remain as authored until explicitly regenerated.
 
 Since 2026-10-04 a level's Blender scene can hold a **backdrop**: the far scenery the player sees behind the gameplay, stones cut from closed guide meshes kept in the scene itself.
 Since 2026-10-05 each piece is a **solid formation** ([blender-formations](blender-formations.md), generator `solid`): the Formations panel shows its guide, edits its parameters and render settings, and regenerates it, exactly as for an outline's formation.
 The river's (`ball` level, `river.blend`) was seeded from the grotto painting through an [Orthographic Studio](../../3d/CLAUDE.md) scene (`ssikuq5cgFgGC20KvbbM_g`: the far wall, the ceiling and its stem, the arch, the waterfall cliff, the ledges and the three boulders in the pool), and is what the level opens on.
-It is scenery like everything else in the scene: `just scene ball` exports it, and nothing in it can change how the ball rolls.
+It was scenery like everything else in the scene: `just scene ball` exported it until both were retired on 2026-11-26, and nothing in it could change how the ball rolls.
 
 ## Work on it
 
@@ -28,7 +28,7 @@ $B --set roof stoneSize=1.2,curveTurn=45 --rebuild changed --save
 $B --render roof export_chips=true,export_map_max=2048 --save     # `auto` forgets one
 $B --rebuild all --save
 blender -b assets-src/scenes/river.blend --python tools/blender/backdrop_check.py   # the rules, below
-just scene ball
+just scene ball                                    # retired 2026-11-26: no longer exists
 ```
 
 A guide can be edited by script too: it is the mesh `backdrop.<id> / guide` in `Formation recipes`, parented to its rock (its vertices in the rock's frame, which for a backdrop rock is the world), and a rebuild reads it as it stands.
@@ -53,8 +53,8 @@ it saves a `river.blend.pre-east-bank` backup before adding anything and
 keeps existing named additions on subsequent runs. `-- --smooth-guides`
 rounds existing additions once, regenerates them, and removes the automatic
 formation growth, with a `river.blend.pre-east-smoothing` backup.
-Export separately with
-`just scene ball` when the composition is ready for the game.
+It was exported separately with `just scene ball` when the composition was ready for the game.
+That step is retired with the scenes (2026-11-26), so nothing the script adds reaches the game.
 
 The level opens with the camera locked by the camera region the spawn stands in (`lockX`, `lockY`; for the river (10.85, 8.0) m), at the guide camera's distance from the gameplay plane (10.24 m) with the level's 70 mm lens, a 19.5 degree vertical field.
 The studio picture was drawn through a 40 degree lens, so the solids cannot simply be moved and scaled into the game's view: from the game's eye they would show only the middle third of the picture.
@@ -227,7 +227,8 @@ of 4.1 and 1.8 mm, maxima 17.5 and 8.8 mm; these are sampled differences, not
 guaranteed surface bounds. The more aggressive .3 candidate was not selected.
 The [in-game comparison tools](../tools/blender/lod_prototype/README.md) show
 the regenerated roof with the full production surface finish and approximate
-projected reference illumination. A full scene export must rebake its lighting.
+projected reference illumination. A full scene export had to rebake its lighting.
+The scene export is retired (2026-11-26), and with it that rebake.
 
 ### Legacy uniform construction and rendering
 

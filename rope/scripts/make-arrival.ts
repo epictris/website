@@ -58,15 +58,16 @@ if (!bundlePath || !levelFile) {
 const name = nameArg ?? levelFile;
 
 const rec = JSON.parse(readFileSync(bundlePath.replace(/^~/, process.env.HOME ?? "~"), "utf8")) as Recording;
-// The flat form the file compiles to, which is what a bundle embeds
-// (`flatLevelOf`, src/sim/record.ts): the two are compared field by field.
+// The flat form the file compiles to, which is what the sim reads: compared
+// field by field with the flat form of what the bundle embeds (a tree since
+// the node tree, `embeddedLevelOf`; the flat level before it).
 const level = flatLevelOf(JSON.parse(readFileSync(join(root, "levels", `${levelFile}.json`), "utf8")) as LevelSource);
 
 if (rec.controller !== "ball") {
   console.error(`[arrival] ${bundlePath} was recorded with the ${rec.controller ?? "grapple"} controller.`);
   process.exit(1);
 }
-const recorded = rec.data;
+const recorded = rec.data ? flatLevelOf(rec.data) : undefined;
 if (!recorded) {
   console.error(
     `[arrival] ${bundlePath} carries no level data, so there is nothing to check it against the level file with. ` +

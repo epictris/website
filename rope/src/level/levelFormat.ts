@@ -2438,7 +2438,7 @@ export function spawnAtCheckpoint(
       `[checkpoint] no checkpoint named "${name}" in this level; starting at the spawn. ` +
         (known ? `Known checkpoints: ${known}.` : "This level has no checkpoints."),
     );
-    return data;
+    return source;
   }
   // The opening - the rolling entry, or the recorded arrival - is dropped with
   // the move, and that is what a checkpoint means: an opening is how the LEVEL
@@ -2447,14 +2447,39 @@ export function spawnAtCheckpoint(
   // length to one side of the point that was asked for, inside whatever stands
   // there, and the arrival would ignore the point entirely and play seven
   // seconds of somewhere else.
-  return spawnWithoutEntry({ ...data, player: { ...data.player, x: hit.x, y: hit.y } });
+  return spawnMovedTo(source, { x: hit.x, y: hit.y });
+}
+
+// The level opened at `at` (world, the level's units), with no opening (see
+// `spawnWithoutEntry`), or with no opening where it stands when `at` is null.
+// A tree stays a tree - its look is in it and nowhere else - with its
+// `Spawn2D` taken out of wherever it sat and put at the top level, in the
+// world frame; a flat level moves its `player`.
+export function spawnMovedTo(source: LevelSource, at: { x: number; y: number } | null): LevelSource {
+  if (!isLevelTree(source)) return spawnWithoutEntry(at ? { ...source, player: { ...source.player, ...at } } : source);
+  const where = at ?? (() => {
+    const p = normalizeLevelData(source).player;
+    return { x: p.x, y: p.y };
+  })();
+  let spawn: (LevelNode & Record<string, unknown>) | null = null;
+  const without = (list: readonly LevelNode[]): LevelNode[] =>
+    list.flatMap((n) => {
+      if (n.type === "Spawn2D" && !spawn) {
+        spawn = n as LevelNode & Record<string, unknown>;
+        return [];
+      }
+      return [n.children ? ({ ...n, children: without(n.children) } as LevelNode) : n];
+    });
+  const nodes = without(source.nodes);
+  if (!spawn) return source;
+  const { roll: _roll, arrival: _arrival, x: _x, y: _y, rot: _r, ...kept } = spawn as Record<string, unknown>;
+  return { ...source, nodes: [{ ...kept, x: where.x, y: where.y } as unknown as LevelNode, ...nodes] };
 }
 
 // THE FLAT LEVEL a source is: a tree compiled (`normalizeLevelData`, its node
-// references and tree left off), a flat level as it is. For code that reads or
-// patches a level's flat fields - its spawn, its checkpoints - and for what a
-// recording embeds, which must replay as played whatever the prefabs it
-// placed become later.
+// references and tree left off), a flat level as it is. What the sim reads,
+// and only that (the look is the tree's, `compileLevel`): for code that reads
+// or patches a level's flat fields - its spawn, its checkpoints, its bodies.
 export function flatLevelOf(raw: LevelSource): RawLevelData {
   if (!isLevelTree(raw)) return raw;
   const { tree: _tree, ...flat } = normalizeLevelData(raw);
@@ -2462,10 +2487,18 @@ export function flatLevelOf(raw: LevelSource): RawLevelData {
     ...flat,
     bodies: flat.bodies.map(({ node: _n, ...b }) => ({
       ...b,
-      ...(b.formation ? { formation: (({ node: _f, ...f }) => f)(b.formation) } : {}),
       objects: b.objects.map(({ node: _o, ...o }) => o as SceneObjectData),
     })),
   };
+}
+
+// THE LEVEL A RECORDING EMBEDS: the tree with every placed prefab expanded,
+// so it replays - and draws - as played whatever the prefabs it placed become
+// later, and needs no library to be read. A flat level (a hand-written
+// sandbox) travels as it is.
+export function embeddedLevelOf(raw: LevelSource): LevelSource {
+  if (!isLevelTree(raw)) return raw;
+  return { ...raw, format: LEVEL_FORMAT, nodes: compileLevel(raw).nodes };
 }
 
 // The level with NO OPENING: neither the rolling entry nor the recorded

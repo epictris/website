@@ -502,6 +502,49 @@ export function walkNodes(
   }
 }
 
+// THE LEVEL'S LOOK as the tools read it: every rock, decoration, model and lamp
+// that is not disabled, with its world frame (its pose composed down its
+// ancestors, a `Node` starting again from the world, as `compileLevel` places
+// everything) and the body it rides, if any. A decoration has no pose of its
+// own: it stands in its rock's frame. Walk the EXPANDED tree (`LevelData.tree`,
+// `compileLevel().nodes`), so a placed prefab's look is in it.
+export type LookNode = FormationNode | DecorationNode | ModelNode | LightNode;
+export interface PlacedLook<T extends LookNode = LookNode> {
+  node: T;
+  world: Frame3D;
+  // The nearest body node above it, or null for a look that stands on its own.
+  body: string | null;
+  // A decoration's rock.
+  formation: string | null;
+}
+
+// A rock node as the recipe the store, the loaders and the hash are written
+// against: no pose (it is the node's, `lookNodes`' `world`), no name.
+export function formationDataOf(n: FormationNode): FormationData {
+  const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, z: _z, tilt: _tl, placedScale: _s, ...rest } = n;
+  return { id, ...rest } as unknown as FormationData;
+}
+
+export function lookNodes(nodes: readonly LevelNode[]): PlacedLook[] {
+  const out: PlacedLook[] = [];
+  const walk = (list: readonly LevelNode[], up: Frame3D, body: string | null, rock: string | null): void => {
+    for (const n of list) {
+      if (n.disabled) continue;
+      // A depth and tilt are a 3D frame's pose; a lamp's or a model's `z` is
+      // its own depth field, drawn by it, not a frame its children stand in.
+      const own = n as Pose3D;
+      const pose = n.type === "Node3D" || n.type === "Formation3D" ? own : { x: own.x, y: own.y, rot: own.rot };
+      const here = n.type === "Node" ? IDENTITY_3D : n.type === "Decoration3D" ? up : compose3D(up, frameOf(pose));
+      if (n.type === "Formation3D" || n.type === "Decoration3D" || n.type === "Model3D" || n.type === "Light3D") {
+        out.push({ node: n, world: here, body, formation: n.type === "Decoration3D" ? rock : null });
+      }
+      if (n.children) walk(n.children, here, isBodyNode(n) ? n.id : body, n.type === "Formation3D" ? n.id : rock);
+    }
+  };
+  walk(nodes, IDENTITY_3D, null, null);
+  return out;
+}
+
 export function findNode(nodes: readonly LevelNode[], id: string): LevelNode | null {
   let found: LevelNode | null = null;
   walkNodes(nodes, (n) => {
@@ -1216,8 +1259,8 @@ function scaleShapeGeometry(shape: ShapeNode["shape"], s: number): ShapeNode["sh
 export interface CompiledLevel {
   data: LevelData;
   // The full node id of the body node each `data.bodies` entry came from, by
-  // index; a body that only holds bodiless content (a rock, a lamp) has the
-  // id of the node it was gathered under.
+  // index; a body that only holds bodiless anchors has the id of the node
+  // they sit in.
   bodyNodes: string[];
   // The expanded tree the data was compiled from (instances replaced).
   nodes: LevelNode[];
@@ -1244,10 +1287,11 @@ interface Ctx {
 
 // THE ONE FUNCTION THE SIM'S INPUT COMES FROM. Bodies come out in build order
 // (`order` keys, then pre-order for ties), each with its pieces composed into
-// its frame in pre-order; a body's rock is its first `Formation3D` (the flat
-// form has one slot), and the rest of what has no body to ride - rocks, lamps,
-// anchors - is gathered into bodies that build nothing, appended after every
-// body that builds, as the renderer and the editor have always drawn them.
+// its frame in pre-order; an anchor with no body above it is held in a body
+// that builds nothing, appended after every body that builds. The look (rock,
+// decorations, models, lamps) is not compiled at all: the sim never reads it,
+// and the renderer, the editor and the tools read it from the tree
+// (`lookNodes`).
 export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLibrary()): CompiledLevel {
   const problems: string[] = [];
   const nodes = expandInstances(tree.nodes, prefabsAt(tree.lengthScale ?? 1, prefabs), problems);
@@ -1273,14 +1317,11 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
   const chains: { node: ChainNode; key: number[]; seq: number }[] = [];
   const vines: { node: VineNode; key: number[]; seq: number }[] = [];
   const anchors: string[] = [];
-  const lights: { o: LightObjectData; path: string }[] = [];
-  const formationBodies = new Map<string, LevelBodyData>();
-  const decorations: { o: DecorationObjectData; formation: string; parent: LevelNode | null; ctx: Ctx }[] = [];
   const pendingRoots: { node: ShapeNode; o: CollisionObjectData; body: NonNullable<Ctx["body"]> }[] = [];
-  const pendingSubsets: { node: FormationNode; f: FormationData; body: NonNullable<Ctx["body"]> }[] = [];
 
-  // Everything with no body to ride is gathered under the node it sits in: one
-  // body that builds nothing per such frame, in that frame's world pose.
+  // An anchor with no body above it is a point fixed in the world, which a
+  // chain or a vine is hung from: the flat form holds it in a body that builds
+  // nothing, one per frame such anchors sit in, in that frame's world pose.
   const gatherBody = (ctx: Ctx): LevelBodyData => {
     const key = ctx.parent?.id ?? "";
     let b = gatherFor.get(key);
@@ -1347,47 +1388,19 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
         (ctx.body ? ctx.body.data : gatherBody(ctx)).objects.push(tag(o, n.id));
         return;
       }
-      case "Light3D": {
-        const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, path, x: _x, y: _y, rot: _r, ...rest } = n;
-        const o = { type: "light", ...placeIn(ctx.body ? ctx.local : IDENTITY_2D, n), ...rest, node: n.id } as LightObjectData;
-        if (path !== undefined) lights.push({ o, path });
-        (ctx.body ? ctx.body.data : gatherBody(ctx)).objects.push(tag(o, n.id));
+      // THE LOOK - rock, what grows on it, models, lamps - is not the sim's:
+      // it is drawn from the tree (`render3d/treeLook.ts`) and read from the
+      // tree by every tool that needs it (`lookNodes`). The sim is given the
+      // bodies and the shapes they collide as, and nothing it never reads.
+      case "Light3D":
+      case "Model3D":
+      case "Decoration3D":
         return;
-      }
-      case "Model3D": {
-        const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...rest } = n;
-        const o = { type: "model", ...placeIn(ctx.body ? ctx.local : IDENTITY_2D, n), ...rest, node: n.id } as ModelObjectData;
-        (ctx.body ? ctx.body.data : gatherBody(ctx)).objects.push(tag(o, n.id));
+      case "Formation3D":
+        // What a rock holds besides its decorations (nothing a level authors
+        // today) is still compiled, in the rock's parent's frame.
+        for (const c of n.children ?? []) visit(c, childCtx({}));
         return;
-      }
-      case "Formation3D": {
-        const { type: _t, id, name: _n, children, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, z: _z, tilt: _tl, guide, placedScale: _ps, ...rest } = n;
-        const plainGuide = guide.kind === "collision" ? (({ subset: _s, ...g }) => g)(guide) : guide;
-        let host: LevelBodyData;
-        let f: FormationData;
-        if (ctx.body && !ctx.body.data.formation && !ctx.offPlane) {
-          host = ctx.body.data;
-          f = { id, ...placeIn(ctx.local, n), ...rest, guide: plainGuide } as FormationData;
-          if (guide.kind === "collision" && guide.subset) pendingSubsets.push({ node: n, f, body: ctx.body });
-        } else {
-          // A rock with no body to ride (or a second rock on one): a body of
-          // its own that builds nothing, in the rock's world pose.
-          host = frameBody({ ...ctx, parent: n }, n);
-          host.node = { id: n.id, path };
-          gathered.push({ data: host, node: n.id });
-          f = { id, ...rest, guide: plainGuide } as FormationData;
-        }
-        host.formation = tag(f, id);
-        formationBodies.set(id, host);
-        for (const c of children ?? []) visit(c, childCtx({}));
-        return;
-      }
-      case "Decoration3D": {
-        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...rest } = n;
-        const formation = ctx.parent?.type === "Formation3D" ? ctx.parent.id : "";
-        decorations.push({ o: { type: "decoration", id, formation, ...rest } as DecorationObjectData, formation, parent: ctx.parent, ctx });
-        return;
-      }
       case "Node3D": {
         const world3 = compose3D(ctx.world3, frameOf(n));
         const local = ctx.body ? compose2D(ctx.local, pose) : IDENTITY_2D;
@@ -1437,27 +1450,12 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
   const root: Ctx = { world: IDENTITY_2D, world3: IDENTITY_3D, offPlane: false, body: null, local: IDENTITY_2D, parent: null, path: "" };
   for (const n of nodes) visit(n, root);
 
-  // Decorations go into whatever body their rock was compiled into.
-  for (const d of decorations) {
-    const host = formationBodies.get(d.formation) ?? (d.ctx.body ? d.ctx.body.data : gatherBody(d.ctx));
-    host.objects.push(tag(d.o, d.o.id));
-  }
-
-  // Root branches and guide subsets: node ids back to the indices the flat form reads.
+  // Root branches: node ids back to the indices the flat form reads.
   for (const r of pendingRoots) {
     const parentId = r.node.root!.parent!;
     const index = r.body.shapes.get(parentId) ?? (parentId.startsWith("#") ? Number(parentId.slice(1)) : undefined);
     if (index !== undefined) r.o.root = { ...r.o.root!, parent: index };
     else problems.push(`root ${r.node.id} grows out of ${parentId}, which is not a shape in its body`);
-  }
-  for (const p of pendingSubsets) {
-    const pieces: string[] = [];
-    for (const [id, i] of p.body.shapes) {
-      const o = p.body.data.objects[i] as CollisionObjectData;
-      if (enclosesShape(o)) pieces.push(id);
-    }
-    const subset = (p.node.guide as NodeCollisionGuide).subset!.map((id) => (id.startsWith("#") ? Number(id.slice(1)) : pieces.indexOf(id)));
-    (p.f.guide as CollisionGuide).subset = subset;
   }
 
   // Anchor ids: a numeric id keeps its number; any other is given the next
@@ -1468,7 +1466,6 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
 
   const pathNumbers = numberIds(fireflyPaths.map((p) => p.key));
   for (const p of fireflyPaths) p.id = pathNumbers.get(p.key)!;
-  for (const l of lights) l.o.path = pathNumbers.get(l.path) ?? (/^\d+$/.test(l.path) ? Number(l.path) : -1);
 
   const ordered = [...bodies].sort((a, b) => compareKeys(a.key, b.key) || a.seq - b.seq);
   const byOrder = <T extends { key: number[]; seq: number }>(list: T[]): T[] => [...list].sort((a, b) => compareKeys(a.key, b.key) || a.seq - b.seq);

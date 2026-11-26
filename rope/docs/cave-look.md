@@ -98,7 +98,7 @@ The v6 rig (`--light v6`), on the study stage from `cave_features.build_stage`:
 
 View transform AgX Base Contrast, exposure 0, Cycles OptiX, 64 samples at 640 px for the review renders.
 
-The Bevel node and the Ambient Occlusion node are Cycles only and neither exports: for the game the edge line and the crevice darkening have to be baked: the scene export bakes them into an image texture per object ([blender-scenes](blender-scenes.md#what-blender-cannot-carry)).
+The Bevel node and the Ambient Occlusion node are Cycles only and neither exports: for the game the edge line and the crevice darkening have to be baked: the exporter, `tools/blender/scene_export.py`, bakes them into an image texture per object, for every model and formation bake that runs it since the Blender scenes were retired on 2026-11-26 ([blender-scenes](blender-scenes.md#what-blender-cannot-carry)).
 
 ### Moss, the dab-painted mound
 

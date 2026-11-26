@@ -22,8 +22,8 @@ import type { ContactPulses } from "../engine/contactPulses";
 import type { CollisionObject2D } from "../engine/body";
 import { mushroomParameters } from "../level/mushroom";
 import { objectDepth } from "../level/buildBodies";
-import type { DecorationObjectData, FormationData, LightObjectData } from "../level/levelFormat";
-import { isBodyNode, type DecorationNode, type FormationNode, type LevelNode, type ModelNode, type Pose3D } from "../level/nodes";
+import type { DecorationObjectData, LightObjectData } from "../level/levelFormat";
+import { formationDataOf, isBodyNode, type DecorationNode, type FormationNode, type LevelNode, type ModelNode, type Pose3D } from "../level/nodes";
 import { decorationFile, decorationLayerFile, isMaterialLayer, isTextureLayer } from "../formation/decoration";
 import { decodedFile, loadExportFile, loadModelFile, mountExport, noShadowBehindPlane } from "./exportFiles";
 import { decodedFormationFile, decorationDelta, formationFile, loadFormationFile } from "./formations";
@@ -43,10 +43,6 @@ function decorationData(n: DecorationNode, formation: string): DecorationObjectD
   return { type: "decoration", id, formation, ...rest } as DecorationObjectData;
 }
 
-function formationData(n: FormationNode): FormationData {
-  const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, z: _z, tilt: _tl, placedScale: _s, ...rest } = n;
-  return { id, ...rest } as unknown as FormationData;
-}
 
 // A body, or the top-level frame a bodiless node is gathered under: what a
 // waking light drives the glow of, and what a mushroom bounces with.
@@ -257,7 +253,7 @@ export class TreeLook {
     holder.add(scaled);
     scaled.visible = this.shown;
     this.holders.push(scaled);
-    const f = formationData(n);
+    const f = formationDataOf(n);
     const decorations = (n.children ?? []).filter((c): c is DecorationNode => c.type === "Decoration3D" && !c.disabled).map((c) => decorationData(c, n.id));
     const which = formationFile(f);
     if (which) {

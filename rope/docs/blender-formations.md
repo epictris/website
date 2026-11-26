@@ -1,7 +1,15 @@
 # Formations in Blender
 
+**The by-hand workflow is retired** (2026-11-26, with the Blender scenes, [blender-scenes](blender-scenes.md)): formations are no longer authored in a level's `.blend` through the Formations panel and shipped by `just scene <level>`, which is gone.
+A level's rock is now a `Formation3D` node in the level editor, its guide drawn or sculpted there and its rock generated headless as a job (`src/server/formations.ts`, `scripts/formation-build.ts`, `scripts/formation-build-level.ts`; [formations](formations.md)).
+That job still runs this add-on's code, so the add-on lives on as a library.
+`formations/worker.py` builds the rock from the recipe (the boulder generator in `tools/blender/boulders` in rope/.venv's Python, then `assemble.py`, `fitted.py`, `solidfit.py` and the rest in a headless Blender), `tools/blender/formation_export.py` finishes it with `formations.curve` and `formations.render`, and the bake runs `tools/blender/scene_export.py`, which uses `formations.render`, `slate`, `detail`, `depth_lod`, `curve` and `crease_cleanup`.
+The editor's Formation panel shows the generators' own parameters, read off the add-on by `just formation-schema` (`formations/schema_export.py`).
+So the generators, their parameters, the slate and the render passes, and the numbers that chose them, are current.
+The panel, the guides edited in Blender, **Replant Growth** (an editor rock's moss, ivy and plants are its decorations instead), `just formations-install` and the export of a level's scene describe the retired workflow, and are kept for the reasoning behind them.
+
 Since 2026-09-29 a Blender scene can hold **formations**: rock masses generated from **guides** (closed outlines and closed meshes), with moss beds, sprigs and hanging moss grown on them.
-They are a Blender add-on, `tools/blender/formations/`, and they are scenery like anything else in a scene: `just scene <level>` exports them (see [blender-scenes](blender-scenes.md)), and no formation can change how the ball rolls.
+They are a Blender add-on, `tools/blender/formations/`, and until 2026-11-26 they were scenery like anything else in a scene: `just scene <level>` (retired) exported them (see [blender-scenes](blender-scenes.md)), and no formation can change how the ball rolls.
 The Sunken Grotto, `assets-src/scenes/grotto.blend` (no level names it now), is built from them.
 
 Since 2026-10-08 the add-on is only guides and what is generated from them, and knows nothing of the game or the level editor.
@@ -21,7 +29,8 @@ just sources              # the scenes' .blend files and the growth textures, fr
 
 The add-on is the **Formations** tab in the 3D viewport's sidebar (N).
 `tools/blender/addon_install.py` links the package into Blender's `user_default` extension repository, as it does the ivy and moss add-ons.
-The scene exporter imports the package from the repo itself and needs none of this.
+The scene exporter imports the package from the repo itself and needs none of this, and so do the formation and decoration jobs that run it now.
+Retired with the by-hand workflow (2026-11-26): `just formations-install` only puts the panel in an interactive Blender, which nothing needs now; `bun run generators:setup` is still what a formation job needs (its `--python` is rope/.venv's).
 
 ## Asset masters and export scenes
 
@@ -256,6 +265,9 @@ For the master-to-export-file workflow, use **Export Representation** instead. T
 Each formation has an **Attachment**, which decides what grows on it, and a **Moisture** (how much).
 
 ## Growth
+
+Retired 2026-11-26 with the by-hand workflow: no job plants this growth, and an editor rock wears what is placed or painted on it as decorations ([formations](formations.md#decorations)).
+The planting is kept as it stood.
 
 **Replant Growth** (Replant in the formation's Growth sub-panel, Stale or All under Scene) grows, on each formation, as a pure function of its mesh, placement, attachment, moisture and id:
 

@@ -1,5 +1,13 @@
 # Foliage in Blender
 
+**The by-hand workflow is retired** (2026-11-26, with the Blender scenes, [blender-scenes](blender-scenes.md)): plants are no longer placed in a level's `.blend` in Blender and shipped by `just scene <level>`, which is gone.
+A fern, a hanging vine, mushrooms, orbs or glow flora is now a placed `Decoration3D` child of its rock, placed in the level editor's Decorations workspace and grown headless by `scripts/decoration-build.ts` ([formations](formations.md#decorations)).
+That job still runs this add-on's code, so the add-on lives on as a library.
+`tools/blender/decoration_prepare.py` lands the plant on the rock and makes it with `foliage.ops.create_plant` (kinds `FERN`, `VINE`, `MUSHROOM`, `ORBS`, `GLOW`), and `tools/blender/scene_export.py` grows and exports it with the add-on's generators, atlas and material.
+The editor's Decoration panel shows the add-on's own settings, read off its registered properties by `just decoration-schema`.
+So the generators, their port, the settings, the atlas and material and the numbers that chose them are current.
+The panel's placing tools, `just foliage-install` and the export of a level's scene describe the retired workflow, and are kept for the reasoning behind them.
+
 ## Automatic High-DOF LOD for ferns and vines
 
 Fern and hanging-vine rebuilds/export use the same gameplay-plane blur budget
@@ -40,8 +48,9 @@ material separation and rebuild after moving a plant into the background.
 
 
 Since 2026-10-08 ferns, leaf-sprig bushes and hanging vines are **placed in a scene in Blender, one plant at a time, and grown procedurally** by the foliage add-on, `tools/blender/foliage/`.
-Each plant is an object of its own: placed and aimed by hand, with its own settings and seed, saved in the `.blend`, grown again by `just scene <level>` and drawn by the game from the exported scene like any other scenery.
-See [blender-scenes](blender-scenes.md) for the pipeline it rides on.
+Until 2026-11-26 each plant was an object of its own: placed and aimed by hand, with its own settings and seed, saved in the `.blend`, grown again by `just scene <level>` (retired) and drawn by the game from the exported scene like any other scenery.
+See [blender-scenes](blender-scenes.md) for the pipeline it rode on.
+Now each plant is a decoration with its own settings and seed in the level, placed, turned and sized in the editor, and grown alone by a decoration build through the same exporter.
 
 ## Where it comes from
 
@@ -59,10 +68,14 @@ Karin's tubes carried a duplicate seam column for a texture they never used; the
 just foliage-install      # once per machine; links the add-on into Blender and enables it
 ```
 
-`tools/blender/addon_install.py` links `tools/blender/foliage` into Blender's `user_default` extension repository and enables it; the scene exporter imports the package from the repo and needs no install.
+Retired with the by-hand workflow (2026-11-26): the install only puts the panel and the placing tools in an interactive Blender, which nothing needs now.
+`tools/blender/addon_install.py` links `tools/blender/foliage` into Blender's `user_default` extension repository and enables it; the decoration build, like the scene exporter before it, imports the package from the repo and needs no install.
 It reaches the shared brush module (`stampbrush`, for the ray cast and `grown_by`) through a symlink inside the package, as the ivy and the moss do.
 
 ## Placing a plant
+
+Retired 2026-11-26: a plant is placed with the Decorations workspace's palette and moved, turned and sized with its gizmo ([formations](formations.md#decorations)); `decoration_prepare.py` aims every plant toward the game's camera (Blender -y) from its root, rather than the open-side and downhill aims a click without a drag takes below.
+The Blender tools are kept as they stood.
 
 The **Foliage** tab in the 3D viewport's sidebar (N) has **Add Fern** and **Add Hanging Vine**.
 Press on a mesh where the plant's root goes (a fern's crown, a vine's start), drag to aim it, and release: the arrow drawn while dragging lies in the surface's tangent plane and is the way a fern leans open, or the way a vine sets off.
@@ -290,6 +303,7 @@ The game logs `[render3d] scene "<scene>": N plant meshes cast and receive leaf 
 ## Export
 
 `scene_export.py` grows every plant again after the ivy and the moss, in order, so what ships is grown from the settings against the rock as it now stands.
+Since 2026-11-26 the file it reads is the one a decoration build prepares (one plant on its formation's rock), not a level's scene, and the growth is the same; the rest of this section describes the export of a scene as it stood.
 A plant that cannot grow (its host gone, its root off the surface, a vine trapped) is a warning and stays out of the export; each one grown is a `[scene_export] foliage` line with its triangles, fronds, leaves and build time.
 **Plants stay out of the bake**: they are hidden in render while the procedural textures bake, so no leaf card is baked into a rock's occlusion, and no plant is in a rock's bake-cache key; placing or editing a plant re-bakes nothing. The game's own shadows shade the rock under a plant.
 The plant stays a child of its host through the optimiser (`--keep-hierarchy`), so a plant on a rock that dresses a body rides the body.
@@ -308,6 +322,8 @@ The four sheets are karin-lu's, from her branch ("the painted generators and atl
 They are not in `tools/blender/image_credits.json` until it is, so every export that ships a plant warns that `foliage-atlas-v1.png` has no credit; add a set for them (author, source, licence) when it is confirmed, and publish the sheets as sources (`bun run assets:publish-sources scenes/textures/foliage/leaf-atlas.webp` and the other three) so `just sources` brings them to another machine.
 
 ## Verified, and not
+
+The records below are dated and kept as written, from when plants were placed in a level's scene by hand (retired 2026-11-26).
 
 2026-10-08, all on a scratch copy of `river.blend` (never saved over the real one):
 

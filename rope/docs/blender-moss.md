@@ -1,5 +1,13 @@
 # Moss in Blender
 
+**The by-hand workflow is retired** (2026-11-26, with the Blender scenes, [blender-scenes](blender-scenes.md)): moss is no longer painted into a level's `.blend` in Blender and shipped by `just scene <level>`, which is gone.
+A moss is now a `Decoration3D` child of its rock, painted in the level editor's Decorations workspace and grown headless by `scripts/decoration-build.ts` ([formations](formations.md#decorations)).
+That job still runs this add-on's code, so the add-on lives on as a library.
+`tools/blender/decoration_prepare.py` makes the moss with `moss.ops.create_moss` and stores the editor's strokes through `stampbrush`, `tools/blender/scene_export.py` grows and exports the mound with `moss.ops` and `moss.build` (side by side through `growth_pool.py`), and a texture-only moss is painted into the rock's paint UV by `tools/blender/decoration_layer.py` through `moss.build.layer_map` ([texture layers](formations.md#texture-layers)).
+The editor's Decoration panel shows the add-on's own settings, read off its registered properties by `just decoration-schema`.
+So what is grown, its settings and the numbers that chose them are current.
+The panel, the brush in Blender, `just moss-install` and the export of a level's scene describe the retired workflow, and are kept for the reasoning behind them.
+
 New moss defaults match `Terrace.003.moss` in `river.blend` (2026-11-14):
 Resolution **0.05 m**, Floor **0.001 m**, **400 triangles/m²**, Texel Size
 **0.005 m**, Max Texture **4096**, Detail **1**. Other generation settings and
@@ -67,7 +75,8 @@ near/far ivy geometry and materials, and moss cache invalidation and generation.
 Since 2026-10-02 moss is **painted onto a scene in Blender** with the moss add-on, `tools/blender/moss/`, and grown as a low mound whose colour is printed dab by dab: a dark base at its rim, lighter clumps inside, and the lighter the moss, the taller it stands.
 It is the cave sheet study's moss carpet (the record is `cave-sheet-study/moss_study.py` and [cave-look](cave-look.md)), settled with the owner over many rounds on 2026-10-01 and 2026-10-02, made into a tool.
 Until that day "moss" was the name of the ivy add-on; it is now [blender-ivy](blender-ivy.md), and the owner's words on the difference were "the current moss pipeline is actually an ivy carpet pipeline. They are different effects".
-Like the ivy it lives entirely in Blender: the paint and the settings are saved in the `.blend`, the mound and its print are exported by `just scene <level>`, and the exporter first rebuilds any moss whose saved mound is not what its paint, settings and rock make now (see "The export keeps what is current").
+Until 2026-11-26 it lived entirely in Blender, like the ivy: the paint and the settings were saved in the `.blend`, the mound and its print were exported by `just scene <level>` (retired), and the exporter first rebuilt any moss whose saved mound was not what its paint, settings and rock made now (see "The export keeps what is current").
+Now the paint and the settings are the level's (a `Decoration3D` node, its strokes in `levels/paint/<level>.json`), and a decoration build hands them to the same exporter, which grows the moss on its one rock.
 
 ## Bioluminescence
 
@@ -99,10 +108,14 @@ on export. See [lighting-and-surfaces](lighting-and-surfaces.md).
 just moss-install      # once per machine; links the add-on into Blender and enables it
 ```
 
-`tools/blender/addon_install.py` links `tools/blender/moss` into Blender's `user_default` extension repository and enables it; the scene exporter imports the package from the repo and needs no install.
+Retired with the by-hand workflow (2026-11-26): the install only puts the panel and the brush in an interactive Blender, which nothing needs now.
+`tools/blender/addon_install.py` links `tools/blender/moss` into Blender's `user_default` extension repository and enables it; the decoration build, like the scene exporter before it, imports the package from the repo and needs no install.
 The add-on shares its brush, the stamps' storage and the mesh helpers with the ivy in `tools/blender/stampbrush/`, reached through a symlink inside the package (`moss/stampbrush -> ../stampbrush`).
 
 ## Painting
+
+Retired 2026-11-26: moss is painted with the editor's brush, a port of the stamp brush's coverage ([formations](formations.md#decorations)).
+The Blender panel and brush below are kept as they stood, for the reasons behind the brush the editor ported.
 
 The **Moss** tab in the 3D viewport's sidebar (N) has **Paint Moss** and **Erase Moss**, the same brush as the ivy's: left-drag paints on whatever mesh is under the cursor, Ctrl+left-drag erases, `[` and `]` resize, Escape, right-click or Enter end it, and navigation passes through.
 The radius is in metres in the world.
@@ -182,6 +195,7 @@ Every build stores `built_key` on its moss: a hash of the growth's inputs (each 
 Since 2026-11-13 the key holds the rocks' triangles before their union (`hosts.parts_key`), which the union is a function of, so whether a moss on several rocks is current is known without making the union; a moss built before then is rebuilt once.
 A texture-only moss grows nothing at that point: its key is part of its rock's bake-cache key, so a cached map already holds it, and its dabs are grown only when the rock is baked. A moss painted in a file from before `built_key` (or with code changed since) is rebuilt by the export until it is rebuilt in Blender and the file saved.
 A file load clears the cache, and the scene exporter, a fresh process, always grows.
+That is all a decoration build ever runs: its `.blend` is made fresh by `decoration_prepare.py`, so the mound is always grown, and what spares an unchanged moss is the decoration's request hash (`decorationHash`), which names its folder in the store and is answered at once when the store holds it.
 
 ## What is grown
 
@@ -318,6 +332,9 @@ A texture-only moss grows the same dabs, layers and tones from the same paint an
 The study's record of rejected looks is in `moss_study.py`'s history and the memory of the sessions: shells, sss, toon, Kuwahara, card dabs, a voxel-quantised carpet, alpha-card edges (the owner: "remove the png cards from the edges"), and the dab fringe printed on the rock's own texture around the mound (tried 2026-10-02; the owner preferred the mound's own edge: "I like how it is without it").
 
 ## Verified, and not
+
+The records below are dated and kept as written.
+Where one lists "an export by `just scene`" as not yet done, that step no longer exists (retired 2026-11-26); its place is a growth in the editor's Decorations workspace, which runs the same exporter.
 
 2026-10-02: headless only, on the study's rock-b with stamps laid by script over the study's own painted area (up-facing, metre lobes, tongues over the lip), rendered under the study's v6 light (`cave-sheet-study/out/moss/addon*_*.png`). With 14 cm stamps the column grew 1111 / 685 / 631 / 347 / 86 / 13 dabs a layer (the study: 866 / 449 / 341 / 187 / 56 / 8) and the mound's mean height over the rock rose with every tone step, -5 mm to 96 mm. With 9 cm stamps the paint had pinholes between stamps and the moss had holes: paint broadly. A build takes 2-9 s a rock (the boulder: 2,263 triangles, 3,180 dabs, a 2048 print of 664k texels, 8.9 s); a per-triangle chart atlas held each surface point five times over and took 28 s. The scene exporter grew and wrote four moss rocks with their prints and no moss warnings, and exported `river.blend` with its ivy migrated and unchanged.
 The print of a 1.5 m² mound at 1.5 mm needs 0.66M texels, so a 2048 square (the charts' boxes fill 47 % of their area; 1024 would need 65 %); `Texel` is the knob, and a better packer is open.

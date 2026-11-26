@@ -345,15 +345,17 @@ function caseFormat(): RootResult {
     disk.bodies.length === 1 && tags.filter((t) => t !== undefined).length === 3,
   );
   // Indices: a parent is named by its index among the body's objects as
-  // WRITTEN. The node tree keeps the authored order (the light, listed first
-  // on disk, stays first), so the trunk is object 1 and every parent index
-  // must say so.
+  // WRITTEN, whatever stands before it. The editor's flat form keeps the
+  // light listed first on disk in its place (the sim's compile leaves it out,
+  // the look being the tree's), so the trunk is wherever the first branch is
+  // written, and every parent index must say so.
   const trunkAt = tags.findIndex((t) => t !== undefined && t.parent === undefined);
   const branchAt = tags.findIndex((t) => t?.parent === trunkAt);
   const twigAt = tags.findIndex((t) => t?.parent === branchAt);
+  const firstBranch = roots.findIndex((o) => isCollisionObject(o) && o.root !== undefined);
   c.check(
     `...each naming its parent by its NEW index (trunk ${trunkAt}, branch ${branchAt} -> ${tags[branchAt]?.parent}, twig ${twigAt} -> ${tags[twigAt]?.parent})`,
-    trunkAt === 1 && branchAt > 0 && twigAt > 0 && near(tags[branchAt]!.at ?? -1, 0.5, 1e-12) && near(tags[twigAt]!.at ?? -1, 0.6, 1e-12),
+    trunkAt === firstBranch && trunkAt >= 0 && branchAt > trunkAt && twigAt > 0 && near(tags[branchAt]!.at ?? -1, 0.5, 1e-12) && near(tags[twigAt]!.at ?? -1, 0.6, 1e-12),
   );
   const again = modelToFlatDisk(modelFromDisk(disk));
   c.check("...and a second round trip writes the same level", JSON.stringify(again.bodies) === JSON.stringify(disk.bodies));

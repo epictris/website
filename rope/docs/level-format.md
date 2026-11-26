@@ -82,17 +82,20 @@ A **name** is a label, unique only among siblings: a clash takes the next free n
 
 ### Compiling: the sim never sees the tree
 
-The sim, and everything else that reads `.bodies`, keeps consuming the flat `LevelData` it always has.
+The sim, and everything else that reads `.bodies`, keeps consuming the flat `LevelData` it always has, and it is given only what it reads: bodies and the shapes they collide as, anchors, chains, vines, the spawn, checkpoints and the plane's volumes.
 `compileLevel(tree, prefabs)` produces it:
 
 - every `Instance` is expanded first ([prefabs](prefabs.md#the-instance-node)), so what follows sees only ordinary nodes;
-- each body node becomes a `LevelBodyData` at its world pose, its shapes, anchors, lights and models composed into its frame in pre-order;
-- a body's rock is its first `Formation3D` in the plane (the flat form has one slot); a second one, or one off the plane, or one with no body above it, gets a body of its own that builds nothing;
-- what has no body to ride (rocks, lamps, anchors) is **gathered** into collisionless bodies, one per frame it sits in, appended after every body that builds, which is where the renderer and the editor have always found such bodies;
-- node references go back to the numbers the flat form reads: anchor ids are numbered (a numeric id keeps its number), `subset` and `root.parent` become indices, a swarm's path its path's number.
+- each body node becomes a `LevelBodyData` at its world pose, its shapes and anchors composed into its frame in pre-order;
+- an anchor with no body above it is a point fixed in the world (what a chain or a vine is hung from), held in a body that builds nothing, one per frame such anchors sit in, appended after every body that builds;
+- **the look is not compiled** (since 2026-11-26): rocks, decorations, models and lamps are drawn from the tree (`render3d/treeLook.ts`) and read from it by every tool that needs them (`lookNodes` in `nodes.ts`: each with its world frame, the body it rides and a decoration's rock), so a rock with no body above it costs the sim nothing at all;
+- node references go back to the numbers the flat form reads: anchor ids are numbered (a numeric id keeps its number), `root.parent` becomes an index.
+
+The editor reads it the same way: `modelFromTree` builds its bodies' shapes and anchors from the compiled level and its rocks, lamps, models and decorations from the tree (`lookNodes`), and its scene is rebuilt when what the look DRAWS changes (`sceneKeyOf`), not when any field of the tree does.
 
 `LevelBodyData.node` carries the node each compiled body came from (its full id and its path of names, which `cli query` and the replay tools print beside the engine body index), `ObjectPlacement.node` the node id each object came from, and `compileLevel().nodeOf` maps every compiled element back to its node, for the editor, which reads the compiled level and edits the tree.
 `bodyNodes` lists the node of each compiled body by index.
+A recording embeds the level as its tree with every prefab expanded (`embeddedLevelOf`), so a replay draws as well as plays as recorded; a start at a checkpoint and the editor's ▶ Test move the tree's `Spawn2D` (`spawnMovedTo`), and the tree stays a tree.
 
 ### Build order
 
@@ -275,9 +278,9 @@ A body is a thing in the gameplay plane: `x`, `y`, `rot` and no depth, because t
 What stands off the plane is a 3D node: a `Node3D`, `Formation3D`, `Model3D` or `Light3D` with `z` (disk pixels, toward the camera) and `tilt: [x, y]` (radians about three's x then y, applied before `rot`: Euler order ZYX), placed in its parent's frame (`placeBody3d` in `render3d/space.ts` is the convention; `frameOf` in `nodes.ts` composes it).
 A background rock is a top-level `Formation3D` with no body above it ([formations](formations.md#in-the-editor)).
 
-In the compiled flat form a rock or lamp with no body to ride still lands in a **3D body** (`space: "3d"`, since 2026-11-22): a gathered body that collides with nothing, in the node's world pose, which the sim never sees.
-`cli levels` refuses a collision object in a 3D body ("a 3D body holds nothing that collides").
-Until 2026-11-26 the 3D body was also how a level file stated a backdrop, and the editor kept its depth and tilt beside the body's frame (`EdModel.bodies3d`); a flat file that still has one migrates into a `Formation3D` (a lone rock, its frame composed with the rock's placement) or a `Node3D` holding the rock and its lights and models.
+The sim's level holds no 3D body: a rock or lamp off the plane is the look, drawn from the tree, and a shape off the plane is a state the tree refuses (a 2D node under a 3D one).
+The only 3D collision in the game is the glass ball's shards, which land on what each body draws, render-side ([glass-ball](glass-ball.md)).
+Until 2026-11-26 the 3D body (`space: "3d"`) was also how a level file stated a backdrop, and the editor kept its depth and tilt beside the body's frame (`EdModel.bodies3d`); a flat file that still has one migrates into a `Formation3D` (a lone rock, its frame composed with the rock's placement) or a `Node3D` holding the rock and its lights and models.
 
 ## Regenerating level geometry
 

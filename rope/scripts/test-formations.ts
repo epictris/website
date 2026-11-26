@@ -29,13 +29,14 @@ import { fitSection, isSimple } from "../src/formation/fit";
 import { formationHash } from "../src/formation/recipe";
 import { sha256Bytes, sha256Hex } from "../src/formation/sha256";
 import type { FormationMeta } from "../src/formation/store";
-import { isCollisionObject, scaleLevelData, type DecorationObjectData, type FormationData, type LevelData, type PaintStamp, type RawLevelData } from "../src/level/levelFormat";
+import { isCollisionObject, loadLevelTree, scaleLevelData, type DecorationObjectData, type FormationData, type LevelData, type PaintStamp, type RawLevelData } from "../src/level/levelFormat";
 import { MaterialMask, MASK_SIDE, rasterizePaintUv, type PaintUvMesh } from "../src/formation/materialMask";
 import { decorationRequest } from "../src/formation/decoration";
 import { readPaintUvMeshes } from "./paintUvMesh";
 import { decorationDelta } from "../src/render3d/formations";
 import { alignCollisionToGuide, collisionMatchesGuide, formationItemOf, guideFromCollision } from "../src/editor/formationEdit";
-import { modelFromDisk, modelToFlatDisk } from "../src/editor/model";
+import { modelFromDisk, modelToDisk, modelToFlatDisk } from "../src/editor/model";
+import { formationDataOf, lookNodes, poseOfFrame, scaleLevelTree, type DecorationNode, type FormationNode, type LevelTree } from "../src/level/nodes";
 import { PaintCoverage, samplesOf } from "../src/editor/paintCoverage";
 import { PaintCursor } from "../src/editor/paintCursor";
 import { isGroup, moveEntry, setMode, stackOf, treeOf } from "../src/formation/solidStack";
@@ -91,9 +92,11 @@ const level: LevelData = {
 
 // 2. Through the disk and the editor.
 {
-  const disk = scaleLevelData(level, PIXELS_PER_METER) as RawLevelData;
-  const back = scaleLevelData(disk, PX);
-  const f = back.bodies[0]!.formation!;
+  // The level as its file holds it: a tree in pixels. A rock is the look, so it
+  // is read from the tree (`lookNodes`), never from the sim's bodies.
+  const disk = scaleLevelTree(loadLevelTree(level), PIXELS_PER_METER);
+  const rockOf = (tree: LevelTree): FormationNode => lookNodes(tree.nodes).find((p) => p.node.type === "Formation3D")!.node as FormationNode;
+  const f = rockOf(scaleLevelTree(disk, PX));
   const near = (a: number | undefined, b: number | undefined) => Math.abs((a ?? 0) - (b ?? 0)) < 1e-9;
   check(
     "a formation crosses the disk with its placement, recipe, tier and build record",
@@ -107,9 +110,10 @@ const level: LevelData = {
   const item = formationItemOf(model, bodyId)!;
   check("the editor loads a formation as an item of its body", !!item && item.formation?.id === "f1");
   item.formation = { ...item.formation!, guide: guideFromCollision(model, bodyId) };
-  const saved = modelToFlatDisk(model);
-  const reloaded = scaleLevelData(modelToFlatDisk(modelFromDisk(saved)), PX).bodies[0]!.formation!;
-  const savedF = scaleLevelData(saved, PX).bodies[0]!.formation!;
+  const saved = modelToDisk(model);
+  const reloaded = formationDataOf(rockOf(scaleLevelTree(modelToDisk(modelFromDisk(saved)), PX)));
+  const savedNode = rockOf(scaleLevelTree(saved, PX));
+  const savedF = { ...formationDataOf(savedNode), x: savedNode.x, y: savedNode.y, rot: savedNode.rot };
   check("the recipe hash survives the editor's save and load", formationHash(reloaded) === formationHash(savedF), `${formationHash(reloaded)} vs ${formationHash(savedF)}`);
   check(
     "the guide keeps each piece's fields",
@@ -126,16 +130,19 @@ const level: LevelData = {
   // editor unchanged, and a 2D body gains none of them.
   {
     const solid: FormationData = { id: "b1", generator: "solid", variant: "boulder", params: {}, guide: { kind: "solid", tree: { prim: "box", size: [3, 2, 2], pos: [0, 1, -2.5] } } };
-    const disk3d = scaleLevelData(
-      { player: { x: 0, y: 0, radius: 0.1 }, bodies: [{ kind: "static", x: 4, y: -2, rot: 0.3, space: "3d", z: -6, tilt: [0.2, -0.4], objects: [], formation: solid }] } as LevelData,
+    // A retired 3D body is read as the rock standing in its frame: the rock's
+    // world pose is the body's frame, depth and tilt.
+    const disk3d = scaleLevelTree(
+      loadLevelTree({ player: { x: 0, y: 0, radius: 0.1 }, bodies: [{ kind: "static", x: 4, y: -2, rot: 0.3, space: "3d", z: -6, tilt: [0.2, -0.4], objects: [], formation: solid }] } as LevelData),
       PIXELS_PER_METER,
     );
-    const round3d = scaleLevelData(modelToFlatDisk(modelFromDisk(disk3d as unknown as RawLevelData)), PX).bodies[0]!;
+    const rock3d = lookNodes(scaleLevelTree(modelToDisk(modelFromDisk(disk3d)), PX).nodes).find((p) => p.node.type === "Formation3D")!;
+    const round3d = poseOfFrame(rock3d.world);
     check(
       "a 3D body's frame, depth and tilt survive the disk and the editor",
-      round3d.space === "3d" && near(round3d.x, 4) && near(round3d.y, -2) && near(round3d.rot, 0.3) && near(round3d.z, -6) &&
-        near(round3d.tilt?.[0], 0.2) && near(round3d.tilt?.[1], -0.4),
-      JSON.stringify({ space: round3d.space, x: round3d.x, y: round3d.y, rot: round3d.rot, z: round3d.z, tilt: round3d.tilt }),
+      rock3d.body === null && near(round3d.x, 4) && near(round3d.y, -2) && near(round3d.rot, 0.3) && near(round3d.z, -6) &&
+        near(round3d.tilt[0], 0.2) && near(round3d.tilt[1], -0.4),
+      JSON.stringify({ body: rock3d.body, ...round3d }),
     );
     const flat = scaleLevelData(modelToFlatDisk(modelFromDisk(disk)), PX).bodies[0]!;
     check("a 2D body stays one", flat.space === undefined && flat.z === undefined && flat.tilt === undefined);
@@ -281,8 +288,13 @@ const level: LevelData = {
   const at = { p: [0.1, 0.2, 0.3] as [number, number, number], n: [0, 1, 0] as [number, number, number] };
   const turn: [number, number, number, number] = [0, 0, Math.sin(Math.PI / 6), Math.cos(Math.PI / 6)];
   const dec: DecorationObjectData = { type: "decoration", id: "fern-t", kind: "fern", formation: "f1", anchor: at, onRock: at, turn, scale: [2, 2, 2], built: { hash: "h", host: "f", at } };
-  const disk = scaleLevelData({ ...level, bodies: [{ ...level.bodies[0]!, objects: [dec] }] }, PIXELS_PER_METER) as RawLevelData;
-  const back = scaleLevelData(disk, PX).bodies[0]!.objects[0] as DecorationObjectData;
+  // Across the disk as the file holds it, a tree, the decoration read back
+  // from the tree (it is the look, not the sim's).
+  const decorationOf = (data: LevelData): DecorationNode => {
+    const tree = scaleLevelTree(scaleLevelTree(loadLevelTree(data), PIXELS_PER_METER), PX);
+    return lookNodes(tree.nodes).find((p) => p.node.type === "Decoration3D")!.node as DecorationNode;
+  };
+  const back = decorationOf({ ...level, bodies: [{ ...level.bodies[0]!, objects: [dec] }] });
   check("a decoration's turn and size cross the disk unscaled", JSON.stringify(back.turn) === JSON.stringify(turn) && JSON.stringify(back.scale) === "[2,2,2]", JSON.stringify(back));
   // Grown where it stands, so the move is nothing: the root stays put, and a
   // point a unit up its normal (the frame's z) ends up twice as far, turned.
@@ -293,8 +305,7 @@ const level: LevelData = {
   // A material layer's build names its baked material (`built.maps`), which
   // the disk's field list must carry as it carries the rest.
   const layerDec: DecorationObjectData = { type: "decoration", id: "material-t", kind: "material", formation: "f1", anchor: at, settings: { material: "dirt" }, built: { hash: "h", host: "f", at, maps: "m" } };
-  const layerDisk = scaleLevelData({ ...level, bodies: [{ ...level.bodies[0]!, objects: [layerDec] }] }, PIXELS_PER_METER) as RawLevelData;
-  const layerBack = scaleLevelData(layerDisk, PX).bodies[0]!.objects[0] as DecorationObjectData;
+  const layerBack = decorationOf({ ...level, bodies: [{ ...level.bodies[0]!, objects: [layerDec] }] });
   check("a material layer's baked material crosses the disk", layerBack.built?.maps === "m" && layerBack.settings?.["material"] === "dirt", JSON.stringify(layerBack.built));
 }
 

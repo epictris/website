@@ -13,7 +13,7 @@
 // registry name so it is self-contained: a script's arena is usually authored in
 // the script itself and exists nowhere else.
 
-import { flatLevelOf } from "../level/levelFormat";
+import { embeddedLevelOf } from "../level/levelFormat";
 import type { PlaytestResult, PlaytestScript } from "./playtest";
 import { runScript, scriptSpec } from "./playtest";
 import type { Recording } from "./trace";
@@ -42,7 +42,7 @@ export function recordScript(script: PlaytestScript, stamp?: RecordStamp): Recor
       // The level travels WITH the bundle. A script's arena is authored inline
       // and is not in the registry, so a bundle naming it by id would replay
       // against nothing.
-      data: flatLevelOf(spec.data),
+      data: embeddedLevelOf(spec.data),
       controller: "ball",
       ...(script.ball === "glass" ? { ball: "glass" as const } : {}),
       frames: result.serializedFrames,

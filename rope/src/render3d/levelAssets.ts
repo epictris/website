@@ -22,6 +22,7 @@
 
 import type { LevelSource, RawLevelData } from "../level/levelFormat";
 import { normalizeLevelData, scaleLevelData } from "../level/levelFormat";
+import { formationDataOf, lookNodes } from "../level/nodes";
 import { PX } from "../engine/units";
 import { rootMeshKey } from "./rootKey";
 import rootBakes from "./rootBakes.json";
@@ -62,19 +63,17 @@ function modelStoredFile(model: string): StoredFile {
 // each once.
 export function levelFormationFiles(raw: LevelSource): StoredFile[] {
   const out = new Map<string, StoredFile>();
-  for (const body of normalizeLevelData(raw).bodies) {
-    const served = body.formation ? formationServedFile(body.formation) : null;
+  for (const { node } of lookNodes(normalizeLevelData(raw).tree ?? [])) {
+    const served = node.type === "Formation3D" ? formationServedFile(formationDataOf(node)) : null;
     if (served) out.set(served.path, { file: served.path, bytes: served.bytes });
   }
   return [...out.values()];
 }
 
-// Every model the level's bodies carry, by name, each once, in authored order.
+// Every model the level places, by name, each once, in authored order.
 export function levelModelNames(raw: LevelSource): string[] {
   const names = new Set<string>();
-  for (const body of normalizeLevelData(raw).bodies) {
-    for (const object of body.objects) if (object.type === "model") names.add(object.model);
-  }
+  for (const { node } of lookNodes(normalizeLevelData(raw).tree ?? [])) if (node.type === "Model3D") names.add(node.model);
   return [...names];
 }
 

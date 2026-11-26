@@ -71,6 +71,8 @@ import {
   prefabLibrary,
   prefabsAt,
   PREFAB_ROCK_RECIPE,
+  formationDataOf,
+  lookNodes,
   scaleGeometry,
 } from "../level/nodes";
 import { ancestors, bodyAbove, canParent, childrenOf, descendants, freeName, isBodyType, nextOrder, removeSubtree, reparent, treeOf, type EdBody, type EdNode, type EdTree } from "./tree";
@@ -134,6 +136,7 @@ import {
   isCollisionObject,
   isAnchorObject,
   isModelObject,
+  type ModelObjectData,
   type CheckpointData,
   type LevelCameraData,
   type NoteData,
@@ -1590,7 +1593,8 @@ export function modelFromTree(tree: LevelTree): EdModel {
     return item;
   };
 
-  // Bodies: their properties onto their nodes, their objects into items.
+  // Bodies: their properties onto their nodes, their shapes and anchors into
+  // items (what the sim is given, `compileLevel`).
   data.bodies.forEach((b) => {
     const id = b.node?.id;
     const node = id ? edTree.nodes.get(id) : undefined;
@@ -1598,28 +1602,51 @@ export function modelFromTree(tree: LevelTree): EdModel {
       node.body = edBodyOf(b, (findNodeData(compiled.nodes, node.id) as { order?: number } | null)?.order ?? 0);
     }
     b.objects.forEach((o) => {
-      if (isDecorationObject(o)) return;
       const nodeId = o.node ?? nodeOf.get(o);
       if (!nodeId) return;
       const item = objectItem(o, nodeId);
       if (item) add(item);
     });
-    if (b.formation) {
-      const { x: _x, y: _y, rot: _r, node: _n, ...f } = b.formation;
-      add({ ...blankItem("scene", "formation", f.id), formation: f });
-    }
   });
-  // Decorations: grown on their rock, so placed where their anchor lands on it.
-  for (const b of data.bodies) {
-    for (const o of b.objects) {
-      if (!isDecorationObject(o)) continue;
-      const rock = edTree.nodes.get(o.formation);
-      const at = o.onRock ?? o.anchor;
-      const { type: _t, x: _x, y: _y, rot: _r, node: _n, ...decoration } = o;
-      const item = add({ ...blankItem("scene", "decoration", o.id), shape: { kind: "rect", w: MODEL_MARK / 2, h: MODEL_MARK / 2 }, decoration });
-      if (rock) {
-        item.pos = rock.pos.add(new Vec2(at.p[0], -at.p[1]).rotated(rock.rot));
-        item.rot = 0;
+
+  // THE LOOK, from the tree itself (it is not the sim's, so not compiled):
+  // rocks, lamps, models, and decorations grown on their rock, placed where
+  // their anchor lands on it. A lamp's swarm path is named by its path's node;
+  // the editor holds the path's number (`EdItem.pathId`).
+  const pathNumber = new Map<string, number>();
+  for (const p of data.fireflyPaths ?? []) {
+    const node = nodeOf.get(p);
+    if (node) pathNumber.set(node, p.id);
+  }
+  const numberOfPath = (path: string): number => pathNumber.get(path) ?? (/^\d+$/.test(path) ? Number(path) : -1);
+  const rocks: EdItem[] = [];
+  for (const { node: n, formation: rockId } of lookNodes(compiled.nodes)) {
+    switch (n.type) {
+      case "Light3D": {
+        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, path, ...fields } = n;
+        add(lightItem({ type: "light", ...fields, ...(path !== undefined ? { path: numberOfPath(path) } : {}) } as LightObjectData, id));
+        break;
+      }
+      case "Model3D": {
+        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n;
+        const item = objectItem({ type: "model", ...fields } as ModelObjectData, id);
+        if (item) add(item);
+        break;
+      }
+      case "Formation3D":
+        rocks.push(add({ ...blankItem("scene", "formation", n.id), formation: formationDataOf(n) }));
+        break;
+      case "Decoration3D": {
+        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...fields } = n;
+        const decoration = { id, formation: rockId ?? "", ...fields } as EdDecoration;
+        const item = add({ ...blankItem("scene", "decoration", id), shape: { kind: "rect", w: MODEL_MARK / 2, h: MODEL_MARK / 2 }, decoration });
+        const rock = rockId ? edTree.nodes.get(rockId) : undefined;
+        if (rock) {
+          const at = decoration.onRock ?? decoration.anchor;
+          item.pos = rock.pos.add(new Vec2(at.p[0], -at.p[1]).rotated(rock.rot));
+          item.rot = 0;
+        }
+        break;
       }
     }
   }
@@ -1760,6 +1787,17 @@ export function modelFromTree(tree: LevelTree): EdModel {
     meta: { ...tree.meta },
   };
   relink(model);
+  // A collision guide's `subset` names its pieces by node id in the tree; the
+  // editor holds indices into its body's enclosing pieces (`nodeGuide` is the
+  // way back). A "#n" id is the flat form's index as it was.
+  for (const item of rocks) {
+    const guide = item.formation!.guide as NodeFormationGuide;
+    if (guide.kind !== "collision" || !guide.subset) continue;
+    const body = bodyAbove(model.tree, item.node);
+    const pieces = body ? enclosingPiecesOf(model, body.id).map((p) => p.node) : [];
+    const subset = guide.subset.map((id) => (id.startsWith("#") ? Number(id.slice(1)) : pieces.indexOf(id)));
+    item.formation = { ...item.formation!, guide: { ...guide, subset } as FormationGuide };
+  }
   return model;
 }
 
@@ -2885,8 +2923,10 @@ export function enclosingPiecesOf(model: EdModel, bodyNode: string): EdItem[] {
 export type SceneTag = SceneObjectData | FormationData;
 
 // THE FLAT LEVEL, in metres, compiled from the model's tree as the game compiles
-// a level file. `itemOf`, when given, is filled with which item each written
-// object or rock came from, so a 3D pick on one can be answered with its item.
+// a level file: what the sim is given, the look in its `tree` alone. `itemOf`,
+// when given, is filled with which item each written object came from, so a
+// 3D pick on one can be answered with its item (the look answers a pick with
+// its node's id, `pickTagOf`).
 export function toLevelData(model: EdModel, itemOf?: Map<SceneTag, number>): LevelData {
   const compiled = compileLevel(toTree(model));
   if (itemOf) {

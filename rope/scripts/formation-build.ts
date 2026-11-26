@@ -50,7 +50,7 @@ import { readStoredMesh } from "../src/formation/meshBin";
 import { meshFiles, solidWorkerRecipe, type SolidMesh } from "../src/formation/solid";
 import { FORMATION_HASH, GEOMETRY_FILE, meshFileName, MESHES, META_FILE, ROCK_FILE, tierFileName, type FormationMeta, type SectionLoop } from "../src/formation/store";
 import { isCollisionObject, normalizeLevelData, scaleFormation, scaleNormalized, type FormationData, type FormationTier, type GuidePiece, type SolidNode } from "../src/level/levelFormat";
-import { BODY_TYPES, enclosesShape, IDENTITY_2D, poseOf, relative2D } from "../src/level/nodes";
+import { BODY_TYPES, compose2D, enclosesShape, lookNodes, poseOf, poseOfFrame, relative2D, type FormationNode } from "../src/level/nodes";
 import { exportBlend, ROOT } from "./blendExport";
 import { formationOf, readLevelTree, resolveNode } from "./levelTree";
 import { StepProgress } from "./stepProgress";
@@ -103,18 +103,26 @@ function loadRecipe(): Recipe {
     const generator = flag("--generator") as Recipe["generator"] | undefined;
     // The formation's own recipe, its guide in metres.
     if (node.type === "Formation3D" && !generator) return scaleFormation(formationOf(node), PX);
-    // The body the node is, or the one its rock is compiled onto: compiling
-    // composes everything between them.
+    // The body the node is, or the one its rock rides, and the rock: compiling
+    // composes everything between them, and the tree places the rock.
     const data = scaleNormalized(normalizeLevelData(tree), PX);
-    const b = data.bodies.find((x) => (node.type === "Formation3D" ? x.formation?.id === node.id : x.node?.id === node.id));
-    if (!b) fail(`${level} node "${ref}" compiles to no body (is it, or something above it, disabled?)`);
+    const looks = lookNodes(data.tree ?? []);
+    const rock = node.type === "Formation3D" ? looks.find((p) => p.node.id === node.id) : looks.find((p) => p.node.type === "Formation3D" && p.body === node.id);
+    const bodyId = node.type === "Formation3D" ? rock?.body : node.id;
+    const b = bodyId ? data.bodies.find((x) => x.node?.id === bodyId) : undefined;
     // A body's rock as it is, unless another generator is asked for.
-    if (b.formation && !generator) return b.formation;
-    // Else a guide from the body's collision, in its rock's frame.
-    const frame = b.formation ? poseOf(b.formation) : IDENTITY_2D;
-    const pieces = b.objects.filter(isCollisionObject).filter(enclosesShape).map((o): GuidePiece => ({ ...relative2D(frame, poseOf(o)), shape: o.shape }));
-    if (!pieces.length) fail(`${level} node "${ref}" has no enclosing collision pieces to take a guide from${node.type === "Formation3D" ? " (a rock with no body is a background rock: build its own recipe, without --generator)" : ""}`);
-    return { generator: generator ?? b.formation?.generator ?? "fitted", params: {}, guide: { kind: "collision", pieces } };
+    if (rock && !generator) return formationOf(rock.node as FormationNode);
+    if (!b) fail(`${level} node "${ref}" ${node.type === "Formation3D" ? "rides no body: a rock with no body is a background rock, so build its own recipe, without --generator" : "compiles to no body (is it, or something above it, disabled?)"}`);
+    // Else a guide from the body's collision, in its rock's frame (the body's
+    // own when it has no rock yet), in the plane.
+    const bodyPose = { x: b.x, y: b.y, rot: b.rot };
+    const rockPose = rock ? poseOfFrame(rock.world) : bodyPose;
+    const pieces = b.objects
+      .filter(isCollisionObject)
+      .filter(enclosesShape)
+      .map((o): GuidePiece => ({ ...relative2D(rockPose, compose2D(bodyPose, poseOf(o))), shape: o.shape }));
+    if (!pieces.length) fail(`${level} node "${ref}" has no enclosing collision pieces to take a guide from`);
+    return { generator: generator ?? (rock?.node as FormationNode | undefined)?.generator ?? "fitted", params: {}, guide: { kind: "collision", pieces } };
   }
   const path = positional[0] ?? fail(usage);
   const raw = JSON.parse(readFileSync(path, "utf8")) as Recipe & { outline?: [number, number][] };

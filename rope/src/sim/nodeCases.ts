@@ -26,7 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { collides, flatLevelOf, isMover, LEVEL_FORMAT, normalizeFlat, scaleNormalized, type AnchorObjectData, type CollisionObjectData, type LevelBodyData, type LevelData, type LevelSource, type RawLevelData } from "../level/levelFormat";
-import { compileLevel, compose3D, frameOf, isLevelTree, migrateToTree, scaleLevelTree, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type PrefabLibrary } from "../level/nodes";
+import { compileLevel, compose3D, formationDataOf, frameOf, isLevelTree, lookNodes, migrateToTree, scaleLevelTree, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type PrefabLibrary } from "../level/nodes";
 import { LEVELS } from "../level/registry";
 
 export interface NodeCaseResult {
@@ -67,16 +67,21 @@ export function firstDifference(a: unknown, b: unknown, path = "", tol = 0): str
   return null;
 }
 
-// What the sim reads of a level, for an exact comparison. A body's `name` is
-// a label (and migration may suffix it to keep siblings apart), so it is not
-// part of it; neither is the format stamp.
+// The look: a rock, what grows on it, a model, a lamp. Never the sim's; a flat
+// level carried it in its bodies, and the compile leaves it in the tree.
+const LOOK_OBJECTS: ReadonlySet<string> = new Set(["light", "model", "decoration"]);
+
+// What the sim reads of a level, for an exact comparison: the bodies that
+// build, without the look. A body's `name` is a label (and migration may
+// suffix it to keep siblings apart), so it is not part of it; neither is the
+// format stamp.
 function simView(d: LevelData): unknown {
-  const { bodies, format: _f, ...rest } = d;
+  const { bodies, format: _f, tree: _t, ...rest } = d;
   return {
     ...rest,
-    bodies: bodies.filter(collides).map(({ name: _n, node: _node, ...b }) => ({
+    bodies: bodies.filter(collides).map(({ name: _n, node: _node, formation: _rock, ...b }) => ({
       ...b,
-      objects: b.objects.map((o) => {
+      objects: b.objects.filter((o) => !LOOK_OBJECTS.has(o.type)).map((o) => {
         const { node: _o, ...rest } = o;
         return rest;
       }),
@@ -91,29 +96,57 @@ function canonical(v: unknown): string {
   );
 }
 
-// What a body that builds nothing draws, and where: its objects and its rock,
-// each with its world placement.
-function drawnView(bodies: readonly LevelBodyData[]): { key: string; x: number; y: number; z: number }[] {
-  const out: { key: string; x: number; y: number; z: number }[] = [];
+type Drawn = { key: string; x: number; y: number; z: number };
+
+// What a drawn thing is, for comparing a flat level's look with a tree's:
+// every field but its placement and the references whose spelling the tree
+// changes (a guide's `subset` and a lamp's `path` name nodes there, indices
+// here, and are proved by the editor's own round trips).
+function lookKey(type: string, fields: Record<string, unknown>): string {
+  const { x: _x, y: _y, rot: _r, node: _nd, path: _p, ...rest } = fields;
+  const guide = rest["guide"] as { subset?: unknown } | undefined;
+  if (guide?.subset !== undefined) rest["guide"] = (({ subset: _s, ...g }) => g)(guide);
+  return `${type} ${canonical(rest)}`;
+}
+const byKey = (p: Drawn, q: Drawn): number => (p.key < q.key ? -1 : p.key > q.key ? 1 : 0);
+
+// A flat level's look, from its bodies: each rock, lamp, model and decoration,
+// at its world placement. The full frame, a 3D body's depth and tilt
+// included, so a rock that migration lifted out of a tilted body is checked
+// where it is drawn. A decoration stands on its rock and is checked by what
+// it is.
+function flatLook(bodies: readonly LevelBodyData[]): Drawn[] {
+  const out: Drawn[] = [];
   for (const b of bodies) {
-    if (collides(b)) continue;
-    // The full frame, a 3D body's depth and tilt included, so a rock that
-    // migration lifted out of a tilted body is checked where it is drawn.
     const frame = frameOf({ x: b.x, y: b.y, rot: b.rot, ...(b.space === "3d" ? { z: b.z, tilt: b.tilt } : {}) });
-    const place = (o: { x?: number; y?: number; rot?: number }): { x: number; y: number; z: number } => {
+    const place = (o: { x?: number; y?: number }): { x: number; y: number; z: number } => {
       const t = compose3D(frame, frameOf({ x: o.x, y: o.y })).t;
       return { x: t[0], y: t[1], z: t[2] };
     };
-    if (b.formation) {
-      const { x: _x, y: _y, rot: _r, node: _nd, ...f } = b.formation;
-      out.push({ key: `formation ${canonical(f)}`, ...place(b.formation) });
-    }
+    if (b.formation) out.push({ key: lookKey("formation", b.formation as unknown as Record<string, unknown>), ...place(b.formation) });
     for (const o of b.objects) {
-      const { x: _x, y: _y, rot: _r, node: _nd, ...rest } = o as typeof o & { x?: number; y?: number; rot?: number };
-      out.push({ key: `${o.type} ${canonical(rest)}`, ...(o.type === "decoration" ? { x: 0, y: 0, z: 0 } : place(o)) });
+      if (!LOOK_OBJECTS.has(o.type)) continue;
+      const placed = o.type === "decoration" ? { x: 0, y: 0, z: 0 } : place(o as { x?: number; y?: number });
+      out.push({ key: lookKey(o.type, o as unknown as Record<string, unknown>), ...placed });
     }
   }
-  return out.sort((p, q) => (p.key < q.key ? -1 : p.key > q.key ? 1 : 0));
+  return out.sort(byKey);
+}
+
+// ...and the same of a tree, from its nodes (`lookNodes`).
+function treeLook(nodes: readonly LevelNode[]): Drawn[] {
+  const out: Drawn[] = [];
+  for (const { node: n, world, formation } of lookNodes(nodes)) {
+    const at = { x: world.t[0], y: world.t[1], z: world.t[2] };
+    if (n.type === "Formation3D") {
+      out.push({ key: lookKey("formation", formationDataOf(n) as unknown as Record<string, unknown>), ...at });
+      continue;
+    }
+    const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...fields } = n;
+    if (n.type === "Decoration3D") out.push({ key: lookKey("decoration", { type: "decoration", id, formation: formation ?? "", ...fields }), x: 0, y: 0, z: 0 });
+    else out.push({ key: lookKey(n.type === "Light3D" ? "light" : "model", { type: n.type === "Light3D" ? "light" : "model", ...fields }), ...at });
+  }
+  return out.sort(byKey);
 }
 
 export function roundTrip(raw: RawLevelData): { pass: boolean; detail: string; tree: LevelTree } {
@@ -122,8 +155,10 @@ export function roundTrip(raw: RawLevelData): { pass: boolean; detail: string; t
   const compiled = compileLevel(tree);
   const exact = firstDifference(simView(flat), simView(compiled.data));
   if (exact) return { pass: false, detail: `sim view differs at ${exact}`, tree };
-  const want = drawnView(flat.bodies);
-  const got = drawnView(compiled.data.bodies);
+  // The look is not the sim's: it is in the tree, each thing where the flat
+  // level drew it.
+  const want = flatLook(flat.bodies);
+  const got = treeLook(compiled.nodes);
   if (want.length !== got.length) return { pass: false, detail: `drawn: ${want.length} things became ${got.length}`, tree };
   for (let i = 0; i < want.length; i++) {
     const w = want[i]!;
@@ -278,7 +313,7 @@ export function runNodeTreeCases(): NodeCaseResult[] {
     };
     const remade = tree([{ type: "Instance", id: "i", name: "I", prefab: "rock", order: 0, overrides: { r: { params: { seed: 2 } } } } as LevelNode]);
     const remadeProblems = validateTree(remade.nodes, { prefabs: rocky });
-    const remadeRock = compileLevel(remade, rocky).data.bodies.find((b) => b.formation)?.formation;
+    const remadeRock = lookNodes(compileLevel(remade, rocky).nodes).find((p) => p.node.type === "Formation3D")?.node as { params?: unknown } | undefined;
     check(
       "prefab-rock-recipe",
       remadeProblems.some((p) => p.error && p.message.includes("prefab's alone")) && (remadeRock?.params as { seed?: number } | undefined)?.seed === 1,

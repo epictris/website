@@ -71,7 +71,9 @@ import {
   moveModeCloses,
   moveModeEases,
   type MoveMode,
-  spawnWithoutEntry,
+  spawnMovedTo,
+  embeddedLevelOf,
+  type LevelSource,
   loadLevelTree,
 } from "../level/levelFormat";
 import { LAYER_ROPE, MASK_ALL } from "../engine/body";
@@ -229,7 +231,7 @@ import { paintLayerAt } from "../render3d/paintLayers";
 import { setMaterialLayerSource } from "../render3d/materialLayers";
 import { MaterialMasks } from "./materialMasks";
 import { ancestors, bodyAbove, canParent, childrenOf, clickTarget, cloneTree, layersOf, outermostGroup, nextOrder, pathOf, removeSubtree, rename as renameNode, type EdBody, type EdNode } from "./tree";
-import { is3D, newNodeId, prefabLibrary, scaleLevelTree, setPrefab, walkNodes, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type NodeType, type PrefabData } from "../level/nodes";
+import { is3D, lookNodes, newNodeId, poseOfFrame, prefabLibrary, relative2D, scaleLevelTree, setPrefab, walkNodes, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type NodeType, type PrefabData } from "../level/nodes";
 import { materialLabel } from "../formation/materialLayer";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { FormationJobs, mountJobsPanel } from "./formationJobs";
@@ -398,6 +400,7 @@ import { RunRecording } from "../sim/runRecording";
 import type {
   EnvironmentData,
   FormationData,
+  DecorationObjectData,
   LevelBodyData,
   LevelCameraData,
   LevelData,
@@ -3605,34 +3608,43 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // collision, which only the preview's fireflies read (they keep off solid
   // scenery); it catches up at the next edit that rebuilds.
   function sceneKeyOf(data: LevelData, itemOf: ReadonlyMap<SceneTag, number>, vines: unknown): string {
-    const bodies = data.bodies.map((b) => {
-      const restsAsAuthored =
-        b.kind !== "water" && b.pivot !== true && !(b.springFreqX ?? 0) && !(b.springFreqY ?? 0) && !isMover(b);
-      // A formation draws what it BUILT, where it stands: its recipe and its
-      // guide change no pixel until a Generate lands, so a parameter typed
-      // into the panel rebuilds nothing.
-      const drawn = (f: FormationData, world: boolean): unknown => {
-        const nm = (v: number): number => Math.round(v * 1e9) / 1e9;
-        const w = world ? worldPlacement(b, f) : { pos: new Vec2(f.x ?? 0, f.y ?? 0), rot: f.rot ?? 0 };
-        return { id: f.id, built: f.built, lod: f.lod, x: nm(w.pos.x), y: nm(w.pos.y), rot: nm(w.rot) };
-      };
-      // A decoration draws what it grew; where it stands now is moved in
-      // place (`Scene3D.moveDecorations`), and its strokes are not here.
-      // A material layer draws what the editor has for it now
-      // (materialMasks.ts): its bake and its live mask.
-      const decor = (o: SceneObjectData): SceneObjectData | unknown =>
-        o.type === "decoration"
-          ? { type: o.type, id: o.id, kind: o.kind, formation: o.formation, built: o.built, ...(o.kind === "material" ? { live: materialMasks.drawKey(o) } : {}) }
-          : o;
-      if (!restsAsAuthored) {
-        return { ...b, objects: b.objects.map(decor), ...(b.formation ? { formation: drawn(b.formation, false) } : {}) };
+    const nm = (v: number): number => Math.round(v * 1e9) / 1e9;
+    const restsAsAuthored = (b: LevelBodyData): boolean =>
+      b.kind !== "water" && b.pivot !== true && !(b.springFreqX ?? 0) && !(b.springFreqY ?? 0) && !isMover(b);
+    const bodyOfNode = new Map(data.bodies.flatMap((b) => (b.node ? [[b.node.id, b] as const] : [])));
+    // THE LOOK, from the tree (`lookNodes`), each thing by what it DRAWS and
+    // where: in the world, or in its body's frame on a body whose pose
+    // depends on its mass (which the engine moves the look with).
+    const look = lookNodes(data.tree ?? []).map(({ node: n, world, body, formation }) => {
+      const ridden = body ? bodyOfNode.get(body) : undefined;
+      const w = poseOfFrame(world);
+      const at = ridden && !restsAsAuthored(ridden) ? relative2D({ x: ridden.x, y: ridden.y, rot: ridden.rot }, w) : w;
+      const pose = { x: nm(at.x), y: nm(at.y), rot: nm(at.rot), z: nm(w.z), tilt: [nm(w.tilt[0]), nm(w.tilt[1])] };
+      const { type: _t, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n as LevelNode & Record<string, unknown>;
+      switch (n.type) {
+        // A formation draws what it BUILT, where it stands: its recipe and its
+        // guide change no pixel until a Generate lands, so a parameter typed
+        // into the panel rebuilds nothing.
+        case "Formation3D":
+          return { id: n.id, built: n.built, lod: n.lod, placedScale: n.placedScale, ...pose };
+        // A decoration draws what it grew; where it stands now is moved in
+        // place (`Scene3D.moveDecorations`), and its strokes are not here. A
+        // material layer draws what the editor has for it now
+        // (materialMasks.ts): its bake and its live mask.
+        case "Decoration3D": {
+          const o = { type: "decoration", formation: formation ?? "", ...fields } as DecorationObjectData;
+          return { id: n.id, kind: n.kind, formation, built: n.built, ...(n.kind === "material" ? { live: materialMasks.drawKey(o) } : {}) };
+        }
+        default:
+          return { type: n.type, ...fields, ...pose };
       }
+    });
+    const bodies = data.bodies.map((b) => {
+      if (!restsAsAuthored(b)) return b;
       const { x: _x, y: _y, rot: _rot, ...body } = b;
       return {
         ...body,
-        ...(b.formation ? { formation: drawn(b.formation, true) } : {}),
         objects: b.objects.map((o) => {
-          if (o.type === "decoration") return decor(o);
           if (o.type === "collision" && o.shape.kind !== "belt") {
             const { shape: _s, x: _ox, y: _oy, rot: _or, thickness: _t, material: _m, soundMaterial: _sm, density: _dn, debug: _d, ...kept } = o;
             // Bark switches only rebuild this body's root visuals, not the
@@ -3646,12 +3658,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // To the nanometre: an offset re-measured from a moved frame comes
           // back a rounding error from where it was, which is not a move.
           const w = worldPlacement(b, o);
-          const nm = (v: number): number => Math.round(v * 1e9) / 1e9;
           return { ...o, x: nm(w.pos.x), y: nm(w.pos.y), rot: nm(w.rot) };
         }),
       };
     });
-    return JSON.stringify({ ...data, bodies, vines, items: [...itemOf.values()] });
+    // Not the tree itself: every node's every field is in it, so a corner
+    // dragged on an outline would read as a new scene. What it draws is `look`.
+    const { tree: _tree, ...rest } = data;
+    return JSON.stringify({ ...rest, bodies, look, vines, items: [...itemOf.values()] });
   }
 
   // THE GAME'S CAMERA, FOR THE FOG. The editor fogs every surface by the depth
@@ -3873,7 +3887,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // `completedFrame` is set for every frame after it, so without this the toast
   // would be raised sixty times a second for the rest of the run.
   let testFinished = false;
-  let testData: LevelData | null = null;
+  let testData: LevelSource | null = null;
   // The test's bundle, as `main.ts` records the game's: every input, and the
   // avatar's and every moving body's digest for the last thirty seconds and one
   // a second before that (see sim/runRecording.ts). A test-mode bundle without
@@ -4107,23 +4121,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The spawn override is baked in here rather than into the model, so a
   // spot-check never edits the level, and a reset (and the exported bundle)
   // respawns at the same place.
-  // The level as it compiles, flat: what a bundle embeds, so a test replays
-  // as played whatever the prefabs it places become later. Without its tree,
-  // which the run's own load rebuilds from the flat form.
-  function testDataFor(spawn: Vec2 | undefined): LevelData {
-    const { tree: _tree, ...flat } = modelToFlatDisk(model);
-    const pixelData = spawnWithoutEntry(flat);
-    if (spawn) {
-      pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
-    }
-    return pixelData;
+  // The level as a bundle embeds it (`embeddedLevelOf`): the tree in pixels,
+  // its placed prefabs expanded, so a test replays - and draws - as played
+  // whatever the prefabs it places become later.
+  function testDataFor(spawn: Vec2 | undefined): LevelSource {
+    return spawnMovedTo(embeddedLevelOf(modelToDisk(model)), spawn ? { x: spawn.x * M2PX, y: spawn.y * M2PX } : null);
   }
 
-  function testKeyOf(data: LevelData): string {
+  function testKeyOf(data: LevelSource): string {
     return JSON.stringify(data);
   }
 
-  function buildTestLevel(data: LevelData): BallLevel {
+  function buildTestLevel(data: LevelSource): BallLevel {
     return new BallLevel(data);
   }
 
@@ -4148,7 +4157,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // than a test of a stale level. `B` (from the cursor) has nowhere to be built
   // ahead for, and builds at the press as before.
   const PREBUILD_QUIET_MS = 1500;
-  let prebuilt: { key: string; data: LevelData; level: BallLevel; scene: LevelScene | null } | null = null;
+  let prebuilt: { key: string; data: LevelSource; level: BallLevel; scene: LevelScene | null } | null = null;
   // What the last prebuild was of - the revision, the controller, the start,
   // whether a scene was wanted - so each is built once rather than every idle
   // frame. Cleared by a test, whose level is played and so has to be built
