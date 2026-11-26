@@ -64,6 +64,36 @@ export function ballChainLayout(
     return { path, pitch, count: undefined, shackled: false };
   }
 
+  // The nearest odd count to the chain's length in links.
+  const odd = 2 * Math.floor(length / CHAIN_LINK_LEN / 2) + 1;
+
+  // ONE link is one rigid piece of metal: straight from the loop to the cuff,
+  // whatever the drape between them is doing. A chain that short is wound in
+  // against what it is anchored on, both of the drape's pins sit inside the
+  // band its nodes are held out of, and its polyline cannot be the chain's
+  // length; laid along it, the one link was bent round the drape's detour and
+  // drawn as long as it, 14-60 cm on `session-668f` f569-581 (Tris,
+  // 2026-11-27: "one straight rigid link"). It points from the cuff at the
+  // loop and keeps its own length: a cuff nearer the loop than that has the
+  // loop's bar somewhere inside the link's hole, the link threaded on through
+  // it, rather than a link shrinking (or vanishing at half a link, which on
+  // that recording put it out and back on single frames, f467 and f593-594);
+  // only a gap the sim leaves longer than a link is spanned by a link that
+  // long. None for a stowed tip, whose cuff rides on the loop itself.
+  if (odd === 1) {
+    const anchor = loopToAnchor[loopToAnchor.length - 1]!;
+    const off = anchor.sub(loop.centre);
+    const dir = off.length() > 1e-9 ? off.normalized() : ball.renderLoopDirection(alpha);
+    const bearing = loop.centre.add(dir.mul(loop.inner));
+    const span = anchor.distanceTo(bearing);
+    return {
+      path: [anchor, bearing],
+      pitch: Math.max(span, CHAIN_LINK_LEN),
+      count: ball.chainStowed ? 0 : 1,
+      shackled: true,
+    };
+  }
+
   // The run starts where it leaves the loop: every point of the drawn chain
   // inside the loop's outside edge is chain the loop already holds (the sim's
   // chain starts on the rim under it).
@@ -79,10 +109,8 @@ export function ballChainLayout(
   path.push(bearing);
 
   const run = polylineLength(path);
-  // The nearest odd count to the chain's length in links; none when the cuff
-  // sits so close to the loop that not even half a link fits between them (a
-  // stowed tip, hinged on the loop itself).
-  const odd = 2 * Math.floor(length / CHAIN_LINK_LEN / 2) + 1;
+  // None when the cuff sits so close to the loop that not even half a link
+  // fits between them.
   const count = run < CHAIN_LINK_LEN / 2 ? 0 : odd;
   return { path, pitch: count > 0 ? run / count : CHAIN_LINK_LEN, count, shackled: true };
 }

@@ -1125,10 +1125,28 @@ export class SlackChain {
     // ran from the rim back toward a node a bore's radius from the centre and
     // flickered with it (`session-407f`).
     // A ring on a vine hangs the drape from its rim the same way.
+    //
+    // And the path ends where it reaches the ring: a wrap closer to the ring's
+    // centre than its rim is chain the ring already holds, past the point the
+    // chain leaves it, so it is dropped (never the loop). Kept, the path ran on
+    // past the rim and doubled back to it. On `session-668f` the ball wound in
+    // against the lantern its cuff is clamped to: the solver's last wrap on the
+    // ball's rim lay 2.3 cm from the ring's centre with the rim 4.5 cm out on
+    // the loop's side, so the path went on round the ball and came 4 cm back,
+    // and as that wrap came and went on alternate steps the drape's length
+    // flipped between 3.7 and 7.5 cm and the chain was drawn one link, then
+    // three, then one (f596-606).
     const end = this.chain.end;
     const clamp = ringEnd(end);
-    if (clamp !== null) pathPoints[pathPoints.length - 1] = clamp.rimPoint();
-
+    if (clamp !== null) {
+      const centre = pathPoints[pathPoints.length - 1]!;
+      const rim = clamp.rimPoint();
+      const reach = rim.distanceTo(centre);
+      while (pathPoints.length > 2 && pathPoints[pathPoints.length - 2]!.distanceTo(centre) < reach) {
+        pathPoints.splice(pathPoints.length - 2, 1);
+      }
+      pathPoints[pathPoints.length - 1] = rim;
+    }
     const first = this.pos.length !== SEGMENTS + 1;
     if (first) {
       // First step: lay the chain along the wrap path it is deployed on, at
@@ -1154,6 +1172,25 @@ export class SlackChain {
     const restLen = targetLen / SEGMENTS;
     this.lengthFrom = first ? targetLen : this.length;
     this.length = targetLen;
+
+    // The loop end is pinned where the chain leaves the loop: on the loop's
+    // bar, a link's half-width out from the rim the solver starts the chain on,
+    // which is where every node lying on the ball is held (`NODE_RADIUS`). On
+    // the rim under it, the node next to the pin was pushed 22.4 mm out on
+    // every collision pass and pulled back by its segment on every constraint
+    // pass, wherever a segment is shorter than that (a chain under 1.43 m).
+    // It never settled, so the movement gate never skipped a collision pass:
+    // 16 of 16 on `session-668f`, a 0.69 m chain hung wound on the ball, the
+    // step 0.89 ms against the live budget's 0.5. The leg it spent going out
+    // is inside the drawn loop, which the renderers lay no link along.
+    // Only the pin moves, not the length, which is measured above from the
+    // rim as the solver measures it: from the bar, the length changed with the
+    // angle the chain left the loop at, and the link count stepped with it as
+    // the ball turned (`session-276f` f98).
+    const ball = this.chain.start.contact.obj.globalPosition;
+    const out = pathPoints[0]!.sub(ball);
+    const rimRadius = out.length();
+    if (rimRadius > 1e-9) pathPoints[0] = pathPoints[0]!.add(out.mul(NODE_RADIUS / rimRadius));
 
     const pinA = pathPoints[0]!;
     const pinB = pathPoints[pathPoints.length - 1]!;
