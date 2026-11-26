@@ -154,7 +154,7 @@ Selecting something outside G1 leaves it, and the next click inside selects G1 a
 - **Ctrl+G** groups the selection: one node is flagged, several are first put under a new group node (a `Node2D`, or a `Node3D` when all of them are 3D) standing on their centre.
   **Ctrl+Shift+G** ungroups, and the Group / Ungroup button and the Node section's `grouped` box do the same.
 - **Per workspace**, only a group root whose class is clickable there stops a click (`clickableIn`, `editor/workspaces.ts`); the rest pass it through.
-  2D stops at bodies, shapes, anchors, the plane's volumes, chains, vines and instances; Formations at `Node3D`, `Formation3D`, `Model3D`, `Light3D` and instances; Decorations at decorations alone, so a click on a fern selects the fern though the body above it is grouped; Texturing at nothing, its work being the brush.
+  2D stops at bodies, shapes, anchors, the plane's volumes, chains, vines and instances; Formations at bodies (since 2026-11-26: a body's Transform and Formation are this workspace's, and a click passed through it to the collision a guide is taken from), `Node3D`, `Formation3D`, `Model3D`, `Light3D` and instances; Decorations at decorations alone, so a click on a fern selects the fern though the body above it is grouped; Texturing at nothing, its work being the brush.
 
 **And clicking again walks on down whatever else is under the pointer** (`pickAt`).
 Every rule the pick has - depth, containment, the active layer - can only ever name ONE winner, so an object nested inside or behind other outlines was unreachable with the mouse by construction: every point of it is also a point of the things drawn over it, and there is no pointer position that means it rather than them.
@@ -209,6 +209,13 @@ The `cli render3d` cases assert it across the round trip an author performs - pr
 **A new object drawn while a body is selected joins that body**, as a child of the body node.
 With a body selected the thing being authored is a part of it - a second shape for a compound wall, the light a lamp throws - and making it a body of its own would mean drawing it and reparenting it every time.
 It shares the body's kind, fill and friction because those are the body node's, held once; camera regions, notes and the other plane furniture never join a body (`canShareBody`).
+
+**A collision shape drawn with no body selected gets a body of its own, and which class is asked at the shape** (since 2026-11-26), as Godot's CollisionShape2D needs a PhysicsBody2D above it.
+Once the shape is down a **Parent body** menu stands beside it: StaticBody2D, RigidBody2D, and Area2D as each area kind (kill zone, force, water, finish).
+The new body already has the class last picked (static to begin with), lit in the menu, so a run of walls or a pile of crates needs no answer: Esc, Enter, any other key, a press anywhere else or any other edit closes it and keeps that class.
+A pick changes the new body's class within the draw's own undo step, renames it while its name is still the class's (`StaticBody2D3` becomes `RigidBody2D`), and is what the next shape's body gets (`offerParentPick`, `pickParent`).
+A belt asks nothing: it builds only on a static body, so it gets one.
+It replaced a `kind` select in a strip over the 2D view, which set the class before the drawing and was easy to leave on the wrong one; a body's class after that is its panel's `kind`.
 
 ## Decorations
 

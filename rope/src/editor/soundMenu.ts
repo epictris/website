@@ -176,14 +176,15 @@ export class SoundMenu {
     this.render();
   }
 
-  // Beside the toolbar rather than over it, so every button stays in reach -
-  // the toolbar's width is its tools', which differ by layer and workspace, so
-  // it is measured. A window too narrow for both overlaps the toolbar rather
+  // Beside the toolbar rather than over it, so every tool stays in reach -
+  // the toolbar's width is its tools', which differ by layer and workspace,
+  // so it is measured (the editor keeps it in `--toolbar-w`, editor/
+  // toolbar.ts). A window too narrow for both overlaps the toolbar rather
   // than squeezing the menu under a readable width.
   private place(): void {
-    const bar = document.querySelector(".ed-bar")?.getBoundingClientRect();
+    const width = parseFloat(getComputedStyle(this.root).getPropertyValue("--toolbar-w"));
     const minWidth = Math.min(MENU_MIN_WIDTH, window.innerWidth - 16);
-    const left = bar ? Math.min(bar.right + 8, window.innerWidth - 8 - minWidth) : 8;
+    const left = Number.isFinite(width) ? Math.min(8 + width + 8, window.innerWidth - 8 - minWidth) : 8;
     this.root.style.left = `${Math.max(8, left)}px`;
   }
 

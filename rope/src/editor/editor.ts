@@ -366,7 +366,6 @@ import { surfacePlacement } from "./visuals/surfaceDrop";
 import { describe, fieldRow, heading, PANEL_UI_CSS, pruneEmptySections, revealInSection, section, setDefaultOpen } from "./panelUi";
 import {
   EMPTY_HINTS as WORKSPACE_EMPTY_HINTS,
-  HEAD_ON_ONLY,
   inWorkspace,
   parseWorkspace,
   paintsRocks,
@@ -442,6 +441,7 @@ import { ROOT_BEND_DAMPING, ROOT_BEND_FREQ } from "../level/levelFormat";
 import type { EdRoot } from "./model";
 import { applyCut, cuttable, joinBodies, planCut } from "./splitJoin";
 import { installToolTips, refreshBlocks, setToolName, toolBlock, toolize, toolSet, watchToolbarWidth } from "./toolbar";
+import { menuButton } from "./menu";
 import type { ToolIconName } from "./toolIcons";
 import { SoundSystem } from "../audio/soundSystem";
 import { SoundMenu } from "./soundMenu";
@@ -723,7 +723,8 @@ type Drag =
   // metres down it (`root`), and releasing past the click's slop grows a
   // berry where the pointer is. Nothing is written until then.
   | { mode: "berryDraw"; vine: EdVine; along: number; root: Vec2; cursor: Vec2; press: Vec2 }
-  | { mode: "draw"; body: EdItem; start: Vec2 };
+  // `made`: the body drawn for it, whose class is asked on release.
+  | { mode: "draw"; body: EdItem; start: Vec2; made: string | null };
 
 // Arrow-key nudge directions (world axes, +y down).
 const NUDGE_DIRS: Record<string, Vec2 | undefined> = {
@@ -898,7 +899,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function swingView(face: CubeFace): void {
     const pose = visuals?.view;
     const to = CUBE_FACES.find((f) => f.face === face);
-    if (!visuals || !pose || !to || HEAD_ON_ONLY[workspace]) return;
+    if (!visuals || !pose || !to) return;
     const from = { yaw: pose.yaw, pitch: pose.pitch };
     // The shorter way round; at a pole the yaw is the face's own (Top and
     // Bottom have the front at the foot of the screen).
@@ -1220,7 +1221,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   let tool: Tool = "select";
   let placingMushroom = false;
+  // The class the last drawn shape's new body was given (`offerParentPick`),
+  // which the next one is given too until another is picked.
   let newKind: BodyKind = "static";
+  // The menu asking for that class, while it is open.
+  let parentPick: { body: string; menu: HTMLElement } | null = null;
   // Layers. Every *visible* layer is hit-testable, so a selection may span them
   // and the inspector shows one panel per layer it contains. The active layer is
   // what new items are drawn onto, and it breaks the pick: a camera region
@@ -1986,6 +1991,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // one over it.
   function beginAction(): void {
     nudging = false; // any other action ends the current nudge run
+    // ...and the parent pick, whose answer belongs to the draw before it.
+    closeParentPick();
     history.push(snapshot(model));
     if (history.length > HISTORY_MAX) history.shift();
     future.length = 0;
@@ -2005,6 +2012,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function afterHistoryChange(): void {
     drag = null;
     nudging = false;
+    closeParentPick();
     // An undone edit may have been the one that placed a corner, so an index
     // carried across it names a different vertex or none at all. A route node's
     // index is the same kind of thing over the same kind of list - undoing the
@@ -4309,7 +4317,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // THE TOOL SETTINGS (Blender's tool header): a strip across the top of the
   // viewport holding what the workspace's tools are set to and what it does
-  // to the level as a whole - a new body's kind, a brush's radius, Generate.
+  // to the level as a whole - a brush's radius, Generate. 2D has none: its
+  // tools are set as they draw (a new shape's body is asked for at the shape,
+  // Root's widths stand in a card while it is armed), so in 2D the strip is
+  // not there and the view starts under the workspace tabs.
   // The tools themselves are the TOOLBAR, a column of icons over the
   // viewport's left edge (editor/toolbar.ts), one set per workspace.
   const bar = el("div", "ed-toolhead");
@@ -4317,21 +4328,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const toolbar = el("div", "ed-toolbar");
   installToolTips(toolbar);
   const fitToolbar = watchToolbarWidth(toolbar, root);
-  const brand = el("header", "ed-shell-header");
-  const brandName = document.createElement("strong");
-  brandName.textContent = "Just Swing";
-  const navigation = document.createElement("nav");
-  navigation.className = "studio-nav";
-  navigation.setAttribute("aria-label", "Authoring tools");
-  for (const [label, href] of [["Level editor", "./editor.html"], ["Sound mixer", "./sound-layers.html"], ["Sound lab", "./sound-lab.html"]]) {
-    const link = document.createElement("a");
-    link.textContent = label!;
-    link.href = href!;
-    if (label === "Level editor") link.setAttribute("aria-current", "page");
-    navigation.appendChild(link);
-  }
-  brand.append(brandName, navigation);
-  root.appendChild(brand);
   root.appendChild(bar);
 
   // The right dock's tabs: the SCENE tree of what is open (the level, or the
@@ -4352,9 +4348,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   workspaceBtns.prefabs.title = "The prefab library: shared node trees to place, open and make (plans/node-tree.md \"Prefabs\")";
   for (const b of [workspaceBtns.level, workspaceBtns.prefabs]) b.setAttribute("role", "tab");
 
+  // THE TOP BAR: the File menu, the level's own settings, the workspace tabs
+  // and ▶ Test.
   const fileRow = el("div", "ed-row ed-file-row ed-commandbar");
   root.appendChild(fileRow);
-  const btnNew = button("New", () => {
+  const newLevel = (): void => {
     if (dirty && !confirm("Discard unsaved changes?")) return;
     cancelAutosave();
     replaceModel(emptyModel());
@@ -4369,23 +4367,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     poseFromCameraNow();
     rebuildInspector();
     updateTitle();
-  });
-  const loadSel = document.createElement("select");
-  loadSel.className = "ed-select";
-  loadSel.title = "Load level from disk";
-  loadSel.addEventListener("change", async () => {
-    const name = loadSel.value;
-    if (!name) return;
-    if (dirty && !confirm("Discard unsaved changes?")) {
-      loadSel.value = "";
-      return;
-    }
+  };
+  // The saved levels, as the server last listed them (`refreshLevelList`).
+  let levelNames: string[] = [];
+  const openLevel = async (name: string): Promise<void> => {
+    if (name === currentName && !dirty) return;
+    if (dirty && !confirm("Discard unsaved changes?")) return;
     await doLoad(name);
-    loadSel.value = "";
-  });
-  const btnSave = button("Save", () => doSave(false));
-  const btnSaveAs = button("Save As", () => doSave(true));
-  const btnDelete = button("Delete File", async () => {
+  };
+  const deleteFile = async (): Promise<void> => {
     if (!currentName) return;
     if (!confirm(`Delete level "${currentName}" from disk?`)) return;
     cancelAutosave(); // a queued write would recreate the file
@@ -4395,17 +4385,45 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     dirty = true;
     await refreshLevelList();
     updateTitle();
-  });
-  fileRow.append(btnNew, loadSel, btnSave, btnSaveAs, btnDelete);
-  btnDelete.classList.add("ed-danger");
-  loadSel.setAttribute("aria-label", "Load level");
-  // The game's sounds (see soundMenu.ts): not part of any level, so beside the
+  };
+  // The game's sounds (see soundMenu.ts): not part of any level, so with the
   // files rather than in the inspector, and heard in ▶ Test as they change.
+  // Its panel links the sound mixer and the sound lab.
   const soundMenu = new SoundMenu(root, testSound);
-  const btnSounds = button("Sounds", () => soundMenu.toggle());
-  soundMenu.onOpenChange = (open) => btnSounds.classList.toggle("active", open);
-  btnSounds.title = "Assign sound files to the game's events: rolling, attaching, bouncing, winding, the whoosh";
-  fileRow.append(btnSounds);
+  const fileMenu = menuButton("File", () => [
+    { kind: "item", label: "New", title: "Start an empty, unsaved level", run: newLevel },
+    {
+      kind: "sub",
+      label: "Open",
+      title: "Open a saved level",
+      entries: () =>
+        levelNames.length
+          ? levelNames.map((n) => ({ kind: "item", label: n, checked: n === currentName, run: () => void openLevel(n) }))
+          : [{ kind: "note", label: "No saved levels" }],
+    },
+    { kind: "sep" },
+    { kind: "item", label: "Save", title: currentName ? `Save to levels/${currentName}.json` : "Save under a new name", run: () => void doSave(false) },
+    { kind: "item", label: "Save As…", title: "Save under a new name, which is then the level open", run: () => void doSave(true) },
+    { kind: "sep" },
+    {
+      kind: "item",
+      label: "Sounds…",
+      title: "Assign sound files to the game's events: rolling, attaching, bouncing, winding, the whoosh",
+      checked: soundMenu.isOpen,
+      run: () => soundMenu.toggle(),
+    },
+    { kind: "sep" },
+    {
+      kind: "item",
+      label: "Delete File",
+      title: currentName ? `Delete levels/${currentName}.json from disk` : "Nothing open is saved",
+      disabled: !currentName,
+      danger: true,
+      run: () => void deleteFile(),
+    },
+  ]);
+  fileMenu.title = "New, open, save and delete levels; the game's sounds";
+  fileRow.append(fileMenu);
 
   // THE LEVEL'S OWN SETTINGS, beside the files: what is behind everything and
   // the 3D camera's lens. Level-wide and few, so here rather than in a panel;
@@ -4582,11 +4600,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   fileRow.append(workspaceTabs);
 
-  // 2D's tool settings: the kind of body a shape tool makes, and +Root's widths.
-  const toolRow = el("div", "ed-toolhead-set");
-  toolRow.setAttribute("role", "group");
-  toolRow.setAttribute("aria-label", "2D tool settings");
-  bar.appendChild(toolRow);
   const toolBtns: Record<Tool, HTMLButtonElement> = {
     select: button("Select", () => setTool("select")),
     rect: button("Rect", () => setTool("rect")),
@@ -4665,31 +4678,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Click to drop a glowing mushroom: one static body holding a collision box and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. Give the body a model (or a formation) for its look; what glows in it follows the light. The 3D preview shows it awake.";
   toolBtns.checkpoint.title =
     "Click to drop a named spawn. Playing with ?checkpoint=NAME starts there instead of at the level's spawn - and stays there over a reset - so an area can be playtested without swinging out to it first. Selecting one and pressing ▶ Test starts the test there.";
-  const kindSel = document.createElement("select");
-  kindSel.className = "ed-select";
-  for (const k of BODY_KINDS) {
-    const o = document.createElement("option");
-    o.value = k;
-    o.textContent = k;
-    kindSel.appendChild(o);
-  }
-  kindSel.value = newKind;
-  kindSel.title = "Kind for new bodies (and every selected body)";
-  kindSel.addEventListener("change", () => {
-    newKind = kindSel.value as BodyKind;
-    const sel = selectedBodies();
-    if (sel.length) {
-      beginAction();
-      for (const b of sel) propsOf(b).kind = newKind;
-      markDirty();
-      rebuildInspector();
-    }
-  });
-  const kindWrap = labelWrap("kind", kindSel);
-
-  // `+ Root`'s own options, in the toolbar while it is armed: the width a root
-  // STARTS at (its base) and the width it tapers to, in px like every length
-  // in the panels. They are the widths a new root is drawn at, remembered by
+  // `+ Root`'s own options, while it is armed: the width a root STARTS at
+  // (its base) and the width it tapers to, in px like every length in the
+  // panels. They are the widths a new root is drawn at, remembered by
   // this browser (`readRootWidths`); while a root or branch is being drawn they
   // show - and set - that one's, so a branch, which starts from its parent's
   // girth, can be made thicker or thinner before it is grown. Every grown root
@@ -4733,8 +4724,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
     },
   );
-  const rootWidthsWrap = el("span", "ed-inline");
-  rootWidthsWrap.append(labelWrap("start width", rootStartInput), labelWrap("tip", rootTipInput));
+  // 2D has no tool-settings strip (the class of a drawn shape's body is asked
+  // as it is drawn, `offerParentPick`), so Root's two fields stand in a card
+  // of their own at the foot of the view, there only while Root is armed.
+  const rootOptions = el("div", "ed-tool-options");
+  rootOptions.setAttribute("role", "group");
+  rootOptions.setAttribute("aria-label", "Root tool settings");
+  rootOptions.append(labelWrap("start width", rootStartInput), labelWrap("tip", rootTipInput));
+  root.appendChild(rootOptions);
   // The fields say what the next press will draw: the draft's widths while
   // there is one, the remembered ones otherwise. Called when a draft starts or
   // ends and when the tool changes - never from the fields' own input, so it
@@ -4744,12 +4741,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     rootStartInput.value = round(rootDraft ? rootDraft.width : rootStartWidth);
     rootTipInput.value = round(rootDraft ? rootDraft.tip : rootTipWidth);
   }
-  // The toolbar's per-tool options: `kind` for the shape tools on the scene
-  // layer, the widths for `+ Root` (whose root is always static and hook-only,
-  // so `kind` says nothing about it).
+  // The armed tool's options: Root's widths, in 2D.
   function refreshToolOptions(): void {
-    kindWrap.style.display = activeLayer === "scene" && tool !== "root" ? "" : "none";
-    rootWidthsWrap.style.display = tool === "root" ? "" : "none";
+    rootOptions.style.display = tool === "root" && workspace === "2d" ? "" : "none";
     refreshRootWidthFields();
   }
   toolBtns.poly.title =
@@ -4766,16 +4760,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // (the workspace's Generate, Grow or Bake) to the strip's far end.
   const toolheadDivider = (): HTMLElement => el("span", "ed-toolhead-divider");
   const toolheadSpacer = (): HTMLElement => el("span", "ed-toolhead-spacer");
-  toolRow.append(kindWrap, rootWidthsWrap);
-  // 2D's toolbar, in blocks by what they make: select; the outlines the ball
-  // collides with (and the knife that cuts them); the things it plays with;
-  // what lights and dresses the plane; the plane's volumes; and the notes
-  // layer's. A layer shows only its own (`refreshToolButtons`), and a block
-  // with none of them shown goes.
+  // 2D's toolbar, in blocks by what they make: select and the knife, which
+  // make nothing but work on what is there; the outlines the ball collides
+  // with; the things it plays with; what lights and dresses the plane; the
+  // plane's volumes; and the notes layer's. A layer shows only its own
+  // (`refreshToolButtons`), and a block with none of them shown goes.
   const toolbar2d = toolSet(
     "2D tools",
-    toolBlock(toolBtns.select),
-    toolBlock(toolBtns.rect, toolBtns.circle, toolBtns.poly, toolBtns.path, toolBtns.belt, toolBtns.cut),
+    toolBlock(toolBtns.select, toolBtns.cut),
+    toolBlock(toolBtns.rect, toolBtns.circle, toolBtns.poly, toolBtns.path, toolBtns.belt),
     toolBlock(toolBtns.chain, toolBtns.vine, toolBtns.root, mushroomButton, toolBtns.glow),
     toolBlock(toolBtns.light, toolBtns.model),
     toolBlock(toolBtns.fog, toolBtns.shelter),
@@ -5769,20 +5762,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // another way, so the camera keeps its position and direction (Tris,
     // 2026-11-25; each 3D workspace used to come back at the angle it was left
     // at, which moved the camera on every switch between Formations and
-    // Decorations). Only 2D moves it, since its lock is the plane head on:
-    // turned there, it faces the plane where the view was looking.
-    if (visuals) {
-      visuals.headOnOnly = HEAD_ON_ONLY[ws];
-      if (!boot && HEAD_ON_ONLY[ws] && orbited()) resetView();
-    }
-    resetViewBtn?.style.setProperty("display", HEAD_ON_ONLY[ws] ? "none" : "");
-    // 2D has the lens alone: its view has no other side to go to.
-    viewCube?.setCubeShown(!HEAD_ON_ONLY[ws]);
+    // Decorations). 2D too since 2026-11-26, when its head-on lock went: it is
+    // navigated as the others are, and Align camera to plane faces the plane.
     viewSwing++;
     refreshOrbitBtn();
     // The toolbar and the tool settings are the workspace's own; the layers
     // are 2D's.
-    toolRow.style.display = ws === "2d" ? "" : "none";
     layerList.style.display = ws === "2d" ? "" : "none";
     formationsDock.style.display = ws === "formations" ? "" : "none";
     decorationsDock.style.display = ws === "decorations" ? "" : "none";
@@ -11870,26 +11855,142 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // close the loop rather than adding another vertex.
   // PUT A DRAWN ITEM IN THE TREE. A piece drawn while one body is selected
   // goes into that body (when it may: an area is one kind of thing); any
-  // other collision piece gets a body of its own, of the draw tool's kind,
-  // created grouped as every body is; a light or a model drawn into nothing
-  // stands on its own, and so does everything on the other layers.
-  // `bodyProps` sets what a new body is born with.
-  function insertDrawn(item: EdItem, bodyProps: Partial<EdBody> = {}): EdItem {
+  // other collision piece gets a body of its own, created grouped as every
+  // body is; a light or a model drawn into nothing stands on its own, and so
+  // does everything on the other layers.
+  //
+  // A new body is of the class last picked for one (`newKind`), and which
+  // class is the author's to say once the shape is down: the new body is
+  // returned for `offerParentPick`. A belt's is not: a belt builds only on a
+  // static body, so it gets one and nothing is asked.
+  function insertDrawn(item: EdItem): string | null {
     const host = canShareBody(item) ? soleBodyId() : null;
     const hostNode = host !== null ? model.tree.nodes.get(host) : undefined;
-    if (hostNode?.body && bodyMembers(model.items, host!).every(canShareBody)) return addItem(model, item, host);
+    if (hostNode?.body && bodyMembers(model.items, host!).every(canShareBody)) {
+      addItem(model, item, host);
+      return null;
+    }
     if (item.layer === "scene" && item.object === "collision") {
-      const body = addFrameNode(model, "StaticBody2D", null, {
+      const ask = item.shape.kind !== "belt";
+      const body: EdBody = { ...defaultBody(nextOrder(model.tree)), kind: ask ? newKind : "static", color: item.color, opacity: item.opacity };
+      const node = addFrameNode(model, bodyNodeType(body), null, {
         pos: item.pos,
         rot: item.rot,
-        name: newKind === "static" ? "StaticBody2D" : newKind === "rigid" ? "RigidBody2D" : "Area2D",
-        body: { ...defaultBody(nextOrder(model.tree)), kind: newKind, color: item.color, opacity: item.opacity, ...bodyProps },
+        name: bodyNodeType(body),
+        body,
         grouped: true,
       });
-      return addItem(model, item, body.id);
+      addItem(model, item, node.id);
+      return ask ? node.id : null;
     }
-    return addItem(model, item, null);
+    addItem(model, item, null);
+    return null;
   }
+
+  // THE PARENT PICK. A collision shape needs a body above it, as Godot's
+  // CollisionShape2D needs a PhysicsBody2D, and which class of body is asked
+  // where the shape was drawn: a menu at the pointer once the shape is down,
+  // listing the classes with the one the new body already has lit, so a run
+  // of walls is a click each and needs no answer. A pick changes the new
+  // body's class (and its name, while that is still the class's) within the
+  // draw's own undo step, and is what the next shape's body is given; Esc,
+  // any other key, a press anywhere else or any other edit closes the menu
+  // and keeps the class it has. With one body selected nothing is asked: the
+  // shape goes into it (`insertDrawn`).
+  const PARENT_CHOICES: readonly { kind: BodyKind; note: string }[] = [
+    { kind: "static", note: "stays put" },
+    { kind: "rigid", note: "falls and tumbles" },
+    { kind: "killzone", note: "kill zone" },
+    { kind: "force", note: "pushes" },
+    { kind: "water", note: "water" },
+    { kind: "finish", note: "finish line" },
+  ];
+  function closeParentPick(): void {
+    parentPick?.menu.remove();
+    parentPick = null;
+  }
+  function offerParentPick(bodyId: string): void {
+    closeParentPick();
+    const node = model.tree.nodes.get(bodyId);
+    if (!node?.body) return;
+    const menu = el("div", "ed-shape-menu ed-parent-menu");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "Parent body");
+    const title = el("div", "ed-shape-menu-title");
+    title.textContent = "Parent body";
+    menu.appendChild(title);
+    for (const { kind, note } of PARENT_CHOICES) {
+      const type = bodyNodeType({ ...node.body, kind });
+      const b = button("", () => pickParent(kind));
+      b.setAttribute("role", "menuitemradio");
+      b.setAttribute("aria-checked", String(node.body.kind === kind));
+      b.classList.toggle("active", node.body.kind === kind);
+      const mark = el("span", "ed-parent-mark");
+      mark.textContent = TYPE_MARK[type] ?? "";
+      const name = el("span", "ed-parent-type");
+      name.textContent = type;
+      const sub = el("span", "ed-parent-note");
+      sub.textContent = note;
+      b.append(mark, name, sub);
+      menu.appendChild(b);
+    }
+    root.appendChild(menu);
+    // Beside the shape, never over it: to its right, or its left where the
+    // right has no room, level with its top - kept inside the view. The
+    // canvas runs under the top bar, the dock and the status line, so those
+    // bound it.
+    const box = canvas.getBoundingClientRect();
+    const r = menu.getBoundingClientRect();
+    const top = fileRow.getBoundingClientRect().bottom;
+    // (On a phone the dock is a drawer, hidden while closed.)
+    const dock = rightDock.getBoundingClientRect();
+    const right = dock.width > 0 ? dock.left : window.innerWidth;
+    const bottom = statusLine.getBoundingClientRect().top;
+    const shape = bodyMembers(model.items, bodyId)[0];
+    const s = shape?.shape;
+    const outline = !shape || !s
+      ? []
+      : s.kind === "circle"
+        ? [new Vec2(-s.r, -s.r), new Vec2(s.r, s.r), new Vec2(-s.r, s.r), new Vec2(s.r, -s.r)].map((v) => toWorld(shape, v))
+        : worldVertices(shape);
+    const onScreen = outline.map((w) => canvasScreen(w)).filter((v) => Number.isFinite(v.x) && Number.isFinite(v.y));
+    const fallback = lastPointerScreen ?? new Vec2(box.width / 2, box.height / 2);
+    const xs = onScreen.length ? onScreen.map((v) => box.left + v.x) : [box.left + fallback.x];
+    const ys = onScreen.length ? onScreen.map((v) => box.top + v.y) : [box.top + fallback.y];
+    const [minX, maxX, minY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys)];
+    const x = maxX + 12 + r.width <= right - 8 ? maxX + 12 : minX - 12 - r.width;
+    menu.style.left = `${Math.round(Math.max(box.left + 8, Math.min(right - r.width - 8, x)))}px`;
+    menu.style.top = `${Math.round(Math.max(top + 8, Math.min(bottom - r.height - 8, minY)))}px`;
+    parentPick = { body: bodyId, menu };
+  }
+  function pickParent(kind: BodyKind): void {
+    const pick = parentPick;
+    closeParentPick();
+    const node = pick ? model.tree.nodes.get(pick.body) : undefined;
+    if (!node?.body) return;
+    newKind = kind;
+    if (node.body.kind === kind) return;
+    const wasName = bodyNodeType(node.body);
+    node.body.kind = kind;
+    node.type = bodyNodeType(node.body);
+    // Still the class's own name (numbered apart from its siblings', as
+    // `StaticBody2D3`): it names the new class instead.
+    if (new RegExp(`^${wasName}\\d*$`).test(node.name)) renameNode(model.tree, node.id, node.type);
+    markDirty();
+    rebuildInspector();
+  }
+  window.addEventListener("pointerdown", (e) => {
+    if (parentPick && !parentPick.menu.contains(e.target as Node)) closeParentPick();
+  }, true);
+  window.addEventListener("keydown", (e) => {
+    if (!parentPick || e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") return;
+    closeParentPick();
+    // Esc and Enter are answers to the menu, and go no further.
+    if (e.code === "Escape" || e.code === "Enter" || e.code === "NumpadEnter") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
 
   const POLY_CLOSE_PX = 10;
 
@@ -12015,9 +12116,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     centreShapeOrigin(item);
     beginAction();
-    insertDrawn(item);
+    const made = insertDrawn(item);
     setSelection([item.id]);
     markDirty();
+    if (made) offerParentPick(made);
   }
 
   // The clicked points as a camera path: taken exactly as drawn, with no
@@ -12046,9 +12148,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     centreShapeOrigin(item);
     beginAction();
-    insertDrawn(item);
+    const made = insertDrawn(item);
     setSelection([item.id]);
     markDirty();
+    if (made) offerParentPick(made);
   }
 
   // How close (in screen px) outside a root's bar a stroke may start and still
@@ -12519,18 +12622,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Whether the list arrived; a failed one leaves the dropdown as it was.
   async function refreshLevelList(): Promise<boolean> {
     try {
-      const names = await listLevels();
-      loadSel.innerHTML = "";
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = names.length ? "Load…" : "(no saved levels)";
-      loadSel.appendChild(placeholder);
-      for (const n of names) {
-        const o = document.createElement("option");
-        o.value = n;
-        o.textContent = n;
-        loadSel.appendChild(o);
-      }
+      levelNames = await listLevels();
       return true;
     } catch (e) {
       console.error(e);
@@ -13442,13 +13534,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const body = newDrawnItem(drawTool, start);
       // Into the selected body, or a body of its own (`insertDrawn`): a body
       // has one kind, one fill, one friction, held on its node.
-      insertDrawn(body);
+      const made = insertDrawn(body);
       setSelection([body.id]);
       // A checkpoint has no size to drag out (see `newDrawnItem`), so the press
       // IS the whole gesture: entering a draw drag would offer a resize that
       // does nothing and leave the marker's box disagreeing with the avatar it
       // is drawn at.
-      drag = drawTool === "checkpoint" || drawTool === "model" ? null : { mode: "draw", body, start };
+      drag = drawTool === "checkpoint" || drawTool === "model" ? null : { mode: "draw", body, start, made };
       markDirty();
       rebuildInspector();
       // A text note is placed to be written in, so the caret goes there rather
@@ -13488,7 +13580,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return;
       }
       selectBerry(berry.vine, berry.index);
-      drag = turned ? null : { mode: "berryMove", vine: berry.vine, index: berry.index, grab: berry.fruit.sub(world) };
+      drag = { mode: "berryMove", vine: berry.vine, index: berry.index, grab: berry.fruit.sub(world) };
       return;
     }
     // 3c. A vine, before the items too: it is a line a few pixels wide drawn
@@ -13500,9 +13592,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       setVineSelection([vine.id]);
       // ...and a press that DRAGS off the vine grows a berry on it, its stalk
       // leaving the cord where the press was and the berry where the drag is
-      // released (see `berryDraw`). Head on only: the draft is drawn on the
-      // overlay.
-      const path = turned ? null : vineRestPath(model, vine);
+      // released (see `berryDraw`), at any angle: the draft is drawn with the
+      // overlay, through the view when it is turned.
+      const path = vineRestPath(model, vine);
       if (path) {
         const along = Math.min(vine.length, berryAlongAt(path, world));
         drag = { mode: "berryDraw", vine, along, root: pointAlong(path, along), cursor: world, press: scr };
@@ -14790,8 +14882,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const to = topmostAt(drag.cursor, (b) => chainable(b));
       if (to) addWrapPoint(drag.chain, drag.index, to, drag.cursor);
     }
+    const made = drag.mode === "draw" ? drag.made : null;
     drag = null;
     applyToolCursor();
+    if (made) offerParentPick(made);
   });
 
   canvas.addEventListener("wheel", (e) => {
@@ -15543,8 +15637,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, cam.pitch));
       visuals.setView(poseFromCamera(camera, lens, { yaw: cam.yaw, pitch }));
     }
-    // A turned address opened in 2D is the same place head on.
-    if (HEAD_ON_ONLY[workspace] && orbited()) resetView();
     refreshOrbitBtn();
     applyToolCursor();
   }
@@ -15578,7 +15670,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const fresh = modelRev === bootRev && currentName === null;
       const name = urlView.level ?? readLastLevel();
       if (fresh && listed && name !== null) {
-        if ([...loadSel.options].some((o) => o.value === name)) await doLoad(name);
+        if (levelNames.includes(name)) await doLoad(name);
         else if (urlView.level === null) writeLastLevel(null);
       }
       if (fresh && currentName === urlView.level) takeUpUrlView();

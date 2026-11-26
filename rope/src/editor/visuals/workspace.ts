@@ -216,13 +216,6 @@ export class VisualsWorkspace {
   // so it uses the workspace for its camera alone.
   showGuides = true;
 
-  // THE 2D WORKSPACE'S LOCK (editor/workspaces.ts): the view stays the plane
-  // head on. An orbit is a pan, the wheel zooms about the plane point under
-  // the pointer rather than a rock behind it, and framing keeps the target on
-  // the plane, so the view never leaves the head-on mapping the 2D camera
-  // draws and picks through.
-  headOnOnly = false;
-
   enter(): void {
     if (this.on) return;
     this.on = true;
@@ -279,11 +272,7 @@ export class VisualsWorkspace {
   // Frame a box (three's frame) from the current direction: **F**.
   frameBox(box: Box3): void {
     if (!this.pose) return;
-    const z = this.pose.target.z;
-    // Locked head on, the box is framed as its footprint on the plane: the
-    // target keeps its depth, so the view stays the head-on one.
-    const flat = this.headOnOnly ? { min: { ...box.min, z }, max: { ...box.max, z } } : box;
-    this.pose = frame(this.navigable(this.pose), flat, this.aspect());
+    this.pose = frame(this.navigable(this.pose), box, this.aspect());
     this.apply();
   }
 
@@ -363,7 +352,7 @@ export class VisualsWorkspace {
   moveView(scr: Vec2): void {
     const g = this.gesture;
     if (!g || !this.pose) return;
-    if (g.kind === "orbit" && !this.headOnOnly) {
+    if (g.kind === "orbit") {
       // The pointer drags the SCENE, as the Level workspace's orbit reads: a
       // drag right swings the level right (the camera left), a drag down tips
       // its far side down and the camera rises to look at it.
@@ -392,7 +381,7 @@ export class VisualsWorkspace {
     if (!this.pose) return;
     const n = this.ndc(scr);
     const scene = this.host.scene;
-    let toward: Vec3 | null = this.headOnOnly ? null : scene.drawnSurfaceAt(n.x, n.y);
+    let toward: Vec3 | null = scene.drawnSurfaceAt(n.x, n.y);
     if (!toward) {
       const cam = scene.camera;
       const forward = cam.getWorldDirection(this.forward);
@@ -414,12 +403,11 @@ export class VisualsWorkspace {
   //   rest the target is put on the surface in the middle of the view
   //   (`refocus`, one ray), so the mouse's orbit afterwards pivots on what
   //   was being looked at.
-  // - Locked head on (2D), or orthographic: there is no depth to fly through,
-  //   so push/pull zooms about the target and the slide pans; the 2D lock
-  //   turns nothing at all.
+  // - Orthographic: there is no depth to fly through, so push/pull zooms
+  //   about the target and the slide pans.
   ndof(axes: NdofAxes, dt: number, orthographic: boolean): boolean {
     if (!this.pose) return false;
-    const flat = this.headOnOnly || orthographic;
+    const flat = orthographic;
     if (atRest(axes)) {
       if (!this.flown) return false;
       this.flown = false;
@@ -448,11 +436,9 @@ export class VisualsWorkspace {
         x: (-t.x * 2 * dt) / this.aspect(),
         y: -t.y * 2 * dt,
       });
-      if (!this.headOnOnly) {
-        // Over the poles as the fly goes, the twist as seen on screen (`fly`).
-        const onScreen = upsideDown(pose.pitch) ? -twist : twist;
-        pose = orbit(pose, onScreen * FLY_TURN_RAD_PER_S * dt, tilt * FLY_TURN_RAD_PER_S * dt, true);
-      }
+      // Over the poles as the fly goes, the twist as seen on screen (`fly`).
+      const onScreen = upsideDown(pose.pitch) ? -twist : twist;
+      pose = orbit(pose, onScreen * FLY_TURN_RAD_PER_S * dt, tilt * FLY_TURN_RAD_PER_S * dt, true);
     } else {
       const step = FLY_SPEED_M_PER_S * dt;
       const turn = FLY_TURN_RAD_PER_S * dt;

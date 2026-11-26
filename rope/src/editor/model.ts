@@ -1,4 +1,4 @@
-import { mushroomOutline, mushroomParameters, type MushroomParameters } from "../level/mushroom";
+import { mushroomCapCentre, mushroomOutline, mushroomParameters, type MushroomParameters } from "../level/mushroom";
 import mushroomVariants from "../level/mushroomVariants.json";
 // Editor scene model. Mirrors LevelData but keeps positions as Vec2 in WORLD
 // METRES (so it shares the camera/pointer un-projection with the sim), plus a
@@ -4806,7 +4806,8 @@ export function mushroomBody(pos: Vec2, variant = 0, scale = 1): LevelBodyData {
     objects: [
       { type: "collision", debug: { on: false }, shape: { kind: "poly", verts: mushroomOutline(params, scale) } },
       { type: "model", model: spec.model, scale, mushroom: params },
-      { type: "light", color: "#9cbbff", intensity: 5, range: 2.5*scale,
+      // In the cap (`mushroomCapCentre`), at the model's depth.
+      { type: "light", ...mushroomCapCentre(params, scale), z: 0, color: "#9cbbff", intensity: 5, range: 2.5*scale,
         wake: 6, wakeDelay: 0, wakeRise: .2, wakeFall: 1 },
     ],
   };
@@ -4819,9 +4820,22 @@ export function mushroomModel(pos: Vec2): EdModel {
 }
 
 export function resizeMushroom(model: EdModel, item: EdItem, key: keyof MushroomParameters, value: number): void {
-  const params = mushroomParameters(item.modelRef.name, { ...mushroomParameters(item.modelRef.name, item.modelRef.mushroom)!, [key]: value });
-  if (!params) return;
+  const was = mushroomParameters(item.modelRef.name, item.modelRef.mushroom);
+  const params = mushroomParameters(item.modelRef.name, { ...was!, [key]: value });
+  if (!was || !params) return;
   item.modelRef.mushroom = params;
+  // The body's light stays in the middle of the cap as it grows or shrinks -
+  // if that is where it was: one put somewhere else on purpose stays there.
+  const centre = (p: MushroomParameters): Vec2 => {
+    const c = mushroomCapCentre(p, item.modelRef.scale);
+    return item.pos.add(new Vec2(c.x, c.y).rotated(item.rot));
+  };
+  const before = centre(was);
+  for (const light of model.items) {
+    if (light.unit !== item.unit || light.object !== "light") continue;
+    if (light.pos.distanceTo(before) > 1e-6 || Math.abs(light.light.z - item.modelRef.z) > 1e-6) continue;
+    light.pos = centre(params);
+  }
   const caps = model.items.filter(b => b.unit === item.unit && b.object === "collision");
   if (caps.length !== 1) return;
   const cap = caps[0]!;

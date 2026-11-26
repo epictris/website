@@ -222,6 +222,9 @@ export class TreeLook {
         if (child instanceof THREE.Mesh) {
           this.owned.push(child.geometry);
           this.ownedMaterials.push(child.material as THREE.Material);
+          // ...and the shadow material its meshes share (proceduralMushroom.ts).
+          const shadow = child.customDistanceMaterial;
+          if (shadow && !this.ownedMaterials.includes(shadow)) this.ownedMaterials.push(shadow);
         }
       });
       this.mushrooms.push({ bounce: new MushroomBounce(node, params.stemHeight), carrier: carrier.id });

@@ -16,7 +16,7 @@ What a level LOOKS like is what its nodes carry - formations and the decorations
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
 The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
-**Cut**, beside the draw tools, is a knife: two clicks draw a line, every polygon or box it crosses edge to edge is cut, and what no longer touches becomes a body of its own, taking the anchors (with their chains and vines) on its side; **Join** (Ctrl+J) folds the selected bodies into the first, fusing pieces of the same surface ([editor-model](editor-model.md#split-and-join)).
+**Cut**, in Select's block of the toolbar (it makes nothing, it works on what is there), is a knife: two clicks draw a line, every polygon or box it crosses edge to edge is cut, and what no longer touches becomes a body of its own, taking the anchors (with their chains and vines) on its side; **Join** (Ctrl+J) folds the selected bodies into the first, fusing pieces of the same surface ([editor-model](editor-model.md#split-and-join)).
 
 `+Poly` is the one draw tool that is a run of clicks rather than a drag, because an outline
 is a vertex list and not a box: each click places a vertex, **Enter** or a click on
@@ -89,7 +89,7 @@ At most eight berries a vine.
 
 `+ Root` (beside `+ Vine`) draws a root: press for each node and drag before releasing to pull out its Bézier handles, then Enter or a double-click (see [**Roots**](roots.md)).
 A stroke started ON a root grows a branch out of it, at any depth; anywhere else it starts a new root, a static hook-only body of its own.
-While the tool is armed the toolbar's `start width` and `tip` (px) set the widths new roots are drawn at, remembered by the browser; mid-draw they set the root or branch being drawn.
+While the tool is armed a card at the foot of the view has `start width` and `tip` (px), which set the widths new roots are drawn at, remembered by the browser; mid-draw they set the root or branch being drawn.
 While the tool is armed the selection's handles and gizmo stand down, so a press on a root always starts a branch.
 With the select tool a branch is edited like any curve, except that its first node is its junction: dragging it slides the branch along its parent, and it cannot be removed.
 Delete takes a branch and everything growing out of it; moving a branch into a body of its own (**New body**, or a drag in the scene tree) makes it a trunk where it stands.
@@ -256,7 +256,7 @@ backdrop's minor-grid spacing) keeps geometry aligned - **moves** snap the body'
 corner, and **corner-resize** anchors the opposite corner (grows toward the drag). Each body
 **Undo/redo** (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) keeps 50 model snapshots - one step per
 discrete action (each drag, add/delete/duplicate, kind/colour/opacity/numeric edit); New and
-Load clear the stack.
+Open clear the stack.
 Every colour field in the editor is a swatch that opens the editor's own picker (`src/editor/colorPicker.ts`: saturation/value square, hue strip, hex field, eyedropper; Escape or a click elsewhere closes it), not `<input type="color">`.
 The **eyedropper** (the pipette beside the hex field, 2026-10-17) picks a colour off anything the editor shows: the pointer becomes a crosshair with the colour under it beside it, a click takes it, and Escape or a right-click cancels without closing the picker.
 It is the editor's own (`src/editor/eyedropper.ts`), since the browser's `EyeDropper` exists only on Windows, macOS and ChromeOS: it reads the elements under the point front to back, each canvas by its pixel and anything else by its background colour, so it sees the 3D view, the overlay and the panels' swatches, but not text.
@@ -376,7 +376,7 @@ Hidden scenery is not picked and not dropped onto: `Scene3D.hitsAt` skips any hi
 
 The toolbar's view boxes - **snap**, **edge clamp**, **all debug**, **reflections**, **shadows**, **water**, **roots** and **scene** - are remembered by the browser (`localStorage` key `rope.editor.view`, `editor/prefs.ts`), so the editor opens as it was last left; each box writes itself back when it changes.
 So is the layer stack's hidden and locked state (`rope.editor.layers`), per browser rather than per level, written by every path that changes it (the eye and padlock, a paste or pick that reveals a layer); a stored name that is no longer a layer is dropped, and a stack stored with every layer hidden opens with none hidden.
-So is the level last open (`rope.editor.level`), which a fresh editor reopens: it is written by Load and Save As, and cleared by New and Delete File, so an editor last left on an unnamed model opens empty.
+So is the level last open (`rope.editor.level`), which a fresh editor reopens: it is written by File > Open and Save As, and cleared by New and Delete File, so an editor last left on an unnamed model opens empty.
 The reopen waits for the level list and is skipped for a name no longer on disk (forgotten, without a dialog) and for a model already edited while the list was on its way.
 
 **The view is in the address bar**, the way a map keeps its centre and zoom, so a reload - the dev server's, after an edit to the editor itself - comes back looking at the same place instead of at the spawn (`editor/viewUrl.ts`):
@@ -398,7 +398,7 @@ Any other query parameter is left alone.
 
 ## Sounds
 
-The **Sounds** button beside the file controls opens the menu that assigns sound files to the game's events - rolling and landing per surface, the cuff attaching and bouncing, links winding on, the whoosh, splash and wade - with upload, preview and each file's credit, and a clip editor per file (its waveform, cropped by dragging, with its own volume and pitch).
+**File > Sounds…** opens the menu that assigns sound files to the game's events - rolling and landing per surface, the cuff attaching and bouncing, links winding on, the whoosh, splash and wade - with upload, preview and each file's credit, and a clip editor per file (its waveform, cropped by dragging, with its own volume and pitch).
 It is not part of any level: what it writes is `src/audio/soundBank.json` and the sound library, and a change is heard straight away in ▶ Test and in a game open in another tab.
 See [sound](sound.md#the-sounds-menu).
 
@@ -410,9 +410,9 @@ The policy is one module, `src/editor/workspaces.ts`; the editor asks it.
 
 | | 2D | Formations | Decorations | Texturing |
 |---|---|---|---|---|
-| View | the gameplay plane head on, locked | free 3D | free 3D | free 3D |
-| Toolbar | Select; Rectangle, Circle, Polygon, Curve, Belt, Cut; Chain, Vine, Root, the bouncy and the glowing mushroom; Light, Model; Fog region, Shelter (the camera layer: Rectangle, Circle, Polygon, Camera path; the notes layer: Text, Arrow, Checkpoint) | Select; Add box, Add cylinder; with a solid guide selected Union, Subtract, Intersect; while sculpting Draw, Grab, Cut instead | Select; Moss, Ivy (painted); Fern, Hanging vine, Mushrooms, Pendant orbs, Glow flora (placed) | Select; Paint |
-| Tool settings | `kind`, the root widths while +Root is armed (the type layers are over the scene tree, in 2D only) | the selection's Guide / Rock / Both (Tab) and Sculpt (Ctrl+Tab; the strip is Sculpt's while it is on), Add to guide, a combine's Apply / Cancel; Show Guides / Rocks, Generate N out of date | the brush's radius while Moss or Ivy is armed; Show Collision, Grow N out of date | Material (picking one picks up Paint), the brush's radius while painting; Show Collision, Bake N out of date |
+| View | free 3D, opening on the gameplay plane head on | free 3D | free 3D | free 3D |
+| Toolbar | Select, Cut; Rectangle, Circle, Polygon, Curve, Belt; Chain, Vine, Root, the bouncy and the glowing mushroom; Light, Model; Fog region, Shelter (the camera layer: Rectangle, Circle, Polygon, Camera path; the notes layer: Text, Arrow, Checkpoint) | Select; Add box, Add cylinder; with a solid guide selected Union, Subtract, Intersect; while sculpting Draw, Grab, Cut instead | Select; Moss, Ivy (painted); Fern, Hanging vine, Mushrooms, Pendant orbs, Glow flora (placed) | Select; Paint |
+| Tool settings | none: a new shape's body class is asked at the shape ([editor-model](editor-model.md)), and Root's widths are a card at the foot of the view while it is armed (the type layers are over the scene tree, in 2D only) | the selection's Guide / Rock / Both (Tab) and Sculpt (Ctrl+Tab; the strip is Sculpt's while it is on), Add to guide, a combine's Apply / Cancel; Show Guides / Rocks, Generate N out of date | the brush's radius while Moss or Ivy is armed; Show Collision, Grow N out of date | Material (picking one picks up Paint), the brush's radius while painting; Show Collision, Bake N out of date |
 | Drawn and picked | everything on the plane, all layers; not what stands in 3D (a rock or model with no body above it) or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations but material layers | the scene layer's formations and their material layers |
 | Inspector | everything but the Formation, Decorations and Materials sections | the spawn, Sun and Environment, a body's Transform and Formation | the spawn, Sun and Environment, a rock's Decorations, a decoration's panel | the spawn, Sun and Environment, a rock's Materials, a material layer's panel |
 
@@ -429,9 +429,9 @@ Texturing is painting a rock with materials from the library, live: [formations]
 **The inspector** is filtered by section key (`sectionShown`, applied by `pruneEmptySections`), so a rock's panel in Formations is its recipe rather than its bounce, friction and mover first.
 The section a workspace's work is done in (`PRIMARY_SECTIONS`: Formation, Decorations, a decoration's own; and the panels that ARE their node - the spawn's, the Sun's, the Environment's, a fog region's Fog, a shelter's Wall) starts open until the author closes it, remembered as opened sections are (`setDefaultOpen` in `panelUi.ts`).
 
-**The 2D view is locked head on** (`VisualsWorkspace.headOnOnly`): the middle drag pans instead of orbiting, the wheel zooms about the plane point under the pointer (never a rock behind it, which would move the target off the plane), and **F** frames the selection's footprint with the target kept on the plane.
-Entering 2D turns a turned view back to the plane over the same place; "Align camera to plane" is not offered there, since there is nothing to align.
-**A switch never moves the camera** except into 2D: Formations, Decorations and back keep the camera's position and direction exactly, and leaving 2D keeps its head-on view (Tris, 2026-11-25).
+**The 2D view is navigated as the others are** (since 2026-11-26; it was locked head on before): the middle drag orbits, Shift + middle or right drag pans, the wheel dollies toward what is under the pointer, and the view cube turns it.
+Everything 2D draws and picks works at any angle, through the plane under the pointer ([below](#the-3d-view-since-2026-11-22)); **Align camera to plane** (top left, Numpad 1) faces the plane again, and is lit while the view is turned.
+**A switch never moves the camera**: every workspace keeps the camera's position and direction exactly (Tris, 2026-11-25).
 Until then each 3D workspace came back at the yaw, pitch and depth it was left at, which moved the camera on every switch between Formations and Decorations.
 
 **Guides and rocks** (Formations, 2026-11-23).
@@ -500,7 +500,7 @@ The workspace is remembered by the browser (`rope.editor.workspace`) and written
 ## The 3D view (since 2026-11-22)
 
 The editor has one view: a free 3D camera, navigated as 3D editors are, with the overlay drawn through it at any angle ([plans/editor-ux-pass.md](../plans/editor-ux-pass.md)).
-The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and **Prefabs** say what is being edited rather than how it is seen, and the 2D workspace locks this view head on ([Workspaces](#workspaces-2d-formations-decorations-texturing)).
+The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and **Prefabs** say what is being edited rather than how it is seen, and every workspace navigates it the same way, 2D included since 2026-11-26 ([Workspaces](#workspaces-2d-formations-decorations-texturing)).
 
 | Gesture or key | Does |
 |---|---|
@@ -537,7 +537,7 @@ Since 2026-11-23 the top right of the viewport holds a **view cube** (`src/edito
 The cube turns with the view: six labelled faces drawn on a small 2D canvas through the pose's own basis (`poseBasis`), back to front, each label laid on its face by an affine transform so it turns and foreshortens with it.
 A click on a face swings the view to look from that side - Front (the gameplay plane head on, ending as "Align camera to plane" does), Back, Left, Right, Top (straight down, the front at the foot of the screen, as Blender's top view has it) and Bottom - about the same target and at the same distance, eased over 220 ms (`swingView`); an orbit, a pan or the wheel during the swing takes over from it.
 Face on, the other five faces are edge-on and cannot be clicked, so four arrows round the cube (Fusion's) go to the face next to it that way: the face whose normal is nearest the screen's right, left, up or down.
-The 2D workspace shows the lens alone, since its view has no other side to go to.
+Every workspace has the cube, 2D included since its head-on lock went (2026-11-26).
 
 Top and Bottom are at the poles, which the view could not reach before: the pitch was clamped at 80 degrees (`MAX_ORBIT_PITCH`), because `applyPose` aimed the camera with world +y as its up, which degenerates there.
 The editor's pose now goes to ±90 degrees (`MAX_VIEW_PITCH`, also the orbit drag's limit, so an orbit away from Top does not snap back to 80); past 80 degrees `applyPose` takes its up from the pose's own basis, which is the same direction there and the only one defined at the pole, and up to 80 it is world +y exactly as before.
@@ -725,14 +725,17 @@ What is left is the idle build's own frame (~70-100 ms, 1.5 s after the last thi
 
 The authoring tools are named **Just Swing**.
 The editor, sound mixer and audition lab share `src/styles/studio.css`: a docked navy workspace with blue selection and amber time/clip emphasis, selected through Impeccable previews.
-The top navigation switches tools.
+The editor has no navigation row of its own (since 2026-11-26): the sound mixer and the audition lab are its Sounds menu's **Edit layers ↗** and **Compare sounds ↗**.
 
 The editor's screen (since 2026-11-26) is laid out around an unobstructed viewport:
 
-- **The command bar** carries the files (New, Load, Save, Save As, Delete File), **Sounds**, then the level's own few settings - **Background** (what is behind everything, `LevelTree.background`), **Lens mm** and **Cam z** (the 3D camera, `LevelTree.camera`; blank is the default) - the workspace tabs, and **Test level**.
+- **The top bar** is one row: the **File** menu, then the level's own few settings - **Background** (what is behind everything, `LevelTree.background`), **Lens mm** and **Cam z** (the 3D camera, `LevelTree.camera`; blank is the default) - the workspace tabs, and **Test level**.
+  **File** (`editor/menu.ts`) holds **New**, **Open ▸** (the saved levels, the open one ticked), **Save**, **Save As…**, **Sounds…** and **Delete File**, as a desktop menu: the arrows move through it and into Open's flyout, Enter picks, Esc closes, and no key reaches the editor's shortcuts while it is open.
   The level's light is not here: it is its **Sun** and **Environment** nodes, and its fog is its **fog regions** ([level-format](level-format.md#the-levels-light)).
   The level select's `title`, `intro` and `unlisted` have no control any more (there is one main level); a level that has them keeps them.
-- **The tool settings** (Blender's tool header, since 2026-11-26): a strip across the viewport's top holding what the workspace's tools are set to (a new body's kind, a brush's radius, Paint's material, a combine under way), then at its far end what is drawn and the workspace's bulk action (Generate, Grow, Bake). It is one row and scrolls sideways rather than wrapping, so the viewport under it never moves; hints that were paragraphs in the old dock are a line here.
+- **The tool settings** (Blender's tool header, since 2026-11-26): a strip across the viewport's top holding what the workspace's tools are set to (a brush's radius, Paint's material, a combine under way), then at its far end what is drawn and the workspace's bulk action (Generate, Grow, Bake).
+  It is one row and scrolls sideways rather than wrapping, so the viewport under it never moves; hints that were paragraphs in the old dock are a line here.
+  2D has none, and its view starts under the top bar: a drawn shape's body class is asked at the shape, and Root's widths are a card at the foot of the view while Root is armed.
 - **The toolbar** (`editor/toolbar.ts`, `editor/toolIcons.ts`, since 2026-11-26), as Blender draws its own: each workspace's tools as a column of icons down the viewport's left edge, in blocks of related tools, the active one lit blue ([the table below](#workspaces-2d-formations-decorations-texturing)).
   The icons are one 24-unit line-art set, stroked in the text colour with one mint accent on the part that says what the tool makes.
   A tool's name, its key and what it does are its tooltip, beside it after a short rest (or at once from the keyboard); the description is the button's own `title`, taken into the tooltip as the pointer arrives, so the browser's never shows over it.
@@ -746,5 +749,5 @@ The editor's screen (since 2026-11-26) is laid out around an unobstructed viewpo
   The spawn, the Sun and the Environment are nodes like any other: their panels are what the inspector shows when the scene tree picks them.
 - **The status line** along the viewport's foot says what is open, whether it is saved, what is in it, and the draft or notice of the moment.
 
-The top bars wrap on a narrow window, and everything under them follows (`--chrome-top`, measured as they resize).
+The top bar wraps on a narrow window, and everything under it follows (`--chrome-top`, measured as it resizes).
 At phone widths the scene tree's dock becomes a drawer, **Scene**, starting closed, leaving the canvas reachable; the toolbar and the tool settings stay. Native Tab navigation works while a toolbar button or disclosure has focus; Tab from the canvas still cycles edit layers. Inspector sections and sound event families are keyboard-accessible buttons with expanded state. A tool's shortcut is in its tooltip, and active tool, layer and view controls expose pressed state.

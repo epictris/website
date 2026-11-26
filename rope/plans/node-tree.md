@@ -326,7 +326,7 @@ Proposed starting presets, to be settled by playing them in phase 3:
 | Workspace | Clickable |
 |---|---|
 | 2D | bodies, shapes, anchors, chains, vines, the 2D volumes, notes, instances |
-| Formations | `Formation3D`, plain `Node3D`, `Model3D`, `Light3D`, instances |
+| Formations | bodies, `Formation3D`, plain `Node3D`, `Model3D`, `Light3D`, instances |
 | Decorations | `Decoration3D` (placed kinds); painted kinds through the brush |
 | Texturing | material layers through the brush; nothing by click |
 

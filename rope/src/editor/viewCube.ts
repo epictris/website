@@ -2,10 +2,8 @@
 // top right of the viewport, as Blender's, Fusion's and Unity's are. A cube
 // turned with the view, one labelled face per axis; a click on a face swings
 // the camera to look at the level from that side. Under it, the lens:
-// Perspective or Orthographic.
-//
-// The 2D workspace shows the lens alone: its view never leaves the plane head
-// on, so there is no other side to go to.
+// Perspective or Orthographic. Every workspace has it, 2D too since its
+// head-on lock went (2026-11-26).
 //
 // Drawn on its own small canvas with the 2D context: six quads projected
 // orthographically through the view's own basis (`poseBasis`), painted back to
@@ -110,11 +108,6 @@ export class ViewCube {
       seg.appendChild(b);
     }
     this.el.append(this.canvas, seg);
-  }
-
-  // The 2D workspace has the lens alone.
-  setCubeShown(shown: boolean): void {
-    this.canvas.style.display = shown ? "" : "none";
   }
 
   setProjection(p: ViewProjection): void {

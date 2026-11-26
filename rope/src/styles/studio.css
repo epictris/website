@@ -44,16 +44,14 @@ body.studio { background: var(--studio-bg); color: var(--studio-text); font-fami
 .studio-nav a:hover { color: var(--studio-accent); }
 .studio-nav a[aria-current=page] { color: var(--studio-accent); }
 /* The level editor has fixed furniture around an unobstructed canvas: the
-   top bars, the scene tree's dock on the right (`--dock-width`, dragged by
+   top bar, the scene tree's dock on the right (`--dock-width`, dragged by
    its edge and set by editor.ts), and over the viewport the workspace's tool
-   settings across its top (`--toolhead-h`), its toolbar down its left edge
-   (`--toolbar-w`), the view bar, the view cube with the floating inspector
-   under it, and the status line along its foot. `--chrome-top` is where the
-   top bars end, measured by editor.ts as they wrap; `--view-top` is where the
-   viewport itself starts, under the tool settings. */
+   settings across its top (`--toolhead-h`, none in 2D), its toolbar down its
+   left edge (`--toolbar-w`), the view bar, the view cube with the floating
+   inspector under it, and the status line along its foot. `--chrome-top` is
+   where the top bar ends, measured by editor.ts as it wraps; `--view-top` is
+   where the viewport itself starts, under the tool settings. */
 .studio .ed-root { font: inherit; color: var(--studio-text); --dock-width: 300px; --chrome-top: 104px; --toolhead-h: 40px; --view-top: calc(var(--chrome-top) + var(--toolhead-h)); --toolbar-w: 44px; --status-height: 28px; }
-.studio .ed-file-row .ed-select { flex: 1; width: 16ch; }
-.studio .ed-file-row .ed-danger { margin-left: auto; color: #e8af9f; }
 .studio .ed-btn { min-height: 30px; padding: .25lh 1ch; font: inherit; background: var(--studio-raised); color: var(--studio-text); border-color: var(--studio-line); }
 .studio .ed-btn.active { background: var(--studio-selected); border-color: #759bd0; color: #cee1ff; }
 .studio .ed-primary { background: var(--studio-accent); border-color: var(--studio-accent); color: #14243d; font-weight: 650; }
@@ -215,11 +213,22 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio-lab canvas { background: var(--studio-input); }
 .studio-lab #status { color: var(--studio-warm); }
 /* Full-width shell, bounded editing furniture. */
-.studio .ed-shell-header { position: absolute; inset: 0 0 auto; height: 56px; padding: 0 2.5ch; display: flex; align-items: center; gap: 4ch; background: var(--studio-panel); border-bottom: 1px solid var(--studio-line); pointer-events: auto; }
-.studio .ed-commandbar { position: absolute; top: 56px; left: 0; right: 0; min-height: 48px; padding: .4lh 2ch; background: var(--studio-panel); border-bottom: 1px solid var(--studio-line); pointer-events: auto; }
+.studio .ed-commandbar { position: absolute; top: 0; left: 0; right: 0; min-height: 48px; padding: .4lh 2ch; background: var(--studio-panel); border-bottom: 1px solid var(--studio-line); pointer-events: auto; }
 .studio .ed-commandbar .ed-primary { margin-left: auto; }
-.studio .ed-commandbar .ed-select { width: 22ch; flex: 0 1 auto; }
-.studio .ed-commandbar .ed-danger { margin-left: 0; }
+/* The File menu (editor/menu.ts): a column under its button, a flyout for
+   Open's levels. */
+.studio .ed-menu-button::after { content: "▾"; margin-left: .8ch; color: var(--studio-muted); }
+.studio .ed-menu { position: fixed; z-index: 60; display: flex; flex-direction: column; min-width: 22ch; max-height: calc(100dvh - 16px); overflow-y: auto; padding: 4px; background: var(--studio-raised); border: 1px solid var(--studio-line); border-radius: 6px; box-shadow: 0 8px 22px rgb(0 0 0 / 45%); outline: none; scrollbar-width: thin; }
+.studio .ed-menu-item { display: grid; grid-template-columns: 2ch 1fr auto; align-items: center; gap: .6ch; min-height: 28px; padding: 0 1ch 0 .6ch; border: 0; border-radius: 4px; background: transparent; color: var(--studio-text); font: inherit; text-align: left; white-space: nowrap; cursor: default; }
+.studio .ed-menu-item:is(:hover,:focus-visible,.open):not(:disabled) { background: #4772b3; color: #fff; outline: none; }
+.studio .ed-menu-item:disabled { color: var(--studio-muted); opacity: .55; }
+.studio .ed-menu-item.danger:not(:disabled) { color: #e8af9f; }
+.studio .ed-menu-item.danger:is(:hover,:focus-visible):not(:disabled) { background: #8f3f33; color: #fff; }
+.studio .ed-menu-tick { text-align: center; }
+.studio .ed-menu-arrow { padding-left: 2ch; color: var(--studio-muted); }
+.studio .ed-menu-item:is(:hover,:focus-visible,.open) .ed-menu-arrow { color: inherit; }
+.studio .ed-menu-sep { height: 1px; margin: 4px 2px; background: var(--studio-line); }
+.studio .ed-menu-note { padding: 4px 1ch 4px 2.6ch; color: var(--studio-muted); }
 /* The level's own settings, set off from the files by a rule. */
 .studio .ed-level-settings { display: flex; align-items: center; gap: 1.5ch; padding-left: 1.5ch; margin-left: .5ch; border-left: 1px solid var(--studio-line); }
 .studio .ed-level-settings .ed-inline { gap: .8ch; white-space: nowrap; }
@@ -247,7 +256,7 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
   .studio-mixer .arrangement { overflow: visible; }
 }
 @media (max-width: 600px) {
-  .studio-header,.studio .ed-shell-header { padding-inline: 1.2ch; gap: 2ch; }
+  .studio-header { padding-inline: 1.2ch; gap: 2ch; }
   .studio-nav { gap: 1.5ch; }
   .studio-mixer .workspace { grid-template-columns: 1fr; }
   .studio-mixer .source-browser { border-right: 0; border-bottom: 1px solid var(--studio-line); display: grid; grid-template-columns: 1fr 1fr; gap: .6lh 1.5ch; }
@@ -266,24 +275,20 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
   .studio-mixer .mix-actions { padding-inline: 1.2ch; }
   .studio .ed-field { flex-wrap: wrap; white-space: normal; }
   .studio .ed-field > :is(input,select,textarea) { max-width: 100%; }
-  .studio .ed-shell-header .studio-nav { gap: 1ch; }
-  .studio .ed-shell-header { gap: 1.5ch; }
   .studio .ed-commandbar { gap: .4lh .5ch; padding-inline: 1ch; }
-  .studio .ed-commandbar .ed-select { width: 13ch; }
   .studio .snd-head { gap: .5lh 1ch; }
   body.studio-lab { padding-inline: 1.2ch; }
 }
 /* Control refinements shared by the authoring tools. */
 .studio .ed-eye { position: relative; }
 .studio .ed-eye svg { flex: none; }
-.studio .snd-menu { top: 116px; max-height: calc(100dvh - 128px); }
+.studio .snd-menu { top: calc(var(--chrome-top) + 8px); max-height: calc(100dvh - var(--chrome-top) - 16px); }
 .studio button.snd-fam-head { width: 100%; text-align: left; background: transparent; border: 0; border-radius: 0; padding: .4lh .5ch; }
 .studio button.snd-fam-head:hover:not(:disabled) { background: var(--studio-raised); }
 .studio .snd-slot-line { flex-wrap: wrap; }
 .studio-mixer .track.muted .clip { opacity: .4; }
 .studio-mixer .controls input[type=range] { min-height: 20px; height: 20px; margin: 0; }
 .studio-mixer .clip:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; z-index: 5; }
-@media (max-width: 850px) { .studio .snd-menu { top: 150px; max-height: calc(100dvh - 162px); } }
 .studio .ed-btn { min-height: 30px; }
 .studio .ed-root input::placeholder { color: #99abc5; opacity: 1; }
 .studio .ed-root,.studio .ed-root * { box-sizing: border-box; }
@@ -379,6 +384,15 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-shape-menu { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 2px; min-width: 16ch; padding: 4px; background: var(--studio-raised); border: 1px solid var(--studio-border, #313244); border-radius: 4px; box-shadow: 0 6px 18px rgb(0 0 0 / 45%); }
 .studio .ed-shape-menu-title { padding: 2px 6px 4px; color: var(--studio-muted); }
 .studio .ed-shape-menu .ed-btn { text-align: left; }
+/* The parent pick: a new shape's body class, each row its mark, its class
+   and a word for what it does. */
+.studio .ed-parent-menu { min-width: 30ch; }
+.studio .ed-parent-menu .ed-btn { display: grid; grid-template-columns: 2.2ch 1fr auto; align-items: center; gap: 1ch; min-height: 28px; border-color: transparent; background: transparent; }
+.studio .ed-parent-menu .ed-btn:hover { background: var(--studio-selected); }
+.studio .ed-parent-menu .ed-btn.active { background: #4772b3; border-color: #4772b3; color: #fff; }
+.studio .ed-parent-mark { text-align: center; color: var(--studio-muted); }
+.studio .ed-parent-note { padding-left: 2ch; color: var(--studio-muted); }
+.studio .ed-parent-menu .ed-btn.active :is(.ed-parent-mark,.ed-parent-note) { color: #dce8ff; }
 .studio .ed-stack-intersect .ed-stack-mode { color: #e3b45c; border-color: #e3b45c; }
 .studio .ed-btn.ed-attention { border-color: var(--studio-warm); color: var(--studio-warm); }
 @media (max-width: 600px) { .studio .ed-jobs { left: 8px; bottom: calc(var(--status-height) + 8px); width: min(34ch, calc(100vw - 16px)); } }
@@ -412,6 +426,14 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-toolhead-hint { color: var(--studio-muted); }
 .studio .ed-toolhead-divider { flex: none; align-self: center; width: 1px; height: 20px; margin-inline: .4ch; background: var(--studio-line); }
 .studio .ed-toolhead-spacer { flex: 1 1 2ch; }
+/* 2D has no tool settings: its tools are set as they draw. */
+.studio .ed-root[data-workspace="2d"] { --toolhead-h: 0px; }
+.studio .ed-root[data-workspace="2d"] .ed-toolhead { display: none; }
+/* An armed tool's own options where the strip is not there (Root's widths),
+   at the foot of the view, centred between the toolbar and the dock. */
+.studio .ed-tool-options { position: absolute; bottom: calc(var(--status-height) + 8px); left: calc((var(--toolbar-w) + 100vw - var(--dock-width)) / 2); transform: translateX(-50%); display: flex; align-items: center; gap: 1.5ch; padding: 6px 1.2ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 6px; box-shadow: 0 4px 14px rgb(0 0 0 / 35%); white-space: nowrap; pointer-events: auto; z-index: 4; }
+.studio .ed-tool-options :is(input:not([type=checkbox])) { min-height: 28px; height: 28px; padding-block: 0; }
+.studio .ed-tool-options .ed-num { width: 8ch; }
 /* Sculpt mode (editor/sculpt.ts): while it is on, Formations' tool settings
    and toolbar are the mode's alone. */
 .studio .ed-ws-dock > .ed-sculpt-dock { display: none; }

@@ -237,7 +237,7 @@ That is how the pipeline was verified headless: a replay played in Chromium with
 
 ## The Sounds menu
 
-The editor's **Sounds** button (beside the file controls).
+The editor's **File > Sounds…**.
 
 - **Library**: every uploaded file with ▶, its length, the events that play it, and its credit - source, author, licence. Upload… or drop files anywhere on the menu. **Edit** opens the file's clip editor ([below](#clip-edits)).
 - **Events**: each family, collapsible, with its Default and surface rows. Drop files onto a row to upload and assign them in one go, drag a library row onto it, or pick from its `+ sound` list; click a file to hear it, × to unassign.

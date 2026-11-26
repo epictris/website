@@ -199,10 +199,10 @@ The draft previews the tapered bar it will become, with the pointer as its next 
 
 The **first press decides what is drawn**.
 On a root (on its bar, or within 6 px of it, so a thin tip can be started from) it grows a **branch** out of that root, its first node on the root's centreline under the pointer, at 60% of the parent's width there (`ROOT_BRANCH_SHARE`) tapering to the parent's tip, in the parent's body.
-Anywhere else it starts a new **trunk**: a body of its own whatever is selected, static, hook-only, in the bark colour, at the toolbar's widths.
+Anywhere else it starts a new **trunk**: a body of its own whatever is selected, static, hook-only, in the bark colour, at the card's widths.
 Branches of branches are the same gesture, at any depth.
 
-While `+ Root` is armed the toolbar shows **`start width`** and **`tip`** (px, in place of `kind`, which says nothing about a root).
+While `+ Root` is armed a card at the foot of the view shows **`start width`** and **`tip`** (px).
 They are the widths a new trunk is drawn at - 16 and 2.5 until changed - and this browser remembers them (`readRootWidths`, `editor/prefs.ts`), since they are how the author draws rather than anything about a level.
 While a root or branch is being drawn they show and set THAT one's widths: a branch's start from its parent's girth, so typing a width before pressing Enter makes it thicker or thinner, and changing a branch's leaves the trunk widths as they were.
 Once grown, each piece keeps its own `start width` and `tip width` in its panel.

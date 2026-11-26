@@ -30,18 +30,10 @@ export const WORKSPACE_LABELS: Record<Workspace, string> = {
 
 export const WORKSPACE_TITLES: Record<Workspace, string> = {
   "2d":
-    "The gameplay plane head on: collision outlines, chains, vines, roots, mushrooms, lights, camera regions and notes (1)",
+    "The gameplay plane, at any angle (Align camera to plane faces it): collision outlines, chains, vines, roots, mushrooms, lights, camera regions and notes (1)",
   formations: "Free 3D view: solid and collision guides, and generating rock from them (2)",
   decorations: "Free 3D view: placing, painting and growing moss, ivy, ferns, vines and mushrooms on the rocks (3)",
   texturing: "Free 3D view: painting the rocks with materials from the library, Blender materials baked onto each rock (4)",
-};
-
-// The view never leaves the plane head on.
-export const HEAD_ON_ONLY: Record<Workspace, boolean> = {
-  "2d": true,
-  formations: false,
-  decorations: false,
-  texturing: false,
 };
 
 // The layers each workspace edits. The 3D workspaces work on the scene alone:
@@ -146,7 +138,19 @@ const CLICKABLE: Record<Workspace, ReadonlySet<NodeType>> = {
     "Vine",
     "Instance",
   ]),
-  formations: new Set<NodeType>(["Node3D", "Formation3D", "Model3D", "Light3D", "Instance"]),
+  // A body too: its Transform and Formation sections are this workspace's,
+  // and a second click goes into it, to the collision a guide is taken from.
+  formations: new Set<NodeType>([
+    "StaticBody2D",
+    "AnimatableBody2D",
+    "RigidBody2D",
+    "Area2D",
+    "Node3D",
+    "Formation3D",
+    "Model3D",
+    "Light3D",
+    "Instance",
+  ]),
   decorations: new Set<NodeType>(["Decoration3D"]),
   texturing: new Set<NodeType>([]),
 };

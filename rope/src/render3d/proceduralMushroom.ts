@@ -6,9 +6,64 @@ let capPaint: THREE.DataTexture | undefined;
 let capDetail: THREE.DataTexture | undefined;
 let capEmission: THREE.DataTexture | undefined;
 
+// THE MUSHROOM'S OWN LIGHT sits inside its cap (`mushroomCapCentre`) and is
+// for what is AROUND it: the mushroom itself glows by its emission alone. So a
+// point light inside the cap neither lights the cap, the rim, the gills or the
+// stem nor is blocked by them, whatever way their faces point (every material
+// here is double sided) and whether or not the light casts shadows. "Inside"
+// is the cap's box in the mushroom's own frame - its width across, from below
+// the gill folds to the crown - so another lamp beside or above the mushroom
+// lights it as any lamp does.
+//
+// The test is the same in both passes: the light's world position carried
+// into the mushroom's frame (`selfFrame`, world to the mushroom's group,
+// refreshed before each draw and each shadow pass), then against the box.
+const SELF_LIGHT_GLSL = /* glsl */ `
+uniform mat4 selfFrame;
+uniform vec3 selfCap;
+bool insideOwnCap( vec3 world ) {
+  vec3 p = ( selfFrame * vec4( world, 1.0 ) ).xyz;
+  return length( p.xz ) <= selfCap.x && p.y >= selfCap.y && p.y <= selfCap.z;
+}
+`;
+const POINT_LIGHT_INFO = "getPointLightInfo( pointLight, geometryPosition, directLight );";
+// The lit pass's point lights are in view space; `viewMatrix` is rigid, so
+// its inverse is the transposed rotation about the translation.
+const SKIP_OWN_LIGHT = `${POINT_LIGHT_INFO}
+    if ( insideOwnCap( transpose( mat3( viewMatrix ) ) * ( pointLight.position - viewMatrix[ 3 ].xyz ) ) ) directLight.color = vec3( 0.0 );`;
+
 /** Organic bell with rounded rim, luminous gills and fibrous stem. */
 export function proceduralMushroom(p: MushroomParameters): THREE.Group {
   const group = new THREE.Group();
+  const selfUniforms = {
+    selfFrame: { value: new THREE.Matrix4() },
+    // Radius across, then the lowest and highest y counted as inside.
+    selfCap: { value: new THREE.Vector3(p.width * .5, -p.capHeight * .5, p.capHeight) },
+  };
+  const refreshFrame = (): void => {
+    selfUniforms.selfFrame.value.copy(group.matrixWorld).invert();
+  };
+  // Every material here compiles the SAME code (three caches a program by
+  // `onBeforeCompile`'s source, so one function making two shaders would hand
+  // one material the other's): emission follows the vertex paint as well as
+  // the body's waking light (inert without vertex colours, as on the cap), and
+  // the mushroom is lit by every light but its own (see SELF_LIGHT_GLSL).
+  const patch = (material: THREE.MeshStandardMaterial): void => {
+    material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n#ifdef USE_COLOR\n totalEmissiveRadiance *= vColor.rgb;\n#endif');
+      Object.assign(shader.uniforms, selfUniforms);
+      const lights = THREE.ShaderChunk.lights_fragment_begin;
+      if (!lights.includes(POINT_LIGHT_INFO)) throw new Error("proceduralMushroom: three's point-light loop changed; the own-light exclusion needs updating");
+      shader.fragmentShader = SELF_LIGHT_GLSL + shader.fragmentShader.replace("#include <lights_fragment_begin>", lights.replace(POINT_LIGHT_INFO, SKIP_OWN_LIGHT));
+    };
+  };
+  // ...and left out of its own light's shadow (a point light's shadow is
+  // drawn with the mesh's distance material, the light at `referencePosition`).
+  const shadowMaterial = new THREE.MeshDistanceMaterial();
+  shadowMaterial.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, selfUniforms);
+    shader.fragmentShader = SELF_LIGHT_GLSL + shader.fragmentShader.replace("void main() {", "void main() {\n\tif ( insideOwnCap( referencePosition ) ) discard;");
+  };
   const purple = new THREE.Color('#a75cc8');
   const cyan = new THREE.Color('#91deed'), dark = new THREE.Color('#293653');
   const lip = Math.min(p.width*.009, p.capHeight*.11, p.stemHeight*.075);
@@ -34,13 +89,15 @@ export function proceduralMushroom(p: MushroomParameters): THREE.Group {
     if (reverse) for (let i = 0; i < indices.length; i += 3) [indices[i], indices[i+1]] = [indices[i+1]!, indices[i]!];
     geometry.setIndex(indices); geometry.computeVertexNormals();
     const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .58, metalness: .05, side: THREE.DoubleSide });
-    // Emission follows the vertex paint as well as the body's waking light.
     material.emissive.set('#ffffff'); material.emissiveIntensity = glow;
-    material.onBeforeCompile = shader => {
-      shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n#ifdef USE_COLOR\n totalEmissiveRadiance *= vColor.rgb;\n#endif');
-    };
+    patch(material);
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.customDistanceMaterial = shadowMaterial;
+    // Before the draw and before a shadow pass, which comes first in a frame.
+    mesh.onBeforeRender = refreshFrame;
+    mesh.onBeforeShadow = refreshFrame;
+    group.add(mesh);
     return mesh;
   }
   const cap = surface(48, 192, (t, a) => {
@@ -50,7 +107,7 @@ export function proceduralMushroom(p: MushroomParameters): THREE.Group {
     return { point: [radius*Math.cos(a)+p.width*.025*crown*crown,
       thickness+(p.capHeight-thickness)*crown+edgeY(a)*r*r,
       radius*Math.sin(a)+p.width*.012*crown*crown], color: purple };
-  }, .65, true);
+  }, 2.2, true);
   // A high-resolution, procedurally painted map keeps circular spots smooth
   // independently of mesh tessellation. Positions are fixed across edits.
   if (!capPaint) {
@@ -93,12 +150,16 @@ export function proceduralMushroom(p: MushroomParameters): THREE.Group {
       paint.lerp(edgeViolet, edgeBlend*(.55+.15*Math.sin(5*angle+.8)+.10*Math.sin(9*angle)));
       paint.multiplyScalar(.94+.10*soft+.035*(tooth-.5)+.025*streak);
       let coverage = 0;
+      // How far each spot's light spreads into the cap around it: 1 at its
+      // edge, falling off over about half its radius.
+      let halo = 0;
       for (const [dx, dy, r] of dots) {
         const a = Math.atan2(v-dy,u-dx);
         const shape = 1+.12*Math.sin(3*a+dx*17)+.07*Math.sin(5*a+dy*13)+.12*(soft-.5);
         const distance = Math.hypot((u-dx)*(1+dy*.3),(v-dy)*(1-dx*.25));
         const edge = THREE.MathUtils.clamp((r*shape-distance)/.025+.5,0,1);
         coverage = Math.max(coverage, edge * edge * (3 - 2 * edge));
+        halo = Math.max(halo, Math.exp(-Math.max(0, distance - r*shape) / (r * .45)));
       }
       paint.lerp(spot, coverage * (.78 + .12*soft));
       const i = (y * size + x) * 4;
@@ -110,9 +171,15 @@ export function proceduralMushroom(p: MushroomParameters): THREE.Group {
       detail[i] = Math.round(90+coverage*80+tooth*16+streak*5);
       detail[i+1] = Math.round(210-coverage*60+tooth*12);
       detail[i+3] = 255;
-      emission[i] = Math.round(coverage*70);
-      emission[i+1] = Math.round(coverage*160);
-      emission[i+2] = Math.round(coverage*190);
+      // The spots are what glow on the cap: a pale cyan core, and around it
+      // a deeper cyan halo where their light spreads into the cap. There is
+      // no bloom pass, so the halo is what makes a spot read as a light
+      // rather than as pale paint. The map is nothing else, so the cap's
+      // emissive intensity is the spots' brightness.
+      const around = halo * (1 - coverage) * .35;
+      emission[i] = Math.round(Math.min(255, coverage*150 + around*40));
+      emission[i+1] = Math.round(Math.min(255, coverage*235 + around*170));
+      emission[i+2] = Math.round(Math.min(255, coverage*255 + around*255));
       emission[i+3] = 255;
     }
     const makeTexture = (data: Uint8Array) => {
@@ -155,6 +222,8 @@ export function proceduralMushroom(p: MushroomParameters): THREE.Group {
   rim.material.dispose();
   rim.material = cap.material.clone();
   rim.material.emissiveIntensity = 0;
+  // A clone does not carry `onBeforeCompile`.
+  patch(rim.material);
   // Average the join normals so the edge does not read as a separate trim.
   const capNormals = cap.geometry.getAttribute('normal');
   const rimNormals = rim.geometry.getAttribute('normal');
@@ -174,7 +243,9 @@ export function proceduralMushroom(p: MushroomParameters): THREE.Group {
     const fold = Math.sin(t*Math.PI);
     return { point: [radius*Math.cos(a),-thickness+edgeY(a)*t*t-lip*4.6*ridge*fold,radius*Math.sin(a)],
       color: dark.clone().lerp(cyan,.18+.65*ridge*fold) };
-  },.8);
+  // The gills glow by their paint: the cyan ridges bright, the dark troughs
+  // between them barely, so the folds read in light of their own.
+  },2);
   surface(40,64,(t,a) => {
     const fiber = Math.sin(a*27+t*7)*Math.sin(a*11-t*13);
     const radius = p.width*(.026+.022*(1-t)**5+.038*t**8)*(1+.008*fiber+.025*Math.sin(a*3+t*4));
