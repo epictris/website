@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory() as directory:
         model_preview.read_river = read
 
     # Exercise the existing linked-guide lighting path with a tiny library.
-    builder = emission_preview.module('scene_guide')
+    builder = emission_preview.module('game_lighting')
     guide_world, guide_lights = builder.build_lighting(job)
     cam = bpy.data.objects.new('guide.camera', bpy.data.cameras.new('guide.camera'))
     cam['game_fps'], cam['game_frames'] = 60, 1

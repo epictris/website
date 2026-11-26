@@ -26,7 +26,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Recording } from "../src/sim/trace";
-import type { RawLevelData } from "../src/level/levelFormat";
+import { flatLevelOf, type LevelSource } from "../src/level/levelFormat";
 import type { ArrivalStream } from "../src/level/arrivals";
 
 // WHERE THE STREAM IS CUT: an arrival ends when the ball in it stops moving,
@@ -58,7 +58,9 @@ if (!bundlePath || !levelFile) {
 const name = nameArg ?? levelFile;
 
 const rec = JSON.parse(readFileSync(bundlePath.replace(/^~/, process.env.HOME ?? "~"), "utf8")) as Recording;
-const level = JSON.parse(readFileSync(join(root, "levels", `${levelFile}.json`), "utf8")) as RawLevelData;
+// The flat form the file compiles to, which is what a bundle embeds
+// (`flatLevelOf`, src/sim/record.ts): the two are compared field by field.
+const level = flatLevelOf(JSON.parse(readFileSync(join(root, "levels", `${levelFile}.json`), "utf8")) as LevelSource);
 
 if (rec.controller !== "ball") {
   console.error(`[arrival] ${bundlePath} was recorded with the ${rec.controller ?? "grapple"} controller.`);
@@ -80,7 +82,7 @@ const json = (v: unknown): string => JSON.stringify(v);
 const fields = new Set([...Object.keys(recorded), ...Object.keys(level)]);
 fields.delete("player");
 const differs = [...fields].filter(
-  (k) => json((recorded as Record<string, unknown>)[k]) !== json((level as Record<string, unknown>)[k]),
+  (k) => json((recorded as unknown as Record<string, unknown>)[k]) !== json((level as unknown as Record<string, unknown>)[k]),
 );
 if (differs.length > 0) {
   console.error(

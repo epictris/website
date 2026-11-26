@@ -1,5 +1,7 @@
 # The backdrop
 
+**Retired 2026-11-26 with the Blender scenes** ([blender-scenes](blender-scenes.md)): no level is dressed by a scene any more, and a backdrop is made in the level editor as top-level `Formation3D` nodes ([formations](formations.md#in-the-editor)); this page is kept for its lessons.
+
 **Current workflow (2026-11-21):** solid formations now build full-detail masters without camera-dependent stone sizes, depth floors or construction LOD. Assemble them in the authoring scene and use [Build Export Scene](blender-formations.md#asset-masters-and-export-scenes) to derive simpler geometry or baked wall surfaces. The depth-budget sections below record the previous implementation. Existing meshes remain as authored until explicitly regenerated.
 
 Since 2026-10-04 a level's Blender scene can hold a **backdrop**: the far scenery the player sees behind the gameplay, stones cut from closed guide meshes kept in the scene itself.
@@ -235,7 +237,7 @@ The export divides its texel density by it, and its largest map too (4096 over t
 The game focuses 1.5 m behind the gameplay plane and blurs a point at depth d into a circle of `DOF_MAX_BLUR x (1 - s / d)` of the frame's height as a radius (`src/render3d/depthOfField.ts`); the frame is `2 d tanHalf` tall there, so on the rock the blur is a disc `4 DOF_MAX_BLUR tanHalf (d - s)` across, straight with the depth past the focus (`render.detail_blur`).
 The rock's depth is its LOD scale: its detail scale less one, times the start camera's distance from the plane.
 Each pass leaves out the features narrower than that disc (a chip by its wider side, a plane whose sub-facet grid is finer, a bow under it, a strip narrower), and is off altogether once its largest is (`render.LARGEST`: strips 8 cm, bows 20 cm, chips and sub-facets 20 cm); at High, with the river's 70 mm lens, that is 1 cm of blur 0.9 m past the focus, 8 cm at 7.3 m and 20 cm at 18 m.
-`scripts/scene-export.ts` reads the High numbers from the game and the export refuses to run if `formations/render.py`'s copy (which the panel's Render fields show from) differs; the bake cache keys each rock on its blur, so a change rebakes only the rocks it moves.
+The export (`scripts/blendExport.ts`, `scripts/scene-export.ts` until the scenes were retired on 2026-11-26) reads the High numbers from the game, and the export refuses to run if `formations/render.py`'s copy (which the panel's Render fields show from) differs (`SCENE_EXPORT_DOF`, `render.check_dof`); the bake cache keys each rock on its blur, so a change rebakes only the rocks it moves.
 A rock's own Chamfer strips, Curved creases or Chips and sub-facets setting overrides it: set on, its pass runs in full.
 Before, the passes ran only on the plane (a detail scale of 1: 30 to 45 m back they are a pixel or two, and on the backdrop's 155k recipe F faces they held the export for over half an hour), and a solid formation never had the creases and chips (the river's recipe F Cube spent 747 s of a 1330 s export on its 2714 creases and 1630 chips).
 The stones worked as the boulder's top are far coarser: Cube.001 has 155 creases and 251 chips at its depth.

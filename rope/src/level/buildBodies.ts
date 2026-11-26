@@ -883,6 +883,11 @@ function authoredRoute(b: LevelBodyData): {
   };
 }
 
+// The node path each engine body was built from (`LevelBodyData.node`), for
+// the tools that print a body beside its build index. A bending root's segment
+// bodies carry their root's. Never read by the sim.
+export const bodyNodePaths = new WeakMap<CollisionObject2D, string>();
+
 // `data` must already be in metres (scaleLevelData(_, PX)). `onReset` fires when
 // the avatar enters a killzone, and `onFinish` when it enters a finish line.
 //
@@ -933,6 +938,7 @@ export function buildLevelBodies(
     const built = buildOne(world, b, pieces, onReset, onFinish);
     const made = bent ? buildBentRoot(world, b, built, bent, rootUnits) : null;
     const segments = made?.segments ?? [];
+    if (b.node) for (const engineBody of [built, ...segments]) bodyNodePaths.set(engineBody, b.node.path);
     if (!bent) attachRails(built, pieces);
     attachBelts(built, pieces);
     if (built instanceof ConveyorBody) belts.push(built);

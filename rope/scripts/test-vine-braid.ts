@@ -11,9 +11,9 @@ import { VineLeafLag } from "../src/render3d/vineLeafLag";
 import { VINE_VISUAL_RADIUS } from "../src/level/vines";
 import { VineLayer } from "../src/render3d/vineVisual";
 import type { VineTube } from "../src/render3d/vineTube";
-import { modelFromDisk, modelToDisk, cloneVine, ED_LAYERS } from "../src/editor/model";
+import { modelFromDisk, modelToFlatDisk, cloneVine, ED_LAYERS } from "../src/editor/model";
 import { Guides } from "../src/editor/visuals/guides";
-import { scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
+import { scaleLevelData, type LevelSource, type RawLevelData } from "../src/level/levelFormat";
 import { BallLevel } from "../src/level/ballLevel";
 import { emptyFrameInput } from "../src/input/frameInput";
 import ball from "../levels/ball.json";
@@ -283,7 +283,7 @@ assert.ok(lag.offset.length() < 1e-7, "leaf settles after motion ends");
 root.x += 10; lag.update(root, 181 / 60, .2); assert.equal(lag.offset.length(), 0, "teleports reset secondary motion");
 lag.update(root, 0, .2); assert.equal(lag.offset.length(), 0, "replay seeks reset secondary motion");
 
-const model = modelFromDisk(ball);
+const model = modelFromDisk(ball as LevelSource);
 // The shipped level includes a huge scene object; Visuals must frame its
 // vines without trying to allocate millions of grid lines.
 const guides = new Guides();
@@ -298,7 +298,7 @@ assert.ok(gridLines > 0 && gridLines <= 6002, "Visuals grid remains bounded");
 guides.dispose();
 model.vines[0]!.braidSeed = 0;
 model.vines[1]!.braidSeed = 1701;
-const saved = modelToDisk(model), loaded = modelFromDisk(saved);
+const saved = modelToFlatDisk(model), loaded = modelFromDisk(saved);
 assert.equal(loaded.vines[0]!.braidSeed, 0, "zero is a valid seed and survives a save");
 assert.equal(loaded.vines[1]!.braidSeed, 1701, "a second braid survives a reload");
 const scaled = scaleLevelData(scaleLevelData(saved, PX), PIXELS_PER_METER);
@@ -389,10 +389,10 @@ spanLayer.dispose();
 // Rope: the braid's seed drawn as laid rope (`VineData.rope`). Render-only like
 // the seed: it survives save/load and scaling, means nothing without a seed,
 // can change under a live layer, grows no leaves and never reaches the sim.
-const ropeModel = modelFromDisk(ball);
+const ropeModel = modelFromDisk(ball as LevelSource);
 ropeModel.vines[0]!.braidSeed = 1701; ropeModel.vines[0]!.rope = true;
 ropeModel.vines[1]!.braidSeed = null; ropeModel.vines[1]!.rope = true;
-const ropeSaved = modelToDisk(ropeModel), ropeLoaded = modelFromDisk(ropeSaved);
+const ropeSaved = modelToFlatDisk(ropeModel), ropeLoaded = modelFromDisk(ropeSaved);
 assert.equal(ropeLoaded.vines[0]!.rope, true, "a rope survives a save");
 assert.equal(ropeSaved.vines![1]!.rope, undefined, "a plain vine saves no rope look");
 assert.equal(ropeLoaded.vines[1]!.rope, false, "a plain vine loads as no rope");

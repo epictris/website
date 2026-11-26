@@ -2,7 +2,7 @@
 // curve the branch collides as (docs/roots.md).
 //
 // A root is the one piece of level geometry whose look the level states rather
-// than its Blender scene, for the reason a belt's band is: it is GENERATED from
+// than a Blender export, for the reason a belt's band is: it is GENERATED from
 // what the author draws - a branch at a time, each tapering from its base to
 // its tip - and a sprung root moves with the sim, so a mesh modelled by hand
 // would have to be modelled again for every curve the author pulls about.

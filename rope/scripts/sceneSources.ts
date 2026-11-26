@@ -1,14 +1,14 @@
-// The SOURCES of the Blender scenes and models: the `.blend` files under
-// `assets-src/` and the pictures their tools paint with. The game never loads
-// one - it loads the exported `scene.glb` and `model.glb`
-// (`scripts/publish-scenes.ts`, `scripts/publish-models.ts`) - but a `.blend`
-// is the only copy of how its look was made, and before these were pinned it
-// was lost with the machine that made it.
+// The SOURCES of the Blender models (and of the retired Blender scenes,
+// docs/blender-scenes.md): the `.blend` files under `assets-src/` and the
+// pictures their tools paint with. The game never loads one - it loads the
+// exported `model.glb` (`scripts/publish-models.ts`) - but a `.blend` is the
+// only copy of how its look was made, and before these were pinned it was lost
+// with the machine that made it.
 //
 // They live in the same release store as every other binary, and for the same
 // reason (docs/asset-store.md: deletable, never in git history), under a name
 // of their own - `source-<path with "/" as "-">` - and are REPLACED IN PLACE on
-// publish, as scenes are: a source is saved again and again while it is
+// publish, as models are: a source is saved again and again while it is
 // worked on, and a name per save would keep every draft for ever. The pin in
 // `scripts/sceneSources.json` (sha256 + bytes, keyed by the path under
 // `assets-src/`) is what says which save a commit meant.
@@ -17,11 +17,11 @@
 //   bun run assets:fetch-sources                (`just sources`)
 //
 // The build does not fetch them: a deploy draws exports, never sources, and a
-// scene's `.blend` is tens of megabytes it has no use for.
+// `.blend` is megabytes it has no use for.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { ASSET_REPO, ASSET_TAG, levelsModelNames, levelsSceneNames } from "./assetStore";
+import { ASSET_REPO, ASSET_TAG, levelsModelNames } from "./assetStore";
 
 export const ROOT = resolve(import.meta.dirname, "..");
 export const SOURCES_DIR = join(ROOT, "assets-src");
@@ -52,11 +52,8 @@ export function sourceKey(path: string): string {
   return rel;
 }
 
-// The `.blend` of every scene a registered level names, and of every model
-// its bodies carry: always a source.
-export function levelSceneSources(): string[] {
-  return [
-    ...[...levelsSceneNames().keys()].map((scene) => `scenes/${scene}.blend`),
-    ...[...levelsModelNames().keys()].map((model) => `models/${model}.blend`),
-  ];
+// The `.blend` of every model a registered level's bodies carry: always a
+// source.
+export function levelModelSources(): string[] {
+  return [...levelsModelNames().keys()].map((model) => `models/${model}.blend`);
 }

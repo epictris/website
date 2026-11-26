@@ -1,16 +1,16 @@
-// Upload the Blender scenes' sources to the release store and pin them in
+// Upload the Blender sources to the release store and pin them in
 // `scripts/sceneSources.json` (see `scripts/sceneSources.ts` for what a source
 // is and why it is stored).
 //
 //   bun run assets:publish-sources [path ...]   (part of `just publish`)
 //
-// Publishes the `.blend` of every scene a registered level names, every source
-// already pinned, and any further path given (under `assets-src/`, e.g.
+// Publishes the `.blend` of every model a registered level carries, every
+// source already pinned, and any further path given (under `assets-src/`, e.g.
 // `scenes/textures/soft-moss-v2.png`), each only when this machine's copy
 // differs from its pin. A pinned source missing here is fine as long as the
-// release holds it (a checkout that never fetched it); a scene a level names
-// with no source here and none in the store is a failure, because its
-// dressing could not be made again.
+// release holds it (a checkout that never fetched it); a model a level carries
+// with no source here and none in the store is a failure, because its look
+// could not be made again.
 
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ASSET_REPO, ASSET_TAG, sha256 } from "./assetStore";
 import {
-  levelSceneSources,
+  levelModelSources,
   MANIFEST,
   readManifest,
   sourceKey,
@@ -28,7 +28,7 @@ import {
 
 const manifest = readManifest();
 const paths = [
-  ...new Set([...levelSceneSources(), ...Object.keys(manifest), ...process.argv.slice(2).map(sourceKey)]),
+  ...new Set([...levelModelSources(), ...Object.keys(manifest), ...process.argv.slice(2).map(sourceKey)]),
 ].sort();
 
 if (spawnSync("which", ["gh"]).status !== 0) {

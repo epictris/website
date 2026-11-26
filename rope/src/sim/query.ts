@@ -28,6 +28,7 @@ import { RopeWrap } from "../lib/ropeContact";
 import { BallHook } from "../classes/ballHook";
 import { WrapDirection } from "../lib/types";
 import { BallLevel } from "../level/ballLevel";
+import { bodyNodePaths } from "../level/buildBodies";
 import type { Rope } from "../classes/rope";
 
 export interface ShapeView {
@@ -47,6 +48,9 @@ export interface EmbedView {
 export interface BodyView {
   id: number; // build-order index (see CollisionObject2D.buildIndex)
   name: string;
+  // The level node it was built from (`bodyNodePaths`), null for what the
+  // level did not author: the avatar, chain links, debris.
+  node: string | null;
   type: string; // class name — RigidBody2D, BallPlayer, StaticBody2D, …
   px: number;
   py: number;
@@ -257,6 +261,7 @@ function bodyViews(world: World): BodyView[] {
     out.push({
       id: bodyId(body, i),
       name: body.name,
+      node: bodyNodePaths.get(body) ?? null,
       type: body.constructor.name,
       px: body.globalPosition.x,
       py: body.globalPosition.y,

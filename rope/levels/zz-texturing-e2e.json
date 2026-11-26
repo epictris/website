@@ -1,97 +1,31 @@
 {
+  "format": 3,
   "meta": {
     "unlisted": true
   },
-  "format": 2,
-  "player": {
-    "x": -300,
-    "y": -20,
-    "radius": 8
-  },
-  "bodies": [
+  "nodes": [
     {
-      "kind": "static",
-      "x": 0,
-      "y": 0,
-      "rot": 0,
+      "type": "Spawn2D",
+      "id": "x57iw68j",
+      "name": "Spawn",
+      "x": -300,
+      "y": -20,
+      "radius": 8
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "lfaf1qj4",
+      "name": "StaticBody2D",
+      "order": 0,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "formation": {
-        "id": "zztexrock",
-        "generator": "fitted",
-        "params": {
-          "seed": 3
-        },
-        "guide": {
-          "kind": "collision",
-          "pieces": [
-            {
-              "x": 0,
-              "y": 0,
-              "shape": {
-                "kind": "poly",
-                "verts": [
-                  {
-                    "x": 0,
-                    "y": 0
-                  },
-                  {
-                    "x": 80,
-                    "y": 0
-                  },
-                  {
-                    "x": 80,
-                    "y": 160
-                  },
-                  {
-                    "x": 240,
-                    "y": 160
-                  },
-                  {
-                    "x": 240,
-                    "y": 240
-                  },
-                  {
-                    "x": 0,
-                    "y": 240
-                  }
-                ]
-              },
-              "piece": {}
-            }
-          ]
-        },
-        "built": {
-          "hash": "b7a50642f1ced6b1a73d2b63093fc4fa4cb1eef0489fc59da1b1b9aaf23ed147",
-          "front": 0.4751,
-          "generatorHash": "ffbf2ed5844e743a357050ac951552da9ba1671200b2400e10c823899738a2e5",
-          "recipeVersion": 2,
-          "tiers": [
-            {
-              "triangles": 7768,
-              "colour": 2048,
-              "normal": 1024,
-              "bytes": 485888
-            },
-            {
-              "triangles": 1942,
-              "colour": 1024,
-              "normal": 512,
-              "bytes": 241156
-            },
-            {
-              "triangles": 1192,
-              "colour": 512,
-              "normal": 256,
-              "bytes": 122536
-            }
-          ]
-        }
-      },
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "2ejowb6k",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -126,55 +60,131 @@
           }
         },
         {
-          "type": "decoration",
-          "id": "material-fg0x0",
-          "kind": "material",
-          "formation": "zztexrock",
-          "anchor": {
-            "p": [
-              40.000000000000014,
-              -120,
-              52.49999761581421
-            ],
-            "n": [
-              0,
-              0,
-              1
-            ]
-          },
-          "onRock": {
-            "p": [
-              40.000000000000014,
-              -120,
-              30.138557608453446
-            ],
-            "n": [
-              0.24207712891256183,
-              -0.2297693634188549,
-              0.9426583173618877
-            ]
-          },
-          "seed": 65602,
-          "settings": {
-            "material": "dirt"
+          "type": "Formation3D",
+          "id": "zztexrock",
+          "name": "Formation",
+          "generator": "fitted",
+          "params": {
+            "seed": 3
           },
           "built": {
-            "hash": "afb709c982b01891141b243be988a33f52b2a16aaf75e8fbda9defac759daf07",
-            "host": "b7a50642f1ced6b1a73d2b63093fc4fa4cb1eef0489fc59da1b1b9aaf23ed147",
-            "at": {
-              "p": [
-                40.000000000000014,
-                -120,
-                30.138557608453446
-              ],
-              "n": [
-                0.24207712891256183,
-                -0.2297693634188549,
-                0.9426583173618877
-              ]
-            },
-            "maps": "5c96155a903d5a393af17a33af0fc962004d8be9b59cf56076f5a5c8ca6fcece"
-          }
+            "hash": "b7a50642f1ced6b1a73d2b63093fc4fa4cb1eef0489fc59da1b1b9aaf23ed147",
+            "front": 0.4751,
+            "generatorHash": "ffbf2ed5844e743a357050ac951552da9ba1671200b2400e10c823899738a2e5",
+            "recipeVersion": 2,
+            "tiers": [
+              {
+                "triangles": 7768,
+                "colour": 2048,
+                "normal": 1024,
+                "bytes": 485888
+              },
+              {
+                "triangles": 1942,
+                "colour": 1024,
+                "normal": 512,
+                "bytes": 241156
+              },
+              {
+                "triangles": 1192,
+                "colour": 512,
+                "normal": 256,
+                "bytes": 122536
+              }
+            ]
+          },
+          "guide": {
+            "kind": "collision",
+            "pieces": [
+              {
+                "x": 0,
+                "y": 0,
+                "shape": {
+                  "kind": "poly",
+                  "verts": [
+                    {
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "x": 80,
+                      "y": 0
+                    },
+                    {
+                      "x": 80,
+                      "y": 160
+                    },
+                    {
+                      "x": 240,
+                      "y": 160
+                    },
+                    {
+                      "x": 240,
+                      "y": 240
+                    },
+                    {
+                      "x": 0,
+                      "y": 240
+                    }
+                  ]
+                },
+                "piece": {}
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "Decoration3D",
+              "id": "material-fg0x0",
+              "name": "Material",
+              "kind": "material",
+              "anchor": {
+                "p": [
+                  40.000000000000014,
+                  -120,
+                  52.49999761581421
+                ],
+                "n": [
+                  0,
+                  0,
+                  1
+                ]
+              },
+              "onRock": {
+                "p": [
+                  40.000000000000014,
+                  -120,
+                  30.138557608453446
+                ],
+                "n": [
+                  0.24207712891256183,
+                  -0.2297693634188549,
+                  0.9426583173618877
+                ]
+              },
+              "seed": 65602,
+              "settings": {
+                "material": "dirt"
+              },
+              "built": {
+                "hash": "afb709c982b01891141b243be988a33f52b2a16aaf75e8fbda9defac759daf07",
+                "host": "b7a50642f1ced6b1a73d2b63093fc4fa4cb1eef0489fc59da1b1b9aaf23ed147",
+                "at": {
+                  "p": [
+                    40.000000000000014,
+                    -120,
+                    30.138557608453446
+                  ],
+                  "n": [
+                    0.24207712891256183,
+                    -0.2297693634188549,
+                    0.9426583173618877
+                  ]
+                },
+                "maps": "5c96155a903d5a393af17a33af0fc962004d8be9b59cf56076f5a5c8ca6fcece"
+              }
+            }
+          ]
         }
       ]
     }

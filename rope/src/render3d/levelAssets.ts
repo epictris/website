@@ -1,7 +1,7 @@
 // What a level will download, worked out from the level data alone.
 //
 // This is the same question `Scene3D.setLevel` answers by BUILDING the scene -
-// the Blender scene, the sky, the avatar, the water maps, a belt's surface -
+// the sky, the avatar, the models, the water maps, a belt's surface -
 // asked without a canvas, a GPU or a body. It exists because the answer is
 // needed before any of that: the preload list inlined into `index.html` (see
 // `preloadManifest` in vite.config.ts) is what lets the page start fetching at
@@ -20,13 +20,12 @@
 // resolve each name exactly as the renderer's own `surfaceName` does, and let
 // the set do the deduplicating.
 
-import type { RawLevelData } from "../level/levelFormat";
+import type { LevelSource, RawLevelData } from "../level/levelFormat";
 import { normalizeLevelData, scaleLevelData } from "../level/levelFormat";
 import { PX } from "../engine/units";
 import { rootMeshKey } from "./rootKey";
 import rootBakes from "./rootBakes.json";
-import { SCENE_ASSETS, sceneFile } from "./scenes";
-import { modelMeta, sceneMeta } from "./sceneMeta";
+import { modelMeta } from "./modelMeta";
 import { MODEL_ASSETS, modelFile } from "./models";
 import { formationServedFile } from "../formation/bundle";
 import {
@@ -47,24 +46,10 @@ export interface StoredFile {
   bytes: number;
 }
 
-// The Blender scene the level is dressed in, or undefined (see `LevelData.scene`).
-export function levelSceneName(raw: RawLevelData): string | undefined {
-  return normalizeLevelData(raw).scene || undefined;
-}
-
-// A scene's file for the preloader. Its weight is the published pin's, or the
-// local export's `meta.json` for a scene exported here and not yet published,
+// A model's file for the preloader. Its weight is the published pin's, or the
+// local export's `meta.json` for a model exported here and not yet published,
 // or 0 with a warning for one with neither: a 0 is otherwise a silent wrong
 // answer, and it only means the bar does not count the file.
-function sceneStoredFile(scene: string): StoredFile {
-  const bytes = SCENE_ASSETS[scene]?.bytes ?? sceneMeta(scene)?.bytes;
-  if (bytes === undefined) {
-    console.warn(`[levelAssets] scene "${scene}" is not in the store and has no meta.json; preloading ${sceneFile(scene)} unweighted`);
-  }
-  return { file: sceneFile(scene), bytes: bytes ?? 0 };
-}
-
-// A model's file for the preloader, weighed as a scene's is (`sceneStoredFile`).
 function modelStoredFile(model: string): StoredFile {
   const bytes = MODEL_ASSETS[model]?.bytes ?? modelMeta(model)?.bytes;
   if (bytes === undefined) {
@@ -75,7 +60,7 @@ function modelStoredFile(model: string): StoredFile {
 
 // The file each of the level's built formations draws (`formationServedFile`),
 // each once.
-export function levelFormationFiles(raw: RawLevelData): StoredFile[] {
+export function levelFormationFiles(raw: LevelSource): StoredFile[] {
   const out = new Map<string, StoredFile>();
   for (const body of normalizeLevelData(raw).bodies) {
     const served = body.formation ? formationServedFile(body.formation) : null;
@@ -85,7 +70,7 @@ export function levelFormationFiles(raw: RawLevelData): StoredFile[] {
 }
 
 // Every model the level's bodies carry, by name, each once, in authored order.
-export function levelModelNames(raw: RawLevelData): string[] {
+export function levelModelNames(raw: LevelSource): string[] {
   const names = new Set<string>();
   for (const body of normalizeLevelData(raw).bodies) {
     for (const object of body.objects) if (object.type === "model") names.add(object.model);
@@ -95,7 +80,7 @@ export function levelModelNames(raw: RawLevelData): string[] {
 
 // The pinned root bake (`rootBakes.json`) holding any of this level's root
 // bodies, by their keys, which are of the level in metres.
-export function rootBakeOfLevel(raw: RawLevelData): StoredFile | undefined {
+export function rootBakeOfLevel(raw: LevelSource): StoredFile | undefined {
   const keys = new Set(scaleLevelData(raw, PX).bodies.map(rootMeshKey).filter(Boolean));
   if (!keys.size) return undefined;
   const bakes: Record<string, { file: string; bytes: number; keys: string[] }> = rootBakes;
@@ -103,10 +88,10 @@ export function rootBakeOfLevel(raw: RawLevelData): StoredFile | undefined {
 }
 
 // Every stored file the 3D scene will request for this level, in roughly the
-// order it will request them - the sky and the avatar first, then the scene,
-// then what the bodies draw themselves - so a connection that cannot carry all
+// order it will request them - the sky and the avatar first, then the models
+// and formations, then what the bodies draw themselves - so a connection that cannot carry all
 // of it at once carries the most visible parts first.
-export function levelStoredFiles(raw: RawLevelData, controller?: string): StoredFile[] {
+export function levelStoredFiles(raw: LevelSource, controller?: string): StoredFile[] {
   // Normalised, not scaled: the units are irrelevant here, and the retired forms
   // only read as the level they now are on the way through this gate.
   const data = normalizeLevelData(raw);
@@ -136,9 +121,7 @@ export function levelStoredFiles(raw: RawLevelData, controller?: string): Stored
   // `BallVisual` and so fetches no ball. It is named right after the sky
   // because it is what the player is looking at.
   if (controller === "ball") add(MESH_ASSETS[BALL_MESH]);
-  // The Blender scene is what a level looks like, and one file.
-  if (data.scene) add(sceneStoredFile(data.scene));
-  // ...and the models its bodies carry are the rest of its look.
+  // The models its bodies carry are what the level looks like...
   for (const model of levelModelNames(raw)) add(modelStoredFile(model));
   // ...and its generated formations, each the one file it draws
   // (docs/formations.md): a baked tier weighs what its bake recorded, an

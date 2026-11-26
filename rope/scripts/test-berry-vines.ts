@@ -16,8 +16,8 @@ import { Vec2 } from "../src/engine/vec2";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, VineLink } from "../src/engine/body";
 import { PlantUnit, SpringRow } from "../src/level/plantRows";
 import { button, emptyFrameInput } from "../src/input/frameInput";
-import { cloneVine, modelFromDisk, modelToDisk, vineRestPath } from "../src/editor/model";
-import { scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
+import { cloneVine, modelFromDisk, modelToFlatDisk, vineRestPath } from "../src/editor/model";
+import { flatLevelOf, scaleLevelData, type LevelSource, type RawLevelData } from "../src/level/levelFormat";
 import {
   MAX_BERRY_RADIUS,
   MAX_STALK,
@@ -44,7 +44,9 @@ import { stemFraction } from "../src/render/starberryArt";
 import { checkBallInvariants, worldDigestBall } from "../src/sim/trace";
 import rawJson from "../levels/berry-test.json";
 
-const raw = rawJson as RawLevelData;
+// The flat form the level compiles to, in the file's pixels: what the cases
+// below reach into (`vines`, `bodies`, `player`) and edit before building.
+const raw = flatLevelOf(rawJson as LevelSource);
 const rounded = (value: unknown): unknown =>
   JSON.parse(JSON.stringify(value, (_key, v) => (typeof v === "number" ? Math.round(v * 1e9) / 1e9 : v)));
 
@@ -94,7 +96,7 @@ const placedAlong = inAlong(placedRaw);
   assert.deepEqual(rounded(scaleLevelData(bare, 0.01).vines![0]!.starberry!.along), [0.952, 1.972, 2.992]);
   const model = modelFromDisk(placedRaw);
   assert.deepEqual(
-    rounded(modelToDisk(model).vines!.map((v) => v.starberry)),
+    rounded(modelToFlatDisk(model).vines!.map((v) => v.starberry)),
     rounded(placedAlong.vines!.map((v) => v.starberry)),
   );
   const clone = cloneVine(model.vines[0]!);
@@ -207,8 +209,8 @@ console.log("PASS only the berries catch the hook");
   // The numbers survive the editor's round trip, scaled by nothing.
   const model = modelFromDisk(heavy);
   assert.equal(model.vines[0]!.starberry!.berryDensity, 2000);
-  assert.equal(modelToDisk(model).vines![0]!.starberry!.berryDensity, 2000);
-  assert.equal(modelToDisk(model).vines![0]!.starberry!.stalkDensity, 20);
+  assert.equal(modelToFlatDisk(model).vines![0]!.starberry!.berryDensity, 2000);
+  assert.equal(modelToFlatDisk(model).vines![0]!.starberry!.stalkDensity, 20);
   assert.equal(DEFAULT_BERRY_DENSITY, 640);
   assert.equal(DEFAULT_STALK_DENSITY, 8.3);
 }
@@ -250,8 +252,8 @@ console.log("PASS berry and stem masses: defaults, authored, built, round-trippe
   // file that never said it stays without it.
   const model = modelFromDisk(stretched);
   assert.equal(model.vines[0]!.starberry!.stretch, 0.25);
-  assert.equal(modelToDisk(model).vines![0]!.starberry!.stretch, 0.25);
-  assert(!("stretch" in modelToDisk(modelFromDisk(structuredClone(placedRaw))).vines![0]!.starberry!), "unauthored stretch stays absent");
+  assert.equal(modelToFlatDisk(model).vines![0]!.starberry!.stretch, 0.25);
+  assert(!("stretch" in modelToFlatDisk(modelFromDisk(structuredClone(placedRaw))).vines![0]!.starberry!), "unauthored stretch stays absent");
   assert.equal(DEFAULT_STALK_STRETCH, 0.5);
 }
 console.log("PASS the stalk's stretch: capped at reach plus the fraction, invariant follows, round-tripped");
@@ -567,7 +569,7 @@ const BALL_LEGS: readonly (readonly [number, number])[] = [
 // BALL with the ball placed `below` metres under one of its berries, and a
 // feed that holds fire with the aim wherever it is told.
 function underBerry(plant: number, which: number, below: number) {
-  const level = new BallLevel(structuredClone(ballJson) as RawLevelData);
+  const level = new BallLevel(flatLevelOf(structuredClone(ballJson) as LevelSource));
   const berry = level.vines.filter((v) => v.starberry)[plant]!.berries[which]!;
   const rest = berry.fruit.globalPosition;
   level.ball.globalPosition = rest.add(new Vec2(0, below));
@@ -678,7 +680,7 @@ console.log("PASS a berry cannot be whipped into a slingshot, and never spins");
 // sweep's cord 7 to 14 cm shorter for a second, and the rows' within 16 mm.
 {
   const measure = (plant: number, which: number): { back: number; unit: boolean; after: boolean } => {
-    const data = structuredClone(ballJson) as RawLevelData;
+    const data = flatLevelOf(structuredClone(ballJson) as LevelSource);
     for (const v of data.vines ?? []) {
       if (!v.starberry) continue;
       v.starberry.sway = 0.5;

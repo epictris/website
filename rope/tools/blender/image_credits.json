@@ -1,5 +1,5 @@
 {
-  "_comment": "Where every image a Blender scene ships comes from. The scene exporter (scene_export.py) looks each packed/linked image up by name (Blender's .001 suffix ignored); a credit lands in the export's meta, is pinned by `just publish` in src/render3d/sceneAssets.json and listed in CREDITS.md; `generated` names the script that made an original image, which needs no credit. An image not listed here is an export warning. A mesh that is someone else's model names its sets in the object's `credits` custom property (comma-separated), which is how a model's credit survives with no image to find it by.",
+  "_comment": "Where every image a Blender export ships comes from. The exporter (scene_export.py) looks each packed/linked image up by name (Blender's .001 suffix ignored); a credit lands in the export's meta, is pinned by `just publish` in src/render3d/modelAssets.json and listed in CREDITS.md; `generated` names the script that made an original image, which needs no credit. An image not listed here is an export warning. A mesh that is someone else's model names its sets in the object's `credits` custom property (comma-separated), which is how a model's credit survives with no image to find it by.",
   "images": {
     "Mushroom painted cap": { "generated": "tools/blender/mushrooms/build_bouncy_mushroom.py" },
     "moss-grass05-base.png": "grass_05",

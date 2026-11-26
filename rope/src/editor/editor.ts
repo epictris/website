@@ -1,5 +1,5 @@
 import { mushroomParameters, type MushroomParameters } from "../level/mushroom";
-import { resizeMushroom } from "./model";
+import { propsOf, resizeMushroom } from "./model";
 // Level editor. Owns its own canvas loop and DOM overlay (toolbar + inspector),
 // manipulates an EdModel with the mouse, tests the scene with either controller,
 // and saves/loads levels from disk through the dev-server API.
@@ -14,7 +14,7 @@ import { BALL_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/
 import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
 import { DEPTH_OF_FIELD_LEVELS } from "../render/settings";
 import { attachProjector, ProjectedContext, ViewProjector } from "./projectedCanvas";
-import { body3dLift, itemMatrix, setBody3dResolver } from "./space3d";
+import { itemMatrix, planeMatrix, poseMatrix } from "./space3d";
 import {
   CameraController,
   REGION_EXIT_MARGIN,
@@ -72,6 +72,7 @@ import {
   moveModeEases,
   type MoveMode,
   spawnWithoutEntry,
+  loadLevelTree,
 } from "../level/levelFormat";
 import { LAYER_ROPE, MASK_ALL } from "../engine/body";
 import { moveAngleAt } from "../level/movers";
@@ -135,6 +136,7 @@ import {
   defaultLight,
   modelFromDisk,
   modelToDisk,
+  modelToFlatDisk,
   toLevelData,
   newBodyId,
   NOTE_ARROW_BAND,
@@ -157,7 +159,6 @@ import {
   selectionCentre,
   settledGhosts,
   type SettleGhost,
-  pinBodyFrame,
   originToCentroid,
   setArrowEnds,
   shapeMass,
@@ -186,12 +187,11 @@ import {
   toLocal,
   centreShapeOrigin,
   scaleShape,
-  syncBodyProps,
+  relink,
   toWorld,
   worldVertices,
   type EdChain,
   type EdVine,
-  type EdBody3d,
   type EdBodyFrame,
   type EdItem,
   type EdLight,
@@ -207,11 +207,29 @@ import {
   routeOf,
   routeWorldPoints,
   type SceneTag,
+  setNodeWorld,
+  worldOfNode,
+  reconcileTree,
+  graftModel,
+  subModel,
+  membersOf,
+  moveNode,
+  addItem,
+  addFrameNode,
+  blankItem,
+  defaultBody,
+  bodyNodeType,
+  WORLD_ORIGIN,
+  type World3,
+  modelFromTree,
+  toTree,
 } from "./model";
 import { pickTagOf } from "../render3d/bodyVisuals";
 import { paintLayerAt } from "../render3d/paintLayers";
 import { setMaterialLayerSource } from "../render3d/materialLayers";
 import { MaterialMasks } from "./materialMasks";
+import { ancestors, bodyAbove, canParent, childrenOf, clickTarget, cloneTree, layersOf, outermostGroup, nextOrder, pathOf, removeSubtree, rename as renameNode, type EdBody, type EdNode } from "./tree";
+import { is3D, newNodeId, prefabLibrary, scaleLevelTree, setPrefab, walkNodes, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type NodeType, type PrefabData } from "../level/nodes";
 import { materialLabel } from "../formation/materialLayer";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { FormationJobs, mountJobsPanel } from "./formationJobs";
@@ -301,7 +319,7 @@ import {
   type MaterialName,
 } from "../lib/shapeGeometry";
 import { decomposeConvex, isSimpleLoop, normalizeWinding } from "../lib/polygon";
-import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
+import { deleteLevel, listLevels, listPrefabs, loadLevel, loadPrefab, saveLevel, savePrefab } from "./api";
 import {
   HDRI_ASSETS,
   hdriNames,
@@ -311,8 +329,6 @@ import {
 import * as THREE from "three";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
 import type { LevelScene } from "../render3d/levelScene";
-import { SCENERY_TAG } from "../render3d/sceneDressing";
-import { nodeNameOf, sceneMetaFile, type SceneMeta } from "../render3d/scenes";
 import { MODEL_ASSETS, MODELS_API, modelMetaFile, isModelName, type ModelMeta } from "../render3d/models";
 import { setGameFogCamera } from "../render3d/editorFog";
 import {
@@ -358,6 +374,7 @@ import {
   WORKSPACE_TITLES,
   WORKSPACES,
   workspaceLayers,
+  clickableIn,
   writeWorkspace,
   type Workspace,
 } from "./workspaces";
@@ -483,14 +500,14 @@ const CHAINABLE_KINDS: BodyKind[] = ["static", "rigid"];
 // offers only what the level will actually build - which for a wheel is its
 // hub, not its rim.
 const chainable = (b: EdItem): boolean =>
-  b.object === "collision" && CHAINABLE_KINDS.includes(b.kind) && (b.mask & LAYER_ROPE) !== 0;
+  b.object === "collision" && CHAINABLE_KINDS.includes(propsOf(b).kind) && (b.mask & LAYER_ROPE) !== 0;
 
 // What the inspector says when nothing is selected: what the active layer is
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
   fog: "Fog layer: draw a rectangle or circle where haze should be present. Fog fades inward from its boundary over the region's falloff distance. Outside the regions the view is clear; overlapping regions do not add fog. Colour and strength stay in the Environment panel. Place a region over the grotto and leave the sheltered cave outside it. Tab switches layer.",
   scene:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is its Blender scene (Level panel, `scene`): an object there named like a body (the body's `name`) is that body's look, and a shape is drawn in 3D only while its Debug section's draw box is ticked (it starts ticked in a level with no scene). +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is what its bodies carry - formations, their decorations, models - and a shape is drawn in 3D only while its Debug section's draw box is ticked (it starts ticked). +Chain drags a chain from one body to another. New body puts the selected pieces under one new body; drag a row in the scene tree (bottom left) onto another to reparent it. Ctrl+G groups the selection, so a click selects the group first and a second click goes inside (Ctrl+Shift+G ungroups; Alt+click picks the thing under the pointer itself). The scene tree lists every node and is the way to reach one with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no body above it stands on its own (a shaft down a grate, a fill); a lamp you can see goes under the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   shelter:
     "Shelter layer: the front walls of enclosed caves. A shelter is the wall between the camera and the cave, cut away so the player can be seen, put back for the sun alone: never drawn, it casts the sun's shadow, so the cave's rock faces and its inside go out of the sun while its blue-grey air stays. Draw it over the cave (+Poly clicks out the outline, concave corners and all; +Rect / +Circle drag one out); the dotted outline is where its shadow lands on the play plane. Tab switches layer.",
   camera:
@@ -934,7 +951,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the selected body. Null for none, or for one guided by collision.
   function activeSolidFormation(): EdItem | null {
     const f = model.items.find(
-      (i) => i.object === "formation" && i.formation?.guide.kind === "solid" && (selectedIds.has(i.id) || selectedBodyIds.has(i.bodyId)),
+      (i) => i.object === "formation" && i.formation?.guide.kind === "solid" && (selectedIds.has(i.id) || selectedBodyIds.has(i.unit)),
     );
     return f ?? null;
   }
@@ -1106,7 +1123,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   let workspace: Workspace = parseWorkspace(new URLSearchParams(location.search).get("ws")) ?? readWorkspace();
   setDefaultOpen(PRIMARY_SECTIONS);
   // Is an item part of the workspace (drawn, picked, listed)?
-  const inWs = (b: EdItem): boolean => inWorkspace(workspace, b, model.bodies3d.has(b.bodyId));
+  const inWs = (b: EdItem): boolean => inWorkspace(workspace, b, in3D(b));
+  // Is an item in the scene rather than the plane: carried by no body, and a
+  // rock or under a 3D frame (what a "3D body" was before the tree).
+  const in3D = (i: EdItem): boolean =>
+    i.bodyOf === null &&
+    (i.object === "formation" || ancestors(model.tree, i.node).some((a) => a.type === "Node3D" || a.type === "Formation3D"));
   // Is a layer drawn and picked: shown in the layer list, and one the
   // workspace works on.
   const layerShown = (l: EdLayer): boolean => visibleLayers.has(l) && (workspaceLayers(workspace)?.includes(l) ?? true);
@@ -1126,13 +1148,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // Exclusive with the item selection, like the chain selection is, and for the
   // same reason: there is no panel that could say anything sensible about both.
-  // A SET, because merging is an operation on two bodies and the tree is where
-  // two bodies are picked. Shift or Ctrl on an outliner row extends it, exactly
-  // as they extend the item selection.
-  const selectedBodyIds = new Set<number>();
+  // A SET of node ids (bodies, groups, frames): grouping, reparenting and
+  // deleting act on several at once, and the scene tree is where several are
+  // picked. Shift or Ctrl on a scene-tree row extends it, exactly as they
+  // extend the item selection.
+  const selectedBodyIds = new Set<string>();
   // The one body being edited, or null when none or several are. A body panel
   // shows one body's transform, and there is no sane transform for a set.
-  const soleBodyId = (): number | null =>
+  const soleBodyId = (): string | null =>
     selectedBodyIds.size === 1 ? [...selectedBodyIds][0]! : null;
   // Chains carry their own selection, and the two are mutually exclusive: a
   // chain has no shape, no placement and no properties in common with an item,
@@ -1171,10 +1194,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // node 2 of the body just selected. Carrying the id makes a stale pick
   // impossible to express instead of merely unlikely (`selectedRouteNodes` is
   // the one reader, and it asks whose nodes these are).
-  let routeSel: { bodyId: number; nodes: Set<number> } | null = null;
+  let routeSel: { bodyId: string; nodes: Set<number> } | null = null;
   const NO_NODES: ReadonlySet<number> = new Set<number>();
   // An empty selection, for drawing the overlay as if nothing were selected.
   const NO_IDS: ReadonlySet<number> = new Set<number>();
+  const NO_NODE_IDS: ReadonlySet<string> = new Set<string>();
   const NO_ITEMS: readonly EdItem[] = [];
   // The layers the overlay draws: the list's visible ones the workspace works
   // on (`layerShown`).
@@ -1280,8 +1304,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // branched root regrows its mesh, which off skips while one is drawn and
   // reshaped. The sim's roots are untouched. A view setting like `waterShown`.
   let rootsShown = viewSettings.roots;
-  // Whether the level's Blender scene is drawn, here and in ▶ Test: off, the
-  // collision and what the game draws itself stand alone. A view setting like
+  // Whether the bodies' look (formations, decorations, models) is drawn, here
+  // and in ▶ Test: off, the collision and what the game draws itself stand
+  // alone. A view setting like
   // `reflectionsOn`.
   let blenderSceneShown = viewSettings.scene;
   // A remembered toggle may open off, which the renderer has to be told once;
@@ -1380,16 +1405,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const sel = solidSel;
     if (!sel) return null;
     const it = model.items.find((i) => i.id === sel.itemId);
-    if (!it || it.formation?.guide.kind !== "solid" || !(selectedIds.has(it.id) || selectedBodyIds.has(it.bodyId))) return null;
+    if (!it || it.formation?.guide.kind !== "solid" || !(selectedIds.has(it.id) || selectedBodyIds.has(it.unit))) return null;
     return nodeAt(it.formation.guide.tree, sel.path) ? sel : null;
   }
   // The solid guides, drawn through the scene in both workspaces.
-  // Where a 3D body's items are drawn (space3d.ts): asked of the model as it
-  // is now, so every guide and decoration follows the body's depth and tilt.
-  setBody3dResolver((bodyId) => {
-    const space = model.bodies3d.get(bodyId);
-    return space ? body3dLift(bodyFrameOf(model, bodyId), space) : null;
-  });
   const solidView = scene3d ? new SolidGuideView(() => {}) : null;
   if (solidView) scene3d!.editorLayer.add(solidView.group);
   // MATERIAL LAYERS drawn live (materialMasks.ts): the library, the bakes
@@ -1437,7 +1456,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const any = target === null && decorations.anyRock;
     if (target === null && !any) return null;
     const accept = (id: number | undefined): boolean =>
-      id !== undefined && (any ? decorations.isRock(id) && !hiddenBodies.has(itemOf(id)?.bodyId ?? -1) : id === target);
+      id !== undefined && (any ? decorations.isRock(id) && !itemHidden(itemOf(id)) : id === target);
     const hit = visuals.surfaceAt(scr, (tag) => accept(itemOfSceneObject.get(tag as SceneTag)));
     if (!hit) return null;
     return {
@@ -1460,7 +1479,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     bodyName: (bodyId) => {
       const members = bodyMembers(model.items, bodyId);
       // Its name when it has one, which is what a level's author knows it by.
-      return members[0]?.name || `body #${bodyIndexOf(bodyId)}`;
+      return model.tree.nodes.get(bodyId)?.name || `body #${bodyIndexOf(bodyId)}`;
     },
     sculpt: (item) => enterSculpt(item),
     sculpting: () => sculptCtl?.itemId ?? null,
@@ -1483,209 +1502,404 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       rebuildInspector();
     }
     materialMasks.onJob(job);
-    // An asset accepted into the library: `+ Model` offers it now, and its
-    // meta is the new export's.
-    if (job.kind === "asset" && job.result?.model) {
-      modelNames = null;
-      modelMetas.delete(job.result.model);
-      rebuildInspector();
-    }
   });
 
-  // THE ASSETS TAB (docs/formations.md): the editor edits an ASSET DOCUMENT -
-  // one body at the origin carrying a formation on a free guide, kept in
-  // `formation-assets/<name>.json` - in place of the level, with every tool
-  // and both views, and "Accept into the library" turns it into a model of the
-  // library (scripts/formation-asset.ts). The level's session (its model, its
-  // undo, its name) is put aside while it is open and given back after, so
-  // nothing done to an asset can reach the level's file.
-  let assetMode = false;
-  let assetName: string | null = null;
-  let assetSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  let levelSession: { model: EdModel; history: EdModel[]; future: EdModel[]; name: string | null; dirty: boolean; cam: Vec2; zoom: number; pose: ViewPose | null } | null = null;
-  // A fresh asset: a body at the origin with a guide of the kind asked for.
-  function newAssetModel(kind: "outline" | "solid"): EdModel {
-    const formation = {
-      id: "asset",
-      generator: kind === "outline" ? ("fitted" as const) : ("solid" as const),
-      ...(kind === "solid" ? { variant: "boulder" as const } : {}),
-      params: {},
-      guide: kind === "outline"
-        ? { kind: "collision" as const, pieces: [{ shape: { kind: "poly" as const, verts: [{ x: -0.8, y: -0.5 }, { x: 0.9, y: -0.6 }, { x: 0.7, y: 0.5 }, { x: -0.6, y: 0.6 }] } }] }
-        : { kind: "solid" as const, tree: { op: "union" as const, of: [{ prim: "box" as const, size: [1.6, 1.2, 1.2] as [number, number, number] }] } },
-    };
-    return modelFromDisk(scaleLevelData({
-      player: { x: 0, y: -2, radius: 0.08 },
-      meta: { unlisted: true },
-      bodies: [{
-        kind: "static",
-        x: 0,
-        y: 0,
-        rot: 0,
-        // An outline asset's guide is the body's collision, as a level's is:
-        // drawn and reshaped with the same tools, then taken by Generate.
-        objects: kind === "outline" ? [{ type: "collision", shape: formation.guide.kind === "collision" ? formation.guide.pieces[0]!.shape : { kind: "rect", w: 1, h: 1 } }] : [],
-        formation,
-      }],
-    }, PIXELS_PER_METER));
+  // PREFABS (plans/node-tree.md "Prefabs"): shared assets that are editable
+  // node trees, one file each (`prefabs/<name>.json`), placed in a level as
+  // INSTANCES that may override any property of any node inside them. The
+  // Prefabs tab (beside Level, in every workspace) is their library: place
+  // one, open one to edit it, make a new one, or save the selected node as one
+  // (it is replaced by an instance of what it became). It took the place of
+  // the Assets tab, whose reusable rocks are prefabs now.
+  //
+  // Opening a prefab edits it IN PLACE OF the level, with every tool: the
+  // level's session (its model, its undo, its name) is put aside and given
+  // back after, and the level is read again on the way back so every
+  // instance of the prefab shows the edit.
+  let prefabMode = false;
+  let prefabName: string | null = null;
+  let prefabsShown = false;
+  let prefabSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let prefabNames: string[] | null = null;
+  // The level put aside while a prefab is open: its model and its undo steps
+  // each AS WRITTEN (`Shelved`), since an instance's insides are expanded from
+  // the prefab, and the prefab is what is about to change. Read back after,
+  // every instance shows the edit, and an undo step taken back to cannot
+  // carry the prefab's old values as if they were this level's overrides.
+  type Shelved = { tree: LevelTree; strokes: Map<string, PaintStamp[]> };
+  let levelSession: { model: Shelved; history: Shelved[]; future: Shelved[]; name: string | null; dirty: boolean; cam: Vec2; zoom: number; pose: ViewPose | null } | null = null;
+  const shelve = (m: EdModel): Shelved => {
+    const strokes = new Map<string, PaintStamp[]>();
+    for (const i of m.items) if (i.decoration?.strokes) strokes.set(i.decoration.id, i.decoration.strokes);
+    return { tree: toTree(m), strokes };
+  };
+  const unshelve = (s: Shelved): EdModel => {
+    const m = modelFromTree(s.tree);
+    for (const i of m.items) {
+      const strokes = i.decoration && s.strokes.get(i.decoration.id);
+      if (strokes) i.decoration = { ...i.decoration!, strokes };
+    }
+    return m;
+  };
+
+  // The open prefab as its file: its one root (several top-level nodes are
+  // put under a group), in pixels. A string says why it cannot be one.
+  function prefabOfModel(): PrefabData | string {
+    const tree = scaleLevelTree(toTree(model), PIXELS_PER_METER);
+    const nodes = tree.nodes.filter((n) => n.type !== "Spawn2D");
+    if (!nodes.length) return "the prefab is empty";
+    const root: LevelNode = nodes.length === 1 ? nodes[0]! : ({ type: "Node2D", id: newNodeId(), name: prefabName ?? "Prefab", children: nodes } as LevelNode);
+    const refused = validateTree([root], { prefab: true }).filter((p) => p.error);
+    if (refused.length) return refused[0]!.message;
+    return { format: TREE_FORMAT, root };
   }
-  function saveAssetSoon(): void {
-    if (!assetMode || !assetName) return;
-    if (assetSaveTimer) clearTimeout(assetSaveTimer);
-    const name = assetName;
-    assetSaveTimer = setTimeout(() => {
-      assetSaveTimer = null;
-      void fetch(`/api/formation-assets/${name}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelToDisk(model)) }).then((r) => {
-        if (r.ok) {
-          dirty = false;
-          updateTitle();
-        } else showToast(`The asset ${name} could not be saved (${r.status})`, "warn");
-      });
+
+  function savePrefabSoon(): void {
+    if (!prefabMode || !prefabName) return;
+    if (prefabSaveTimer) clearTimeout(prefabSaveTimer);
+    const name = prefabName;
+    prefabSaveTimer = setTimeout(() => {
+      prefabSaveTimer = null;
+      void writePrefab(name);
     }, AUTOSAVE_DELAY_MS);
   }
-  function openAssets(on: boolean): void {
-    if (on === assetMode || mode !== "edit") return;
-    cancelAutosave();
-    if (on) {
-      levelSession = { model, history: [...history], future: [...future], name: currentName, dirty, cam: camera.position, zoom: camera.zoom, pose: visuals?.view ?? null };
-      assetMode = true;
-      currentName = null;
-      assetName = null;
-      replaceModel(newAssetModel("solid"));
-      camera.position = new Vec2(0, 0);
-      poseFromCameraNow();
-    } else {
-      if (assetSaveTimer) {
-        clearTimeout(assetSaveTimer);
-        assetSaveTimer = null;
-        void fetch(`/api/formation-assets/${assetName}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelToDisk(model)) });
-      }
-      const s = levelSession!;
-      levelSession = null;
-      assetMode = false;
-      assetName = null;
-      replaceModel(s.model);
-      history.splice(0, history.length, ...s.history);
-      future.splice(0, future.length, ...s.future);
-      currentName = s.name;
-      dirty = s.dirty;
-      camera.position = s.cam;
-      camera.zoom = s.zoom;
-      if (s.pose) visuals?.setView(s.pose);
-      else poseFromCameraNow();
+
+  async function writePrefab(name: string): Promise<boolean> {
+    const data = prefabOfModel();
+    if (typeof data === "string") {
+      showToast(`The prefab ${name} is not saved: ${data}`, "warn");
+      return false;
     }
-    if (on) resetHistory();
+    try {
+      await savePrefab(name, data);
+      setPrefab(name, data);
+      await savePaint(name);
+      dirty = false;
+      updateTitle();
+      return true;
+    } catch (e) {
+      showToast(`The prefab ${name} could not be saved (${String(e)})`, "warn");
+      return false;
+    }
+  }
+
+  // Put the level aside and edit a prefab in its place.
+  async function openPrefab(name: string): Promise<void> {
+    if (mode !== "edit") return;
+    let data: PrefabData;
+    try {
+      data = await loadPrefab(name);
+    } catch {
+      showToast(`No prefab ${name}`, "warn");
+      return;
+    }
+    // The level is written before it is put aside: its paint is read again
+    // from disk on the way back.
+    if (!levelSession && currentName && dirty) await doSave(false, true);
+    cancelAutosave();
+    if (prefabMode && prefabName && prefabSaveTimer) await writePrefab(prefabName);
+    if (!levelSession) {
+      levelSession = { model: shelve(model), history: history.map(shelve), future: future.map(shelve), name: currentName, dirty, cam: camera.position, zoom: camera.zoom, pose: visuals?.view ?? null };
+    }
+    prefabMode = true;
+    prefabName = name;
+    currentName = null;
+    replaceModel(modelFromTree(scaleLevelTree({ format: TREE_FORMAT, nodes: [data.root] }, PX)));
+    await loadPaint(name);
+    resetHistory();
+    dirty = false;
+    camera.position = Vec2.ZERO;
+    poseFromCameraNow();
     selectedIds.clear();
     selectedVerts.clear();
     selectedBodyIds.clear();
     solidSel = null;
-    workspaceBtns.assets?.classList.toggle("active", assetMode);
-    workspaceBtns.assets?.setAttribute("aria-pressed", String(assetMode));
-    workspaceBtns.level?.classList.toggle("active", !assetMode);
-    workspaceBtns.level?.setAttribute("aria-pressed", String(!assetMode));
-    // The asset's one body is what is edited: select it.
-    if (assetMode) setBodySelection(model.items[0]?.bodyId ?? null);
+    setBodySelection(model.tree.roots[0] ?? null);
+    refreshDocButtons();
     rebuildInspector();
     updateTitle();
   }
-  async function loadAsset(name: string): Promise<void> {
-    const r = await fetch(`/api/formation-assets/${name}`, { cache: "no-store" });
-    if (!r.ok) {
-      showToast(`No asset ${name}`, "warn");
+
+  // Back to the level, read again through the prefab library so every
+  // instance of what was edited shows it.
+  async function closePrefab(): Promise<void> {
+    if (!prefabMode) return;
+    if (prefabName && (prefabSaveTimer || dirty)) {
+      if (prefabSaveTimer) clearTimeout(prefabSaveTimer);
+      prefabSaveTimer = null;
+      await writePrefab(prefabName);
+    }
+    const s = levelSession!;
+    levelSession = null;
+    prefabMode = false;
+    prefabName = null;
+    replaceModel(unshelve(s.model));
+    history.splice(0, history.length, ...s.history.map(unshelve));
+    future.splice(0, future.length, ...s.future.map(unshelve));
+    currentName = s.name;
+    // What is placed from the prefab paints as the prefab now does.
+    if (currentName) await loadPaint(currentName);
+    dirty = s.dirty;
+    camera.position = s.cam;
+    camera.zoom = s.zoom;
+    if (s.pose) visuals?.setView(s.pose);
+    else poseFromCameraNow();
+    selectedIds.clear();
+    selectedVerts.clear();
+    selectedBodyIds.clear();
+    solidSel = null;
+    refreshDocButtons();
+    rebuildInspector();
+    updateTitle();
+  }
+
+  // A new, empty prefab: a group at its origin, saved under `name`.
+  async function newPrefab(name: string): Promise<void> {
+    const data: PrefabData = { format: TREE_FORMAT, root: { type: "Node2D", id: newNodeId(), name, grouped: true } as LevelNode };
+    await savePrefab(name, data);
+    setPrefab(name, data);
+    prefabNames = null;
+    await openPrefab(name);
+  }
+
+  // The level read again through the prefab library, keeping the undo stack:
+  // what placing or changing a prefab needs, since an instance's insides are
+  // nodes of the model (`modelFromTree`).
+  // A tree other than the model's own written form may be given: one with a
+  // node changed as written (`replaceTreeNode`). Which instances have their
+  // children open is the session's, kept across.
+  function reexpand(tree: LevelTree = toTree(model)): void {
+    const editable = new Set([...model.tree.nodes.values()].filter((x) => x.instance?.editable).map((x) => x.id));
+    replaceModel(modelFromTree(tree));
+    for (const e of editable) {
+      const x = model.tree.nodes.get(e);
+      if (x?.instance) x.instance.editable = true;
+    }
+  }
+
+  // PLACE: an instance of `name` at the view's centre, its bodies built after
+  // every other's, grouped as a prefab's instance always is. Placed in the
+  // level AS WRITTEN and read back, so its insides come in expanded: an
+  // instance in the model is never without them, which is what lets every
+  // write of it read what is missing inside as removed.
+  function placePrefab(name: string): void {
+    if (prefabMode && name === prefabName) {
+      showToast("A prefab cannot be placed in itself", "warn");
       return;
     }
-    replaceModel(modelFromDisk((await r.json()) as RawLevelData));
-    resetHistory();
-    assetName = name;
-    dirty = false;
-    solidSel = null;
-    selectedIds.clear();
-    setBodySelection(model.items[0]?.bodyId ?? null);
-    rebuildInspector();
-    updateTitle();
+    beginAction();
+    const tree = toTree(model);
+    const id = newNodeId(new Set(model.tree.nodes.keys()));
+    const at = snapVec(camera.position);
+    const taken = new Set(model.tree.roots.map((r) => model.tree.nodes.get(r)?.name ?? ""));
+    let label = name;
+    for (let k = 2; taken.has(label); k++) label = `${name}${k}`;
+    tree.nodes.push({ type: "Instance", id, name: label, grouped: true, x: at.x, y: at.y, prefab: name, order: nextOrder(model.tree) } as LevelNode);
+    reexpand(tree);
+    markDirty();
+    setBodySelection(id);
   }
-  // The Assets panel, at the top of the inspector while an asset is open.
-  function buildAssetsGroup(): void {
-    const g = el("div", "ed-group");
-    g.appendChild(heading(
-      `Asset ${assetName ?? "(unsaved)"}`,
-      "A reusable rock for the model library, made from a free guide: an outline (draw it as this body's collision) or a solid. Generate to see it, then Accept into the library: it becomes a model, placed in any level with + Model and drawn from one file however many times it is placed. Saved as formation-assets/<name>.json.",
-    ));
-    const row = el("div", "ed-row");
-    const pick = Object.assign(document.createElement("select"), { className: "ed-select" });
-    pick.add(new Option("Open…", ""));
-    void fetch("/api/formation-assets").then((r) => r.json() as Promise<{ names: string[] }>).then(({ names }) => {
-      for (const n of names) pick.add(new Option(n, n));
-      pick.value = assetName ?? "";
-    });
-    pick.addEventListener("change", () => pick.value && void loadAsset(pick.value));
-    row.append(
-      pick,
-      button("New outline", () => {
-        replaceModel(newAssetModel("outline"));
-        resetHistory();
-        assetName = null;
-        setBodySelection(model.items[0]?.bodyId ?? null);
-        rebuildInspector();
-        updateTitle();
-      }),
-      button("New solid", () => {
-        replaceModel(newAssetModel("solid"));
-        resetHistory();
-        assetName = null;
-        setBodySelection(model.items[0]?.bodyId ?? null);
-        rebuildInspector();
-        updateTitle();
-      }),
-    );
-    g.appendChild(row);
-    // The name is the model's: a directory, a .blend and a release asset.
-    const nameRow = fieldRow("name");
-    const nameInput = Object.assign(document.createElement("input"), { className: "ed-text", value: assetName ?? "", placeholder: "rock-name" });
-    nameInput.addEventListener("change", () => {
-      const n = nameInput.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-      nameInput.value = n;
-      if (!isModelName(n)) return;
-      assetName = n;
-      saveAssetSoon();
-      updateTitle();
-      rebuildInspector();
-    });
-    nameRow.appendChild(nameInput);
-    describe(nameRow, "What the asset is saved as and what the library model is called (lower-case letters, digits and dashes).");
-    g.appendChild(nameRow);
-    // Live: the jobs panel's changes reach it as a "refresh" event.
-    const status = el("div", "ed-hint ed-asset-status");
-    const showStatus = (): void => {
-      const job = assetName ? formationJobs.latest(`asset:${assetName}`) : null;
-      const meta = assetName ? modelMetaFor(assetName, showStatus) : undefined;
-      status.textContent =
-        job && (job.state === "queued" || job.state === "running")
-          ? `Accepting: ${Math.round((job.progress ?? 0) * 100)}% ${job.step ?? ""}`
-          : job?.state === "failed"
-            ? `The last accept failed (see Jobs).`
-            : meta
-              ? `In the library: models/${assetName} (${meta.triangles.toLocaleString()} triangles, exported ${meta.exportedAt.slice(0, 16).replace("T", " ")}).`
-              : assetName
-                ? "Not in the library yet."
-                : "Name it to save it.";
+
+  // SAVE BRANCH AS PREFAB: the selected node and everything under it becomes
+  // the prefab `name`, and is replaced in the level by an instance of it,
+  // standing where it stood (its written place is the instance's) and built
+  // in its turn (its key is the instance's).
+  async function saveBranchAsPrefab(name: string): Promise<void> {
+    const ids = selectionNodes();
+    if (ids.length !== 1) {
+      showToast("Select one node to make a prefab of", "warn");
+      return;
+    }
+    const id = ids[0]!;
+    const n = model.tree.nodes.get(id);
+    if (!n || n.extra["spawn"] === true) return;
+    const tree = toTree(model);
+    const top = findNodeIn(tree.nodes, id) as (LevelNode & Record<string, unknown>) | null;
+    if (!top) return;
+    const root: Record<string, unknown> = structuredClone(top);
+    for (const k of ["x", "y", "rot", "z", "tilt"]) delete root[k];
+    const data: PrefabData = { format: TREE_FORMAT, root: scaleLevelTree({ format: TREE_FORMAT, lengthScale: PX, nodes: [root as unknown as LevelNode] }, PIXELS_PER_METER).nodes[0]! };
+    const refused = validateTree([data.root], { prefab: true }).filter((p) => p.error);
+    if (refused.length) {
+      showToast(`Not a prefab: ${refused[0]!.message}`, "warn");
+      return;
+    }
+    await savePrefab(name, data);
+    setPrefab(name, data);
+    prefabNames = null;
+    beginAction();
+    const instId = newNodeId(new Set(model.tree.nodes.keys()));
+    const order = typeof top["order"] === "number" ? top["order"] : nextOrder(model.tree);
+    const inst: Record<string, unknown> = { type: "Instance", id: instId, name: n.name, grouped: true, prefab: name, order };
+    for (const k of ["x", "y", "rot", "z", "tilt"]) if (top[k] !== undefined) inst[k] = top[k];
+    replaceIn(tree.nodes, id, inst as unknown as LevelNode);
+    reexpand(tree);
+    markDirty();
+    setBodySelection(instId);
+  }
+
+  // Put `next` where the node `id` stands, among its siblings.
+  function replaceIn(nodes: LevelNode[], id: string, next: LevelNode): boolean {
+    const at = nodes.findIndex((x) => x.id === id);
+    if (at >= 0) {
+      nodes[at] = next;
+      return true;
+    }
+    return nodes.some((x) => x.children !== undefined && replaceIn(x.children, id, next));
+  }
+
+  function descendantsOf(id: string): string[] {
+    const out: string[] = [];
+    const walk = (x: string): void => {
+      for (const c of model.tree.nodes.get(x)?.children ?? []) {
+        out.push(c);
+        walk(c);
+      }
     };
-    showStatus();
-    status.addEventListener("refresh", showStatus);
-    g.appendChild(status);
-    const accept = button("Accept into the library", () => {
-      if (!assetName) return;
-      void fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "asset", asset: assetName }) })
-        .then((r) => r.json() as Promise<{ id?: string; error?: string }>)
-        .then((b) => (b.id ? rebuildInspector() : showToast(b.error ?? "the job runner refused", "warn")));
-    });
-    accept.title = "Build the rock, bake it as a model of the library (assets-src/models/<name>.blend, public/models/<name>/), and offer it to + Model. A bake: one runs at a time.";
-    accept.disabled = !assetName;
+    walk(id);
+    return out;
+  }
+
+  // MAKE LOCAL (unpack): the instance becomes the nodes it places, ordinary
+  // nodes of the level with ids of their own, the prefab's and the
+  // overrides' values as they stand.
+  function makeLocal(id: string): void {
+    const n = model.tree.nodes.get(id);
+    if (!n?.instance) return;
+    beginAction();
+    const fresh = new Map<string, string>();
+    for (const d of descendantsOf(id)) {
+      const k = model.tree.nodes.get(d)!;
+      if (k.extra["inInstance"] !== id) continue;
+      fresh.set(d, newNodeId(new Set([...model.tree.nodes.keys(), ...fresh.values()])));
+    }
+    // The instance node becomes its root, of the root's class.
+    n.type = (n.extra["rootType"] ?? "Node2D") as NodeType;
+    n.instance = null;
+    const { rootType: _r, ...extra } = n.extra;
+    n.extra = extra;
+    // Every node it brought: an id of its own, no longer the prefab's.
+    for (const [old, now] of fresh) {
+      const k = model.tree.nodes.get(old)!;
+      model.tree.nodes.delete(old);
+      const { inInstance: _i, ...rest } = k.extra;
+      k.extra = rest;
+      k.id = now;
+      model.tree.nodes.set(now, k);
+    }
+    for (const k of model.tree.nodes.values()) {
+      if (k.parent !== null && fresh.has(k.parent)) k.parent = fresh.get(k.parent)!;
+      k.children = k.children.map((c) => fresh.get(c) ?? c);
+    }
+    for (const i of model.items) {
+      const now = fresh.get(i.node);
+      if (!now) continue;
+      i.node = now;
+      if (i.formation) i.formation = { ...i.formation, id: now };
+      if (i.decoration) i.decoration = { ...i.decoration, id: now, formation: fresh.get(i.decoration.formation) ?? i.decoration.formation };
+    }
+    relink(model);
+    markDirty();
+    rebuildInspector();
+  }
+
+  // A placed prefab's insides shown in the scene tree and picked on the
+  // canvas (Godot's "editable children"); an edit made there is an override.
+  function setEditableChildren(id: string, on: boolean): void {
+    const n = model.tree.nodes.get(id);
+    if (!n?.instance) return;
+    n.instance.editable = on;
+    if (on) expandedBodies.add(id);
+    outlinerRev = -1;
+    modelRev++;
+    rebuildInspector();
+  }
+
+  // A click landing inside a placed prefab whose children are not editable
+  // selects the instance, whatever the group rule or Alt said: its insides
+  // are the prefab's until they are opened.
+  function sealedTarget(id: string): string {
+    const owner = model.tree.nodes.get(id)?.extra["inInstance"];
+    if (typeof owner !== "string") return id;
+    return model.tree.nodes.get(owner)?.instance?.editable ? id : owner;
+  }
+
+  // The Level / Prefabs buttons say which document is open.
+  function refreshDocButtons(): void {
+    workspaceBtns.prefabs?.classList.toggle("active", prefabsShown || prefabMode);
+    workspaceBtns.prefabs?.setAttribute("aria-pressed", String(prefabsShown || prefabMode));
+    workspaceBtns.level?.classList.toggle("active", !prefabMode);
+    workspaceBtns.level?.setAttribute("aria-pressed", String(!prefabMode));
+  }
+
+  // THE PREFAB LIBRARY, at the top of the inspector while the Prefabs tab is
+  // up or a prefab is open.
+  function buildPrefabsGroup(): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(
+        prefabMode ? `Prefab ${prefabName ?? ""}` : "Prefabs",
+        "Shared assets that are editable node trees (prefabs/<name>.json). Place one in the level as an instance, which may override any property of any node in it; open one to edit it, and every instance in every level follows.",
+      ),
+    );
+    if (prefabMode) {
+      const back = button("Back to the level", () => void closePrefab());
+      back.title = "Save the prefab and go back to the level, every instance of it showing the edit";
+      g.appendChild(back);
+    }
+    const list = el("div", "ed-col");
+    const fill = (names: string[]): void => {
+      list.innerHTML = "";
+      if (!names.length) list.appendChild(el("div", "ed-hint")).textContent = "No prefabs yet.";
+      for (const name of names) {
+        const row = el("div", "ed-row");
+        const label = el("span", "ed-layer-name");
+        label.textContent = name;
+        const place = button("Place", () => placePrefab(name));
+        place.title = `Place ${name} at the view's centre`;
+        const open = button("Open", () => void openPrefab(name));
+        open.title = `Edit ${name}: every instance follows`;
+        row.append(label, place, open);
+        list.appendChild(row);
+      }
+    };
+    if (prefabNames) fill(prefabNames);
+    else
+      void listPrefabs()
+        .then((names) => {
+          prefabNames = names;
+          fill(names);
+        })
+        .catch(() => fill([]));
+    g.appendChild(list);
+    const nameRow = fieldRow("name");
+    const nameInput = Object.assign(document.createElement("input"), { className: "ed-text", placeholder: "prefab-name" });
+    nameInput.addEventListener("keydown", (e) => e.stopPropagation());
+    nameRow.appendChild(nameInput);
+    describe(nameRow, "The name a new prefab is saved as (letters, digits, - and _).");
+    g.appendChild(nameRow);
+    const nameOf = (): string | null => {
+      const n = nameInput.value.trim().replace(/[^A-Za-z0-9_-]+/g, "-");
+      if (!n) {
+        showToast("Name the prefab first", "warn");
+        return null;
+      }
+      return n;
+    };
     const actions = el("div", "ed-row");
-    actions.appendChild(accept);
+    const make = button("New prefab", () => {
+      const n = nameOf();
+      if (n) void newPrefab(n);
+    });
+    make.title = "An empty prefab, opened to be built";
+    const branch = button("Save selection as prefab", () => {
+      const n = nameOf();
+      if (n) void saveBranchAsPrefab(n);
+    });
+    branch.title = "The selected node and everything under it becomes a prefab, and is replaced here by an instance of it";
+    branch.disabled = selectionNodes().length !== 1;
+    actions.append(make, branch);
     g.appendChild(actions);
-    const body = model.items[0]?.bodyId;
-    if (body !== undefined) buildFormationSection(formationHost, section(g, "asset/Formation", "Formation", false), body);
     inspector.appendChild(g);
   }
 
@@ -1695,14 +1909,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // share.
   const HISTORY_MAX = 50; // undo steps retained
   const history: EdModel[] = [];
-  // The Blender scenes' `meta.json`s, by scene name (see `sceneMetaFor`), and
-  // the models' (`modelMetaFor`).
-  const sceneMetas = new Map<string, SceneMeta | null | undefined>();
-  const sceneMetaWaiters = new Map<string, Array<() => void>>();
+  // The models' `meta.json`s, by model name (see `modelMetaFor`).
   const modelMetas = new Map<string, ModelMeta | null | undefined>();
   const modelMetaWaiters = new Map<string, Array<() => void>>();
   const future: EdModel[] = [];
-  const snapshot = (m: EdModel): EdModel => ({
+  const snapshot = (m: EdModel): EdModel => withLinks({
     fogRegionsEnabled: m.fogRegionsEnabled,
     player: {
       pos: m.player.pos,
@@ -1721,11 +1932,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     })),
     chains: m.chains.map(cloneChain),
     vines: m.vines.map(cloneVine),
-    // A frame is never mutated in place - `translateItems` and friends replace
-    // the entry - so copying the map is enough to detach the snapshot.
-    bodyFrames: new Map(m.bodyFrames),
-    // Entries are replaced, never mutated, as the frames are.
-    bodies3d: new Map(m.bodies3d),
+    // The tree's nodes are mutated in place (a body's properties, a frame's
+    // placement), so every node is copied; `withLinks` points the copied
+    // items at the copied bodies.
+    tree: cloneTree(m.tree),
+    dataLayers: [...m.dataLayers],
     // Mutated in place by the environment panel exactly as `cam` and `light`
     // are, so a snapshot sharing it would alias the state it restores.
     environment: m.environment ? { ...m.environment } : undefined,
@@ -1735,24 +1946,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // and for the same reason: a shared reference would alias the state the
     // undo is meant to be restoring.
     meta: { ...m.meta },
-    scene: m.scene,
   });
   const resetHistory = (): void => {
     history.length = 0;
     future.length = 0;
   };
-  // Every body holding more than one object has its frame written down (see
-  // `EdModel.bodyFrames`): past one object a body can be edited a piece at a
-  // time, and a frame still being read off a member is a frame that member
-  // silently moves. Settled here, once per action and before anything is
-  // mutated, rather than at each of the half-dozen places a body gains one -
-  // membership grows by merging, by drawing into a selected body, by dressing a
-  // shape, by pasting, and the next of those cannot forget a rule it is not
-  // written into.
-  function pinCompoundFrames(): void {
-    const held = new Map<number, number>();
-    for (const i of model.items) held.set(i.bodyId, (held.get(i.bodyId) ?? 0) + 1);
-    for (const [id, n] of held) if (n > 1) pinBodyFrame(model, id);
+  // A snapshot's items, pointed at its own copies of the bodies.
+  function withLinks(m: EdModel): EdModel {
+    relink(m);
+    return m;
   }
 
   // Record the current state before a mutating action, so it can be undone.
@@ -1760,7 +1962,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // one over it.
   function beginAction(): void {
     nudging = false; // any other action ends the current nudge run
-    pinCompoundFrames();
     history.push(snapshot(model));
     if (history.length > HISTORY_MAX) history.shift();
     future.length = 0;
@@ -1795,7 +1996,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const id of selectedVineIds) if (!liveVines.has(id)) selectedVineIds.delete(id);
     // Undoing a merge retires the body it made, so a selection still naming it
     // would leave the panel showing a body with nothing in it.
-    const liveBodies = new Set(model.items.map((b) => b.bodyId));
+    const liveBodies = new Set(model.items.map((b) => b.unit));
     for (const id of selectedBodyIds) if (!liveBodies.has(id)) selectedBodyIds.delete(id);
     rebuildInspector();
     markDirty(); // an undo/redo is a change like any other - it autosaves too
@@ -1807,15 +2008,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // both visible and unlocked, in a body that is not hidden (H), and part of
   // the workspace (`inWs`).
   const pickableItems = () =>
-    model.items.filter((b) => layerShown(b.layer) && !lockedLayers.has(b.layer) && !hiddenBodies.has(b.bodyId) && inWs(b));
+    model.items.filter((b) => layerShown(b.layer) && !lockedLayers.has(b.layer) && !itemHidden(b) && !itemLocked(b) && inWs(b));
 
   // HIDDEN BODIES (H, Alt+H, Shift+H, the outliner's eye; Blender's viewport
   // hide): not drawn - not in the overlay, the scene or the guides - and not
   // picked, while they are worked round. A view setting of this session's,
   // never in the level, and a ▶ Test plays the level whole.
-  const hiddenBodies = new Set<number>();
+  const hiddenBodies = new Set<string>();
+  // ...and the user's DATA LAYERS (plans/node-tree.md "Editor"): layers made
+  // and named here, any node in any number of them (`EdNode.layers`, saved in
+  // the level), a child in its ancestors' too. A node is shown only if no layer
+  // it is in is hidden, and editable only if none is locked. View state of
+  // this session, as the eye above is; the game ignores layers.
+  const hiddenUserLayers = new Set<string>();
+  const lockedUserLayers = new Set<string>();
+  // Is an item hidden: its node or any above it hidden (H, the tree's eye),
+  // or in a hidden data layer?
+  function itemHidden(i: EdItem | null | undefined): boolean {
+    if (!i) return false;
+    if (hiddenBodies.has(i.unit) || hiddenBodies.has(i.node)) return true;
+    for (const a of ancestors(model.tree, i.node)) if (hiddenBodies.has(a.id)) return true;
+    if (hiddenUserLayers.size) for (const l of layersOf(model.tree, i.node)) if (hiddenUserLayers.has(l)) return true;
+    return false;
+  }
+  // ...and locked: drawn, but neither picked nor edited.
+  function itemLocked(i: EdItem | null | undefined): boolean {
+    if (!i || !lockedUserLayers.size) return false;
+    for (const l of layersOf(model.tree, i.node)) if (lockedUserLayers.has(l)) return true;
+    return false;
+  }
   let hiddenRev = 0;
-  function setBodiesHidden(ids: Iterable<number>, hide: boolean): void {
+  function setBodiesHidden(ids: Iterable<string>, hide: boolean): void {
     let changed = false;
     for (const id of ids) {
       if (hide === hiddenBodies.has(id)) continue;
@@ -1827,7 +2050,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     hiddenRev++;
     // What is hidden cannot stay selected: it could not be seen being edited.
     if (hide) {
-      for (const id of [...selectedIds]) if (hiddenBodies.has(itemOf(id)?.bodyId ?? -1)) selectedIds.delete(id);
+      for (const id of [...selectedIds]) if (itemHidden(itemOf(id))) selectedIds.delete(id);
       for (const id of [...selectedBodyIds]) if (hiddenBodies.has(id)) selectedBodyIds.delete(id);
     }
     outlinerRev = -1;
@@ -1843,7 +2066,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // stay out of `inWs` and a click passes through them to the rock.
   let shownCache: { rev: number; hidden: number; ws: Workspace; collision: boolean; model: EdModel } | null = null;
   const referenceOutline = (i: EdItem): boolean =>
-    paintsRocks(workspace) && showCollisionOutlines && i.layer === "scene" && i.object === "collision" && !model.bodies3d.has(i.bodyId);
+    paintsRocks(workspace) && showCollisionOutlines && i.layer === "scene" && i.object === "collision" && !in3D(i);
   function shownModel(): EdModel {
     if (
       shownCache &&
@@ -1855,7 +2078,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     ) {
       return shownCache.model;
     }
-    const items = model.items.filter((i) => !hiddenBodies.has(i.bodyId) && (inWs(i) || referenceOutline(i)));
+    const items = model.items.filter((i) => !itemHidden(i) && (inWs(i) || referenceOutline(i)));
     const plane = workspace === "2d";
     const shown = items.length === model.items.length && plane ? model : { ...model, items, chains: plane ? model.chains : [], vines: plane ? model.vines : [] };
     shownCache = { rev: modelRev, hidden: hiddenRev, ws: workspace, collision: showCollisionOutlines, model: shown };
@@ -1949,20 +2172,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (id === null) return null;
     const lead = routeLeadOf(id);
     // A route's nodes and grips are overlay handles, drawn at any angle.
-    return lead && lead.route.length > 1 ? lead : null;
+    return lead && propsOf(lead).route.length > 1 ? lead : null;
   }
   // ...and the nodes actually picked on it, sorted, empty for any body but the
   // one they were picked on, and with anything past the route's end dropped: an
   // index outlives the list it indexes only until the next edit, and reading one
   // that has gone is how a stale set keys the wrong node.
   function selectedRouteNodes(item: EdItem): number[] {
-    if (routeSel?.bodyId !== item.bodyId) return [];
-    return [...routeSel.nodes].filter((i) => i < item.route.length).sort((a, b) => a - b);
+    if (routeSel?.bodyId !== item.unit) return [];
+    return [...routeSel.nodes].filter((i) => i < propsOf(item).route.length).sort((a, b) => a - b);
   }
   function pickRouteNode(item: EdItem, index: number, add: boolean): void {
     nudging = false; // a new set of nodes starts a new undo step, as a shape's does
-    if (!add || routeSel?.bodyId !== item.bodyId) {
-      routeSel = { bodyId: item.bodyId, nodes: new Set([index]) };
+    if (!add || routeSel?.bodyId !== item.unit) {
+      routeSel = { bodyId: item.unit, nodes: new Set([index]) };
       return;
     }
     if (!routeSel.nodes.delete(index)) routeSel.nodes.add(index);
@@ -2002,13 +2225,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // panel failing at the one thing it is for.
     for (const id of ids) {
       const item = model.items.find((i) => i.id === id);
-      if (item) revealBody(item.bodyId);
+      if (item) revealBody(item.node);
     }
     rebuildInspector();
   }
   // Select a BODY. Its objects are deliberately left unselected: what the
   // inspector then shows is the body's own properties and nothing else.
-  function setBodySelection(id: number | null): void {
+  function setBodySelection(id: string | null): void {
     if (
       soleBodyId() === id &&
       !selectedIds.size &&
@@ -2035,7 +2258,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // merged. It drops the item and chain selections for the same reason
   // `setBodySelection` does: there is no panel that could speak for a body and an
   // object at once.
-  function toggleBodySelection(id: number): void {
+  function toggleBodySelection(id: string): void {
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
@@ -2049,10 +2272,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Open a body in the tree and make sure the next refresh actually redraws it.
   // The tree is rebuilt on MODEL revision, and unfolding is not a model change,
   // so it has to say so itself.
-  function revealBody(id: number): void {
-    if (!expandedBodies.has(id)) {
-      expandedBodies.add(id);
-      outlinerRev = -1;
+  function revealBody(id: string): void {
+    for (const n of ancestors(model.tree, id)) {
+      if (!expandedBodies.has(n.id)) {
+        expandedBodies.add(n.id);
+        outlinerRev = -1;
+      }
     }
   }
 
@@ -2061,8 +2286,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // is a different question from what the inspector is editing.
   const operandItems = (): EdItem[] =>
     selectedBodyIds.size
-      ? [...selectedBodyIds].flatMap((id) => bodyMembers(model.items, id))
+      ? [...new Set([...[...selectedBodyIds].flatMap((id) => membersOf(model, id)), ...selectedBodies()])]
       : selectedBodies();
+
+  // Items and frames together: what a band takes, items it caught alone and
+  // the group roots it caught things of.
+  function setNodeSelection(items: readonly number[], nodes: readonly string[]): void {
+    selectedIds.clear();
+    selectedVerts.clear();
+    selectedChainIds.clear();
+    selectedVineIds.clear();
+    selectedBodyIds.clear();
+    for (const id of items) selectedIds.add(id);
+    for (const id of nodes) selectedBodyIds.add(id);
+    nudging = false;
+    for (const id of nodes) revealBody(id);
+    rebuildInspector();
+  }
 
   function setChainSelection(ids: readonly number[]): void {
     selectedIds.clear();
@@ -2098,8 +2338,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // selected as a body, or with one of its objects picked out? That is what
   // decides whether a click selects the BODY or drills into it.
   const insideCurrentBody = (hit: EdItem): boolean =>
-    selectedBodyIds.has(hit.bodyId) ||
-    model.items.some((i) => i.bodyId === hit.bodyId && selectedIds.has(i.id));
+    selectedBodyIds.has(hit.unit) ||
+    model.items.some((i) => i.unit === hit.unit && selectedIds.has(i.id));
 
   // The items a click on `hit` selects. A click that has DRILLED IN - Alt, or a
   // second click on the body already being edited - means the single object
@@ -2118,9 +2358,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // that touches one piece of a body has touched the body.
   function withWholeBodies(ids: Iterable<number>): number[] {
     const out = new Set<number>(ids);
-    const bodies = new Set<number>();
-    for (const b of model.items) if (out.has(b.id)) bodies.add(b.bodyId);
-    for (const b of model.items) if (bodies.has(b.bodyId)) out.add(b.id);
+    const bodies = new Set<string>();
+    for (const b of model.items) if (out.has(b.id)) bodies.add(b.unit);
+    for (const b of model.items) if (bodies.has(b.unit)) out.add(b.id);
     return [...out];
   }
 
@@ -2183,7 +2423,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const handleZ = (it: EdItem): number => depthOf(it);
 
   // AN OBJECT OF A 3D BODY is placed in the body's frame, which stands off the
-  // plane and tilts (`EdModel.bodies3d`, `itemMatrix`), while its handlers speak
+  // plane and tilts (`EdItem.z`/`tilt`, `itemMatrix`), while its handlers speak
   // the plane's coordinates. This carries what they say into the body's frame
   // and what the handles do back out of it, so the handles stand on the object
   // where it is drawn rather than where it would be on an untilted plane at
@@ -2289,7 +2529,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (solid) return solid;
     const c = bodyCentroid(items);
     const at = new THREE.Vector3(c.x, threeY(c.y), 0);
-    const lift = items.length ? bodyLift(items[0]!.bodyId) : null;
+    const lift = items.length ? bodyLift(items[0]!.unit) : null;
     return lift ? at.applyMatrix4(lift) : at;
   }
 
@@ -2298,16 +2538,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // stands off and tilts (`bodyLift`), carried back out of it.
   function bodyTurnCentre(items: readonly EdItem[]): Vec2 {
     const p = bodyTurnPoint(items);
-    const lift = items.length ? bodyLift(items[0]!.bodyId) : null;
+    const lift = items.length ? bodyLift(items[0]!.unit) : null;
     if (lift) p.applyMatrix4(lift.invert());
     return new Vec2(p.x, threeY(p.y));
   }
 
-  // A 3D body's frame as a transform of the plane its objects are placed in
-  // (`body3dLift`). Null for a body in the plane.
-  function bodyLift(bodyId: number): THREE.Matrix4 | null {
-    const space = model.bodies3d.get(bodyId);
-    return space ? body3dLift(bodyFrameOf(model, bodyId), space) : null;
+  // A 3D frame as a transform of the plane its placement is in: what carries
+  // a point of that plane to where the frame's depth and tilt put it. Null for
+  // a unit in the plane.
+  function bodyLift(unit: string): THREE.Matrix4 | null {
+    const w = worldOfNode(model, unit);
+    if (w.z === 0 && w.tilt[0] === 0 && w.tilt[1] === 0) return null;
+    return poseMatrix(w).multiply(planeMatrix(w.pos, w.rot).invert());
   }
 
   // The handles for one object: on it where its body draws it, and on the
@@ -2316,7 +2558,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const find = (): EdItem | null => model.items.find((b) => b.id === id) ?? null;
     const lift = (): THREE.Matrix4 | null => {
       const it = find();
-      return it ? bodyLift(it.bodyId) : null;
+      return it ? bodyLift(it.unit) : null;
     };
     return pivoted(lifted(itemHandlers(id), lift), () => {
       const it = find();
@@ -2516,53 +2758,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // is a placement and an arrangement - so the handles offered are a move in the
   // plane and a turn about the centre of mass, which is the point the built body
   // rotates about and exactly what the 2D group handle turns it about.
-  // A 3D BODY'S HANDLES (`EdModel.bodies3d`): the full gizmo, as any 3D
-  // editor gives an object - move along x, y and z, turn about all three -
-  // at the body's own origin and in its own orientation. A move carries the
-  // frame and its items in the plane and writes the depth; a turn writes the
-  // tilt and turns the items about the frame's origin in the plane.
-  function body3dHandlers(id: number): GizmoHandlers {
-    const members = (): EdItem[] => bodyMembers(model.items, id);
-    const spaceOf = (): EdBody3d => model.bodies3d.get(id) ?? { z: 0, tilt: [0, 0] };
-    const quatOf = (frame: EdBodyFrame, space: EdBody3d): THREE.Quaternion =>
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(space.tilt[0], space.tilt[1], threeRotation(frame.rot), "ZYX"));
-    let base: { frame: EdBodyFrame; space: EdBody3d; pos: Map<number, Vec2> } | null = null;
+  // A 3D FRAME'S HANDLES - a rock standing off the plane, a `Node3D` - the
+  // full gizmo, as any 3D editor gives an object: move along x, y and z, turn
+  // about all three, at the node's own origin and in its own orientation.
+  // Everything under it is carried (`setNodeWorld`).
+  function body3dHandlers(id: string): GizmoHandlers {
+    const quatOf = (w: World3): THREE.Quaternion =>
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(w.tilt[0], w.tilt[1], threeRotation(w.rot), "ZYX"));
+    let base: World3 | null = null;
     return {
       pose() {
-        const frame = bodyFrameOf(model, id);
-        const space = spaceOf();
-        return { pos: new THREE.Vector3(frame.pos.x, threeY(frame.pos.y), space.z), quat: quatOf(frame, space) };
+        const w = worldOfNode(model, id);
+        return { pos: new THREE.Vector3(w.pos.x, threeY(w.pos.y), w.z), quat: quatOf(w) };
       },
       axes(mode): GizmoAxes {
-        if (!members().length || mode === "scale") return null; // a body has no size
+        if (!model.tree.nodes.has(id) || mode === "scale") return null; // a frame has no size
         return { x: true, y: true, z: true };
       },
       begin() {
         gizmoBegin();
-        // The frame is what everything here is measured about: written down
-        // before the edit, as every multi-object edit does (`pinBodyFrame`).
-        pinBodyFrame(model, id);
-        base = { frame: bodyFrameOf(model, id), space: spaceOf(), pos: new Map(members().map((m) => [m.id, m.pos])) };
+        base = worldOfNode(model, id);
       },
       apply(mode, pos, quat) {
         if (!base) return;
         if (mode === "translate") {
-          const d = snapVec(new Vec2(pos.x, threeY(pos.y))).sub(base.frame.pos);
-          for (const m of members()) {
-            const from = base.pos.get(m.id);
-            if (from) m.pos = from.add(d);
-          }
-          model.bodyFrames.set(id, { pos: base.frame.pos.add(d), rot: base.frame.rot });
-          model.bodies3d.set(id, { z: snapOn ? Math.round(pos.z / gridStep) * gridStep : pos.z, tilt: base.space.tilt });
+          setNodeWorld(model, id, {
+            ...base,
+            pos: snapVec(new Vec2(pos.x, threeY(pos.y))),
+            z: snapOn ? Math.round(pos.z / gridStep) * gridStep : pos.z,
+          });
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZYX");
-          const frame = bodyFrameOf(model, id);
-          rotateItemsAbout(model, members(), frame.pos, threeRotation(e.z) - frame.rot);
-          // ...and carried to where the turn about the handles leaves the frame
-          // (`pivoted`): the frame's own place, unmoved, when the handles stand
-          // on it.
-          translateItems(model, members(), new Vec2(pos.x, threeY(pos.y)).sub(bodyFrameOf(model, id).pos));
-          model.bodies3d.set(id, { z: pos.z, tilt: [e.x, e.y] });
+          setNodeWorld(model, id, { pos: new Vec2(pos.x, threeY(pos.y)), rot: threeRotation(e.z), z: pos.z, tilt: [e.x, e.y] });
         }
         gizmoTouched();
       },
@@ -2573,7 +2800,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
   }
 
-  function bodyHandlers(id: number): GizmoHandlers {
+  function bodyHandlers(id: string): GizmoHandlers {
     const members = (): EdItem[] => bodyMembers(model.items, id);
     let base: {
       centre: Vec2;
@@ -2620,7 +2847,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // Written from the base for the same reason the members are: the drag
           // re-applies its whole displacement each frame rather than adding to
           // what it did last, so the frame has to be re-derived, not advanced.
-          model.bodyFrames.set(id, { pos: base.frame.pos.add(d), rot: base.frame.rot });
+          const frame = model.tree.nodes.get(id);
+          if (frame && frame.item === null) frame.pos = base.frame.pos.add(d);
         } else if (mode === "rotate") {
           // The ring returns to zero when the drag ends (`pose` answers the
           // identity), so what it means is a DELTA, exactly as the 2D group
@@ -2649,7 +2877,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // body turns about the centre of mass the engine mounts it at; a selection is
   // an arrangement, and what an arrangement has is a place and an angle.
   type GizmoTarget =
-    | { kind: "item" | "body" | "decoration"; id: number }
+    | { kind: "item" | "decoration"; id: number }
+    | { kind: "body"; id: string }
     | { kind: "selection"; ids: number[] }
     | { kind: "berry"; vineId: number; index: number }
     | { kind: "solid"; key: string };
@@ -2818,7 +3047,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           : t.kind === "solid"
             ? `solid:${t.key}`
             : // A body made 3D (or 2D) is a different set of handles.
-              `${t.kind}:${t.id}${t.kind === "body" && model.bodies3d.has(t.id) ? ":3d" : ""}`;
+              `${t.kind}:${t.id}${t.kind === "body" && isFrame3D(t.id) ? ":3d" : ""}`;
+
+  // Is this unit a frame standing in the scene rather than the plane - a rock
+  // with no body, a `Node3D` - and so moved with the full 3D handles?
+  function isFrame3D(id: string): boolean {
+    const n = model.tree.nodes.get(id);
+    return !!n && (n.type === "Node3D" || (n.type === "Formation3D" && bodyAbove(model.tree, id) === null));
+  }
 
   // What moves a target, for the gizmo's handles and for **G** alike, so the
   // two move the same thing the same way, in one undo step each.
@@ -2832,7 +3068,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           : spec.kind === "decoration"
             ? (decorations.gizmo(spec.id) ?? objectHandlers(spec.id))
             : spec.kind === "body"
-            ? model.bodies3d.has(spec.id)
+            ? isFrame3D(spec.id)
               ? pivoted(body3dHandlers(spec.id), () => solidCentre(bodyMembers(model.items, spec.id)))
               : bodyHandlers(spec.id)
             : objectHandlers(spec.id);
@@ -3286,6 +3522,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   function markDirty(): void {
+    // The tree and the lists agree after every edit (`reconcileTree`).
+    reconcileTree(model);
     if (model.items.some((i) => i.layer === "fog")) model.fogRegionsEnabled = true;
     // Every edit leaves a root a tree (rootEditing.ts): a branch whose parent
     // went away is a trunk, and every branch starts on its parent again.
@@ -3293,7 +3531,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     dirty = true;
     modelRev++;
     scheduleAutosave();
-    saveAssetSoon();
+    savePrefabSoon();
     updateTitle();
   }
 
@@ -3465,7 +3703,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // switch flipped - which is rebuilt in place, body by body; and where
       // the decorations stand, moved in place.
       scene3d.restyleDebug(data.bodies);
-      scene3d.moveDecorations(data.bodies);
+      scene3d.moveDecorations(data.tree ?? []);
       return;
     }
     const world = new World();
@@ -3482,6 +3720,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     itemOfSceneObject = itemOf;
     sceneObjectOfItem = new Map();
     for (const [object, id] of itemOfSceneObject) sceneObjectOfItem.set(id, object);
+    // The look - rocks, decorations, models - is drawn from the level's tree
+    // (render3d/treeLook.ts) and answers a pick with its NODE's id.
+    for (const i of model.items) {
+      if (i.object === "formation" || i.object === "decoration" || i.object === "model") {
+        itemOfSceneObject.set(i.node as unknown as SceneTag, i.id);
+        sceneObjectOfItem.set(i.id, i.node as unknown as SceneTag);
+      }
+    }
     sceneLevel = {
       world,
       vines: vinePaths.map(({ color, braidSeed, rope, points, restLength, attachedAtBothEnds, starberry }) => ({
@@ -3542,9 +3788,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     highlightKey = key;
     // The hidden bodies' drawn objects (H), from the same map.
     const hiddenTags = new Set<unknown>();
-    if (hiddenBodies.size) {
+    if (hiddenBodies.size || hiddenUserLayers.size) {
       for (const item of model.items) {
-        if (!hiddenBodies.has(item.bodyId)) continue;
+        if (!itemHidden(item)) continue;
         const object = sceneObjectOfItem.get(item.id);
         if (object) hiddenTags.add(object);
       }
@@ -3565,7 +3811,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (object) tags.set(object, color);
     };
     for (const item of model.items) {
-      if (selectedBodyIds.has(item.bodyId)) paint(item.id, BODY_MEMBER);
+      if (selectedBodyIds.has(item.unit)) paint(item.id, BODY_MEMBER);
     }
     // Second, so an object picked out of a selected body reads as the selection
     // rather than as one more of its siblings.
@@ -3861,8 +4107,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The spawn override is baked in here rather than into the model, so a
   // spot-check never edits the level, and a reset (and the exported bundle)
   // respawns at the same place.
+  // The level as it compiles, flat: what a bundle embeds, so a test replays
+  // as played whatever the prefabs it places become later. Without its tree,
+  // which the run's own load rebuilds from the flat form.
   function testDataFor(spawn: Vec2 | undefined): LevelData {
-    const pixelData = spawnWithoutEntry(modelToDisk(model));
+    const { tree: _tree, ...flat } = modelToFlatDisk(model);
+    const pixelData = spawnWithoutEntry(flat);
     if (spawn) {
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
@@ -3995,21 +4245,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   root.appendChild(brand);
   root.appendChild(bar);
 
-  // What is being edited: the level, or the Assets tab's reusable rocks. (How
-  // it is seen is the one 3D view's, the same for both.)
-  // The Formations workspace's alone: an asset is a rock and nothing else.
-  const workspaceBtns: Partial<Record<"level" | "assets", HTMLButtonElement>> = {};
-  let assetsRow: HTMLElement | null = null;
+  // What is being edited: the level, or a prefab (the Prefabs tab). How it
+  // is seen is the one 3D view's, the same for both.
+  const workspaceBtns: Partial<Record<"level" | "prefabs", HTMLButtonElement>> = {};
   if (visuals) {
     const row = el("div", "ed-row");
-    assetsRow = row;
     bar.appendChild(row);
-    workspaceBtns.level = button("Level", () => openAssets(false));
+    workspaceBtns.level = button("Level", () => {
+      prefabsShown = false;
+      if (prefabMode) void closePrefab();
+      else {
+        refreshDocButtons();
+        rebuildInspector();
+      }
+    });
     workspaceBtns.level.title = "Edit the level";
-    workspaceBtns.assets = button("Assets", () => openAssets(!assetMode));
-    workspaceBtns.assets.title =
-      "Make reusable rocks for the model library from free guides, and come back to the level as it was (docs/formations.md, \"The Assets tab\")";
-    row.append(workspaceBtns.level, workspaceBtns.assets);
+    workspaceBtns.prefabs = button("Prefabs", () => {
+      prefabsShown = !prefabsShown || prefabMode;
+      refreshDocButtons();
+      rebuildInspector();
+    });
+    workspaceBtns.prefabs.title = "The prefab library: shared node trees to place, open and make (plans/node-tree.md \"Prefabs\")";
+    row.append(workspaceBtns.level, workspaceBtns.prefabs);
     workspaceBtns.level.classList.add("active");
   }
 
@@ -4136,7 +4393,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Draw a root: click out its curve from base to tip - press and drag to pull out a node's Bézier handles - and Enter or a double-click grows it. Start a stroke ON a root to grow a branch out of it, at any depth. Roots are hook-only and static; tick pivot on the body to make one spring about its base.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   toolBtns.glow.title =
-    "Click to drop a glowing mushroom: one static body holding a collision box and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. Name the body and model it in the level's Blender scene; what glows in its model follows the light. The 3D preview shows it awake.";
+    "Click to drop a glowing mushroom: one static body holding a collision box and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. Give the body a model (or a formation) for its look; what glows in it follows the light. The 3D preview shows it awake.";
   toolBtns.fireflies.title =
     "Click to drop a swarm of fireflies: a body holding only the swarm's light, which is where they hover. When the ball comes within the dashed ring they follow it for the rest of the run, looping around it and lighting it wherever it goes - or, given a firefly path (the fireflies layer) in their `path` field, along that path until the player reaches its end.";
   toolBtns.checkpoint.title =
@@ -4156,7 +4413,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const sel = selectedBodies();
     if (sel.length) {
       beginAction();
-      for (const b of sel) b.kind = newKind;
+      for (const b of sel) propsOf(b).kind = newKind;
       markDirty();
       rebuildInspector();
     }
@@ -4392,7 +4649,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const made = createBackdrop(formationHost, at, newPrimitive(kind, [0, 0, 0]));
     if (!made) return;
     revealGuide(made);
-    setBodySelection(made.bodyId);
+    setBodySelection(made.unit);
   }
   // A guide just made, or just added a shape to, is drawn whatever Show ->
   // Guides says: it was made to be worked on, and with it hidden the add
@@ -4453,7 +4710,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       canvas,
       ndc: (scr) => vis.ndc(scr),
       item: (id) => itemOf(id) ?? undefined,
-      stillSelected: (item) => selectedIds.has(item.id) || selectedBodyIds.has(item.bodyId),
+      stillSelected: (item) => selectedIds.has(item.id) || selectedBodyIds.has(item.unit),
       frame: (item) => itemMatrix(item),
       color: guideHex,
       formation: formationHost,
@@ -4478,7 +4735,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // The formations selected, or in a selected body.
   function selectedFormations(): EdItem[] {
-    return model.items.filter((i) => i.object === "formation" && (selectedIds.has(i.id) || selectedBodyIds.has(i.bodyId)));
+    return model.items.filter((i) => i.object === "formation" && (selectedIds.has(i.id) || selectedBodyIds.has(i.unit)));
   }
   // What a formation shows now, as the dock's buttons say it (null: nothing).
   function viewOf(f: EdItem): FormationView | null {
@@ -4777,6 +5034,110 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     setLayerLocked(l, false); // ditto
   }
 
+  // DATA LAYERS (plans/node-tree.md "Editor"): the user's own, under the
+  // type filters above. Each has an eye and a lock, and assigns or unassigns
+  // the selection; a node is in its ancestors' layers too, so a layer holding
+  // a body holds everything in it. Made with `+`, removed with `×` (which
+  // takes it off every node).
+  const dataLayerList = el("div", "ed-layers ed-data-layers");
+  bar.appendChild(dataLayerList);
+  function buildDataLayers(): void {
+    dataLayerList.innerHTML = "";
+    const head = el("div", "ed-layer-label");
+    head.textContent = "Data layers";
+    const add = button("+", () => {
+      const input = document.createElement("input");
+      input.className = "ed-out-rename";
+      input.placeholder = "layer name";
+      head.appendChild(input);
+      input.focus();
+      const done = (keep: boolean): void => {
+        const name = input.value.trim();
+        input.remove();
+        if (!keep || !name || model.dataLayers.includes(name)) return;
+        beginAction();
+        model.dataLayers.push(name);
+        markDirty();
+        buildDataLayers();
+      };
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") done(true);
+        if (e.key === "Escape") done(false);
+      });
+      input.addEventListener("blur", () => done(true));
+    });
+    add.title = "Make a data layer";
+    head.appendChild(add);
+    dataLayerList.appendChild(head);
+    const selection = (): string[] => [...selectedNodeIds()];
+    for (const name of model.dataLayers) {
+      const row = el("div", "ed-layer-row");
+      const eye = document.createElement("button");
+      eye.className = "ed-eye";
+      const shown = !hiddenUserLayers.has(name);
+      eye.innerHTML = eyeIcon(shown);
+      eye.classList.toggle("off", !shown);
+      eye.title = `${shown ? "Hide" : "Show"} everything in ${name}`;
+      eye.addEventListener("click", () => {
+        if (!hiddenUserLayers.delete(name)) hiddenUserLayers.add(name);
+        hiddenRev++;
+        modelRev++;
+        buildDataLayers();
+      });
+      const lock = document.createElement("button");
+      lock.className = "ed-eye ed-lock";
+      const locked = lockedUserLayers.has(name);
+      lock.innerHTML = lockIcon(locked);
+      lock.classList.toggle("on", locked);
+      lock.title = `${locked ? "Unlock" : "Lock"} everything in ${name}`;
+      lock.addEventListener("click", () => {
+        if (!lockedUserLayers.delete(name)) lockedUserLayers.add(name);
+        modelRev++;
+        buildDataLayers();
+      });
+      const label = el("span", "ed-layer-name");
+      const count = [...model.tree.nodes.values()].filter((n) => n.layers.includes(name)).length;
+      label.textContent = `${name} (${count})`;
+      const assign = button("+sel", () => {
+        const ids = selection();
+        if (!ids.length) return;
+        beginAction();
+        for (const id of ids) {
+          const n = model.tree.nodes.get(id);
+          if (n && !n.layers.includes(name)) n.layers.push(name);
+        }
+        markDirty();
+        buildDataLayers();
+      });
+      assign.title = `Put the selection in ${name}`;
+      const unassign = button("−sel", () => {
+        const ids = selection();
+        if (!ids.length) return;
+        beginAction();
+        for (const id of ids) {
+          const n = model.tree.nodes.get(id);
+          if (n) n.layers = n.layers.filter((l) => l !== name);
+        }
+        markDirty();
+        buildDataLayers();
+      });
+      unassign.title = `Take the selection out of ${name}`;
+      const remove = button("×", () => {
+        beginAction();
+        model.dataLayers = model.dataLayers.filter((l) => l !== name);
+        for (const n of model.tree.nodes.values()) n.layers = n.layers.filter((l) => l !== name);
+        hiddenUserLayers.delete(name);
+        lockedUserLayers.delete(name);
+        markDirty();
+        buildDataLayers();
+      });
+      remove.title = `Remove the layer ${name} (every node leaves it)`;
+      row.append(eye, lock, label, assign, unassign, remove);
+      dataLayerList.appendChild(row);
+    }
+  }
+
   // Show or hide a layer. Hiding everything would leave a blank canvas nothing
   // can be clicked on, so the last visible layer refuses to go; hiding the one
   // being edited moves the edit focus rather than leaving an invisible target.
@@ -4957,7 +5318,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       writeViewSetting("scene", v);
     });
     sceneChk.title =
-      "Draw the level's Blender scene - the scenery and what dresses the bodies - here and in ▶ Test. Untick to see the collision and what the game draws itself (water, belts, chains, lights, the ball) on their own; hidden scenery is not picked or dropped onto. An editor setting: the game always draws it.";
+      "Draw the bodies' look - their formations, decorations and models - here and in ▶ Test. Untick to see the collision and what the game draws itself (water, belts, chains, lights, the ball) on their own; a hidden look is not picked or dropped onto. An editor setting: the game always draws it.";
     testRow.append(sceneChk);
   }
 
@@ -5020,9 +5381,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!boot && (ws === workspace || mode !== "edit")) return;
     workspace = ws;
     writeWorkspace(ws);
-    // An asset is a rock: the Assets tab is Formations'. The decoration
-    // palette and brush are Decorations'.
-    if (ws !== "formations" && assetMode) openAssets(false);
     // The brush is the workspace's: leaving it ends it.
     decorations.end();
     // The library is read again while Texturing is open: a material saved
@@ -5069,7 +5427,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     formationsDock.style.display = ws === "formations" ? "" : "none";
     decorationsDock.style.display = ws === "decorations" ? "" : "none";
     texturingDock.style.display = ws === "texturing" ? "" : "none";
-    if (assetsRow) assetsRow.style.display = ws === "formations" ? "" : "none";
     for (const [w, b] of workspaceTabBtns) {
       b.classList.toggle("active", w === ws);
       b.setAttribute("aria-selected", String(w === ws));
@@ -5144,247 +5501,394 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   outlinerHead.append(outlinerToggle, outlinerTitle);
   outliner.append(outlinerHead, outlinerBody);
 
-  // Which bodies are expanded, kept across rebuilds so a drag does not collapse
-  // the tree under the pointer. Keyed by body id rather than by row index, since
-  // the row index moves whenever anything is added.
-  const expandedBodies = new Set<number>();
-  // What the tree was last built from. The list is a few hundred rows on a real
-  // level, so it is rebuilt when the MODEL changes and only re-highlighted when
-  // the selection does.
+  // THE SCENE TREE (plans/node-tree.md "Editor"): every node of the level,
+  // nested as the level is nested. A row click selects exactly that node,
+  // grouped or not, as Godot's does; a drag moves a node under another (onto
+  // a row) or among its siblings (between rows), keeping where it stands in
+  // the world - Alt keeps its numbers instead, so it lands at the same offset
+  // on its new parent. A row's `+` adds a node under it, a double-click
+  // renames it. The breadcrumb over the list is the path of what is selected.
+  //
+  // Which nodes are open, kept across rebuilds so a drag does not collapse the
+  // tree under the pointer. Keyed by node id, which never changes.
+  const expandedBodies = new Set<string>();
+  // What the tree was last built from. A real level is several hundred nodes,
+  // so it is rebuilt when the MODEL changes and only re-highlighted when the
+  // selection does.
   let outlinerRev = -1;
-
-  // What the tree was last highlighted for, so a selection made on the CANVAS
-  // can be scrolled to without the scroll fighting the user every frame: a real
-  // level is a couple of hundred bodies, and highlighting a row a hundred rows
-  // off-screen is the same as not highlighting it.
+  // What the tree was last highlighted for, so a selection made on the canvas
+  // is scrolled to once, not fought for every frame.
   let outlinerSelKey = "";
+  // The breadcrumb: the selected node's path of names.
+  const outlinerCrumb = el("div", "ed-out-crumb");
+  outliner.insertBefore(outlinerCrumb, outlinerBody);
+
+  // The node ids a row stands for, by kind of selection it answers to.
+  const nodeRows = new Map<string, HTMLElement>();
+
+  // Every node the canvas selection covers: the items' nodes, the selected
+  // frames, chains and vines.
+  function selectedNodeIds(): Set<string> {
+    const out = new Set<string>(selectedBodyIds);
+    for (const id of selectedIds) {
+      const item = itemOf(id);
+      if (item) out.add(item.node);
+    }
+    for (const n of model.tree.nodes.values()) {
+      if ((n.chain !== null && selectedChainIds.has(n.chain)) || (n.vine !== null && selectedVineIds.has(n.vine))) out.add(n.id);
+    }
+    return out;
+  }
 
   function refreshOutliner(): void {
     if (outlinerRev !== modelRev) {
       outlinerRev = modelRev;
       buildOutliner();
     }
+    const sel = selectedNodeIds();
     let first: HTMLElement | null = null;
-    for (const [row, ids] of outlinerRows) {
-      const on = ids.length > 0 && ids.some((id) => selectedIds.has(id));
+    for (const [id, row] of nodeRows) {
+      const on = sel.has(id);
       row.classList.toggle("sel", on);
       if (on && !first) first = row;
     }
-    for (const [row, id] of bodyRows) {
-      const on = selectedBodyIds.has(id);
-      row.classList.toggle("sel", on);
-      if (on && !first) first = row;
-    }
-    for (const [row, id] of chainRows) {
-      const on = selectedChainIds.has(id);
-      row.classList.toggle("sel", on);
-      if (on && !first) first = row;
-    }
-    for (const [row, id] of vineRows) {
-      const on = selectedVineIds.has(id);
-      row.classList.toggle("sel", on);
-      if (on && !first) first = row;
-    }
-    const bodyKey = [...selectedBodyIds].sort((a, b) => a - b).join(",");
-    const chainKey = [...selectedChainIds].sort((a, b) => a - b).join(",");
-    const vineKey = [...selectedVineIds].sort((a, b) => a - b).join(",");
-    const key = `${bodyKey}|${chainKey}|${vineKey}|${[...selectedIds].sort((a, b) => a - b).join(",")}`;
+    const only = sel.size === 1 ? [...sel][0]! : null;
+    outlinerCrumb.textContent = only ? pathOf(model.tree, only) : sel.size ? `${sel.size} nodes` : "";
+    const key = [...sel].sort().join(",");
     if (key === outlinerSelKey) return;
     outlinerSelKey = key;
     first?.scrollIntoView({ block: "nearest" });
   }
 
-  // Every row, with the item ids it stands for - one for an object row, all of
-  // the body's for a body row.
-  const outlinerRows: Array<[HTMLElement, number[]]> = [];
-  // Body rows are highlighted by the BODY selection rather than by the item one,
-  // since the two are different selections. Chain rows are a third, for the same
-  // reason: a chain has its own selection because it has nothing an item panel
-  // could say about it.
-  const bodyRows: Array<[HTMLElement, number]> = [];
-  const chainRows: Array<[HTMLElement, number]> = [];
-  const vineRows: Array<[HTMLElement, number]> = [];
+  // A short mark for a node's class: what it is at a glance.
+  const TYPE_MARK: Partial<Record<NodeType, string>> = {
+    Node: "○",
+    Node2D: "◇",
+    Node3D: "◆",
+    StaticBody2D: "▣",
+    AnimatableBody2D: "⟳",
+    RigidBody2D: "●",
+    Area2D: "▢",
+    CollisionShape2D: "▭",
+    Anchor2D: "⚓",
+    Spawn2D: "☺",
+    Checkpoint2D: "⚑",
+    CameraRegion2D: "⬚",
+    CameraPath2D: "⤳",
+    FireflyPath2D: "✦",
+    Shelter2D: "⌂",
+    FogRegion2D: "≋",
+    Note2D: "✎",
+    Formation3D: "⛰",
+    Decoration3D: "❦",
+    Model3D: "⬢",
+    Light3D: "☀",
+    Chain: "⛓",
+    Vine: "⌇",
+    Instance: "⧉",
+  };
+
+  // The class a node shows as: a body's follows what it is now.
+  // A placed prefab shows as one (its root's class is in its title).
+  const shownType = (n: EdNode): NodeType => (n.instance ? "Instance" : n.body ? bodyNodeType(n.body) : n.type);
+  // The class a node is: a placed prefab's is its root's.
+  const classOfNode = (n: EdNode): NodeType => (n.instance ? ((n.extra["rootType"] as NodeType | undefined) ?? "Node2D") : shownType(n));
+  // The children a scene-tree row lists: a placed prefab's insides only once
+  // they are made editable, what was added under it always.
+  const listedChildren = (n: EdNode): string[] =>
+    n.instance && !n.instance.editable ? n.children.filter((c) => model.tree.nodes.get(c)?.extra["inInstance"] !== n.id) : n.children;
+
+  // Is a node shown in the scene tree in this workspace: its own item is in
+  // the workspace, or something under it is.
+  function inTreeWorkspace(n: EdNode): boolean {
+    if (workspace === "2d") return true;
+    const item = n.item !== null ? itemOf(n.item) : null;
+    if (item && inWs(item)) return true;
+    return n.children.some((c) => {
+      const k = model.tree.nodes.get(c);
+      return !!k && inTreeWorkspace(k);
+    });
+  }
+
+  // Where a drag would drop: onto a row (under it) or between two (among its
+  // siblings, before or after it).
+  let treeDrag: string | null = null;
+  function dropOf(row: HTMLElement, e: DragEvent): "into" | "before" | "after" {
+    const r = row.getBoundingClientRect();
+    const t = (e.clientY - r.top) / Math.max(1, r.height);
+    return t < 0.25 ? "before" : t > 0.75 ? "after" : "into";
+  }
+
   function buildOutliner(): void {
-    outlinerRows.length = 0;
-    bodyRows.length = 0;
-    chainRows.length = 0;
-    vineRows.length = 0;
+    nodeRows.clear();
     outlinerBody.innerHTML = "";
-    // The workspace's bodies, and in each only what it works on (`inWs`): the
-    // rocks and their guides' collision in Formations, the rocks and what
-    // grows on them in Decorations. Numbered as the level numbers them, so a
-    // body is the same number in every workspace.
-    const allRuns = bodyRuns(model.items.filter((i) => i.layer === "scene"));
-    const runs = allRuns
-      .map((m) => m.filter(inWs))
-      .filter((m) => (workspace === "2d" ? m.length > 0 : m.some((i) => i.object === "formation")));
-    const numberOf = new Map(allRuns.map((m, i) => [m[0]!.bodyId, i] as const));
-    outlinerTitle.textContent = `${workspace === "2d" ? "Bodies" : "Rocks"} (${runs.length})`;
-    runs.forEach((members: EdItem[]) => {
-      const id = members[0]!.bodyId;
-      const index = numberOf.get(id) ?? 0;
-      const open = expandedBodies.has(id);
-      const row = el("div", "ed-out-row body");
-      // EVERY body expands, including one holding a single object. A body and a
-      // scene object are two different things - one is a container with a
-      // transform, a kind and a fill, the other is a shape or a light inside it -
-      // and a row that collapsed the two whenever a body happened to hold one
-      // object would teach exactly the confusion this refactor removed. It also
-      // makes the count of rows stop matching the count of bodies as objects are
-      // added and removed, which is the thing the panel is read for.
-      const twist = el("span", "ed-out-twist live");
-      twist.textContent = open ? "▾" : "▸";
+    let count = 0;
+    const addRow = (n: EdNode, depth: number): void => {
+      if (!inTreeWorkspace(n)) return;
+      count++;
+      const open = expandedBodies.has(n.id);
+      const type = shownType(n);
+      const row = el("div", `ed-out-row node${n.body ? " body" : ""}${n.item !== null ? " obj" : ""}`);
+      row.style.paddingLeft = `${depth}ch`;
+      row.draggable = true;
+      const listed = listedChildren(n);
+      const twist = el("span", `ed-out-twist${listed.length ? " live" : ""}`);
+      twist.textContent = listed.length ? (open ? "▾" : "▸") : "";
       twist.addEventListener("mousedown", (e) => {
         e.stopPropagation();
         e.preventDefault();
-        if (open) expandedBodies.delete(id);
-        else expandedBodies.add(id);
+        if (!listed.length) return;
+        if (open) expandedBodies.delete(n.id);
+        else expandedBodies.add(n.id);
         buildOutliner();
         refreshOutliner();
       });
+      const mark = el("span", "ed-out-type");
+      mark.textContent = TYPE_MARK[type] ?? "·";
+      const cls = classOfNode(n);
+      mark.title = n.instance ? `Instance of the prefab ${n.instance.prefab} (a ${cls})` : type;
+      const dim = el("span", "ed-out-dim");
+      dim.textContent = is3D(cls) ? "3D" : cls === "Node" || cls === "Chain" || cls === "Vine" || cls === "Instance" ? "" : "2D";
       const label = el("span", "ed-out-label");
-      // Labelled as the whole body is (its kind and name), whatever the
-      // workspace lists of it.
-      label.textContent = `${index}  ${bodyLabel(bodyMembers(model.items, id))}`;
-      const count = el("span", "ed-out-count");
-      count.textContent = `${members.length}`;
-      // Shown or hidden (H), as the layers' eyes say it; a click on it does
-      // not select the body.
-      const hidden = hiddenBodies.has(id);
+      label.textContent = n.name;
+      label.title = `${pathOf(model.tree, n.id)} · ${type}${n.item !== null ? ` · ${objectLabel(itemOf(n.item)!, M2PX)}` : ""}`;
+      label.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        renameNodeInline(n, label);
+      });
+      const group = el("span", "ed-out-group");
+      group.textContent = n.grouped ? "⊞" : "";
+      group.title = n.grouped ? "Grouped: a click on the canvas selects this first (Ctrl+Shift+G ungroups)" : "";
+      const add = el("span", "ed-out-add");
+      add.textContent = "+";
+      add.title = "Add a node under this one";
+      add.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        showAddChildMenu(n.id, add);
+      });
+      const hidden = hiddenBodies.has(n.id);
       const eye = document.createElement("button");
       eye.className = "ed-eye ed-out-eye";
       eye.innerHTML = eyeIcon(!hidden);
       eye.classList.toggle("off", hidden);
-      eye.title = `${hidden ? "Show" : "Hide"} this body (H hides the selection, Alt+H shows everything)`;
+      eye.title = `${hidden ? "Show" : "Hide"} this node (H hides the selection, Alt+H shows everything)`;
       eye.addEventListener("mousedown", (e) => {
         e.stopPropagation();
         e.preventDefault();
-        setBodiesHidden([id], !hiddenBodies.has(id));
+        setBodiesHidden([n.id], !hiddenBodies.has(n.id));
       });
-      row.classList.toggle("hidden", hidden);
-      row.append(twist, label, count, eye);
-      // Selecting a body selects THE BODY - not the objects in it. That is the
-      // whole point of the row existing: a body has properties of its own, and
-      // they are what the inspector should offer when you click one.
-      //
-      // Shift or Ctrl extends, which is how two bodies are picked to be merged.
+      row.classList.toggle("hidden", hidden || n.disabled);
+      row.append(twist, mark, dim, label, group, add, eye);
       row.addEventListener("mousedown", (e) => {
-        e.preventDefault();
+        if (e.button !== 0) return;
         e.stopPropagation();
-        // Combining guides: the row picks its body's guide instead.
+        // Combining guides: the row picks its formation instead.
         if (combine) {
-          const f = members.find((m) => m.object === "formation");
+          const f = membersOf(model, n.id).find((m) => m.object === "formation");
           if (f) toggleCombinePick(f.id);
           return;
         }
-        if (e.shiftKey || e.ctrlKey || e.metaKey) toggleBodySelection(id);
-        else setBodySelection(id);
+        pickNodeRow(n, e.shiftKey || e.ctrlKey || e.metaKey);
+      });
+      row.addEventListener("dragstart", (e) => {
+        if (n.extra["spawn"] === true) {
+          e.preventDefault();
+          return;
+        }
+        treeDrag = n.id;
+        e.dataTransfer?.setData("text/plain", n.id);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      });
+      row.addEventListener("dragend", () => {
+        treeDrag = null;
+        for (const r of nodeRows.values()) r.classList.remove("drop-into", "drop-before", "drop-after");
+      });
+      row.addEventListener("dragover", (e) => {
+        if (treeDrag === null || treeDrag === n.id) return;
+        const where = dropOf(row, e);
+        const parent = where === "into" ? n.id : n.parent;
+        if (canParent(model.tree, treeDrag, parent) !== null) return;
+        e.preventDefault();
+        row.classList.remove("drop-into", "drop-before", "drop-after");
+        row.classList.add(`drop-${where}`);
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("drop-into", "drop-before", "drop-after"));
+      row.addEventListener("drop", (e) => {
+        e.preventDefault();
+        row.classList.remove("drop-into", "drop-before", "drop-after");
+        const dragged = treeDrag;
+        treeDrag = null;
+        if (dragged === null || dragged === n.id) return;
+        const where = dropOf(row, e);
+        const parent = where === "into" ? n.id : n.parent;
+        const siblings = where === "into" ? n.children : n.parent === null ? model.tree.roots : model.tree.nodes.get(n.parent)!.children;
+        const index = where === "into" ? undefined : siblings.indexOf(n.id) + (where === "after" ? 1 : 0);
+        moveNodeTo(dragged, parent, index, e.altKey);
       });
       outlinerBody.appendChild(row);
-      outlinerRows.push([row, []]);
-      bodyRows.push([row, id]);
+      nodeRows.set(n.id, row);
       if (!open) return;
-      for (const m of members) {
-        const objRow = el(
-          "div",
-          `ed-out-row obj ${
-            m.object === "light" ? "light" : m.object === "anchor" ? "anchor" : m.object === "model" ? "model" : "solid"
-          }`,
-        );
-        const objLabel = el("span", "ed-out-label");
-        objLabel.textContent = objectLabel(m, M2PX);
-        objRow.append(el("span", "ed-out-twist"), objLabel);
-        // ...and selecting ONE object selects only it, which is what Alt+click
-        // reaches for on the canvas. That is the whole point of the panel: the
-        // objects with no outline are not clickable there at all.
-        objRow.addEventListener("mousedown", (e) => pickRow(e, [m.id]));
-        outlinerBody.appendChild(objRow);
-        outlinerRows.push([objRow, [m.id]]);
+      for (const c of listed) {
+        const k = model.tree.nodes.get(c);
+        if (k) addRow(k, depth + 1);
       }
-    });
-
-    // CHAINS, after the bodies and not inside any of them - which is exactly what
-    // a chain is. Its two anchors are objects and appear under their own bodies
-    // above; the chain itself belonged to neither, so before this it was the one
-    // thing in a level with no row at all and could only be found by clicking the
-    // rope on the canvas.
-    const indexOfBodyRun = new Map<number, number>();
-    runs.forEach((members, i) => indexOfBodyRun.set(members[0]!.bodyId, i));
-    if (workspace !== "2d") return;
-    if (model.chains.length) buildChainRows(runs);
-    if (model.vines.length) buildVineRows(indexOfBodyRun);
-  }
-
-  // CHAINS, after the bodies and not inside any of them - which is exactly what
-  // a chain is. Its two anchors are objects and appear under their own bodies
-  // above; the chain itself belonged to neither, so before this it was the one
-  // thing in a level with no row at all and could only be found by clicking the
-  // rope on the canvas.
-  function buildChainRows(runs: EdItem[][]): void {
-    const head = el("div", "ed-out-row head");
-    head.append(el("span", "ed-out-twist"), el("span", "ed-out-label"));
-    head.lastElementChild!.textContent = `Chains (${model.chains.length})`;
-    outlinerBody.appendChild(head);
-    // Named by the two BODIES they hold, which is what a chain is read as - "the
-    // one between the winch and the gate" - rather than by ids nothing else
-    // shows. The index is the body's outliner number, so the name says where to
-    // look.
-    const indexOfBody = new Map<number, number>();
-    runs.forEach((members, i) => indexOfBody.set(members[0]!.bodyId, i));
-    const endLabel = (end: number): string => {
-      const anchor = anchorItem(model, end);
-      if (!anchor) return "?";
-      const i = indexOfBody.get(anchor.bodyId);
-      return i === undefined ? "?" : `${i}`;
     };
-    for (const c of model.chains) {
-      const row = el("div", "ed-out-row obj chain");
-      const label = el("span", "ed-out-label");
-      // The route: end, wrap points, end, each by the body it is on.
-      label.textContent = [c.a, ...c.via, c.b].map(endLabel).join(" ↔ ");
-      row.append(el("span", "ed-out-twist"), label);
-      if (c.length !== null) {
-        const len = el("span", "ed-out-count");
-        len.textContent = `${Math.round(c.length * M2PX)}`;
-        row.appendChild(len);
-      }
-      row.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setChainSelection([c.id]);
-      });
-      outlinerBody.appendChild(row);
-      chainRows.push([row, c.id]);
+    for (const r of model.tree.roots) {
+      const n = model.tree.nodes.get(r);
+      if (n) addRow(n, 0);
     }
+    outlinerTitle.textContent = `Scene (${model.tree.nodes.size})`;
+    void count;
   }
 
-  // ...and VINES, after them, for the same reason: a vine's one anchor is an
-  // object under its own body, and the vine itself belongs to no body at all.
-  // Named by the body it hangs from and how long it is, which is the whole of
-  // what a vine is.
-  function buildVineRows(indexOfBody: Map<number, number>): void {
-    const head = el("div", "ed-out-row head");
-    head.append(el("span", "ed-out-twist"), el("span", "ed-out-label"));
-    head.lastElementChild!.textContent = `Vines (${model.vines.length})`;
-    outlinerBody.appendChild(head);
-    for (const v of model.vines) {
-      const row = el("div", "ed-out-row obj chain");
-      const anchor = model.items.find((i) => i.id === v.anchor);
-      const at = anchor ? indexOfBody.get(anchor.bodyId) : undefined;
-      const label = el("span", "ed-out-label");
-      label.textContent = `from ${at === undefined ? "?" : at}`;
-      row.append(el("span", "ed-out-twist"), label);
-      const len = el("span", "ed-out-count");
-      len.textContent = `${Math.round(v.length * M2PX)}`;
-      row.append(len);
-      row.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setVineSelection([v.id]);
-      });
-      outlinerBody.appendChild(row);
-      vineRows.push([row, v.id]);
+  // A drag's drop, as one undo step: refused with the reason when the tree
+  // would not have the node there.
+  function moveNodeTo(id: string, parent: string | null, index: number | undefined, keepRelative: boolean): void {
+    if (canParent(model.tree, id, parent) !== null) {
+      flashNotice(canParent(model.tree, id, parent)!);
+      return;
     }
+    beginAction();
+    const why = moveNode(model, id, parent, index, keepRelative);
+    if (why) {
+      history.pop();
+      flashNotice(why);
+      return;
+    }
+    if (parent !== null) expandedBodies.add(parent);
+    markDirty();
+  }
+
+  // A row's name, edited where it stands: Enter keeps it (made free among its
+  // siblings), Escape or leaving puts it back.
+  function renameNodeInline(n: EdNode, label: HTMLElement): void {
+    const input = document.createElement("input");
+    input.className = "ed-out-rename";
+    input.value = n.name;
+    label.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (keep: boolean): void => {
+      if (done) return;
+      done = true;
+      const name = input.value.trim();
+      if (keep && name && name !== n.name) {
+        beginAction();
+        renameNode(model.tree, n.id, name);
+        markDirty();
+      } else {
+        outlinerRev = -1;
+        refreshOutliner();
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") finish(true);
+      if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+  }
+
+  // The `+` on a row: the nodes that may be added under it.
+  function showAddChildMenu(parent: string | null, anchor: HTMLElement): void {
+    const kinds: { type: NodeType; label: string }[] = [
+      { type: "Node2D", label: "Node2D (a group in the plane)" },
+      { type: "Node3D", label: "Node3D (a frame in the scene)" },
+      { type: "StaticBody2D", label: "StaticBody2D" },
+      { type: "RigidBody2D", label: "RigidBody2D" },
+      { type: "Area2D", label: "Area2D (killzone)" },
+      { type: "Anchor2D", label: "Anchor2D" },
+      { type: "Node", label: "Node (a folder)" },
+    ];
+    const menu = el("div", "ed-out-menu");
+    for (const k of kinds) {
+      const probe = { type: k.type } as EdNode;
+      void probe;
+      const item = el("div", "ed-out-menu-item");
+      item.textContent = `${TYPE_MARK[k.type] ?? ""} ${k.label}`;
+      item.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        menu.remove();
+        addChildNode(parent, k.type);
+      });
+      menu.appendChild(item);
+    }
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = `${r.right}px`;
+    menu.style.top = `${r.top}px`;
+    document.body.appendChild(menu);
+    const close = (e: MouseEvent): void => {
+      if (menu.contains(e.target as Node)) return;
+      menu.remove();
+      window.removeEventListener("mousedown", close, true);
+    };
+    window.addEventListener("mousedown", close, true);
+  }
+
+  // A new node under `parent`, standing where its parent is (or at the
+  // view's centre at the top level), and selected.
+  function addChildNode(parent: string | null, type: NodeType): void {
+    const at = parent !== null ? worldOfNode(model, parent) : { ...WORLD_ORIGIN, pos: camera.position };
+    if (type === "Anchor2D") {
+      const item: EdItem = { ...blankItem("scene", "anchor", ""), shape: { kind: "rect", w: ANCHOR_GIZMO, h: ANCHOR_GIZMO }, anchorId: newAnchorId(), pos: at.pos, rot: at.rot };
+      if (canParentNew(parent, "Anchor2D")) {
+        beginAction();
+        addItem(model, item, parent);
+        markDirty();
+        setSelection([item.id]);
+      }
+      return;
+    }
+    if (!canParentNew(parent, type)) return;
+    beginAction();
+    const body =
+      type === "StaticBody2D" || type === "RigidBody2D" || type === "Area2D" || type === "AnimatableBody2D"
+        ? { ...defaultBody(nextOrder(model.tree)), kind: (type === "RigidBody2D" ? "rigid" : type === "Area2D" ? "killzone" : "static") as BodyKind }
+        : undefined;
+    const n = addFrameNode(model, type, parent, { pos: at.pos, rot: at.rot, z: at.z, tilt: [at.tilt[0], at.tilt[1]], ...(body ? { body, grouped: true } : {}) });
+    if (parent !== null) expandedBodies.add(parent);
+    markDirty();
+    setBodySelection(n.id);
+  }
+
+  // Would a new node of `type` be allowed under `parent`? Asked of a stand-in
+  // so the rule stays the tree's (`canParent`).
+  function canParentNew(parent: string | null, type: NodeType): boolean {
+    const probe = "__probe__";
+    model.tree.nodes.set(probe, { ...model.tree.nodes.values().next().value!, id: probe, type, parent: null, children: [], body: type.endsWith("Body2D") || type === "Area2D" ? defaultBody(0) : null, item: null });
+    const why = canParent(model.tree, probe, parent);
+    model.tree.nodes.delete(probe);
+    if (why) flashNotice(why);
+    return why === null;
+  }
+
+  // A row click: exactly that node, extended with Shift or Ctrl.
+  function pickNodeRow(n: EdNode, extend: boolean): void {
+    if (n.chain !== null) return setChainSelection([n.chain]);
+    if (n.vine !== null) return setVineSelection([n.vine]);
+    if (n.item !== null) {
+      const item = itemOf(n.item);
+      // Picking on a hidden or locked layer would select something that cannot
+      // be seen or edited, so the row reveals it first.
+      if (item && (!visibleLayers.has(item.layer) || lockedLayers.has(item.layer))) {
+        setLayerVisible(item.layer, true);
+        setLayerLocked(item.layer, false);
+      }
+      if (extend) {
+        const next = new Set(selectedIds);
+        if (!next.delete(n.item)) next.add(n.item);
+        setSelection([...next]);
+      } else {
+        setSelection([n.item]);
+      }
+      return;
+    }
+    if (extend) toggleBodySelection(n.id);
+    else setBodySelection(n.id);
   }
 
   // A row click, with the same Shift-to-extend rule the canvas has. It
@@ -5423,7 +5927,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Bodies rather than items: a body is the unit the level is written in, and
     // the outliner counts the same thing the same way.
     const bodies = new Set(
-      model.items.filter((i) => i.layer === "scene").map((i) => i.bodyId),
+      model.items.filter((i) => i.layer === "scene").map((i) => i.unit),
     ).size;
     const lights = model.items.filter((i) => i.object === "light").length;
     // The notes layer holds two different things (see `EdNote`), so it is
@@ -5467,7 +5971,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           `${rootDraft.verts.length === 1 ? "node" : "nodes"} · drag to pull handles` +
           (rootDraft.verts.length >= 2 ? " · Enter to grow it" : "")
         : "";
-    const named = assetMode ? `asset ${assetName ?? "(unnamed)"}` : (currentName ?? "(unsaved)");
+    const named = prefabMode ? `prefab ${prefabName ?? "(unnamed)"}` : (currentName ?? "(unsaved)");
     title.textContent = `${named}${state} · ${count("scene")} objects${extra}${draft}${notice ? ` · ${notice}` : ""}`;
   }
   function flashNotice(text: string): void {
@@ -5597,7 +6101,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Water's own effect on friction is not this: it scales the friction of
   // whatever is INSIDE it (see `WATER_TRACTION_LOSS`), which is a property of
   // the submerged body rather than a number the water authors.
-  const frictionless = (b: EdItem) => isAreaKind(b.kind) || b.passable;
+  const frictionless = (b: EdItem) => isAreaKind(propsOf(b).kind) || propsOf(b).passable;
 
   // May this item be welded into one body? Geometry that is not an area,
   // decoration included - it rides the body rather than adding a piece to it -
@@ -5613,15 +6117,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // is what stops them drifting apart. Moving the sconce moves the light because
   // they are the same body, which is the thing that used to have to be faked by
   // deriving a light out of the fitting's emissive colour.
-  const canShareBody = (b: EdItem) =>
-    b.layer === "scene" && (b.object !== "collision" || !isAreaKind(b.kind));
+  // Can this item share a body with others? Anything in the scene can: an
+  // area may have any number of shapes (plans/node-tree.md "Area2D with
+  // several shapes"), its overlap, push, drag and drawing reading every piece.
+  const canShareBody = (b: EdItem) => b.layer === "scene";
 
   // An area is a region of space rather than a piece of stuff, so it is made of
   // nothing and carries no density. Every other kind does, `anchor` included:
   // a grate is a real object, and its material fixes the centre of mass a
   // compound one is built and rotated about even though nothing collides with
   // it.
-  const massless = (b: EdItem) => isAreaKind(b.kind);
+  const massless = (b: EdItem) => isAreaKind(propsOf(b).kind);
 
   // A number field bound to one panel and one selection: it shows the value the
   // group agrees on (blank if they differ) and writes to every member. `after`
@@ -5655,8 +6161,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // group when it is, and per item when it is not.
   function wholeGroup(items: readonly EdItem[]): EdItem[] | null {
     if (items.length < 2) return null;
-    const g = items[0]!.bodyId;
-    if (g === null || !items.every((b) => b.bodyId === g)) return null;
+    const g = items[0]!.unit;
+    if (g === null || !items.every((b) => b.unit === g)) return null;
     const members = bodyMembers(model.items, g);
     return members.length === items.length ? [...items] : null;
   }
@@ -5666,7 +6172,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The frame an object is placed IN, which is the origin `toLevelData` measures
   // every object against. One rule, so what the inspector shows and what the
   // file records cannot disagree.
-  const bodyOrigin = (b: EdItem): EdBodyFrame => bodyFrameOf(model, b.bodyId);
+  const bodyOrigin = (b: EdItem): EdBodyFrame => bodyFrameOf(model, b.unit);
   // An item's placement IN its body's frame, which is the pair of numbers the
   // file records for it - so the frame's rotation is taken out on the way in and
   // put back on the way out, exactly as `toLevelData`'s `localOf` does. Without
@@ -5679,7 +6185,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return b.pos.sub(f.pos).rotated(-f.rot);
   };
   // Is this object its body's ONLY member, with no frame of the body's own?
-  // Then `bodyFrameOf` derives the frame FROM IT (see `EdModel.bodyFrames`), and
+  // Then `bodyFrameOf` derives the frame FROM IT (the node is the item's own), and
   // measuring its placement against that frame measures the thing being edited
   // against itself: the offset is always (0, 0, 0), and a value typed into one
   // of these fields lands as a DELTA - typing 10 into `rot°` turned the object
@@ -5692,8 +6198,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A body of one that DOES have a stored frame - one whose siblings were
   // deleted - is left alone: its frame is a real frame, an offset from it is a
   // real offset, and the ordinary local reading is right.
-  const framedByItself = (b: EdItem): boolean =>
-    !model.bodyFrames.has(b.bodyId) && bodyMembers(model.items, b.bodyId).length === 1;
+  const framedByItself = (b: EdItem): boolean => b.bodyOf === null && b.unit === b.node;
 
   function addTransformFields(g: HTMLElement, num: GroupNum, items: EdItem[]): void {
     // RELATIVE TO THE BODY, because that is what an object's placement IS - the
@@ -5705,7 +6210,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // before it put it on the world's.
     //
     // It moves THE OBJECT and nothing else, whichever object it is. The frame is
-    // the body's own (`EdModel.bodyFrames`) rather than a member's, so there is
+    // the body node's own pose (`bodyFrameOf`) rather than a member's, so there is
     // no longer an object that secretly IS the body and moves it when it moves.
     //
     // ...with ONE exception, and it is the case a level is mostly made of: an
@@ -5750,7 +6255,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // something (a force area's current).
     if (
       items.every(
-        (b) => b.shape.kind !== "circle" || (b.object === "collision" && b.kind === "force"),
+        (b) => b.shape.kind !== "circle" || (b.object === "collision" && propsOf(b).kind === "force"),
       )
     ) {
       // Measured against the whole SELECTION, not this panel's slice of it: a
@@ -5766,7 +6271,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // what the body panel's `rot°` reads, so the two cannot disagree.
         // Read per use rather than captured, for the reason the body panel's own
         // transform fields are: a frame is replaced, not mutated.
-        const frame = (): EdBodyFrame => bodyFrameOf(model, whole[0]!.bodyId);
+        const frame = (): EdBodyFrame => bodyFrameOf(model, whole[0]!.unit);
         numField(
           g,
           "rot°",
@@ -6351,17 +6856,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // field on its own is unauthorable; `v²/2g` turns it into the number actually
   // being picked - how far up the pad throws what lands on it.
   function addBounceFields(g: HTMLElement, num: GroupNum, leads: EdItem[]): void {
-    num("bounce", (b) => b.bounce, (b, v) => (b.bounce = Math.min(1, Math.max(0, v))), 0.1);
+    num("bounce", (b) => propsOf(b).bounce, (b, v) => (propsOf(b).bounce = Math.min(1, Math.max(0, v))), 0.1);
     // A speed in px/s, like every other length per second on the panel. Never
     // negative: a surface that threw a body INTO itself is not a thing to
     // author, and the sign a force area and a current carry means direction,
     // which a launch takes from the contact normal instead.
-    num("launch", (b) => b.launch * M2PX, (b, v) => (b.launch = Math.max(0, v) * PX), 50);
+    num("launch", (b) => propsOf(b).launch * M2PX, (b, v) => (propsOf(b).launch = Math.max(0, v) * PX), 50);
     // Live, and re-derived from the items rather than from the values the panel
     // was built with, for the same reason the spring's droop is: typing a launch
     // has to move the number the launch was typed FOR.
     const height = (): string => {
-      const v = shared(leads, (b) => b.launch);
+      const v = shared(leads, (b) => propsOf(b).launch);
       if (v === null) return "mixed";
       if (v <= 0) return "-";
       return `${((v * v) / (2 * 9.8)).toFixed(2)} m`;
@@ -6394,8 +6899,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function addBreakFields(g: HTMLElement, num: GroupNum, leads: EdItem[]): void {
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.checked = leads.every((b) => b.breakForce > 0);
-    box.indeterminate = !box.checked && leads.some((b) => b.breakForce > 0);
+    box.checked = leads.every((b) => propsOf(b).breakForce > 0);
+    box.indeterminate = !box.checked && leads.some((b) => propsOf(b).breakForce > 0);
     box.addEventListener("change", () => {
       beginAction();
       for (const b of leads) {
@@ -6403,8 +6908,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // 600 kg resting load. Breakable but not fragile, and a number to tune
         // from rather than one that gives way to the first thing that touches
         // it (the readouts below say what it means as it is typed).
-        b.breakForce = box.checked ? 6000 : 0;
-        b.durability = 1;
+        propsOf(b).breakForce = box.checked ? 6000 : 0;
+        propsOf(b).durability = 1;
       }
       markDirty();
       rebuildInspector();
@@ -6412,12 +6917,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const wrap = fieldRow("breakable");
     wrap.appendChild(box);
     g.appendChild(wrap);
-    if (leads.every((b) => b.breakForce > 0)) {
-      num("threshold", (b) => b.breakForce, (b, v) => (b.breakForce = Math.max(1, v)), 1000);
+    if (leads.every((b) => propsOf(b).breakForce > 0)) {
+      num("threshold", (b) => propsOf(b).breakForce, (b, v) => (propsOf(b).breakForce = Math.max(1, v)), 1000);
       num(
         "durability",
-        (b) => b.durability,
-        (b, v) => (b.durability = Math.max(1, Math.round(v))),
+        (b) => propsOf(b).durability,
+        (b, v) => (propsOf(b).durability = Math.max(1, Math.round(v))),
         1,
       );
       // Live, and re-derived from the items rather than from the values the
@@ -6428,12 +6933,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return (4 / 3) * Math.PI * r * r * r * BallPlayer.DENSITY;
       };
       const holds = (): string => {
-        const f = shared(leads, (b) => b.breakForce);
+        const f = shared(leads, (b) => propsOf(b).breakForce);
         if (f === null) return "mixed";
         return `${(f / 9.8).toFixed(0)} kg`;
       };
       const arrives = (): string => {
-        const f = shared(leads, (b) => b.breakForce);
+        const f = shared(leads, (b) => propsOf(b).breakForce);
         if (f === null) return "mixed";
         const m = ballMass();
         // The ball's own weight is already on the face while it lands, so what
@@ -6472,14 +6977,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function addPassableField(g: HTMLElement, leads: EdItem[]): void {
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.checked = leads.every((b) => b.passable);
+    box.checked = leads.every((b) => propsOf(b).passable);
     // A mixed selection says so rather than reporting one body's answer as the
     // group's, exactly as the hook-proof and pivot checkboxes do.
-    box.indeterminate = !box.checked && leads.some((b) => b.passable);
+    box.indeterminate = !box.checked && leads.some((b) => propsOf(b).passable);
     box.addEventListener("change", () => {
       beginAction();
-      for (const b of leads) b.passable = box.checked;
-      syncEditedBodies(leads);
+      for (const b of leads) propsOf(b).passable = box.checked;
       markDirty();
       // Rebuilt because the answer decides which OTHER fields the panel offers:
       // hook-only geometry carries no friction (nothing rests on it) and no
@@ -6502,13 +7006,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function addRootSpringField(g: HTMLElement, leads: EdItem[]): void {
     const box = document.createElement("input");
     box.type = "checkbox";
-    const springs = (b: EdItem): boolean => b.kind === "rigid" && b.pivot;
+    const springs = (b: EdItem): boolean => propsOf(b).kind === "rigid" && propsOf(b).pivot;
     box.checked = leads.every(springs);
     box.indeterminate = !box.checked && leads.some(springs);
     box.addEventListener("change", () => {
       beginAction();
       setRootSprings(model, leads, box.checked);
-      syncEditedBodies(leads);
       markDirty();
       rebuildInspector();
     });
@@ -6516,7 +7019,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     wrap.appendChild(box);
     g.appendChild(wrap);
     describe(wrap,
-      "Hinge this root where its trunk grows from, on a torsion spring: it bends under the ball and comes back. The Pivot section tunes how stiff (return Hz) and how quickly it settles (damping). Unticked, the root is static. To spring one branch on its own, Ctrl+G it into a body of its own - it becomes a trunk where it stood - and tick this there.");
+      "Hinge this root where its trunk grows from, on a torsion spring: it bends under the ball and comes back. The Pivot section tunes how stiff (return Hz) and how quickly it settles (damping). Unticked, the root is static. To spring one branch on its own, select it and press New body - it becomes a trunk where it stood - and tick this there.");
   }
 
   // Pivot mounting, rigid bodies only (see `LevelBodyData.pivot`): bolted to a
@@ -6528,19 +7031,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function addPivotField(g: HTMLElement, leads: EdItem[]): void {
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.checked = leads.every((b) => b.pivot);
+    box.checked = leads.every((b) => propsOf(b).pivot);
     // Mutually exclusive with a spring (see `addSpringFields`): a body that
     // could neither translate nor rotate is not a thing to author, so the two
     // controls lock each other out here rather than letting a file be saved
     // that the loader has to break the tie in.
-    box.disabled = leads.some((b) => b.springFreqX > 0 || b.springFreqY > 0);
+    box.disabled = leads.some((b) => propsOf(b).springFreqX > 0 || propsOf(b).springFreqY > 0);
     // A mixed selection says so rather than reporting one body's answer as the
     // group's, exactly as the hook-proof checkbox does.
-    box.indeterminate = !box.checked && leads.some((b) => b.pivot);
+    box.indeterminate = !box.checked && leads.some((b) => propsOf(b).pivot);
     box.addEventListener("change", () => {
       beginAction();
-      for (const b of leads) b.pivot = box.checked;
-      syncEditedBodies(leads);
+      for (const b of leads) propsOf(b).pivot = box.checked;
       markDirty();
       // Rebuilt so the box loses its indeterminate state.
       rebuildInspector();
@@ -6559,7 +7061,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // authored angle - a tree branch, a springboard, a swing gate.
     if (box.checked) {
       const comLocalOf = (lead: EdItem): Vec2 => {
-        const members = bodyMembers(model.items, lead.bodyId).filter(
+        const members = bodyMembers(model.items, lead.unit).filter(
           (m) => m.object === "collision",
         );
         let mass = 0;
@@ -6570,19 +7072,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           acc = acc.add(m.pos.mul(kg));
         }
         const world = mass > 0 ? acc.div(mass) : (members[0]?.pos ?? Vec2.ZERO);
-        const f = bodyFrameOf(model, lead.bodyId);
+        const f = bodyFrameOf(model, lead.unit);
         return world.sub(f.pos).rotated(-f.rot);
       };
-      const at = (b: EdItem): Vec2 => b.pivotAt ?? comLocalOf(b);
+      const at = (b: EdItem): Vec2 => propsOf(b).pivotAt ?? comLocalOf(b);
       const setAt =
         (mut: (cur: Vec2, v: number) => Vec2) =>
         (v: number): void => {
-          for (const b of leads) b.pivotAt = mut(at(b), v);
-          syncEditedBodies(leads);
+          for (const b of leads) propsOf(b).pivotAt = mut(at(b), v);
         };
       const clearAt = (): void => {
-        for (const b of leads) b.pivotAt = null;
-        syncEditedBodies(leads);
+        for (const b of leads) propsOf(b).pivotAt = null;
       };
       numField(
         g,
@@ -6605,10 +7105,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       numField(
         g,
         "return (Hz)",
-        () => shared(leads, (b) => b.pivotFreq),
+        () => shared(leads, (b) => propsOf(b).pivotFreq),
         (v) => {
-          for (const b of leads) b.pivotFreq = Math.min(MAX_SPRING_FREQ, Math.max(0, v));
-          syncEditedBodies(leads);
+          for (const b of leads) propsOf(b).pivotFreq = Math.min(MAX_SPRING_FREQ, Math.max(0, v));
         },
         0.1,
         leads.length > 1,
@@ -6616,14 +7115,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       numField(
         g,
         "damping",
-        () => shared(leads, (b) => b.pivotDamping),
+        () => shared(leads, (b) => propsOf(b).pivotDamping),
         (v) => {
-          for (const b of leads) b.pivotDamping = Math.min(1, Math.max(0, v));
-          syncEditedBodies(leads);
+          for (const b of leads) propsOf(b).pivotDamping = Math.min(1, Math.max(0, v));
         },
         0.05,
         leads.length > 1,
-        { disabled: !leads.some((b) => b.pivotFreq > 0) },
+        { disabled: !leads.some((b) => propsOf(b).pivotFreq > 0) },
       );
 
     }
@@ -6652,15 +7150,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // selected rather than how many leads there are - a compound body has
     // several leads and exactly one route. (`numField`'s `mixable` is the other
     // question and stays per lead: it only picks the placeholder.)
-    const bodyIds = new Set(leads.map((b) => b.bodyId));
+    const bodyIds = new Set(leads.map((b) => b.unit));
     const one = bodyIds.size === 1 ? leads[0]! : null;
-    const swinging = (b: EdItem): boolean => b.swingAmp !== 0 && b.swingPeriod > 0;
-    const spinning = (b: EdItem): boolean => b.spinPeriod !== 0;
-    const travelling = (b: EdItem): boolean => b.route.length > 1 && b.moveSpeed > 0;
+    const swinging = (b: EdItem): boolean => propsOf(b).swingAmp !== 0 && propsOf(b).swingPeriod > 0;
+    const spinning = (b: EdItem): boolean => propsOf(b).spinPeriod !== 0;
+    const travelling = (b: EdItem): boolean => propsOf(b).route.length > 1 && propsOf(b).moveSpeed > 0;
     const anySwing = leads.some(swinging);
     const anySpin = leads.some(spinning);
     const anyTurn = anySwing || anySpin;
-    const anyRoute = leads.some((b) => b.route.length > 1);
+    const anyRoute = leads.some((b) => propsOf(b).route.length > 1);
 
     // Three fields below appear and disappear with whether the body turns at all
     // - the two phases and the bearing they share - so a value typed into any of
@@ -6677,12 +7175,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       g,
       "swing °",
       () => {
-        const v = shared(leads, (b) => b.swingAmp);
+        const v = shared(leads, (b) => propsOf(b).swingAmp);
         return v === null ? null : (v * 180) / Math.PI;
       },
       (v) => {
-        for (const b of leads) b.swingAmp = (Math.min(180, Math.max(-180, v)) * Math.PI) / 180;
-        syncEditedBodies(leads);
+        for (const b of leads) propsOf(b).swingAmp = (Math.min(180, Math.max(-180, v)) * Math.PI) / 180;
         rebuildIfTurnChanged();
       },
       1,
@@ -6692,10 +7189,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     numField(
       g,
       "swing s",
-      () => shared(leads, (b) => b.swingPeriod),
+      () => shared(leads, (b) => propsOf(b).swingPeriod),
       (v) => {
-        for (const b of leads) b.swingPeriod = Math.max(0, v);
-        syncEditedBodies(leads);
+        for (const b of leads) propsOf(b).swingPeriod = Math.max(0, v);
         rebuildIfTurnChanged();
       },
       0.5,
@@ -6709,10 +7205,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       numField(
         g,
         "swing phase",
-        () => shared(leads, (b) => b.swingPhase),
+        () => shared(leads, (b) => propsOf(b).swingPhase),
         (v) => {
-          for (const b of leads) b.swingPhase = v;
-          syncEditedBodies(leads);
+          for (const b of leads) propsOf(b).swingPhase = v;
         },
         0.125,
         leads.length > 1,
@@ -6726,10 +7221,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     numField(
       g,
       "spin s",
-      () => shared(leads, (b) => b.spinPeriod),
+      () => shared(leads, (b) => propsOf(b).spinPeriod),
       (v) => {
-        for (const b of leads) b.spinPeriod = v;
-        syncEditedBodies(leads);
+        for (const b of leads) propsOf(b).spinPeriod = v;
         rebuildIfTurnChanged();
       },
       0.5,
@@ -6740,10 +7234,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       numField(
         g,
         "spin phase",
-        () => shared(leads, (b) => b.spinPhase),
+        () => shared(leads, (b) => propsOf(b).spinPhase),
         (v) => {
-          for (const b of leads) b.spinPhase = v;
-          syncEditedBodies(leads);
+          for (const b of leads) propsOf(b).spinPhase = v;
         },
         0.125,
         leads.length > 1,
@@ -6766,10 +7259,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const speedInput = numField(
       g,
       "speed",
-      () => (speedKeyed ? NaN : shared(leads, (b) => b.moveSpeed * M2PX)),
+      () => (speedKeyed ? NaN : shared(leads, (b) => propsOf(b).moveSpeed * M2PX)),
       (v) => {
-        for (const b of leads) b.moveSpeed = Math.max(0, v) * PX;
-        syncEditedBodies(leads);
+        for (const b of leads) propsOf(b).moveSpeed = Math.max(0, v) * PX;
         refreshFields();
       },
       10,
@@ -6785,10 +7277,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       numField(
         g,
         "move phase",
-        () => shared(leads, (b) => b.movePhase),
+        () => shared(leads, (b) => propsOf(b).movePhase),
         (v) => {
-          for (const b of leads) b.movePhase = v;
-          syncEditedBodies(leads);
+          for (const b of leads) propsOf(b).movePhase = v;
         },
         0.125,
         leads.length > 1,
@@ -6804,9 +7295,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         MOVE_MODES,
         MOVE_MODE_LABELS,
         leads,
-        (b) => b.moveMode,
+        (b) => propsOf(b).moveMode,
         (b, v) => {
-          b.moveMode = v;
+          propsOf(b).moveMode = v;
         },
         true,
       );
@@ -6816,21 +7307,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         MOVE_EASES,
         null,
         leads,
-        (b) => b.moveEase,
+        (b) => propsOf(b).moveEase,
         (b, v) => {
-          b.moveEase = v;
+          propsOf(b).moveEase = v;
         },
         false,
       );
-      easeSel.disabled = leads.some((b) => !moveModeEases(b.moveMode));
+      easeSel.disabled = leads.some((b) => !moveModeEases(propsOf(b).moveMode));
 
       // Whether the route AIMS the body. A checkbox rather than a keyed field
       // because it is a statement about the whole route: either the track
       // decides which way the body faces or the drawn angle does, and a node
       // keying its own answer to that would be a cart that detaches from its
       // rails half way along (see `LevelBodyData.moveAlign`).
-      checkField(g, "align", leads, (b) => b.moveAlign, (b, v) => {
-        b.moveAlign = v;
+      checkField(g, "align", leads, (b) => propsOf(b).moveAlign, (b, v) => {
+        propsOf(b).moveAlign = v;
       });
 
       // What the route IS, since the canvas draws it but nothing on the panel
@@ -6841,12 +7332,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const trip = (): string => {
         if (!one) return "mixed";
         const route = routeOf(model, one);
-        const legs = `${one.route.length} nodes, ${(route.total * M2PX).toFixed(0)} px`;
-        return route.traverse > 0 && one.moveSpeed > 0
+        const legs = `${propsOf(one).route.length} nodes, ${(route.total * M2PX).toFixed(0)} px`;
+        return route.traverse > 0 && propsOf(one).moveSpeed > 0
           ? `${legs}, ${route.traverse.toFixed(1)} s`
           : legs;
       };
-      const trow = fieldRow(one && moveModeCloses(one.moveMode) ? "lap" : "trip");
+      const trow = fieldRow(one && moveModeCloses(propsOf(one).moveMode) ? "lap" : "trip");
       const tval = document.createElement("span");
       tval.textContent = trip();
       trow.appendChild(tval);
@@ -6865,30 +7356,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const lead = one;
       const row = el("div", "ed-row");
       row.appendChild(
-        button(lead.route.length ? "+ node" : "draw a route", () => {
+        button(propsOf(lead).route.length ? "+ node" : "draw a route", () => {
           beginAction();
           // A metre on from wherever the route currently ends, along the leg it
           // arrived by - so appending twice draws a straight run rather than
           // stacking two nodes on one point. A route that does not exist yet is
           // the body plus one, which is the shortest thing that is a route.
-          const frame = bodyFrameOf(model, lead.bodyId);
-          const pts = lead.route.length ? routeWorldPoints(model, lead) : [frame.pos];
+          const frame = bodyFrameOf(model, lead.unit);
+          const pts = propsOf(lead).route.length ? routeWorldPoints(model, lead) : [frame.pos];
           const last = pts[pts.length - 1]!;
           const prev = pts.length > 1 ? pts[pts.length - 2]! : last.sub(new Vec2(1, 0));
           const dir = last.sub(prev);
           const step = dir.length() > 1e-9 ? dir.normalized() : new Vec2(1, 0);
-          const next = lead.route.length ? [...lead.route] : [routeNode(Vec2.ZERO)];
+          const next = propsOf(lead).route.length ? [...propsOf(lead).route] : [routeNode(Vec2.ZERO)];
           next.push(routeNode(last.add(step).sub(frame.pos).rotated(-frame.rot)));
-          lead.route = next;
+          propsOf(lead).route = next;
           // A route with no speed never moves, so the first node brings one
           // rather than leaving a body that has a route and stands still.
-          if (lead.moveSpeed <= 0) lead.moveSpeed = 0.5;
-          syncEditedBodies([lead]);
+          if (propsOf(lead).moveSpeed <= 0) propsOf(lead).moveSpeed = 0.5;
           markDirty();
           rebuildInspector();
         }),
       );
-      if (lead.route.length > 1) {
+      if (propsOf(lead).route.length > 1) {
         // The two curve gestures, which are the camera path's own (`Smooth` /
         // `Sharpen`) doing the same thing to the same kind of node list: a route
         // is a Bezier curve and a corner is a route whose handles are zero, so
@@ -6899,11 +7389,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           button("smooth", () => {
             beginAction();
             const t = smoothTangents(
-              lead.route.map((n) => n.p),
-              moveModeCloses(lead.moveMode),
+              propsOf(lead).route.map((n) => n.p),
+              moveModeCloses(propsOf(lead).moveMode),
             );
-            lead.route = lead.route.map((n, i) => ({ ...n, in: t[i]!.in, out: t[i]!.out }));
-            syncEditedBodies([lead]);
+            propsOf(lead).route = propsOf(lead).route.map((n, i) => ({ ...n, in: t[i]!.in, out: t[i]!.out }));
             markDirty();
             rebuildInspector();
           }),
@@ -6911,8 +7400,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         row.appendChild(
           button("sharpen", () => {
             beginAction();
-            lead.route = lead.route.map((n) => ({ ...n, in: Vec2.ZERO, out: Vec2.ZERO }));
-            syncEditedBodies([lead]);
+            propsOf(lead).route = propsOf(lead).route.map((n) => ({ ...n, in: Vec2.ZERO, out: Vec2.ZERO }));
             markDirty();
             rebuildInspector();
           }),
@@ -6920,9 +7408,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         row.appendChild(
           button("clear route", () => {
             beginAction();
-            lead.route = [];
+            propsOf(lead).route = [];
             clearRouteSel();
-            syncEditedBodies([lead]);
             markDirty();
             rebuildInspector();
           }),
@@ -6955,7 +7442,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // path's node keys sit under its path-level ones - and reached the same way,
     // by clicking a node on the canvas.
     const pickedNodes = one ? selectedRouteNodes(one) : [];
-    if (one && pickedNodes.length && one.route.length > 1) {
+    if (one && pickedNodes.length && propsOf(one).route.length > 1) {
       buildRouteNodeKeys(g, one, pickedNodes);
     }
 
@@ -6972,11 +7459,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // that some of the route overrides is a value the panel must stop offering as
   // if it governed the whole thing.
   function keyedRouteNodes(leads: readonly EdItem[], field: "rot" | "speed"): string | null {
-    const bodies = new Map<number, number[]>();
+    const bodies = new Map<string, number[]>();
     for (const b of leads) {
-      if (bodies.has(b.bodyId)) continue;
-      const at = b.route.flatMap((n, i) => (n[field] !== null ? [i] : []));
-      if (at.length) bodies.set(b.bodyId, at);
+      if (bodies.has(b.unit)) continue;
+      const at = propsOf(b).route.flatMap((n, i) => (n[field] !== null ? [i] : []));
+      if (at.length) bodies.set(b.unit, at);
     }
     if (bodies.size === 0) return null;
     const one = bodies.size === 1;
@@ -7001,13 +7488,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const route = routeOf(model, item);
     const at = (i: number): number => route.index.nodeS[i] ?? 0;
-    const effAngle = (i: number): number => moveAngleAt(route, item.moveAlign, at(i));
+    const effAngle = (i: number): number => moveAngleAt(route, propsOf(item).moveAlign, at(i));
     // Both read the route the SIM builds rather than a track assembled here: a
     // `loop` repeats node zero's key at the far end of the arc length, and a
     // second construction that forgot to would offer a placeholder the motion
     // disagrees with (see `MoveRoute.speedKeys`).
     const effSpeed = (i: number): number =>
-      keyValueAt(route.speedKeys, at(i), item.moveSpeed);
+      keyValueAt(route.speedKeys, at(i), propsOf(item).moveSpeed);
 
     // Every angle the inspector shows is in degrees and every length in the
     // file's pixels, so the keys are too - the model holds radians and metres.
@@ -7038,17 +7525,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         g,
         label,
         () => {
-          const vals = picked.map((i) => item.route[i]?.[key] ?? null);
+          const vals = picked.map((i) => propsOf(item).route[i]?.[key] ?? null);
           if (vals.some((v) => v === null)) return null;
           const first = show(vals[0]!);
           return vals.every((v) => Math.abs(show(v!) - first) < 1e-9) ? first : null;
         },
         (v) => {
           for (const i of picked) {
-            const n = item.route[i];
+            const n = propsOf(item).route[i];
             if (n) n[key] = store(v);
           }
-          syncEditedBodies([item]);
           refreshFields();
         },
         step,
@@ -7057,10 +7543,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           placeholder: agreed,
           onEmpty: () => {
             for (const i of picked) {
-              const n = item.route[i];
+              const n = propsOf(item).route[i];
               if (n) n[key] = null;
             }
-            syncEditedBodies([item]);
           },
         },
       );
@@ -7105,7 +7590,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (!sel.value) return;
       beginAction();
       for (const b of leads) set(b, sel.value as T);
-      syncEditedBodies(leads);
       markDirty();
       if (rebuild) rebuildInspector();
       else refreshFields();
@@ -7130,7 +7614,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     box.addEventListener("change", () => {
       beginAction();
       for (const b of leads) set(b, box.checked);
-      syncEditedBodies(leads);
       markDirty();
       rebuildInspector();
     });
@@ -7145,7 +7628,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // of what "blank means the centre of mass" is.
   function addBearingFields(g: HTMLElement, leads: EdItem[]): void {
     const comLocalOf = (lead: EdItem): Vec2 => {
-      const members = bodyMembers(model.items, lead.bodyId).filter((m) => m.object === "collision");
+      const members = bodyMembers(model.items, lead.unit).filter((m) => m.object === "collision");
       let mass = 0;
       let acc = Vec2.ZERO;
       for (const m of members) {
@@ -7154,20 +7637,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         acc = acc.add(m.pos.mul(kg));
       }
       const world = mass > 0 ? acc.div(mass) : (members[0]?.pos ?? Vec2.ZERO);
-      const f = bodyFrameOf(model, lead.bodyId);
+      const f = bodyFrameOf(model, lead.unit);
       return world.sub(f.pos).rotated(-f.rot);
     };
-    const at = (b: EdItem): Vec2 => b.pivotAt ?? comLocalOf(b);
+    const at = (b: EdItem): Vec2 => propsOf(b).pivotAt ?? comLocalOf(b);
     const setAt =
       (mut: (cur: Vec2, v: number) => Vec2) =>
       (v: number): void => {
-        for (const b of leads) b.pivotAt = mut(at(b), v);
-        syncEditedBodies(leads);
+        for (const b of leads) propsOf(b).pivotAt = mut(at(b), v);
         refreshFields();
       };
     const clearAt = (): void => {
-      for (const b of leads) b.pivotAt = null;
-      syncEditedBodies(leads);
+      for (const b of leads) propsOf(b).pivotAt = null;
       refreshFields();
     };
     numField(
@@ -7206,9 +7687,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // goes when the player is on it. The second is the one that needs the mass,
   // which is why this sits below the material fields rather than above them.
   function addSpringFields(g: HTMLElement, leads: EdItem[]): void {
-    const sprung = (b: EdItem): boolean => b.springFreqX > 0 || b.springFreqY > 0;
+    const sprung = (b: EdItem): boolean => propsOf(b).springFreqX > 0 || propsOf(b).springFreqY > 0;
     const anySprung = leads.some(sprung);
-    const anyPivot = leads.some((b) => b.pivot);
+    const anyPivot = leads.some((b) => propsOf(b).pivot);
 
     const freq = (label: string, get: (b: EdItem) => number, set: (b: EdItem, v: number) => void) =>
       numField(
@@ -7217,7 +7698,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         () => shared(leads, get),
         (v) => {
           for (const b of leads) set(b, Math.min(MAX_SPRING_FREQ, Math.max(0, v)));
-          syncEditedBodies(leads);
           // The pivot checkbox's enabled state depends on these, and the axle
           // ring is drawn from the item - so a frequency typed in has to rebuild
           // the panel rather than only revalue it.
@@ -7227,15 +7707,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         leads.length > 1,
         { disabled: anyPivot },
       );
-    freq("spring x (Hz)", (b) => b.springFreqX, (b, v) => (b.springFreqX = v));
-    freq("spring y (Hz)", (b) => b.springFreqY, (b, v) => (b.springFreqY = v));
+    freq("spring x (Hz)", (b) => propsOf(b).springFreqX, (b, v) => (propsOf(b).springFreqX = v));
+    freq("spring y (Hz)", (b) => propsOf(b).springFreqY, (b, v) => (propsOf(b).springFreqY = v));
     numField(
       g,
       "damping",
-      () => shared(leads, (b) => b.springDamping),
+      () => shared(leads, (b) => propsOf(b).springDamping),
       (v) => {
-        for (const b of leads) b.springDamping = Math.min(1, Math.max(0, v));
-        syncEditedBodies(leads);
+        for (const b of leads) propsOf(b).springDamping = Math.min(1, Math.max(0, v));
       },
       0.05,
       leads.length > 1,
@@ -7246,14 +7725,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // was built with, for the same reason the mass readout is: typing a
     // frequency has to move the number the frequency was typed FOR.
     const droop = (): string => {
-      const f = shared(leads, (b) => b.springFreqY);
+      const f = shared(leads, (b) => propsOf(b).springFreqY);
       if (f === null) return "mixed";
       if (f <= 0) return "pinned";
       const w = 2 * Math.PI * f;
       return `${((9.8 / (w * w)) * 100).toFixed(1)} cm`;
     };
     const hang = (): string => {
-      const f = shared(leads, (b) => b.springFreqY);
+      const f = shared(leads, (b) => propsOf(b).springFreqY);
       if (f === null) return "mixed";
       if (f <= 0) return "pinned";
       const w = 2 * Math.PI * f;
@@ -7262,7 +7741,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const kg = leads.reduce(
         (m, lead) =>
           m +
-          bodyMembers(model.items, lead.bodyId)
+          bodyMembers(model.items, lead.unit)
             .filter((x) => x.object === "collision")
             .reduce((a, x) => a + shapeMass(x), 0),
         0,
@@ -7442,7 +7921,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     wrap.appendChild(box);
     g.appendChild(wrap);
     describe(wrap,
-      "Draws this shape in 3D, in the game and in ▶ Test as well as here: its outline extruded through the depth, in a flat colour. It is an instrument, not a look - what a level is blocked out in before its Blender scene exists, or what a piece the scene has nothing over is seen by. G hides every shape's debug geometry at once while playing. The settings below apply whenever it is drawn, and unticking keeps them.");
+      "Draws this shape in 3D, in the game and in ▶ Test as well as here: its outline extruded through the depth, in a flat colour. It is an instrument, not a look - what a level is blocked out in before it has a look, or what a piece the look has nothing over is seen by. G hides every shape's debug geometry at once while playing. The settings below apply whenever it is drawn, and unticking keeps them.");
 
     // The colour, or the body's own fill while none is picked.
     const cw = fieldRow("colour");
@@ -7528,8 +8007,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // own friction; it did not, and the file it saves to has never had a place to
   // put them.
   //
-  // A LOOK is not here at all: what a body looks like is its Blender scene's
-  // (the body's `name` binds it), so a collision shape has none to edit.
+  // A LOOK is not here at all: what a body looks like is what it carries (a
+  // formation, a model), so a collision shape has none to edit.
   function buildBodyGroup(bodies: EdItem[]): void {
     const g = el("div", "ed-group");
     // Named for what it IS. A panel headed "Body #12" on something that is one
@@ -7542,14 +8021,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     g.appendChild(title);
 
-    const sync = () => syncEditedBodies(bodies);
+    // A body's properties are held once, on its node: nothing to keep in step.
+    const sync = (): void => {};
     const transform = section(g, "object/Transform", "Transform");
     const placeNum = groupNum(transform, bodies, sync);
     addTransformFields(transform, placeNum, bodies);
     // Hook-proof, offered for the solid kinds it means something on: an area is
     // a region the rope passes through, and a hook-only body exists to be caught
     // on, so neither has a hook to repel.
-    if (bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)) {
+    if (bodies.every((b) => (propsOf(b).kind === "static" || propsOf(b).kind === "rigid") && !propsOf(b).passable)) {
       const surface = section(g, "object/Surface", "Surface");
       addImpermeableField(surface, bodies);
       addViscousField(surface, bodies);
@@ -7600,25 +8080,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   function appendGroupSection(g: HTMLElement, title: HTMLElement): void {
     const sel = selectedBodies();
-    // Bodies picked in the TREE count here too - selecting two rows and pressing
-    // Merge is the plainest way to say "these are one body from now on", and it
-    // is the reason the body selection is a set.
-    const bodies = new Set(selectedBodyIds.size ? selectedBodyIds : sel.map((b) => b.bodyId));
+    // Nodes picked in the scene tree count here too, as the canvas's do.
+    const bodies = new Set(selectedBodyIds.size ? selectedBodyIds : sel.map((b) => b.unit));
     const row = el("div", "ed-row");
-    // A body has one formation, and a formation keeps its collision and its
-    // decorations with it (docs/formations.md): neither a merge that would
-    // put two in one body nor a split that would take one from them is offered.
-    const formationsIn = (ids: Iterable<number>): number =>
-      [...ids].reduce((n, id) => n + bodyMembers(model.items, id).filter((m) => m.object === "formation").length, 0);
-    if (mergeableBodies().length > 1 && formationsIn(mergeableBodies()) <= 1) {
-      const b = button("Merge", () => mergeIntoBody());
-      b.title = "Move these objects into one body (Ctrl+G)";
+    // New body is offered while anything selected is not a body already: the
+    // pieces go under one new body, each where it stands. Taking a body apart
+    // is dragging its pieces out of it in the scene tree.
+    if (selectionNodes().some((id) => !model.tree.nodes.get(id)?.body)) {
+      const b = button("New body", () => newBodyFromSelection());
+      b.title = "Put these under a new static body, each where it stands: one compound body";
       row.appendChild(b);
     }
-    const compound = [...bodies].some((id) => bodyMembers(model.items, id).length > 1);
-    if (compound && formationsIn(bodies) === 0) {
-      const b = button("Split", () => splitIntoBodies());
-      b.title = "Take these bodies apart - every object becomes its own body (Ctrl+Shift+G)";
+    {
+      const grouped = selectionNodes().some((id) => model.tree.nodes.get(id)?.grouped);
+      const b = button(grouped ? "Ungroup" : "Group", () => (grouped ? ungroupSelection() : groupSelection()));
+      b.title = grouped ? "A click on the canvas no longer selects this as one (Ctrl+Shift+G)" : "A click on the canvas selects this as one first (Ctrl+G)";
       row.appendChild(b);
     }
     if (row.childElementCount) g.appendChild(row);
@@ -7650,9 +8126,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A body's position in the outliner, which is what names it everywhere in the
   // UI. Derived from the same `bodyRuns` the tree and `toLevelData` walk, so the
   // number on a panel is the number in the tree is the index on disk.
-  const bodyIndexOf = (id: number): number =>
+  const bodyIndexOf = (id: string): number =>
     bodyRuns(model.items.filter((i) => i.layer === "scene")).findIndex(
-      (r) => r[0]!.bodyId === id,
+      (r) => r[0]!.unit === id,
     );
 
   // The properties a BODY has exactly one of: what it is, what it rubs like,
@@ -7668,7 +8144,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // opinion on the body's fill is reading the wrong field.
   function addBodyProps(g: HTMLElement, members: EdItem[]): void {
     const leads = members.filter((b) => b.object === "collision");
-    const sync = () => syncEditedBodies(leads);
+    const sync = (): void => {};
     // The physics half exists only for a body that HAS some. A body of pure
     // decoration or a lone light has no kind, no friction and no force, and
     // offering them would be three controls that change nothing.
@@ -7678,7 +8154,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const kw = fieldRow("kind");
       const ks = document.createElement("select");
       ks.className = "ed-select";
-      const sharedKind = leads.every((b) => b.kind === leads[0]!.kind) ? leads[0]!.kind : null;
+      const sharedKind = leads.every((b) => propsOf(b).kind === propsOf(leads[0]!).kind) ? propsOf(leads[0]!).kind : null;
       if (!sharedKind) {
         // Mixed kinds: a blank entry holds the selection until one is picked, so
         // the picker never misreports one body's kind as the group's.
@@ -7697,7 +8173,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ks.addEventListener("change", () => {
         if (!ks.value) return;
         beginAction();
-        for (const m of leads) m.kind = ks.value as BodyKind;
+        for (const m of leads) propsOf(m).kind = ks.value as BodyKind;
         markDirty();
         // Which fields apply depends on the kind (force magnitude, friction), so
         // the panel has to be rebuilt rather than just revalued.
@@ -7706,39 +8182,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       kw.appendChild(ks);
       physics.appendChild(kw);
       if (!leads.some(frictionless)) {
-        num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
+        num("friction", (b) => propsOf(b).friction, (b, v) => (propsOf(b).friction = Math.min(1, Math.max(0, v))), 0.1);
       }
-      if (leads.every((b) => b.kind === "force")) {
+      if (leads.every((b) => propsOf(b).kind === "force")) {
         // Acceleration along rot°, authored in px/s² like every other length.
         // Negative reverses the flow, so it is deliberately not clamped at 0.
-        num("force", (b) => b.force * M2PX, (b, v) => (b.force = v * PX), 50);
+        num("force", (b) => propsOf(b).force * M2PX, (b, v) => (propsOf(b).force = v * PX), 50);
       }
-      if (leads.every((b) => b.kind === "water")) {
+      if (leads.every((b) => propsOf(b).kind === "water")) {
         // The current's SPEED along rot°, in px/s - a length per second, so it
         // converts like every other length, and signed for the same reason the
         // force does.
-        num("flow", (b) => b.flow * M2PX, (b, v) => (b.flow = v * PX), 25);
+        num("flow", (b) => propsOf(b).flow * M2PX, (b, v) => (propsOf(b).flow = v * PX), 25);
         // ...and the rate it takes hold at, in 1/s. NOT a length: it is a
         // reciprocal time, so it is authored and stored as the same number.
-        num("drag", (b) => b.drag, (b, v) => (b.drag = Math.max(0, v)), 0.5);
+        num("drag", (b) => propsOf(b).drag, (b, v) => (propsOf(b).drag = Math.max(0, v)), 0.5);
         // The fall off the downstream end: its drop in px (0 = none, the run
         // ends against its bank). How fast it leaves the lip is not authored:
         // it follows from the current's speed and depth (see
         // `LevelBodyData.spill`).
-        num("spill", (b) => b.spill * M2PX, (b, v) => (b.spill = Math.max(0, v) * PX), 10);
+        num("spill", (b) => propsOf(b).spill * M2PX, (b, v) => (propsOf(b).spill = Math.max(0, v) * PX), 10);
         // The slab through z, drawn by the game (see `LevelBodyData.waterZ`):
         // its middle's offset from the plane and its depth, both in px. An
         // empty depth is the renderer's own.
-        num("water z", (b) => b.waterZ * M2PX, (b, v) => (b.waterZ = v * PX), 5);
+        num("water z", (b) => propsOf(b).waterZ * M2PX, (b, v) => (propsOf(b).waterZ = v * PX), 5);
         num(
           "water depth",
-          (b) => (b.waterDepth ?? 0) * M2PX,
-          (b, v) => (b.waterDepth = Math.max(1, v) * PX),
+          (b) => (propsOf(b).waterDepth ?? 0) * M2PX,
+          (b, v) => (propsOf(b).waterDepth = Math.max(1, v) * PX),
           10,
           {
             placeholder: leads.length > 1 ? "mixed" : "default",
             onEmpty: () => {
-              for (const b of leads) b.waterDepth = null;
+              for (const b of leads) propsOf(b).waterDepth = null;
             },
           },
         );
@@ -7746,14 +8222,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // The finish line has nothing to tune - being entered IS the whole of it
       // - so what its panel carries is the one thing that is not on the canvas:
       // what happens when the player gets there.
-      if (leads.every((b) => b.kind === "finish")) {
+      if (leads.every((b) => propsOf(b).kind === "finish")) {
         describe(kw,
-          "The end of the level: the run is over the moment the player touches this region, however they arrive. Draw it across the way out - wide enough that a swing cannot miss it - and name the body so the level's Blender scene can put a finish gantry on it. A listed level needs exactly one.");
+          "The end of the level: the run is over the moment the player touches this region, however they arrive. Draw it across the way out - wide enough that a swing cannot miss it - and give the body a model for its finish gantry. A listed level needs exactly one.");
       }
       // Offered for the kinds that build a BODY: an area is a region the sim
       // walks through already, so "the hook is the only thing that finds it"
       // says nothing about one.
-      if (leads.every((b) => b.kind === "static" || b.kind === "rigid")) {
+      if (leads.every((b) => propsOf(b).kind === "static" || propsOf(b).kind === "rigid")) {
         addPassableField(physics, leads);
       }
       if (!leads.some(frictionless)) {
@@ -7762,29 +8238,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       // Offered for the kinds that build a BODY, like hook-only above: an
       // area is a region rather than a thing anything can hit.
-      if (leads.every((b) => b.kind === "static" || b.kind === "rigid")) {
+      if (leads.every((b) => propsOf(b).kind === "static" || propsOf(b).kind === "rigid")) {
         const breaks = section(g, "body/Breakable", "Breakable");
         addBreakFields(breaks, groupNum(breaks, leads, sync), leads);
       }
       // A ROOT's one body question: does it spring about where it grows from.
       if (
-        leads.every((b) => (b.kind === "static" || b.kind === "rigid") && bodyMembers(model.items, b.bodyId).some(isRootItem))
+        leads.every((b) => (propsOf(b).kind === "static" || propsOf(b).kind === "rigid") && bodyMembers(model.items, b.unit).some(isRootItem))
       ) {
         addRootSpringField(section(g, "body/Root", "Root"), leads);
       }
-      if (leads.every((b) => b.kind === "rigid")) {
+      if (leads.every((b) => propsOf(b).kind === "rigid")) {
         addPivotField(section(g, "body/Pivot", "Pivot"), leads);
         addSpringFields(section(g, "body/Spring", "Spring"), leads);
       }
       // ...and the two motions a static may carry, which are the same shape of
       // thing one kind along: a body the LEVEL drives rather than the solver.
-      if (leads.every((b) => b.kind === "static")) {
+      if (leads.every((b) => propsOf(b).kind === "static")) {
         addMoverFields(section(g, "body/Mover", "Mover"), leads);
       }
     }
-    // The body's name, for a body of any make-up: it is what the level's
-    // Blender scene dresses it by.
-    addBodyNameField(section(g, "body/Blender", "Blender"), members);
+    // The body's name, for a body of any make-up.
+    addBodyNameField(section(g, "body/Name", "Name"), members);
     // ...and the fill, which only a body written from a collision lead has: a
     // body that is nothing but a light is not painted at all. It is the 2D
     // view's fill, and the colour a piece's debug geometry takes unless the
@@ -7795,26 +8270,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   }
 
-  // The body's NAME (see `LevelBodyData.name`), which is how the level's
-  // Blender scene finds it: an object of the same name in the scene is mounted
-  // on this body and carried by it. Read and written on EVERY member, as the
-  // rock seed is, because a body of geometry alone may be dressed too.
-  //
-  // Offered with the scene's own object names, so a body is bound by picking
-  // rather than by retyping what Blender calls the thing, and with the binding
-  // reported live: this name is an object in the export, or it is not yet.
+  // A NODE's name (plans/node-tree.md "Identity"): a label, unique among its
+  // siblings (a clash is suffixed with the next free number as it is typed),
+  // shown in the scene tree and in the replay tools' paths.
   function addBodyNameField(g: HTMLElement, members: EdItem[]): void {
-    const ids = [...new Set(members.map((m) => m.bodyId))];
-    if (ids.length !== 1) return; // a name is one body's; several selected have several
-    const all = bodyMembers(model.items, ids[0]!);
+    const ids = [...new Set(members.map((m) => m.unit))];
+    if (ids.length !== 1) return; // a name is one node's; several selected have several
+    const id = ids[0]!;
     const input = document.createElement("input");
     input.className = "ed-text";
-    input.value = all[0]?.name ?? "";
+    input.value = model.tree.nodes.get(id)?.name ?? "";
     input.placeholder = "unnamed";
-    const listId = `ed-scene-nodes-${ids[0]}`;
-    const list = document.createElement("datalist");
-    list.id = listId;
-    input.setAttribute("list", listId);
     let edited = false;
     input.addEventListener("blur", () => (edited = false));
     input.addEventListener("input", () => {
@@ -7823,60 +8289,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         edited = true;
       }
       const text = input.value.replace(/\s+/g, " ").trim();
-      for (const b of all) b.name = text;
+      if (text) renameNode(model.tree, id, text);
       markDirty();
-      hint.textContent = hintText();
       refreshOutliner();
     });
     const row = fieldRow("name");
     row.appendChild(input);
-    row.appendChild(list);
-    describe(row,
-      "A stable name for this body. An object of the same name in the level's Blender scene (the Level panel's `scene`) is drawn on this body and moves with it. Matched as three.js spells glTF node names: spaces become _ and . : / [ ] are dropped, so `Ledge.001` and `Ledge001` are the same. Must be unique in the level (`cli levels`).");
+    describe(row, "This node's name: what the scene tree lists it by. Unique among its siblings.");
     g.appendChild(row);
-    const hint = el("div", "ed-hint");
-    const hintText = (): string => {
-      const name = all[0]?.name ?? "";
-      if (!model.scene) return name ? "Set the level's scene (Level panel) for this name to dress anything." : "Unnamed: the scene cannot dress this body.";
-      const meta = sceneMetaFor(model.scene, () => {
-        hint.textContent = hintText();
-        fillList();
-      });
-      if (!name) return meta ? `Unnamed. Objects in ${model.scene} not on a body: ${meta.scenery.slice(0, 8).join(", ")}${meta.scenery.length > 8 ? "…" : ""}` : "Unnamed: the scene cannot dress this body.";
-      if (meta === undefined) return `Looking for the export of ${model.scene}…`;
-      if (meta === null) return `${model.scene} is not exported yet (\`just scene ${currentName ?? "<level>"}\`).`;
-      const node = nodeNameOf(name);
-      const found = meta.nodes.find((n) => n.node === node);
-      if (!found) return `No object called "${node}" in ${model.scene}; the body is not dressed: nothing in this scene draws it. Re-export after adding one.`;
-      const twin = model.items.some((i) => i.bodyId !== ids[0] && i.name && nodeNameOf(i.name) === node);
-      return `Dressed by "${found.name}" (${found.triangles.toLocaleString()} triangles).` + (twin ? ` Another body has this name too; only the first is dressed.` : "");
-    };
-    const fillList = (): void => {
-      list.replaceChildren();
-      const meta = model.scene ? sceneMetaFor(model.scene, fillList) : null;
-      if (!meta) return;
-      for (const n of meta.nodes) {
-        const o = document.createElement("option");
-        o.value = n.name;
-        list.appendChild(o);
-      }
-    };
-    hint.textContent = hintText();
-    fillList();
-    g.appendChild(hint);
   }
 
-  // The exported scene's `meta.json`, fetched once per scene name and kept for
-  // the page (the maps live with the editor's other state, above): undefined
-  // while it is on its way, null when the scene has never been exported here
-  // (a 404). `onChange` is called when the answer lands, so a panel built
-  // before it can redraw its line. A re-export while the editor is open is
-  // picked up on the next page load, like the scene's mesh itself.
-  function sceneMetaFor(scene: string, onChange: () => void): SceneMeta | null | undefined {
-    return scene ? exportMetaFor(sceneMetas, sceneMetaWaiters, scene, sceneMetaFile(scene), onChange) : null;
-  }
-
-  // ...and a model's (`ModelMeta`), by the same rule.
+  // A model's exported `meta.json` (`ModelMeta`), fetched once per model name
+  // and kept for the page (the maps live with the editor's other state,
+  // above): undefined while it is on its way, null when the model has never
+  // been exported here (a 404). `onChange` is called when the answer lands, so
+  // a panel built before it can redraw its line. A re-export while the editor
+  // is open is picked up on the next page load, like the model's mesh itself.
   function modelMetaFor(name: string, onChange: () => void): ModelMeta | null | undefined {
     return name ? exportMetaFor(modelMetas, modelMetaWaiters, name, modelMetaFile(name), onChange) : null;
   }
@@ -7935,7 +8363,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // exactly one of. Deliberately narrow - everything it does NOT offer is a
   // thing that belongs to a scene object, and offering it here is what made a
   // body and its one object look like the same thing.
-  function buildBodyPanel(id: number): void {
+  function buildBodyPanel(id: string): void {
     const members = bodyMembers(model.items, id);
     if (!members.length) return;
     const index = bodyIndexOf(id);
@@ -7946,7 +8374,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       `${members.length} object${members.length === 1 ? "" : "s"}: ` +
         `${kinds.filter((k) => k === "collision").length} collision, ` +
         `${kinds.filter((k) => k === "light").length} light. ` +
-        "A body is the frame they are placed in and the properties they share - what each one IS lives on the object. Expand this body in the panel bottom-left and click an object to edit its shape or material. What it LOOKS like is the object named like it in the level's Blender scene.",
+        "A body is the frame they are placed in and the properties they share - what each one IS lives on the object. Expand this body in the panel bottom-left and click an object to edit its shape or material. What it LOOKS like is what it carries: its formation, the decorations on it, its models.",
     );
     g.appendChild(title);
     const transform = section(g, "body/Transform", "Transform");
@@ -7975,42 +8403,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // mass - so the editor's rotation and the engine's are the same operation.
       (v) => rotateItemsAbout(model, members, bodyTurnCentre(members), rad(v) - origin().rot),
     );
-    // 2D OR 3D (`LevelBodyData.space`). A body holding nothing that collides
-    // is only drawn, so it may be a 3D body: off the plane by a depth and
-    // tilted, its gizmo the full one. One with collision is in the plane.
-    if (!members.some((m) => m.object === "collision")) {
-      const space = (): EdBody3d | undefined => model.bodies3d.get(id);
-      const setSpace = (on: boolean): void => {
-        beginAction();
-        // The depth and tilt are about the frame, so it is written down.
-        pinBodyFrame(model, id);
-        if (on) model.bodies3d.set(id, space() ?? { z: 0, tilt: [0, 0] });
-        else model.bodies3d.delete(id);
-        markDirty();
-        syncGizmo();
-        rebuildInspector();
-      };
-      // A div, not the default label: a label forwards a click on its text to
-      // the first button in it, which would make a body 2D unasked.
-      const spaceRow = fieldRow("space", "div");
-      const pair = el("span", "ed-pair");
-      const two = button("2D", () => setSpace(false));
-      const three = button("3D", () => setSpace(true));
-      two.title = "In the gameplay plane, like every body with collision: moved in x and y, turned in the plane";
-      three.title = "Drawn anywhere in the scene: a depth toward the camera and a tilt, with the full 3D gizmo. Only for a body that holds nothing that collides (a backdrop)";
-      two.classList.toggle("active", !space());
-      three.classList.toggle("active", !!space());
-      pair.append(two, three);
-      spaceRow.appendChild(pair);
-      transform.appendChild(spaceRow);
-      if (space()) {
-        const write = (s: Partial<EdBody3d>): void => {
-          model.bodies3d.set(id, { ...space()!, ...s });
-        };
-        numField(transform, "z", () => space()!.z * M2PX, (v) => write({ z: v * PX }));
-        numField(transform, "tilt x°", () => deg(space()!.tilt[0]), (v) => write({ tilt: [rad(v), space()!.tilt[1]] }));
-        numField(transform, "tilt y°", () => deg(space()!.tilt[1]), (v) => write({ tilt: [space()!.tilt[0], rad(v)] }));
-      }
+    // A FRAME IN THE SCENE (a rock with no body, a `Node3D`): off the plane
+    // by a depth and tilted, everything under it carried (`setNodeWorld`).
+    // A body is in the plane, and so is what it holds.
+    if (isFrame3D(id)) {
+      const at = (): World3 => worldOfNode(model, id);
+      const write = (s: Partial<World3>): void => setNodeWorld(model, id, { ...at(), ...s });
+      numField(transform, "z", () => at().z * M2PX, (v) => write({ z: v * PX }));
+      numField(transform, "tilt x°", () => deg(at().tilt[0]), (v) => write({ tilt: [rad(v), at().tilt[1]] }));
+      numField(transform, "tilt y°", () => deg(at().tilt[1]), (v) => write({ tilt: [at().tilt[0], rad(v)] }));
     }
     // ...and the one thing that can be done TO the frame rather than through it:
     // put it on the centre of mass, which is where the engine's origin is
@@ -8050,7 +8451,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // SEVERAL bodies. No transform, because there is no one frame to edit - what
   // this panel is for is the operations that take a set: Merge above all, and
   // the body properties they can be given in one go.
-  function buildBodiesPanel(ids: number[]): void {
+  function buildBodiesPanel(ids: string[]): void {
     const members = ids.flatMap((id) => bodyMembers(model.items, id));
     const g = el("div", "ed-group");
     const title = heading(
@@ -8170,8 +8571,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // up, as the loader joins them around a dead anchor.
   function addTiePointRows(g: HTMLElement, c: EdChain): void {
     const runs = bodyRuns(model.items.filter((i) => i.layer === "scene"));
-    const indexOfBody = new Map<number, number>();
-    runs.forEach((members, i) => indexOfBody.set(members[0]!.bodyId, i));
+    const indexOfBody = new Map<string, number>();
+    runs.forEach((members, i) => indexOfBody.set(members[0]!.unit, i));
     const hint = el("div", "ed-hint");
     hint.textContent =
       "Knotted to each body it passes: a rope bridge is one chain, post, slat, slat, ..., post. Each segment between knots on different bodies is straight and has its own length.";
@@ -8179,7 +8580,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     chainThroughItems(model, c).forEach((t, i) => {
       const row = el("div", "ed-row");
       const label = el("span", "ed-hint");
-      const at = indexOfBody.get(t.bodyId);
+      const at = indexOfBody.get(t.unit);
       label.textContent = `tie ${i + 1} · body ${at === undefined ? "?" : at}`;
       row.append(
         label,
@@ -8264,13 +8665,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // closest, for a route whose spans are too short or too buried to Shift-drag.
   function addWrapPointRows(g: HTMLElement, c: EdChain): void {
     const runs = bodyRuns(model.items.filter((i) => i.layer === "scene"));
-    const indexOfBody = new Map<number, number>();
-    runs.forEach((members, i) => indexOfBody.set(members[0]!.bodyId, i));
+    const indexOfBody = new Map<string, number>();
+    runs.forEach((members, i) => indexOfBody.set(members[0]!.unit, i));
     const vias = chainViaItems(model, c);
     vias.forEach((v, i) => {
       const row = el("div", "ed-row");
       const label = el("span", "ed-hint");
-      const at = indexOfBody.get(v.bodyId);
+      const at = indexOfBody.get(v.unit);
       label.textContent = `wrap ${i + 1} · body ${at === undefined ? "?" : at}`;
       row.append(
         label,
@@ -9771,7 +10172,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(title);
     const transform = section(g, "formation/Transform", "Transform");
     addTransformFields(transform, groupNum(transform, items), items);
-    if (items.length === 1 && workspace === "formations") buildFormationSection(formationHost, section(g, "formation/Formation", "Formation"), first.bodyId);
+    if (items.length === 1 && workspace === "formations") buildFormationSection(formationHost, section(g, "formation/Formation", "Formation"), first.unit);
     if (items.length === 1 && workspace === "decorations") decorations.buildList(section(g, "formation/Decorations", "Decorations"), first);
     if (items.length === 1 && workspace === "texturing") decorations.buildList(section(g, "formation/Materials", "Materials"), first, true);
     addGroupSection(g, title);
@@ -9962,48 +10363,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     tw.appendChild(title);
     describe(tw, "What the level select shows. Blank = the level's own id.");
     g.appendChild(tw);
-
-    // The Blender scene the level is dressed in (`LevelData.scene`). A name,
-    // held to what a scene may be called (`SCENE_NAME`): it is a directory
-    // under `assets-src/scenes/` and a release asset, so the field refuses the
-    // characters those cannot take rather than saving a level that `cli
-    // assets` then fails.
-    const scene = document.createElement("input");
-    scene.className = "ed-text";
-    scene.value = model.scene;
-    scene.placeholder = "none";
-    let sceneEdited = false;
-    scene.addEventListener("blur", () => (sceneEdited = false));
-    scene.addEventListener("input", () => {
-      if (!sceneEdited) {
-        beginAction();
-        sceneEdited = true;
-      }
-      const text = scene.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "");
-      if (text !== scene.value) scene.value = text;
-      model.scene = text.replace(/-+$/, "");
-      sceneMetaFor(model.scene, () => refreshFields());
-      markDirty();
-      sceneHint.textContent = sceneHintText();
-    });
-    const sw = fieldRow("scene");
-    sw.appendChild(scene);
-    describe(sw,
-      "The Blender scene this level is dressed in: assets-src/scenes/<scene>.blend, exported by `just scene <level>` and drawn over the level. An object in it named like a body rides that body; everything else is scenery where Blender put it. Blank = no look yet: the level is seen by the shapes whose debug geometry is on (each shape's Debug section). `just scene-guide <level>` writes the level's collision into <scene>-guide.blend and creates the scene file if there is none.");
-    g.appendChild(sw);
-    const sceneHint = el("div", "ed-hint");
-    const sceneHintText = (): string => {
-      if (!model.scene) return "No scene: the level is seen by its shapes' debug geometry.";
-      const meta = sceneMetaFor(model.scene, () => (sceneHint.textContent = sceneHintText()));
-      if (meta === undefined) return `Looking for /scenes/${model.scene}/meta.json…`;
-      if (meta === null) return `Not exported yet: run \`just scene ${currentName ?? "<level>"}\` (after \`just scene-guide\` if assets-src/scenes/${model.scene}.blend does not exist).`;
-      const total = meta.nodes.reduce((n, node) => n + node.triangles, 0);
-      return `${meta.nodes.length} objects (${meta.bound.length} on bodies, ${meta.scenery.length} scenery), ${total.toLocaleString()} triangles, exported ${meta.exportedAt.slice(0, 16).replace("T", " ")}` +
-        (meta.unbound.length ? `. Named but not in the scene: ${meta.unbound.join(", ")}` : "") +
-        (meta.warnings.length ? `. ${meta.warnings.length} exporter warning(s), see meta.json` : "");
-    };
-    sceneHint.textContent = sceneHintText();
-    g.appendChild(sceneHint);
 
     const flag = (
       label: string,
@@ -10286,16 +10645,178 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   }
 
-  function buildInspector(): void {
-    refreshOutliner();
-    fields.length = 0;
-    readouts.length = 0;
-    noteText = null;
-    inspector.innerHTML = "";
+  // THE NODE SECTION: what every node has (plans/node-tree.md "The model") -
+  // its name (a label, unique among its siblings), its class and path, whether
+  // it is grouped, and which data layers it is in.
+  function addNodeSection(id: string): void {
+    const n = model.tree.nodes.get(id);
+    if (!n) return;
+    const g = section(inspector, "node/Node", "Node", true);
+    const nameRow = fieldRow("name");
+    const name = document.createElement("input");
+    name.className = "ed-text";
+    name.value = n.name;
+    name.addEventListener("change", () => {
+      const text = name.value.replace(/\s+/g, " ").trim();
+      if (!text || text === n.name) return;
+      beginAction();
+      renameNode(model.tree, id, text);
+      markDirty();
+      rebuildInspector();
+    });
+    name.addEventListener("keydown", (e) => e.stopPropagation());
+    nameRow.appendChild(name);
+    describe(nameRow, "A label for this node, unique among its siblings (a clash takes the next free number). What the scene tree and the replay tools' paths show. Never what anything refers to it by: that is its id.");
+    g.appendChild(nameRow);
+    const what = fieldRow("class", "div");
+    const type = n.body ? bodyNodeType(n.body) : n.type;
+    what.appendChild(document.createTextNode(`${type}${n.instance ? ` of ${n.instance.prefab}` : ""}`));
+    describe(what, `${pathOf(model.tree, id)} (id ${id})`);
+    g.appendChild(what);
+    const groupRow = fieldRow("grouped");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = n.grouped;
+    box.addEventListener("change", () => {
+      beginAction();
+      n.grouped = box.checked;
+      markDirty();
+      rebuildInspector();
+    });
+    groupRow.appendChild(box);
+    describe(groupRow, "A click on the canvas selects this first; a second click goes inside (Ctrl+G, Ctrl+Shift+G). Changes nothing in the level but what a click picks.");
+    g.appendChild(groupRow);
+    if (model.dataLayers.length) {
+      const layersRow = fieldRow("layers", "div");
+      const inherited = new Set(ancestors(model.tree, id).flatMap((a) => a.layers));
+      for (const l of model.dataLayers) {
+        const chip = document.createElement("label");
+        chip.className = "ed-chip";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = n.layers.includes(l) || inherited.has(l);
+        cb.disabled = inherited.has(l);
+        cb.addEventListener("change", () => {
+          beginAction();
+          n.layers = cb.checked ? [...n.layers, l] : n.layers.filter((x) => x !== l);
+          markDirty();
+          rebuildInspector();
+        });
+        chip.append(cb, document.createTextNode(l));
+        layersRow.appendChild(chip);
+      }
+      describe(layersRow, "The data layers this node is in. One its parent is in it is in too (greyed).");
+      g.appendChild(layersRow);
+    }
+  }
 
-    if (assetMode) buildAssetsGroup();
-    else buildLevelGroup();
+  // A NODE THAT IS NOT A BODY: a group in the plane, a frame in the scene, a
+  // folder, a placed prefab. Its node section and where it stands; moving it
+  // carries everything under it.
+  function buildNodePanel(n: EdNode): void {
+    addNodeSection(n.id);
+    if (n.type === "Node") return; // a folder has no transform
+    const t = section(inspector, "node/Transform", "Transform", true);
+    const at = (): World3 => worldOfNode(model, n.id);
+    const write = (w: Partial<World3>): void => setNodeWorld(model, n.id, { ...at(), ...w });
+    numField(t, "x", () => at().pos.x * M2PX, (v) => write({ pos: at().pos.withX(v * PX) }));
+    numField(t, "y", () => at().pos.y * M2PX, (v) => write({ pos: at().pos.withY(v * PX) }));
+    numField(t, "rot°", () => deg(at().rot), (v) => write({ rot: rad(v) }));
+    if (is3D(n.type) || n.type === "Instance") {
+      numField(t, "z", () => at().z * M2PX, (v) => write({ z: v * PX }));
+      numField(t, "tilt x°", () => deg(at().tilt[0]), (v) => write({ tilt: [rad(v), at().tilt[1]] }));
+      numField(t, "tilt y°", () => deg(at().tilt[1]), (v) => write({ tilt: [at().tilt[0], rad(v)] }));
+    }
+    if (n.instance) buildInstanceSection(n);
+  }
 
+  // A PLACED PREFAB (plans/node-tree.md "Prefabs"): which prefab, its uniform
+  // scale, its insides opened for editing (an edit there is an override),
+  // each override with a revert, and the prefab itself opened or unpacked.
+  function buildInstanceSection(n: EdNode): void {
+    const inst = n.instance;
+    if (!inst) return;
+    const id = n.id;
+    const g = section(inspector, "node/Prefab", "Prefab", true);
+    const row = fieldRow("prefab", "div");
+    const known = prefabLibrary()[inst.prefab] !== undefined;
+    row.appendChild(document.createTextNode(known ? inst.prefab : `${inst.prefab} (missing)`));
+    g.appendChild(row);
+    // The scale re-places the insides: the instance is written out first, its
+    // overrides in the prefab's own units, so they survive the change.
+    numField(g, "scale", () => inst.scale, (v) => {
+      const next = Math.max(0.01, v);
+      if (next === inst.scale) return;
+      replaceTreeNode(id, (w) => {
+        if (next === 1) delete w["scale"];
+        else w["scale"] = next;
+      });
+    }, 0.1);
+    const editable = Object.assign(document.createElement("input"), { type: "checkbox", checked: inst.editable });
+    editable.addEventListener("change", () => setEditableChildren(id, editable.checked));
+    const er = fieldRow("editable children");
+    er.appendChild(editable);
+    describe(er, "Show the prefab's insides in the scene tree and let a click reach them. What is changed there is saved as an override on this instance; the prefab itself is untouched.");
+    g.appendChild(er);
+    // What this instance changes, by the prefab node it changes.
+    const written = findNodeIn(toTree(model).nodes, id) as { overrides?: Record<string, Record<string, unknown>> } | null;
+    const overrides = written?.overrides ?? {};
+    const prefab = prefabLibrary()[inst.prefab];
+    const names = new Map<string, string>();
+    if (prefab) walkNodes([prefab.root], (x) => void names.set(x.id, x.name));
+    for (const [target, props] of Object.entries(overrides)) {
+      const r = el("div", "ed-row");
+      const label = el("span", "ed-hint");
+      const orphan = !names.has(target);
+      label.textContent = `${names.get(target) ?? target}${orphan ? " (no longer in the prefab)" : ""}: ${Object.keys(props).join(", ")}`;
+      const revert = button("Revert", () => {
+        replaceTreeNode(id, (w) => {
+          const o = { ...(w["overrides"] as Record<string, unknown>) };
+          delete o[target];
+          if (Object.keys(o).length) w["overrides"] = o;
+          else delete w["overrides"];
+        });
+      });
+      revert.title = orphan ? "Drop this override: the node it names is gone from the prefab" : "Back to the prefab's values for this node";
+      r.append(label, revert);
+      g.appendChild(r);
+    }
+    const actions = el("div", "ed-row");
+    const open = button("Open prefab", () => void openPrefab(inst.prefab));
+    open.title = "Edit the prefab itself: every instance in every level follows";
+    open.disabled = !known;
+    const local = button("Make local", () => makeLocal(id));
+    local.title = "Unpack: the prefab's nodes become this level's own, as they stand with the overrides, no longer following the prefab";
+    local.disabled = !known;
+    actions.append(open, local);
+    g.appendChild(actions);
+  }
+
+  // Change one node AS WRITTEN (its tree form) and read the model back from
+  // it: what changing an instance's scale or its overrides is, since its
+  // insides are expanded from them.
+  function replaceTreeNode(id: string, edit: (w: Record<string, unknown>) => void): void {
+    beginAction();
+    const tree = toTree(model);
+    const w = findNodeIn(tree.nodes, id) as unknown as Record<string, unknown> | null;
+    if (!w) return;
+    edit(w);
+    reexpand(tree);
+    markDirty();
+    setBodySelection(id);
+  }
+
+  function findNodeIn(nodes: readonly LevelNode[], id: string): LevelNode | null {
+    let found: LevelNode | null = null;
+    walkNodes(nodes, (x) => {
+      if (found) return "skip";
+      if (x.id === id) found = x;
+    });
+    return found;
+  }
+
+  // The player spawn's fields.
+  function buildPlayerGroup(): void {
     const player = section(inspector, "level/Player spawn", "Player spawn", true);
     numField(player, "x", () => model.player.pos.x * M2PX, (v) => (model.player.pos = model.player.pos.withX(v * PX)));
     numField(player, "y", () => model.player.pos.y * M2PX, (v) => (model.player.pos = model.player.pos.withY(v * PX)));
@@ -10331,9 +10852,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       rollField,
       "Open the level on the ball rolling in from this far to the side of the spawn: negative to come in from the left, positive from the right, 0 for a ball that starts standing at its spawn. The ball is placed there and rolls to the spawn at 1.5 m/s, and the player's aim and chain do nothing until it arrives - so the spawn is still where the run starts, it is where the player is handed the ball. The camera stands at the spawn the whole way in rather than following the ball, so the offset is also how far off the standing frame the ball begins: 2 to 4 m rolls it in from the edge, past about 4.8 m it starts out of shot. The grapple controller ignores it, as do a start from a checkpoint and a ▶ Test here - a test starts at the spawn, in your hands, so an edit is not two metres of rolling in away from being checked. Play the level to see the opening.",
     );
+  }
 
-    buildEnvironmentGroup();
-    buildLensGroup();
+  function buildInspector(): void {
+    refreshOutliner();
+    buildDataLayers();
+    fields.length = 0;
+    readouts.length = 0;
+    noteText = null;
+    inspector.innerHTML = "";
+
+    if (prefabMode || prefabsShown) buildPrefabsGroup();
+    if (!prefabMode) buildLevelGroup();
+
+    // The level's own groups; a prefab has no spawn, sky or lens of its own.
+    if (!prefabMode) {
+      buildPlayerGroup();
+      buildEnvironmentGroup();
+      buildLensGroup();
+    }
 
     // Chains carry their own, exclusive selection (see `selectedChainIds`).
     const chains = selectedChains();
@@ -10354,10 +10891,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // shape here, no material and no look, because a body has none of those -
     // they belong to the objects in it, which are edited by picking one out of
     // the tree.
+    //
+    // A node that is not a body - a group, a 3D frame, a folder, a placed
+    // prefab - shows what its class has: its name, its group flag and layers,
+    // and its placement (plans/node-tree.md: the inspector shows the fields of
+    // the node's class, nothing else).
     if (selectedBodyIds.size) {
       const sole = soleBodyId();
-      if (sole !== null) buildBodyPanel(sole);
-      else buildBodiesPanel([...selectedBodyIds]);
+      const n = sole !== null ? model.tree.nodes.get(sole) : undefined;
+      if (n && !n.body) {
+        buildNodePanel(n);
+        return;
+      }
+      if (sole !== null) {
+        addNodeSection(sole);
+        // A placed prefab whose root is a body: the prefab first, then the
+        // body's own fields (a change there is an override).
+        if (n?.instance) buildInstanceSection(n);
+        buildBodyPanel(sole);
+      } else {
+        buildBodiesPanel([...selectedBodyIds].filter((id) => model.tree.nodes.get(id)?.body));
+      }
       return;
     }
 
@@ -10382,6 +10936,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       inspector.appendChild(line);
       return;
     }
+    if (sel.length === 1) addNodeSection(sel[0]!.node);
     // A selection may span KINDS of thing, and their properties have nothing in
     // common (a note has no kind, a camera region no fill, a light no shape), so
     // it gets one panel per kind rather than a reconciled mixed one. Panels come
@@ -10466,196 +11021,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // --- editing ops ----------------------------------------------------------
-  // Detached copies of the given bodies, each with a fresh id and shifted by
-  // `offset`. Shapes are mutated in place, so clone them. Group ids are remapped
-  // too: a duplicated compound body is a NEW body, not a second set of pieces
-  // welded into the one it was copied from. `idOf` maps old id → new, which is
-  // what lets the chains between them be copied along with the bodies.
-  function cloneBodies(
-    bodies: readonly EdItem[],
-    offset: Vec2,
-    // Where the SOURCE's bodies had their frames (see `EdModel.bodyFrames`).
-    // The model's own for a duplicate; the parsed payload's for a paste out of
-    // the clipboard, which is a different model entirely.
-    sourceFrames: ReadonlyMap<number, EdBodyFrame> = model.bodyFrames,
-    // ...and which of them were 3D (`EdModel.bodies3d`).
-    source3d: ReadonlyMap<number, EdBody3d> = model.bodies3d,
-  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame> } {
-    const groups = new Map<number, number>();
-    const idOf = new Map<number, number>();
-    // A body's frame is NOT in its items, so a copy that does not carry it gets
-    // one re-derived from whichever object was written first - and every
-    // frame-local field then points somewhere else. `pivotAt` is the one that
-    // shows: a compound pivot body whose origin was deliberately put at its
-    // bearing came out of a duplicate turning about a corner of one of its
-    // pieces. Carried, the copy is the original moved by `offset` and nothing
-    // else.
-    const frames = new Map<number, EdBodyFrame>();
-    const items = bodies.map((b) => {
-      const id = newBodyId();
-      idOf.set(b.id, id);
-      let group = b.bodyId;
-      if (group !== null) {
-        let mapped = groups.get(group);
-        if (mapped === undefined) {
-          mapped = newBodyId();
-          groups.set(group, mapped);
-          const frame = sourceFrames.get(group);
-          if (frame) frames.set(mapped, { pos: frame.pos.add(offset), rot: frame.rot });
-          // A 3D body's copy is 3D at the same depth and tilt.
-          const space3d = source3d.get(group);
-          if (space3d) model.bodies3d.set(mapped, { z: space3d.z, tilt: [space3d.tilt[0], space3d.tilt[1]] });
-        }
-        group = mapped;
-      }
-      return {
-        ...b,
-        id,
-        // The COPY's body, not the original's. `...b` carries `bodyId` over, so
-        // writing the remapped id to any other field left a duplicated wall
-        // silently joining the body it was copied from.
-        bodyId: group,
-        pos: b.pos.add(offset),
-        shape: cloneShape(b.shape),
-        cam: { ...b.cam },
-        light: { ...b.light },
-        note: { ...b.note },
-        modelRef: { ...b.modelRef },
-      };
-    });
-    // A copied anchor is a NEW anchor and needs an on-disk id of its own:
-    // `anchorId` is what chains and vines name their ends by in the file, so a
-    // copy carrying the original's id loads with both ends resolving to
-    // whichever body the loader finds first.
-    let nextAnchorId = newAnchorId();
-    for (const it of items) {
-      if (it.object === "anchor") it.anchorId = nextAnchorId++;
-    }
-    // ...and a copied formation is a new formation, for the same reason: a
-    // decoration names the guide it sits on by the formation's id. It keeps
-    // what it built, which the store names by its recipe, not by its id.
-    const formationIds = new Set(model.items.flatMap((i) => (i.formation ? [i.formation.id] : [])));
-    const formationOf = new Map<string, string>();
-    for (const it of items) {
-      if (it.object !== "formation" || !it.formation) continue;
-      const fresh = newFormationId(formationIds);
-      formationIds.add(fresh);
-      formationOf.set(it.formation.id, fresh);
-      it.formation = { ...it.formation, id: fresh };
-    }
-    // ...and a copied decoration is a new one, on the copy of its formation
-    // when that was copied with it, its strokes its own.
-    const decorationIds = new Set(model.items.flatMap((i) => (i.decoration ? [i.decoration.id] : [])));
-    for (const it of items) {
-      if (it.object !== "decoration" || !it.decoration) continue;
-      let fresh = "";
-      do fresh = `${it.decoration.kind}-${Math.floor(Math.random() * 36 ** 5).toString(36)}`; while (decorationIds.has(fresh));
-      decorationIds.add(fresh);
-      it.decoration = { ...it.decoration, id: fresh, formation: formationOf.get(it.decoration.formation) ?? it.decoration.formation, ...(it.decoration.strokes ? { strokes: [...it.decoration.strokes] } : {}) };
-    }
-    // ...and a copied ROOT branch grows out of the copy of its parent when the
-    // two were copied together. Copied alone it names the original, which is
-    // in another body now - and `syncRoots` makes it a trunk where it stands.
-    for (const it of items) {
-      if (it.root && it.root.parent !== null) {
-        it.root = { ...it.root, parent: idOf.get(it.root.parent) ?? it.root.parent, at: it.root.at };
-      }
-    }
-    // ...and a copied firefly path is a new path, for the same reason: two
-    // paths under one id leave a swarm naming it following whichever loads
-    // first (the loader drops the second). A copied SWARM keeps naming the
-    // original's path - two swarms guiding along one path is a fine thing to
-    // author - unless that path was copied with it, when the copy follows the
-    // copy.
-    let nextPathId = newFireflyPathId();
-    const pathOf = new Map<number, number>();
-    for (const it of items) {
-      if (it.layer !== "fireflies") continue;
-      pathOf.set(it.pathId, nextPathId);
-      it.pathId = nextPathId++;
-    }
-    for (const it of items) {
-      const p = it.light.path;
-      if (it.object === "light" && p !== null && pathOf.has(p)) {
-        it.light = { ...it.light, path: pathOf.get(p)! };
-      }
-    }
-    return { items, idOf, frames };
-  }
-
-  // Copies of the chains whose BOTH ends landed in the copied set. A chain with
-  // one end outside it would be a chain to a body that is not there, so it is
-  // left behind rather than silently re-pointed at the original.
-  function cloneChainsWithin(
-    chains: readonly EdChain[],
-    idOf: ReadonlyMap<number, number>,
-  ): EdChain[] {
-    const out: EdChain[] = [];
-    for (const c of chains) {
-      const a = idOf.get(c.a);
-      const b = idOf.get(c.b);
-      if (a === undefined || b === undefined) continue;
-      // A wrap point whose anchor was not copied is dropped from the copy's
-      // route rather than pointed at the original, as a vine's second anchor is.
-      const via: number[] = [];
-      for (const id of c.via) {
-        const v = idOf.get(id);
-        if (v !== undefined) via.push(v);
-      }
-      // A tie point whose anchor was not copied is dropped the same way, and
-      // the copy's segment lengths go with it - they index segments that no
-      // longer exist.
-      const through: number[] = [];
-      for (const id of c.through) {
-        const t = idOf.get(id);
-        if (t !== undefined) through.push(t);
-      }
-      const lengths = through.length === c.through.length ? [...c.lengths] : [];
-      out.push({ ...cloneChain(c), id: newBodyId(), a, b, via, through, lengths });
-    }
-    return out;
-  }
-
-  // The vines whose anchor is among the copied items, re-pointed at the copies.
-  // A vine whose anchor was not copied is left behind rather than pointed at the
-  // original, which would give one anchor two vines nobody authored.
-  function cloneVinesWithin(
-    vines: readonly EdVine[],
-    idOf: ReadonlyMap<number, number>,
-  ): EdVine[] {
-    const out: EdVine[] = [];
-    for (const v of vines) {
-      const anchor = idOf.get(v.anchor);
-      if (anchor === undefined) continue;
-      // A span's second anchor is re-pointed the same way. One whose second
-      // anchor was NOT copied falls back to hanging rather than staying bolted
-      // to the original's anchor, which nobody authored.
-      const anchor2 = v.anchor2 !== null ? (idOf.get(v.anchor2) ?? null) : null;
-      out.push({ ...cloneVine(v), id: newBodyId(), anchor, anchor2 });
-    }
-    return out;
-  }
-
-  // Add freshly created bodies to the model and leave them selected, so the
-  // group can immediately be dragged or pasted again.
-  function addAndSelect(
-    bodies: EdItem[],
-    chains: EdChain[] = [],
-    vines: EdVine[] = [],
-    // The frames the arriving bodies were authored against, for the ones whose
-    // frame is somewhere no object sits (see `cloneBodies`).
-    frames?: ReadonlyMap<number, EdBodyFrame>,
-  ): void {
-    model.items.push(...bodies);
-    model.chains.push(...chains);
-    model.vines.push(...vines);
-    if (frames) for (const [id, f] of frames) model.bodyFrames.set(id, f);
+  // PUT A PIECE OF LEVEL IN (`graftModel`): every node, item, chain and vine
+  // of `source` added under fresh ids, moved by `offset`, under `parent`, and
+  // selected - what is added, nothing else.
+  function graftAndSelect(source: EdModel, offset: Vec2 = Vec2.ZERO, parent: string | null = null): void {
+    const added = graftModel(model, source, offset, parent);
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
     selectedVineIds.clear();
     selectedBodyIds.clear();
-    for (const b of bodies) selectedIds.add(b.id);
+    // A whole frame arrived (a body, a group): select it as one; loose items
+    // are selected as themselves.
+    const frames = added.roots.filter((r) => model.tree.nodes.get(r)?.item === null);
+    if (frames.length && frames.length === added.roots.length) for (const r of frames) selectedBodyIds.add(r);
+    else for (const i of added.items) selectedIds.add(i.id);
     markDirty();
     rebuildInspector();
   }
@@ -10671,41 +11051,93 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Body-level properties (kind, fill, friction, force) collapse onto the lead's,
   // since a body has only one of each.
   //
-  // The bodies it acts on come from whichever selection is live: two rows picked
-  // in the outliner, or objects picked on the canvas (whose WHOLE bodies move,
-  // not the selected objects alone - dragging one piece of a body into another
-  // and leaving its siblings behind would silently take that body apart, which
-  // is a thing to do on purpose with Ctrl+Shift+G rather than a side effect of
-  // merging).
-  const mergeableBodies = (): number[] => {
-    const ids = selectedBodyIds.size
-      ? [...selectedBodyIds]
-      : [...new Set(selectedBodies().map((b) => b.bodyId))];
-    // A body only merges if EVERY object in it may share one. An area is
-    // single-shape wherever it is used, so a merged one would silently act
-    // through its first piece alone.
-    return ids.filter((id) => bodyMembers(model.items, id).every(canShareBody));
-  };
+  // The bodies it acts on come from whichever selection is live: rows picked
+  // in the scene tree, or objects picked on the canvas (whose WHOLE bodies
+  // count, not the selected objects alone).
+  // The nodes the selection stands for: the frames selected as such, else the
+  // nodes of the items selected.
+  function selectionNodes(): string[] {
+    if (selectedBodyIds.size) return [...selectedBodyIds];
+    return [...new Set(selectedBodies().map((b) => b.node))];
+  }
 
-  function mergeIntoBody(): void {
-    const ids = mergeableBodies();
-    if (ids.length < 2) return;
-    // One formation to a body (docs/formations.md).
-    if (ids.reduce((n, b) => n + bodyMembers(model.items, b).filter((m) => m.object === "formation").length, 0) > 1) {
-      showToast("Two of these bodies have a formation, and a body has one.", "warn");
-      return;
-    }
-    const id = newBodyId();
-    const absorbed = new Set(ids);
+  // NEW BODY FROM SELECTION (plans/node-tree.md "What replaces what"): the
+  // selected pieces reparented under a new `StaticBody2D`, each keeping where
+  // it stands, which is what making a compound body is now. The new body
+  // stands where the first piece's parent did, on the pieces' centre of mass,
+  // and is created grouped, as every body is.
+  function newBodyFromSelection(): void {
+    const ids = selectionNodes().filter((id) => {
+      const n = model.tree.nodes.get(id);
+      return !!n && !n.body && n.extra["spawn"] !== true;
+    });
+    if (!ids.length) return;
+    const first = model.tree.nodes.get(ids[0]!)!;
+    const items = ids.flatMap((id) => membersOf(model, id));
+    const centre = items.length ? bodyCentroid(items) : first.pos;
     beginAction();
-    for (const b of model.items) if (absorbed.has(b.bodyId)) b.bodyId = id;
-    const members = bodyMembers(model.items, id);
-    syncBodyProps(members);
-    // The result is selected the way its ingredients were: merging two rows in
-    // the tree leaves the new body selected as a BODY, so the panel is still
-    // showing a body and not suddenly a heap of objects.
-    if (selectedBodyIds.size) setBodySelection(id);
-    else setSelection(members.map((b) => b.id));
+    const body = addFrameNode(model, "StaticBody2D", first.parent, {
+      pos: centre,
+      name: "StaticBody2D",
+      body: defaultBody(nextOrder(model.tree)),
+      grouped: true,
+      index: childrenOf(model.tree, first.parent).indexOf(first.id),
+    });
+    for (const id of ids) {
+      const why = moveNode(model, id, body.id, undefined);
+      if (why) {
+        // Refused: put everything back as it was.
+        replaceModel(history.pop()!);
+        showToast(why, "warn");
+        return;
+      }
+    }
+    expandedBodies.add(body.id);
+    markDirty();
+    setBodySelection(body.id);
+  }
+
+  // GROUP (Ctrl+G) and UNGROUP (Ctrl+Shift+G): a node's `grouped` flag, which
+  // changes only what a click on the canvas selects (plans/node-tree.md
+  // "Groups"). Grouping several nodes that are not one already puts them
+  // under a new group node (a `Node2D`, or a `Node3D` for things in the
+  // scene) first.
+  function groupSelection(): void {
+    const ids = selectionNodes();
+    if (!ids.length) return;
+    beginAction();
+    if (ids.length === 1) {
+      model.tree.nodes.get(ids[0]!)!.grouped = true;
+    } else {
+      const first = model.tree.nodes.get(ids[0]!)!;
+      const threeD = ids.every((id) => is3D(model.tree.nodes.get(id)?.type ?? "Node"));
+      const group = addFrameNode(model, threeD ? "Node3D" : "Node2D", first.parent, {
+        pos: bodyCentroid(ids.flatMap((id) => membersOf(model, id))),
+        name: "Group",
+        grouped: true,
+        index: childrenOf(model.tree, first.parent).indexOf(first.id),
+      });
+      for (const id of ids) {
+        const why = moveNode(model, id, group.id, undefined);
+        if (why) {
+          replaceModel(history.pop()!);
+          showToast(why, "warn");
+          return;
+        }
+      }
+      setBodySelection(group.id);
+    }
+    markDirty();
+    rebuildInspector();
+  }
+
+  function ungroupSelection(): void {
+    const ids = selectionNodes().filter((id) => model.tree.nodes.get(id)?.grouped);
+    // An item's own group root when the item itself is not one.
+    const roots = ids.length ? ids : [...new Set(selectedBodies().map((b) => ancestors(model.tree, b.node).find((a) => a.grouped)?.id).filter((x): x is string => !!x))];
+    if (!roots.length) return;
+    beginAction();
+    for (const id of roots) model.tree.nodes.get(id)!.grouped = false;
     markDirty();
     rebuildInspector();
   }
@@ -10713,7 +11145,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Is this body's origin already where its mass is? Asked exactly as
   // `originToCentroid` asks it, so the button it greys out and the operation it
   // guards cannot disagree about whether there is anything to do.
-  const originIsCentred = (id: number): boolean => {
+  const originIsCentred = (id: string): boolean => {
     const members = bodyMembers(model.items, id);
     if (!members.length) return true;
     const d = bodyCentroid(members).sub(bodyFrameOf(model, id).pos);
@@ -10725,69 +11157,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // in the level (`pinCompoundFrames`), so an action that turns out to have
   // nothing to do has still changed the model and would leave an undo step that
   // undoes nothing visible.
-  function originOntoCentroid(id: number): void {
+  function originOntoCentroid(id: string): void {
     if (originIsCentred(id)) return;
     beginAction();
     originToCentroid(model, id);
     markDirty();
     rebuildInspector();
-  }
-
-  // Take the selected bodies apart: every object in them becomes a body of its
-  // own. Nothing else changes - the objects stay exactly where they are, and
-  // only stop sharing a transform, a seam rule and a set of body properties.
-  function splitIntoBodies(): void {
-    // Every body the selection touches, taken WHOLE: splitting half a body would
-    // leave the other half claiming to be a body of two that has one object in
-    // it, which is exactly the state having no null stopped being possible.
-    const ids = new Set(
-      selectedBodyIds.size ? selectedBodyIds : selectedBodies().map((b) => b.bodyId),
-    );
-    const affected = model.items.filter((i) => ids.has(i.bodyId));
-    // A formation keeps its collision and its decorations with it.
-    if (affected.some((i) => i.object === "formation")) {
-      showToast("A body with a formation is not split: the formation keeps its collision and its decorations.", "warn");
-      return;
-    }
-    // Nothing to do when every one of them already holds a single object.
-    if (affected.length === ids.size) return;
-    beginAction();
-    // An ANCHOR does not become a body of its own. A chain is bolted to a shape,
-    // and an anchor alone in a body is tied to something that builds nothing at
-    // all - the chain would simply be dropped at load. It follows the first
-    // collision object out of the body it was in, which is the shape it was
-    // bolted to in the first place.
-    const wasIn = new Map<EdItem, number>(affected.map((b) => [b, b.bodyId]));
-    const leadOf = new Map<number, number>();
-    for (const b of affected) {
-      if (b.object === "anchor") continue;
-      const id = newBodyId();
-      const old = wasIn.get(b)!;
-      if (b.object === "collision" && !leadOf.has(old)) leadOf.set(old, id);
-      b.bodyId = id;
-    }
-    for (const b of affected) {
-      if (b.object !== "anchor") continue;
-      b.bodyId = leadOf.get(wasIn.get(b)!) ?? b.bodyId;
-    }
-    // The bodies that were selected no longer exist, so the selection follows
-    // the objects out - leaving it pointing at retired ids would empty the panel
-    // and leave the tree highlighting nothing.
-    if (selectedBodyIds.size) setSelection(affected.map((b) => b.id));
-    markDirty();
-    rebuildInspector();
-  }
-
-  // Keep a compound body's members in agreement after an edit to one of them.
-  // Only the lead's body-level properties are built, so this is what stops a
-  // file from disagreeing with what the editor draws.
-  function syncEditedBodies(edited: readonly EdItem[]): void {
-    const seen = new Set<number>();
-    for (const b of edited) {
-      if (seen.has(b.bodyId)) continue;
-      seen.add(b.bodyId);
-      syncBodyProps(bodyMembers(model.items, b.bodyId));
-    }
   }
 
   // --- chains ---------------------------------------------------------------
@@ -10871,7 +11246,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   ): void {
     if (!chainable(to)) return;
     if (to.id === from.id) return;
-    if (to.bodyId === from.bodyId) return;
+    if (to.unit === from.unit) return;
     beginAction();
     // One at a time, and IN THE MODEL before the next is minted: `newAnchorId`
     // reads the model to find the next free id, so minting both against the
@@ -11000,7 +11375,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The first piece the rope can hold, where the body has one (a wheel's hub
   // rather than its rim - see `chainable`), else its first piece at all.
   const anchorHost = (a: EdItem): EdItem | null => {
-    const members = bodyMembers(model.items, a.bodyId);
+    const members = bodyMembers(model.items, a.unit);
     return (
       members.find((m) => m.object === "collision" && (m.mask & LAYER_ROPE) !== 0) ??
       members.find((m) => m.object === "collision") ??
@@ -11038,8 +11413,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function placeGlow(at: Vec2): void {
     const arrived = placingMushroom ? mushroomModel(at) : glowModel(at);
     beginAction();
-    const copy = cloneBodies(arrived.items, Vec2.ZERO, arrived.bodyFrames, arrived.bodies3d);
-    addAndSelect(copy.items, [], [], copy.frames);
+    graftAndSelect(arrived);
   }
 
   // `+ Fireflies`: the body `fireflyBody` describes, the way `placeGlow` places
@@ -11047,120 +11421,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function placeFireflies(at: Vec2): void {
     const arrived = fireflyModel(at);
     beginAction();
-    const copy = cloneBodies(arrived.items, Vec2.ZERO, arrived.bodyFrames, arrived.bodies3d);
-    addAndSelect(copy.items, [], [], copy.frames);
+    graftAndSelect(arrived);
   }
 
   function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow" | "fireflies">, start: Vec2): EdItem {
-    // Which scene object the tool draws: `+ Light` a light, every shape tool a
-    // collision object.
     const object: EdObject = t === "light" ? "light" : t === "model" ? "model" : "collision";
     const style = newItemStyle(activeLayer, object);
-    // Drawn INTO the selected body, when one is selected. With a body selected
-    // the thing being authored is a part of it - a second shape for a compound
-    // wall, the light a lamp throws - and making it
-    // a body of its own would mean drawing it, selecting both and merging, every
-    // single time. An area is refused for the reason `canShareBody` gives: it is
-    // single-shape wherever it is used.
-    //
-    // Camera regions and notes are never in a body in any meaningful sense, so
-    // they keep getting one of their own.
-    const host = activeLayer === "scene" ? soleBodyId() : null;
-    const bodyId =
-      host !== null && bodyMembers(model.items, host).every(canShareBody)
-        ? host
-        : newBodyId();
-    const base = {
-      id: newBodyId(),
-      layer: activeLayer,
-      object,
-      // The selected body, or one of its own when nothing is selected. Ctrl+G
-      // moves it later, which is a decision rather than something a draw has an
-      // opinion about.
-      bodyId,
+    // Not in the tree yet: `insertDrawn` puts it there, into the body it is
+    // drawn into or a new one.
+    const base: EdItem = {
+      ...blankItem(activeLayer, object, ""),
       pos: start,
-      rot: 0,
-      kind: newKind,
       color: style.color,
       opacity: style.opacity,
-      friction: DEFAULT_SURFACE_FRICTION,
-      // ...and a fresh shape is a dead one: bounce is opt-in, exactly as
-      // hook-proofing below is.
-      bounce: DEFAULT_BOUNCE,
-      launch: DEFAULT_LAUNCH,
-      // ...and a fresh body is unbreakable, for the same reason: what it takes
-      // to destroy a piece of scenery is a decision about the level, and 0 is
-      // the "nothing can" every body has until one is made.
-      breakForce: 0,
-      durability: 1,
-      // Unnamed until the body panel names it for the level's Blender scene.
-      name: "",
-      // Hook-proof is opt-in: a fresh shape is one the hook can catch.
-      impermeable: false,
-      // ...and so is standing out of something's way: a fresh shape is in
-      // everyone's.
-      mask: MASK_ALL,
-      // A fresh CURVE is a rail, and every other fresh shape is a face. Drawing
-      // a bar is what the curve tool is for - a curved wall is the same shape
-      // with the box unticked, one click away either way - and it is the one
-      // shape kind a rail can be at all (see `CollisionObjectData.rail`).
       rail: t === "path" && activeLayer === "scene",
-      viscosity: 0,
-      slipFloor: 0,
-      // A fresh shape is 20 cm of oak, which is what every body authored before
-      // materials existed is made of.
-      material: DEFAULT_MATERIAL,
-      density: DEFAULT_DENSITY,
-      thickness: DEFAULT_THICKNESS,
-      // Seen in 3D by its debug geometry while the level has no Blender scene
-      // to be seen by - a block-out is drawn in what it is blocked out of - and
-      // invisible in a dressed level, where collision is drawn over nothing
-      // until the Debug section says so.
-      debug: { ...NO_DEBUG(), on: !model.scene },
-      // A root branch is drawn with the root tool alone (`commitRootDraft`).
-      root: null,
-      // Only meaningful on a force area, but a new one needs a non-zero pull
-      // or it would draw no arrows and do nothing until the field is touched.
-      force: DEFAULT_FORCE_MAGNITUDE * PX,
-      // Likewise only meaningful on a water area, and likewise non-zero so a
-      // fresh one runs and drags rather than sitting there as a coloured box.
-      flow: DEFAULT_WATER_FLOW * PX,
-      drag: DEFAULT_WATER_DRAG,
-      // A fresh run ends against its bank; a fall is opted into on the panel.
-      spill: 0,
-      waterZ: 0,
-      waterDepth: null,
-      // A fresh body is free; the bearing and the spring are both opted into on
-      // the panel, and a spring of no frequency is no spring at all.
-      // Hook-only is opt-in: a fresh body is one that collides.
-      passable: false,
-      pivot: false,
-      pivotAt: null,
-      pivotFreq: 0,
-      pivotDamping: DEFAULT_SPRING_DAMPING,
-      springFreqX: 0,
-      springFreqY: 0,
-      springDamping: DEFAULT_SPRING_DAMPING,
-      swingAmp: 0,
-      swingPeriod: 0,
-      swingPhase: 0,
-      spinPeriod: 0,
-      spinPhase: 0,
-      route: [],
-      moveMode: "backAndForth" as const,
-      moveSpeed: 0,
-      movePhase: 0,
-      moveEase: "linear" as const,
-      moveAlign: false,
-      // A fresh region is a no-op until a framing field is authored.
-      cam: defaultCamera(),
-      light: defaultLight(),
-      note: defaultNote(),
-      modelRef: defaultModelRef(),
-      formation: null, decoration: null,
-      shelter: defaultShelter(),
-      anchorId: 0,
-      pathId: 0,
+      // A new piece is seen by its debug geometry, as every piece a level is
+      // blocked out in is.
+      debug: object === "collision" && activeLayer === "scene" ? { ...NO_DEBUG(), on: true } : NO_DEBUG(),
     };
     if (t === "model") {
       // Dropped ON the click: a model's size is its own, and its placement is
@@ -11254,7 +11531,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // nothing else - the kind selector is for the next box.
       return {
         ...base,
-        kind: "static",
         shape: {
           kind: "belt",
           wheels: [
@@ -11278,6 +11554,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // How close (in screen px) a click must land to the draft's first vertex to
   // close the loop rather than adding another vertex.
+  // PUT A DRAWN ITEM IN THE TREE. A piece drawn while one body is selected
+  // goes into that body (when it may: an area is one kind of thing); any
+  // other collision piece gets a body of its own, of the draw tool's kind,
+  // created grouped as every body is; a light or a model drawn into nothing
+  // stands on its own, and so does everything on the other layers.
+  // `bodyProps` sets what a new body is born with.
+  function insertDrawn(item: EdItem, bodyProps: Partial<EdBody> = {}): EdItem {
+    const host = item.layer === "scene" ? soleBodyId() : null;
+    const hostNode = host !== null ? model.tree.nodes.get(host) : undefined;
+    if (hostNode?.body && bodyMembers(model.items, host!).every(canShareBody)) return addItem(model, item, host);
+    if (item.layer === "scene" && item.object === "collision") {
+      const body = addFrameNode(model, "StaticBody2D", null, {
+        pos: item.pos,
+        rot: item.rot,
+        name: newKind === "static" ? "StaticBody2D" : newKind === "rigid" ? "RigidBody2D" : "Area2D",
+        body: { ...defaultBody(nextOrder(model.tree)), kind: newKind, color: item.color, opacity: item.opacity, ...bodyProps },
+        grouped: true,
+      });
+      return addItem(model, item, body.id);
+    }
+    return addItem(model, item, null);
+  }
+
   const POLY_CLOSE_PX = 10;
 
   function cancelPolyDraft(): void {
@@ -11327,10 +11626,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     centreShapeOrigin(item);
     beginAction();
-    addAndSelect([item]);
-    // Same rules the drag-drawn shapes take: a polygon drawn into a selected
-    // body wears that body's properties rather than the tool's defaults.
-    syncBodyProps(bodyMembers(model.items, item.bodyId));
+    insertDrawn(item);
+    setSelection([item.id]);
+    markDirty();
   }
 
   // The clicked points as a camera path: taken exactly as drawn, with no
@@ -11359,7 +11657,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     centreShapeOrigin(item);
     beginAction();
-    addAndSelect([item]);
+    insertDrawn(item);
+    setSelection([item.id]);
+    markDirty();
   }
 
   // How close (in screen px) outside a root's bar a stroke may start and still
@@ -11410,25 +11710,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // by its own generated mesh rather than by debug geometry.
     item.rail = false;
     item.debug = NO_DEBUG();
+    beginAction();
     if (parent && isRootItem(parent) && draft.from) {
-      item.bodyId = parent.bodyId;
+      // A branch: in its root's body, beside the branch it grows out of.
       item.root = {
         parent: parent.id,
         at: draft.from.at,
         bark: parent.root?.bark,
       };
+      addItem(model, item, model.tree.nodes.get(parent.node)?.parent ?? parent.unit);
     } else {
-      item.bodyId = newBodyId();
-      item.kind = "static";
-      item.passable = true;
+      // A new root: a hook-only static body of its own.
       item.color = DEFAULT_ROOT_COLOR;
       item.root = { parent: null, at: 0 };
+      const body = addFrameNode(model, "StaticBody2D", null, {
+        pos: item.pos,
+        name: "Root",
+        body: { ...defaultBody(nextOrder(model.tree)), kind: "static", passable: true, color: DEFAULT_ROOT_COLOR },
+        grouped: true,
+      });
+      addItem(model, item, body.id);
     }
-    beginAction();
-    addAndSelect([item]);
-    // A branch wears its root's body properties - the kind, the pivot, the
-    // colour - rather than the tool's.
-    if (parent) syncBodyProps(bodyMembers(model.items, item.bodyId));
+    setSelection([item.id]);
+    markDirty();
   }
 
   // Remove the picked vertices from the shape they belong to. Answers whether
@@ -11500,10 +11804,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const doomed = new Set(picked.filter((i) => i > 0));
     if (!doomed.size) return true;
     beginAction();
-    const rest = lead.route.filter((_, i) => !doomed.has(i)).map(cloneRouteNode);
-    lead.route = rest.length > 1 ? rest : [];
+    const rest = propsOf(lead).route.filter((_, i) => !doomed.has(i)).map(cloneRouteNode);
+    propsOf(lead).route = rest.length > 1 ? rest : [];
     clearRouteSel();
-    syncEditedBodies([lead]);
     markDirty();
     rebuildInspector();
     return true;
@@ -11556,9 +11859,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       beginAction();
       nudging = true;
     }
-    const d = dir.mul(fine ? NUDGE_FINE : gridStep).rotated(-bodyFrameOf(model, lead.bodyId).rot);
-    lead.route = lead.route.map((n, i) => (moving.has(i) ? { ...n, p: n.p.add(d) } : n));
-    syncEditedBodies([lead]);
+    const d = dir.mul(fine ? NUDGE_FINE : gridStep).rotated(-bodyFrameOf(model, lead.unit).rot);
+    propsOf(lead).route = propsOf(lead).route.map((n, i) => (moving.has(i) ? { ...n, p: n.p.add(d) } : n));
     markDirty();
     refreshFields();
     return true;
@@ -11642,13 +11944,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const sel = operandItems();
     if (!sel.length) return;
     beginAction();
-    const copy = cloneBodies(sel, new Vec2(gridStep * 2, gridStep * 2));
-    addAndSelect(
-      copy.items,
-      cloneChainsWithin(model.chains, copy.idOf),
-      cloneVinesWithin(model.vines, copy.idOf),
-      copy.frames,
-    );
+    // The part of the level the selection is, beside it: its nodes, the
+    // bodies and groups above them, and the chains and vines between them.
+    graftAndSelect(subModel(model, sel), new Vec2(gridStep * 2, gridStep * 2), commonParentOf(sel));
+  }
+
+  // The parent every one of these items' top nodes shares, so a duplicate
+  // lands beside what it copies; the level's root when they differ.
+  function commonParentOf(items: readonly EdItem[]): string | null {
+    const tops = new Set(items.map((i) => {
+      let id = i.unit;
+      for (const a of ancestors(model.tree, i.node)) if (a.grouped && selectedBodyIds.has(a.id)) id = a.id;
+      return model.tree.nodes.get(id)?.parent ?? null;
+    }));
+    return tops.size === 1 ? [...tops][0]! : null;
   }
 
   // --- clipboard ------------------------------------------------------------
@@ -11691,13 +12000,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // assembly rather than a part: folding it into one would collapse the chains
   // and vine spans between its pieces, which need two bodies to hold on to and
   // are dropped at load when they have one (see `addChain`). That pastes as it
-  // always did, and Ctrl+G is there to merge it afterwards on purpose.
-  function pasteHostBody(items: readonly EdItem[]): number | null {
+  // always did, and New body is there to make one of it afterwards on purpose.
+  function pasteHostBody(items: readonly EdItem[]): string | null {
     const host = soleBodyId();
     if (host === null) return null;
     if (!bodyMembers(model.items, host).every(canShareBody)) return null;
     if (!items.every(canShareBody)) return null;
-    if (!items.every((i) => i.bodyId === items[0]!.bodyId)) return null;
+    if (!items.every((i) => i.unit === items[0]!.unit)) return null;
     return host;
   }
 
@@ -11719,16 +12028,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // ask for, carrying text that is not a payload, landed the last copy instead
   // of declining. A paste pastes what is on the clipboard, or nothing.
   function pasteClipboard(text: string | null): void {
-    const data = text !== null ? readClipboard(text) : null;
-    if (!data) return;
-    // The payload is on-disk pixel level data, so it comes back in through the
-    // SAME loader a level does - page-fresh ids and all. That is what makes the
-    // round trip lossless by the cases that already hold a save lossless, and
-    // what lets a payload be hand-written or pasted out of a text editor.
-    const arrived = modelFromDisk(data);
-    if (!arrived.items.length) return;
-    // Pasted items keep the layer they were copied from — a camera region can't
-    // become a body — so a paste reveals and unlocks any layer it lands on
+    // The payload is a fragment of a level file (`editor/clipboard.ts`),
+    // read through the same loader a level is, as a model of its own.
+    const arrived = text !== null ? readClipboard(text) : null;
+    if (!arrived || !arrived.items.length) return;
+    // Pasted items keep the layer they were copied from - a camera region can't
+    // become a body - so a paste reveals and unlocks any layer it lands on
     // rather than dropping items where they can be neither seen nor clicked.
     for (const l of new Set(arrived.items.map((i) => i.layer))) {
       setLayerVisible(l, true);
@@ -11740,28 +12045,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
     const host = pasteHostBody(arrived.items);
     beginAction();
-    // Through `cloneBodies` even though the parse already minted fresh ids, and
-    // it is not redundant: this is what remints the ANCHOR ids, which are
-    // CONTENT in the file rather than page state, so a paste into a level that
-    // already holds anchor 1 does not end up with two of them and a chain that
-    // names either.
-    const copy = cloneBodies(arrived.items, delta, arrived.bodyFrames, arrived.bodies3d);
-    // Into the selected body rather than the fresh one `cloneBodies` minted for
-    // the copy. Placement is untouched: the paste still lands under the cursor,
-    // and what joining a body changes is what it is PART of.
-    if (host !== null) for (const it of copy.items) it.bodyId = host;
-    addAndSelect(
-      copy.items,
-      cloneChainsWithin(arrived.chains, copy.idOf),
-      cloneVinesWithin(arrived.vines, copy.idOf),
-      copy.frames,
-    );
-    // A body has one kind, one fill, one friction: a shape pasted into an
-    // existing body takes them rather than bringing the copy's and disagreeing
-    // with its new siblings about what the body is - the same courtesy a drawn
-    // one gets. The host's own lead comes first in `model.items`, so it is the
-    // body that wins, not the arrival.
-    if (host !== null) syncBodyProps(bodyMembers(model.items, host));
+    // Anchor and firefly path numbers are re-minted by the graft, so a paste
+    // into a level that already holds anchor 1 does not end up with two.
+    const before = new Set(model.tree.nodes.keys());
+    graftAndSelect(arrived, delta, null);
+    // INTO THE SELECTED BODY: the pasted pieces move under it, each where it
+    // landed, and the body the copy came in leaves. What joining a body
+    // changes is what the piece is PART of.
+    if (host !== null) {
+      const arrivedRoots = model.tree.roots.filter((r) => !before.has(r));
+      for (const r of arrivedRoots) {
+        const n = model.tree.nodes.get(r);
+        if (!n?.body) continue;
+        for (const c of [...n.children]) moveNode(model, c, host, undefined);
+        if (!n.children.length) removeSubtree(model.tree, r);
+      }
+      relink(model);
+      setSelection(model.items.filter((i) => i.bodyOf === host && !before.has(i.node)).map((i) => i.id));
+    }
   }
 
   // THE DOM'S OWN EVENTS rather than the keydown switch, and that is what the
@@ -11831,22 +12132,53 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return false;
     }
   }
-  // The level's paint: every painted decoration's strokes, by its id.
+  // The level's paint: every painted decoration's strokes, by its id, in
+  // `levels/paint/<level>.json`; a prefab's in `prefabs/paint/<prefab>.json`
+  // (`paintDoc`). A placed prefab's decorations start from the prefab's
+  // strokes (`inst/deco` reads the prefab's `deco`), and only those painted
+  // over here are written to the level's: the rest go on following the prefab.
   let savedPaint = "";
+  const inheritedPaint = new Map<string, string>();
+  const paintDoc = (name: string): string => (prefabMode ? `${PAINT_API}/prefabs/${name}` : `${PAINT_API}/${name}`);
   async function savePaint(name: string): Promise<void> {
     const strokes: Record<string, PaintStamp[]> = {};
-    for (const i of model.items) if (i.decoration?.strokes?.length) strokes[i.decoration.id] = i.decoration.strokes;
+    for (const i of model.items) {
+      const own = i.decoration?.strokes;
+      if (!own?.length || inheritedPaint.get(i.decoration!.id) === JSON.stringify(own)) continue;
+      strokes[i.decoration!.id] = own;
+    }
     const text = JSON.stringify(strokes);
     if (text === savedPaint) return;
-    const res = await fetch(`${PAINT_API}/${name}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: text });
+    const res = await fetch(paintDoc(name), { method: "PUT", headers: { "Content-Type": "application/json" }, body: text });
     if (!res.ok) throw new Error(`the paint could not be saved (${res.status})`);
     savedPaint = text;
   }
   async function loadPaint(name: string): Promise<void> {
-    const res = await fetch(`${PAINT_API}/${name}`, { cache: "no-store" });
-    const strokes = res.ok ? ((await res.json()) as Record<string, PaintStamp[]>) : {};
+    // Paint that cannot be read is no paint: the level still opens.
+    const read = async (url: string): Promise<Record<string, PaintStamp[]>> => {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        return res.ok ? ((await res.json()) as Record<string, PaintStamp[]>) : {};
+      } catch {
+        return {};
+      }
+    };
+    const strokes = await read(paintDoc(name));
+    // Each placed prefab's own strokes, under the ids its decorations take.
+    inheritedPaint.clear();
+    const inherited: Record<string, PaintStamp[]> = {};
+    for (const n of model.tree.nodes.values()) {
+      if (!n.instance) continue;
+      const theirs = await read(`${PAINT_API}/prefabs/${n.instance.prefab}`);
+      for (const [id, list] of Object.entries(theirs)) {
+        inherited[`${n.id}/${id}`] = list;
+        inheritedPaint.set(`${n.id}/${id}`, JSON.stringify(list));
+      }
+    }
     for (const i of model.items) {
-      if (i.decoration && strokes[i.decoration.id]) i.decoration = { ...i.decoration, strokes: strokes[i.decoration.id] };
+      if (!i.decoration) continue;
+      const list = strokes[i.decoration.id] ?? inherited[i.decoration.id];
+      if (list) i.decoration = { ...i.decoration, strokes: list };
     }
     savedPaint = JSON.stringify(strokes);
   }
@@ -11871,7 +12203,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       rebuildInspector();
       updateTitle();
     } catch (e) {
-      alert(`Load failed: ${e}`);
+      // A toast, not a modal: a modal blocks the page outright (and with it
+      // any tool driving it) for news that needs no answer.
+      showToast(`Load failed: ${e}`, "warn");
     }
   }
   // --- autosave -------------------------------------------------------------
@@ -12128,16 +12462,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // The nearest level surface under the pointer, leaving out the
   // body `exclude` - the thing being put down must not be put down on itself.
-  // Whatever the level draws counts - the Blender scene's dressing and scenery,
-  // and the pieces' debug geometry; the guides, the gizmo and the ball at the
+  // Whatever the level draws counts - the bodies' formations and models, and
+  // the pieces' debug geometry; the guides, the gizmo and the ball at the
   // spawn do not.
-  function surfaceUnder(scr: Vec2, exclude: number | null): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+  function surfaceUnder(scr: Vec2, exclude: string | null): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
     const hit = visuals?.surfaceAt(scr, (tag) => {
-      // Scenery is in no body, so nothing excludes it.
-      if (tag === SCENERY_TAG) return true;
       const id = itemOfSceneObject.get(tag as SceneTag);
       const it = id === undefined ? null : itemOf(id);
-      return it !== null && it.bodyId !== exclude;
+      return it !== null && it.unit !== exclude;
     });
     return hit ? { point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z), normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z) } : null;
   }
@@ -12167,7 +12499,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     const it = itemOf(d.item.id);
     if (!it) return;
-    const hit = surfaceUnder(scr, it.bodyId);
+    const hit = surfaceUnder(scr, it.unit);
     // Over nothing it stays where it last landed: a drop has no plane to fall
     // back to, and snapping to the gameplay plane would be a move nobody made.
     if (!hit) return;
@@ -12201,10 +12533,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // so the last leg's removal takes the whole thing.
       if (alt && i > 0) {
         beginAction();
-        lead.route = lead.route.filter((_, j) => j !== i).map(cloneRouteNode);
-        if (lead.route.length < 2) lead.route = [];
+        propsOf(lead).route = propsOf(lead).route.filter((_, j) => j !== i).map(cloneRouteNode);
+        if (propsOf(lead).route.length < 2) propsOf(lead).route = [];
         clearRouteSel();
-        syncEditedBodies([lead]);
         markDirty();
         rebuildInspector();
         return "consumed";
@@ -12229,13 +12560,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (let i = 0; i < mids.length; i++) {
       if (worldToScreen(camera, mids[i]!).distanceTo(scr) > HANDLE_HIT_PX) continue;
       beginAction();
-      const a = lead.route[i]!;
-      const b = lead.route[(i + 1) % lead.route.length]!;
+      const a = propsOf(lead).route[i]!;
+      const b = propsOf(lead).route[(i + 1) % propsOf(lead).route.length]!;
       const split = splitCubicAtHalf(
         { p: a.p, in: a.in, out: a.out },
         { p: b.p, in: b.in, out: b.out },
       );
-      const next = lead.route.map(cloneRouteNode);
+      const next = propsOf(lead).route.map(cloneRouteNode);
       next[i] = { ...next[i]!, out: split.outA };
       next[(i + 1) % next.length] = { ...next[(i + 1) % next.length]!, in: split.inB };
       // The new node keys nothing: putting a key mid-leg is then one further
@@ -12248,9 +12579,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         rot: null,
         speed: null,
       });
-      lead.route = next;
+      propsOf(lead).route = next;
       pickRouteNode(lead, i + 1, false);
-      syncEditedBodies([lead]);
       markDirty();
       rebuildInspector();
       return { mode: "moveWaypoint", lead, index: i + 1 };
@@ -12270,9 +12600,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The item a body's route is held on: its collision lead, and only when it
   // actually has a route. One place, so the press handler, the panel and the
   // canvas cannot disagree about which item carries the nodes.
-  function routeLeadOf(id: number): EdItem | null {
+  function routeLeadOf(id: string): EdItem | null {
     const lead = bodyMembers(model.items, id).find((m) => m.object === "collision");
-    return lead && lead.kind === "static" && lead.route.length > 0 ? lead : null;
+    return lead && propsOf(lead).kind === "static" && propsOf(lead).route.length > 0 ? lead : null;
   }
 
   function pickHandle(scr: Vec2, alt = false, shift = false): Drag | "consumed" | null {
@@ -12699,11 +13029,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       dragPushed = true;
       const start = snapVec(world);
       const body = newDrawnItem(drawTool, start);
-      model.items.push(body);
-      // A body has one kind, one fill, one friction: an object drawn into an
-      // existing body takes them rather than bringing the draw tool's defaults
-      // and disagreeing with its siblings about what the body is.
-      syncBodyProps(bodyMembers(model.items, body.bodyId));
+      // Into the selected body, or a body of its own (`insertDrawn`): a body
+      // has one kind, one fill, one friction, held on its node.
+      insertDrawn(body);
       setSelection([body.id]);
       // A checkpoint has no size to drag out (see `newDrawnItem`), so the press
       // IS the whole gesture: entering a draw drag would offer a resize that
@@ -12835,7 +13163,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // and merged, exactly as they can in the tree. Falling through to the item
       // selection here would quietly swap what the panel is editing mid-gesture.
       if (e.shiftKey && !e.altKey && selectedBodyIds.size) {
-        toggleBodySelection(hit.bodyId);
+        toggleBodySelection(hit.unit);
         drag = null;
         return;
       }
@@ -12844,11 +13172,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // reaching for the view over a wall moves the view and not the wall.
       // Geometry cannot be nudged out of place by a gesture that meant to look
       // around, which is the one editing mistake that leaves no trace on screen.
-      if (selectedBodyIds.has(hit.bodyId)) {
+      if (selectedBodyIds.has(hit.unit)) {
         // The whole body drags, since the body is what is selected - and a press
         // that turns out to be a CLICK still drills into the object under it,
         // which is the second half of "click the body, then click into it".
-        const members = bodyMembers(model.items, hit.bodyId);
+        const members = bodyMembers(model.items, hit.unit);
         const others = members
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
@@ -12910,14 +13238,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // end the cycle, since the next plain click at that point is starting a
         // fresh question rather than continuing this one.
         if (e.shiftKey || e.altKey) {
-          const targets = clickTargets(hit, e.altKey || insideCurrentBody(hit));
           pickCycle = null;
+          // Alt ignores groups: the thing under the pointer itself.
+          const target = sealedTarget(e.altKey ? hit.node : clickTarget(model.tree, hit.node, selectedNodeIds(), clickable));
+          const n = model.tree.nodes.get(target);
           if (e.shiftKey) {
-            if (targets.length === 1) toggleSelection(hit.id);
-            else setSelection(withWholeBodies([...selectedIds, ...targets.map((t) => t.id)]));
+            if (n?.item !== null && n?.item !== undefined && !selectedBodyIds.size) toggleSelection(n.item);
+            else toggleBodySelection(target);
             return;
           }
-          setSelection(targets.map((t) => t.id));
+          selectNode(target);
           return;
         }
         cycle();
@@ -13206,7 +13536,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   function pickSteps(cands: readonly EdItem[]): PickStep[] {
     const steps: PickStep[] = [];
-    let prevBody: number | null = null;
+    let prevBody: string | null = null;
     for (const it of cands) {
       // One step per body rather than per object, since a body is what a click
       // on any of its objects means. A body appears twice only where the stack
@@ -13217,14 +13547,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // region, a note) is alone in a body that is never built, so its body
       // step was a panel of physics, bounce and mover fields for a thing that
       // has none, and the click that reached the item's own panel the second.
-      if (it.layer === "scene" && it.bodyId !== prevBody) {
-        const bodyId = it.bodyId;
+      if (it.layer === "scene" && it.unit !== prevBody) {
+        const bodyId = it.unit;
         steps.push({
           apply: () => setBodySelection(bodyId),
           isCurrent: () =>
             soleBodyId() === bodyId && !selectedIds.size && !selectedChainIds.size,
         });
-        prevBody = it.bodyId;
+        prevBody = it.unit;
       }
       const id = it.id;
       steps.push({
@@ -13248,28 +13578,44 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return () => {
       const cands = pickCandidatesAt(world, scr);
       if (!cands.length) return;
-      const steps = pickSteps(cands);
       const key = cands.map((c) => c.id).join(",");
-      // A repeat is the same point, the same stack, AND the selection still
-      // being what the last step left - anything else (the outliner, a band, an
-      // undo) has moved on, and continuing the cycle from there would jump to
-      // something nobody pointed at.
-      const repeat =
-        pickCycle !== null &&
-        pickCycle.key === key &&
-        scr.distanceTo(pickCycle.screen) <= CLICK_SLOP_PX &&
-        (steps[pickCycle.index]?.isCurrent() ?? false);
-      const index = repeat
-        ? (pickCycle!.index + 1) % steps.length
-        : // A fresh click is exactly the old behaviour: the body under the
-          // pointer, or the object in it when that body is already the one being
-          // edited.
-          insideCurrentBody(cands[0]!)
-          ? 1
-          : 0;
-      steps[index]!.apply();
+      // THE GROUP RULE (plans/node-tree.md "Groups"): from the outermost group
+      // root on the path down to what is under the pointer, a group not
+      // entered (nothing in it selected) selects its root; an entered one
+      // passes the click to the next group root down, and with none left the
+      // thing under the pointer is selected. Only group roots whose class is
+      // clickable in this workspace stop a click.
+      const targetOf = (hit: EdItem): string => sealedTarget(clickTarget(model.tree, hit.node, selectedNodeIds(), clickable));
+      const selectedNow = (target: string): boolean => {
+        const sel = selectedNodeIds();
+        return sel.size === 1 && sel.has(target);
+      };
+      // A click on what is already selected steps on to the next thing stacked
+      // under the pointer (the cycle `pickCycle` remembers).
+      const repeat = pickCycle !== null && pickCycle.key === key && scr.distanceTo(pickCycle.screen) <= CLICK_SLOP_PX;
+      let index = repeat ? pickCycle!.index : 0;
+      let target = targetOf(cands[index]!);
+      if (selectedNow(target)) {
+        index = (index + 1) % cands.length;
+        target = targetOf(cands[index]!);
+      }
+      selectNode(target);
       pickCycle = { screen: scr, key, index };
     };
+  }
+
+  // Is a node a group root a click stops at here: grouped, and of a class this
+  // workspace clicks (`clickableIn`)?
+  const clickable = (n: EdNode): boolean => n.grouped && clickableIn(workspace, shownType(n));
+
+  // Select one node: an item's node selects the item, any other the node.
+  function selectNode(id: string): void {
+    const n = model.tree.nodes.get(id);
+    if (!n) return;
+    if (n.item !== null) setSelection([n.item]);
+    else if (n.chain !== null) setChainSelection([n.chain]);
+    else if (n.vine !== null) setVineSelection([n.vine]);
+    else setBodySelection(id);
   }
 
   // The chain nearest a world point, within the pick band, or null. Chains are
@@ -13527,13 +13873,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // Written into the BODY's frame, which is where a route is held: the
         // nodes ride the body through every gesture that moves or turns it, and
         // a world position would have to be re-derived by each of them.
-        const frame = bodyFrameOf(model, drag.lead.bodyId);
+        const frame = bodyFrameOf(model, drag.lead.unit);
         const local = snapVec(world).sub(frame.pos).rotated(-frame.rot);
-        const next = drag.lead.route.map(cloneRouteNode);
+        const next = propsOf(drag.lead).route.map(cloneRouteNode);
         const at = next[drag.index];
         if (at) at.p = local;
-        drag.lead.route = next;
-        syncEditedBodies([drag.lead]);
+        propsOf(drag.lead).route = next;
         markDirty();
         refreshFields();
         break;
@@ -13542,16 +13887,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // NOT snapped to the grid: a tangent is a direction and a length, not a
         // placement, and a snapped one quantises the curve's shape rather than
         // where it sits - the same reason a camera path's grips are free.
-        const frame = bodyFrameOf(model, drag.lead.bodyId);
-        const next = drag.lead.route.map(cloneRouteNode);
+        const frame = bodyFrameOf(model, drag.lead.unit);
+        const next = propsOf(drag.lead).route.map(cloneRouteNode);
         const at = next[drag.index];
         if (at) {
           const offset = world.sub(frame.pos).rotated(-frame.rot).sub(at.p);
           at[drag.side] = offset;
           if (drag.mirror) at[drag.side === "in" ? "out" : "in"] = offset.neg();
         }
-        drag.lead.route = next;
-        syncEditedBodies([drag.lead]);
+        propsOf(drag.lead).route = next;
         markDirty();
         refreshFields();
         break;
@@ -13810,7 +14154,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (!anchor) break;
         const host = over ?? anchorHost(anchor);
         if (!host) break;
-        anchor.bodyId = host.bodyId;
+        anchor.unit = host.unit;
         anchor.rot = host.rot;
         anchor.pos = toWorld(host, nearestSurfaceLocal(host, world));
         markDirty();
@@ -13827,7 +14171,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (!anchor) break;
         const host = topmostAt(world, (b) => chainable(b)) ?? anchorHost(anchor);
         if (!host) break;
-        anchor.bodyId = host.bodyId;
+        anchor.unit = host.unit;
         anchor.rot = host.rot;
         anchor.pos = toWorld(host, nearestSurfaceLocal(host, world));
         markDirty();
@@ -13849,9 +14193,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // the body it has - a drag can never leave a chain tied to itself or to
         // nothing.
         const over = topmostAt(world, (b) => chainable(b));
-        const host = over && over.bodyId !== other?.bodyId ? over : anchorHost(anchor);
+        const host = over && over.unit !== other?.unit ? over : anchorHost(anchor);
         if (!host) break;
-        anchor.bodyId = host.bodyId;
+        anchor.unit = host.unit;
         anchor.rot = host.rot;
         anchor.pos = toWorld(host, nearestSurfaceLocal(host, world));
         markDirty();
@@ -13868,7 +14212,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // wrap point is (see `nearestCornerLocal`).
         const host = topmostAt(world, (b) => chainable(b)) ?? anchorHost(anchor);
         if (!host) break;
-        anchor.bodyId = host.bodyId;
+        anchor.unit = host.unit;
         anchor.rot = host.rot;
         anchor.pos = toWorld(host, nearestCornerLocal(host, world));
         markDirty();
@@ -13973,11 +14317,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
                 : caught(b, box.min, box.max),
           )
           .map((b) => b.id);
-        // No group is ever half-caught: a band that touches one piece of a
-        // compound body has touched the body.
-        setSelection(
-          withWholeBodies(drag.additive ? [...selectedIds, ...hits] : hits),
-        );
+        // A band selects the OUTERMOST GROUP ROOT of everything it takes
+        // (plans/node-tree.md "Groups"): a body caught by one piece is the
+        // body, a group caught by one of its things the group.
+        const roots = new Set<string>(drag.additive ? selectedBodyIds : []);
+        const items = new Set<number>(drag.additive ? selectedIds : []);
+        for (const id of hits) {
+          const it = itemOf(id);
+          if (!it) continue;
+          const root = outermostGroup(model.tree, it.node, clickable);
+          if (root === it.node) items.add(id);
+          else roots.add(root);
+        }
+        setNodeSelection([...items], [...roots]);
       } else if (!drag.additive) {
         // A plain click on empty space clears - the VERTEX selection first, if
         // there is one, and the item selection only once there is not. Two
@@ -14134,7 +14486,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // `lookahead`, so it is where the overlay has to be reachable.
       if (e.code === "KeyL") testShowDebug = !testShowDebug;
       // ...and the game's G: the pieces' debug geometry off, to see the
-      // Blender scene alone.
+      // level's look alone.
       if (e.code === "KeyG" && scene3d) scene3d.setDebugShown(!scene3d.debugGeometryShown);
       return;
     }
@@ -14194,10 +14546,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           duplicateSelected();
           break;
         case "KeyG":
-          // Ctrl+G welds the selection into one compound body; Ctrl+Shift+G
-          // breaks one back up - the pairing every editor uses.
-          if (e.shiftKey) splitIntoBodies();
-          else mergeIntoBody();
+          // Ctrl+G groups the selection, Ctrl+Shift+G ungroups it - the
+          // pairing every editor uses. A compound body is made with "New
+          // body" instead (plans/node-tree.md).
+          if (e.shiftKey) ungroupSelection();
+          else groupSelection();
           break;
         // Ctrl+C and Ctrl+V are NOT here. They are `copy` and `paste`
         // listeners on the document, because those are the only events that
@@ -14307,8 +14660,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "KeyH" && !e.ctrlKey && !e.metaKey && mode === "edit") {
       if (e.altKey) setBodiesHidden([...hiddenBodies], false);
       else {
-        const chosen = new Set<number>([...selectedBodyIds, ...[...selectedIds].map((id) => itemOf(id)?.bodyId ?? -1)].filter((id) => id >= 0));
-        if (e.shiftKey) setBodiesHidden(model.items.map((i) => i.bodyId).filter((id) => !chosen.has(id)), true);
+        const chosen = new Set<string>([...selectedBodyIds, ...[...selectedIds].map((id) => itemOf(id)?.unit ?? "")].filter((id) => id !== ""));
+        if (e.shiftKey) setBodiesHidden(model.items.map((i) => i.unit).filter((id) => !chosen.has(id)), true);
         else setBodiesHidden(chosen, true);
       }
       e.preventDefault();
@@ -14364,7 +14717,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const valid =
       to !== null &&
       to.id !== drag.from.id &&
-      !(drag.from.bodyId !== null && to.bodyId === drag.from.bodyId);
+      !(drag.from.unit !== null && to.unit === drag.from.unit);
     return { path, to: drag.cursor, valid };
   }
 
@@ -14580,7 +14933,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           workspace === "formations" ? shownGuideItems() : NO_ITEMS,
           currentSolidSel(),
           new Set([
-            ...model.items.filter((i) => i.object === "formation" && (selectedIds.has(i.id) || selectedBodyIds.has(i.bodyId))).map((i) => i.id),
+            ...model.items.filter((i) => i.object === "formation" && (selectedIds.has(i.id) || selectedBodyIds.has(i.unit))).map((i) => i.id),
             // ...and the guides picked to combine with it, drawn as strongly.
             ...(combine?.picks ?? []),
           ]),
@@ -14648,7 +15001,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // In 3D the scene below is what shows what a body IS; the overlay drops
         // its fills to outlines so the geometry stays visible through them.
         overlayLayers(),
-        tool === "root" ? NO_IDS : selectedBodyIds,
+        tool === "root" ? NO_NODE_IDS : selectedBodyIds,
         tool === "root" ? NO_IDS : selectedVerts,
         currentSettleGhosts(),
         wrapDraftView(),
@@ -15019,7 +15372,7 @@ function injectStyles(): void {
      dimmer, so the eye runs down the bodies and only drops into one when it is
      looking for a piece. */
   .ed-out-row.body { color: #cbccc6; }
-  .ed-out-row.obj { color: #9aa0ac; padding-left: 14px; }
+  .ed-out-row.obj { color: #9aa0ac; }
   /* What an object can be, coloured as the canvas already colours it: solid
      geometry plain, decoration teal (its dashed editor outline), a light amber
      (it is the one furniture layer whose colour is authored), an anchor the
@@ -15033,8 +15386,31 @@ function injectStyles(): void {
   .ed-out-row.head:hover { background: none; }
   .ed-out-twist { width: 10px; color: #6b7280; text-align: center; flex: none; }
   .ed-out-twist.live:hover { color: #cbccc6; }
-  .ed-out-label { overflow: hidden; text-overflow: ellipsis; }
+  .ed-out-label { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
   .ed-out-count { margin-left: auto; color: #6b7280; }
+  /* THE SCENE TREE (plans/node-tree.md): a node's class as a mark, whether it
+     is in the plane or the scene, its name, then the group mark, the add and
+     the eye at the right edge. Indented a character per level. */
+  .ed-out-type { width: 2ch; flex: none; text-align: center; color: #6b7280; }
+  .ed-out-dim { width: 2.5ch; flex: none; color: #4b5263; }
+  .ed-out-group { width: 2ch; flex: none; text-align: center; color: #65bddb; }
+  .ed-out-add { width: 2ch; flex: none; text-align: center; color: transparent; }
+  .ed-out-row:hover .ed-out-add { color: #6b7280; }
+  .ed-out-add:hover { color: #cbccc6 !important; }
+  .ed-out-row.drop-into { outline: 1px solid #65bddb; }
+  .ed-out-row.drop-before { box-shadow: inset 0 2px 0 #65bddb; }
+  .ed-out-row.drop-after { box-shadow: inset 0 -2px 0 #65bddb; }
+  .ed-out-crumb { color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ed-out-crumb:empty { display: none; }
+  .ed-out-rename { flex: 1; min-width: 0; background: #1f2430; color: #cbccc6;
+    border: 1px solid #65bddb; font: inherit; padding: 0 2px; }
+  .ed-out-menu { position: fixed; z-index: 50; background: rgba(31,36,48,0.98);
+    border: 1px solid #313244; padding: 4px; display: flex; flex-direction: column; }
+  .ed-out-menu-item { padding: 2px 6px; cursor: pointer; white-space: nowrap; color: #cbccc6; }
+  .ed-out-menu-item:hover { background: #2a2f3d; }
+  .ed-chip { display: inline-flex; gap: 2px; align-items: center; margin-right: 6px; }
+  .ed-data-layers .ed-layer-row { display: flex; gap: 4px; align-items: center; }
+  .ed-data-layers .ed-layer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Formations (formationPanel.ts): a stale rock's status and its Regenerate
      in the amber that says "a consequence", not "invalid". */
   .ed-formation-status.ed-stale { color: #d0a215; }

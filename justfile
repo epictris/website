@@ -39,28 +39,27 @@ asset IN OUT:
 texture IN OUT MAP:
     cd rope && bun run assets:optimize-texture {{IN}} {{OUT}} --map {{MAP}} && bun run assets:publish {{OUT}}
 
-# Pull the props, textures, Blender scenes and models this checkout's manifests name into rope/public/.
+# Pull the props, textures and models this checkout's manifests name into rope/public/.
 assets:
     cd rope && bun run assets:fetch
 
-# Pull the Blender scenes' sources (their .blend files and the pictures their
-# tools paint with) into rope/assets-src/. Never overwrites a file with
+# Pull the Blender sources (the .blend files and the pictures their tools
+# paint with) into rope/assets-src/. Never overwrites a file with
 # unpublished edits. See rope/scripts/sceneSources.ts.
 sources:
     cd rope && bun run assets:fetch-sources
 
-# Publish the Blender scenes the levels name and the models their bodies carry
-# to the asset release and pin them in rope/src/render3d/sceneAssets.json and
-# modelAssets.json, and their sources (the .blend files, pinned in
-# rope/scripts/sceneSources.json), bake every level's roots (`just roots`),
-# then upload every other pinned asset (props, texture maps, skies, root bakes)
-# the release does not hold yet. The levels' generated formations go up as
-# region bundles, pinned in rope/src/render3d/formationAssets.json (see
-# rope/docs/formations.md). Run it after `just scene`, `just model`, a root
-# edit or a Generate in the editor, then commit the pins with the level; run it
-# before pushing any commit that re-pins an asset.
+# Publish the models the levels' bodies carry to the asset release and pin
+# them in rope/src/render3d/modelAssets.json, and their sources (the .blend
+# files, pinned in rope/scripts/sceneSources.json), bake every level's roots
+# (`just roots`), then upload every other pinned asset (props, texture maps,
+# skies, root bakes) the release does not hold yet. The levels' generated
+# formations go up as region bundles, pinned in
+# rope/src/render3d/formationAssets.json (see rope/docs/formations.md). Run it
+# after `just model`, a root edit or a Generate in the editor, then commit the
+# pins with the level; run it before pushing any commit that re-pins an asset.
 publish:
-    cd rope && bun run assets:publish-scenes && bun run assets:publish-models && bun run assets:publish-sources && bun run assets:publish-formations && bun run roots:bake && bun run assets:publish-stored
+    cd rope && bun run assets:publish-models && bun run assets:publish-sources && bun run assets:publish-formations && bun run roots:bake && bun run assets:publish-stored
 
 # Regenerate the editor's formation schema (rope/src/level/formationSchema.json)
 # from the formations add-on, after a generator parameter changes.
@@ -85,15 +84,6 @@ formation-sweep *FLAGS:
 #   just roots ball     one level
 roots *LEVELS:
     cd rope && bun run roots:bake {{LEVELS}}
-
-# Export a level's Blender scene (rope/assets-src/scenes/<scene>.blend, the
-# level's `scene`) into rope/public/scenes/<scene>/ and report what it dressed.
-# Then refresh the browser. See rope/docs/blender-scenes.md.
-#   just scene ball
-# Unchanged objects load their maps from the bake cache instead of baking;
-# `just scene ball --no-cache` bakes every one afresh.
-scene LEVEL *FLAGS:
-    cd rope && bun run scene:export {{LEVEL}} {{FLAGS}}
 
 # Export a model of the library (rope/assets-src/models/<model>.blend) into
 # rope/public/models/<model>/. Every body carrying a `model` object of that name
@@ -135,11 +125,3 @@ formations-install:
 # viewport's sidebar. See rope/docs/blender-game.md.
 game-install:
     cd rope && blender -b --python tools/blender/addon_install.py -- game
-
-# Write the level's collision and its game camera (along the camera paths, or
-# along a recorded run: just scene-guide ball --ride playtests/x.json.gz) into
-# <scene>-guide.blend as a linked guide to model against, and create
-# <scene>.blend linking it if there is none yet.
-#   just scene-guide ball
-scene-guide LEVEL *ARGS:
-    cd rope && bun run scene:guide {{LEVEL}} {{ARGS}}

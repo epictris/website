@@ -1,18 +1,20 @@
-"""Export a level's Blender scene as the game's dressing.
+"""Export a `.blend` as one of the game's GLBs: a model of the library, a
+formation's baked tier or a decoration. Named for the Blender scenes it was
+first written for (retired 2026-11-26, docs/blender-scenes.md).
 
-    blender -b assets-src/scenes/<scene>.blend --factory-startup --python-exit-code 1 \
-        --python tools/blender/scene_export.py -- out.gltf meta.json [--cache DIR [--stale-occlusion]]
+    blender -b <file>.blend --factory-startup --python-exit-code 1 \
+        --python tools/blender/scene_export.py -- out.gltf meta.json [--all-seen] [--cache DIR [--stale-occlusion]]
 
 `out.gltf` goes out beside its `.bin` and its images; `out.glb` is one file.
 
-Run by `scripts/scene-export.ts` (`just scene <level>`), which optimises the
-result and finishes the meta; see docs/blender-scenes.md.
+Run by `scripts/blendExport.ts` (`just model <model>`, a formation's build, a
+decoration's), which optimises the result and finishes the meta; see
+docs/blender-models.md.
 
-WHAT GOES OUT. Every object in the scene that has geometry (a mesh, a curve, a
+WHAT GOES OUT. Every object in the file that has geometry (a mesh, a curve, a
 surface, a text, a metaball), except:
 
-- one linked from another file (the level's collision guide is one, linked
-  from `<scene>-guide.blend`), or an override of one;
+- one linked from another file, or an override of one;
 - one in a collection whose name starts with "guide" (any case), or in a
   collection excluded from the view layer (the checkbox in the outliner);
 - one hidden in RENDER (the camera icon), itself or through a collection it is
@@ -24,10 +26,8 @@ Lights, cameras, empties, armatures never go out: the level's own lights carry
 a budget and semantics glTF cannot (see docs/lighting-and-surfaces.md), and an
 empty that parents things is flattened away by the optimiser anyway.
 
-WHAT IS KEPT. Every object's WORLD transform, because that is the whole
-binding: the renderer mounts an object named like a body at Blender's pose
-minus the body's rest pose and lets the body carry it (render3d/sceneDressing.ts).
-Modifiers are applied. Materials go as glTF can carry them - a Principled BSDF
+WHAT IS KEPT. Every object's WORLD transform: the file's frame is the frame
+the game mounts the export in (render3d/exportFiles.ts). Modifiers are applied. Materials go as glTF can carry them - a Principled BSDF
 with image textures, a constant tint on one, alpha clipped by a threshold - and
 a PROCEDURAL Base Color or Normal (noise, ramps, mixes, bumps: what the
 formations' stone is) is baked by Cycles into an image of the exported copy's
@@ -70,7 +70,7 @@ def log(msg):
 
 
 def step(name, note=None):
-    """Tell scene-export.ts's progress display that step `name` starts now
+    """Tell blendExport.ts's progress display that step `name` starts now
     (and so the one before it is done). The list of steps, their order and
     their labels are that script's (STEPS); `note` is what the display shows
     beside the step."""
@@ -78,9 +78,9 @@ def step(name, note=None):
 
 
 def node_name(name):
-    """How three.js spells this object's node name (see `nodeNameOf` in
-    render3d/scenes.ts): whitespace to `_`, then `[`, `]`, `.`, `:`, `/`
-    dropped. The report compares body names through the same rule."""
+    """How three.js spells this object's node name (GLTFLoader's
+    `PropertyBinding.sanitizeNodeName`): whitespace to `_`, then `[`, `]`,
+    `.`, `:`, `/` dropped. Recorded in the meta as each node's `node`."""
     return re.sub(r"[\[\]\.:/]", "", re.sub(r"\s", "_", name))
 
 
@@ -1128,7 +1128,7 @@ def image_name(ob, kind, i=0, count=1):
     `count`. No dot in it: the glTF exporter takes everything after the last
     dot for an extension, so "Terrace.003 baked colour" shipped as "Terrace",
     missed the optimiser's " baked colour" rule and went out as lossy WebP at
-    1k, a quarter of its texels (2026-10-04; scene-export.ts now checks every
+    1k, a quarter of its texels (2026-10-04; blendExport.ts now checks every
     baked map is matched)."""
     base = ob.name.replace('.', '-')
     return f"{base} {kind}" if count == 1 else f"{base} map {i + 1} {kind}"
@@ -1781,7 +1781,7 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
               + (f", {len(stale)} with stale occlusion" if stale else "") + f" ({pruned} unused entries removed)"
               if cache else "cache off")
     baked_here = lambda obs: sum(ob not in loaded or ob in worked for ob in obs)  # noqa: E731
-    # scene-export.ts reads the "ships" counts: the optimiser must encode that
+    # blendExport.ts reads the "ships" counts: the optimiser must encode that
     # many baked maps.
     log(f"ships {sum(len(sizes[ob]) for ob in colored)} colour and {sum(len(sizes[ob]) for ob in bumped)} normal "
         f"maps; baked {baked_here(colored)} colour, {len(to_detail) + sum(ob in worked for ob in detailed)} detail "
@@ -2346,7 +2346,7 @@ def main():
         if helper.name.startswith(("game.emission-light.", "game.emission-preview")):
             helper.hide_render = helper.hide_viewport = True
     t0 = time.time()
-    # The game's depth of field, from scripts/scene-export.ts (it reads them
+    # The game's depth of field, from scripts/blendExport.ts (it reads them
     # from src/render3d/depthOfField.ts); the finer passes are budgeted by it.
     if "SCENE_EXPORT_DOF" in os.environ:
         from formations import render
@@ -2512,7 +2512,7 @@ def main():
         "skipped": skipped,
         "warnings": warnings,
         "lighting": {"lightmaps": len(lighting_maps), "probes": math.prod(lighting_field["size"]) if lighting_field else 0},
-        # Every baked map the glTF should carry, by name: scene-export.ts
+        # Every baked map the glTF should carry, by name: blendExport.ts
         # names the ones the shipped file lacks. Not part of the scene's meta.
         "baked_maps": sorted(im.name for im in bpy.data.images
                              if im.get("generated_by") == "tools/blender/scene_export.py"

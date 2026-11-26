@@ -1,11 +1,10 @@
 // Bring the release store in line with the exports the registered levels name
-// (their Blender scenes, the models their bodies carry), and write the
-// manifest that pins them to match: the shared half of
-// `scripts/publish-scenes.ts` and `scripts/publish-models.ts`.
+// (the models their bodies carry), and write the manifest that pins them to
+// match: the store half of `scripts/publish-models.ts`.
 //
 // Unlike a generated mesh, an export is REPLACED IN PLACE: its release asset is
 // re-uploaded whenever this machine's export differs from the pin, because a
-// scene or a model is exported again and again while it is worked on, and a
+// model is exported again and again while it is worked on, and a
 // name per export would leave every draft in the release for ever. The pin
 // (sha256 + bytes) is what says which export a commit meant; `assets:fetch`
 // verifies it, so an older commit whose export was replaced fails its fetch
@@ -21,7 +20,7 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SceneCredit } from "../src/render3d/scenes";
+import type { ExportCredit } from "../src/render3d/exportFiles";
 import { ASSET_REPO, ASSET_TAG, sha256 } from "./assetStore";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -30,13 +29,13 @@ const PUBLIC_DIR = join(ROOT, "public");
 interface PinnedExport {
   sha256: string;
   bytes: number;
-  credits?: SceneCredit[];
+  credits?: ExportCredit[];
 }
 
 export interface ExportKind {
-  // `[scenes]`, `[models]`: the log's tag.
+  // `[models]`: the log's tag.
   tag: string;
-  // What one is called in a message ("scene", "model").
+  // What one is called in a message ("model").
   noun: string;
   // Every export the registered levels name, with the levels naming it.
   named: Map<string, string[]>;
@@ -47,7 +46,7 @@ export interface ExportKind {
   file: (name: string) => string;
   metaFile: (name: string) => string;
   releaseName: (name: string) => string;
-  // The recipe that exports one, for a message (`just scene <level>`).
+  // The recipe that exports one, for a message (`just model <model>`).
   recipe: string;
 }
 
@@ -98,7 +97,7 @@ export function publishExports(kind: ExportKind): boolean {
       // The credits of what is inside it ride along with the pin, from the
       // export's own meta - which must describe this very file.
       const metaPath = join(PUBLIC_DIR, kind.metaFile(entry).slice(1));
-      const meta = existsSync(metaPath) ? (JSON.parse(readFileSync(metaPath, "utf8")) as { sha256: string; credits?: SceneCredit[] }) : null;
+      const meta = existsSync(metaPath) ? (JSON.parse(readFileSync(metaPath, "utf8")) as { sha256: string; credits?: ExportCredit[] }) : null;
       if (!meta || meta.sha256 !== hash) {
         failures.push(`${entry} (${levels.join(", ")}): meta.json does not describe this ${relative(PUBLIC_DIR, path)}; export it again (\`${kind.recipe}\`)`);
         continue;

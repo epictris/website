@@ -27,10 +27,11 @@ import type { VineCord } from "../level/vines";
 import { RopeVineClamp } from "../lib/vineClamp";
 import type { LevelVisualSource } from "../level/buildBodies";
 import { isCollisionObject, type EnvironmentData, type FireflyPathData, type LevelBodyData } from "../level/levelFormat";
+import type { LevelNode } from "../level/nodes";
+import { TreeLook } from "./treeLook";
 import type { Camera } from "../render/camera";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
-import { SceneDressing, sceneryWater, type DressTarget } from "./sceneDressing";
 import { useBakedLighting } from "./bakedLighting";
 import { setFogRegions } from "./fogRegions";
 import { BallVisual } from "./ballVisual";
@@ -69,13 +70,13 @@ import { glassProbeFar, PROBE_FAR, ReflectionProbe } from "./reflectionProbe";
 import { PlanarReflection } from "./planarReflection";
 import type { DepthOfFieldLevel } from "../render/settings";
 import { DepthOfField } from "./depthOfField";
-import { isDepthStandIn, leaveDepthPrepass } from "./depthPrepass";
+import { isDepthStandIn } from "./depthPrepass";
 import { FrameTarget } from "./frameTarget";
 import { frameSource } from "./frameCopy";
-import { bodyTriangles, sceneryTriangles, type CollisionMesh, type ShardCollision } from "./shardCollision";
+import { bodyTriangles, type ShardCollision } from "./shardCollision";
 import { LightShafts } from "./lightShafts";
 import { updateWater, waterTextures } from "./water";
-import { stillWaterMaterial, WaterSplashes, type FoamSurface, type StillSurface } from "./stillWater";
+import { WaterSplashes, type FoamSurface, type StillSurface } from "./stillWater";
 import { beltRenderTime } from "../render/beltTread";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
@@ -153,10 +154,6 @@ export type SceneHit = THREE.Intersection & { depth: number };
 // something a hand can click.
 const LINE_PICK_PX = 12;
 
-// How far from a pool's surface the scene's own flat water may lie and still
-// be taken for its continuation, metres (the backdrop tool lays it 2 cm under).
-const SCENERY_WATER_REACH = 0.1;
-
 // How far past the water's edge on screen the mirror is drawn, in normalised
 // device coordinates: the ripples push a lookup up to ~0.02 of the screen
 // (stillWater.ts, slope x 0.11 x DISTORTION) and the taps a little more.
@@ -165,13 +162,6 @@ const MIRROR_WINDOW_PAD = 0.05;
 // `PlanarReflection.capture`): on the play plane, the depth of the ball and
 // of what it swings on, so their reflections are the ones that never slide.
 const MIRROR_ANCHOR = new THREE.Vector3(0, 0, 0);
-
-// A pool's surface height in three's frame, from the body's pose: the visual's
-// root is first posed by the frame's sync, after the scene may already have
-// landed.
-function top(surface: StillSurface): number {
-  return threeY(surface.body.globalPosition.y) + surface.halfY;
-}
 
 // Whether `obj` is drawn: it and every ancestor visible.
 function inEditorLayer(obj: THREE.Object3D, layer: THREE.Object3D): boolean {
@@ -205,8 +195,8 @@ export class Scene3D {
   // pair costs nothing and leaves the gizmo something stable to be attached to.
   private readonly perspective = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, CAMERA_FAR);
   private readonly orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, CAMERA_FAR);
-  // The level being drawn (see levelScene.ts): its visuals, its Blender scene,
-  // its lights and vines, under a group of its own. Null until the first
+  // The level being drawn (see levelScene.ts): its visuals, its lights and
+  // vines, under a group of its own. Null until the first
   // level is shown.
   private current: LevelScene | null = null;
   // Levels taken down for good, still built: each is disposed at the end of
@@ -241,8 +231,8 @@ export class Scene3D {
   // Whether the roots are grown and drawn (`setRootsShown`), handed to every
   // visual as it is built.
   private rootsShown = true;
-  // Whether the level's Blender scene is drawn (`setSceneShown`), applied to
-  // the dressing as it is mounted.
+  // Whether the bodies' look is drawn (`setSceneShown`), applied to every
+  // visual as it is built.
   private sceneShown = true;
   // Whether EVERY piece's debug geometry is drawn, switched on or not
   // (`setAllDebugShown`). Held here for the same reason.
@@ -258,10 +248,6 @@ export class Scene3D {
   private pinnedClock: number | null = null;
   // What the glass ball's pieces land on (`shardCollision`): its version.
   private shardCollisionVersion = 0;
-  // The scenery's triangles, kept for the scene they are of: a restart mounts
-  // the same file again, and reading 700 thousand triangles out of it is tens
-  // of milliseconds.
-  private sceneryTriangleCache: { key: string; meshes: CollisionMesh[] } | null = null;
   // The glass ball's baked surface wear (see glassWear.ts), once one has been
   // drawn.
   private glassWear: THREE.CubeTexture | null = null;
@@ -318,7 +304,6 @@ export class Scene3D {
   private readonly frustum = new THREE.Frustum();
   private readonly viewProjection = new THREE.Matrix4();
   private readonly poolBox = new THREE.Box3();
-  private readonly sceneryBox = new THREE.Box3();
   private readonly chosenBox = new THREE.Box3();
   private readonly corner = new THREE.Vector3();
   private readonly clipCorner = new THREE.Vector4();
@@ -435,23 +420,20 @@ export class Scene3D {
     if (this.current) this.applyShown(this.current);
   }
 
-  // Off, nothing from the level's Blender scene is drawn - the scenery and the
-  // nodes dressing the bodies alike, and the models the bodies carry - so the collision and what the game draws
-  // itself (water, belts, chains, the ball, lights) stand alone: the editor's
-  // "scene" toggle. Hidden is unpickable too (`hitsAt`), so a click goes
-  // through to what is drawn behind.
+  // Off, none of the bodies' look is drawn - the models they carry, their
+  // formations and the decorations grown on them (`TreeLook.setShown`)
+  // - so the collision and what the game draws itself (water, belts, chains,
+  // the ball, lights) stand alone: the editor's "scene" toggle. Hidden is
+  // unpickable too (`hitsAt`), so a click goes through to what is drawn behind.
   setSceneShown(on: boolean): void {
     this.sceneShown = on;
     if (this.current) this.applyShown(this.current);
   }
 
-  // Hides every pool's water and the scene's water continuing it, for
-  // measuring what drawing it costs (the shot bench's `benchpools`).
+  // Hides every pool's water, for measuring what drawing it costs (the shot
+  // bench's `benchpools`).
   setPoolsShown(on: boolean): void {
-    for (const surface of this.stillSurfaces()) {
-      surface.mesh.visible = on;
-      for (const mesh of surface.scenery) mesh.visible = on;
-    }
+    for (const surface of this.stillSurfaces()) surface.mesh.visible = on;
   }
 
   // GPU milliseconds for the most recently retired frame, or null while the
@@ -486,46 +468,39 @@ export class Scene3D {
     // A body that built an engine object is registered under it, so the
     // reconciliation below finds it already made rather than building a second,
     // authorless visual for the same body.
-    const targets: DressTarget[] = [];
-    const sceneName = level.visualSource.data.scene;
+    const frames = new Map<string, THREE.Object3D>();
+    const solid = new Set<string>();
     level.visualSource.built.bodies.forEach((built) => {
-      const visual = new BodyVisual(built.body, built, slot.lights, this.allDebugShown, this.rootsShown);
-      // A model landing late changes what the body draws, which the shards
-      // collide with (`ShardCollision.bodyMeshes`).
-      visual.modelLanded = () => {
-        if (slot === this.current) this.shardCollisionVersion++;
-      };
+      const visual = new BodyVisual(built.body, built, this.allDebugShown, this.rootsShown);
       slot.root.add(visual.root);
       if (built.body) slot.bodies.set(built.body, visual);
       else slot.standing.push(visual);
       for (const segment of built.segments ?? []) slot.segments.set(segment, visual);
       slot.authored.push(visual);
-      // What the level's Blender scene may dress: the body by name, its root
-      // and the pose that root has at rest. A pick on the dressing answers with
-      // the body's first authored object, which is the one the editor can act
-      // on (see `pickTagOf`).
-      targets.push({
-        name: built.data.name,
-        root: visual.root,
-        origin: built.origin,
-        rotation: built.rotation,
-        solid: built.data.objects.some(isCollisionObject),
-        tag: built.data.objects[0],
-        adopt: (node) => visual.adoptDressing(node),
-      });
+      const node = built.data.node?.id;
+      if (node) {
+        frames.set(node, visual.frame);
+        if (built.data.objects.some(isCollisionObject)) solid.add(node);
+        if (built.body) slot.engineOf.set(node, built.body);
+      }
     });
-    // The level's Blender scene, over everything (see docs/blender-scenes.md):
-    // bound nodes land under the roots above when the file arrives, scenery
-    // stands in the world where Blender put it.
-    slot.sceneryLanded = !sceneName;
-    if (sceneName) {
-      slot.dressing = new SceneDressing(sceneName, targets, (scenery) => {
-        this.adoptSceneryWater(slot, scenery);
-        slot.sceneryLanded = true;
-        if (slot === this.current) this.shardCollisionVersion++;
-      });
-      slot.root.add(slot.dressing.root);
-    }
+    // The LOOK, from the level's node tree (treeLook.ts): every rock,
+    // decoration, model and light under its parent's object, a body's under
+    // the body's authored frame, in tree order - which is the order the light
+    // budgets are spent in, so a level's lamps go out in the same place every
+    // time it loads.
+    slot.look = new TreeLook(level.visualSource.data.tree ?? [], {
+      bodyFrame: (id) => frames.get(id) ?? null,
+      solid: (id) => solid.has(id),
+      rig: slot.lights,
+      shown: this.sceneShown,
+    });
+    // A file landing late changes what is drawn, which the shards collide
+    // with (`ShardCollision.bodyMeshes`).
+    slot.look.modelLanded = () => {
+      if (slot === this.current) this.shardCollisionVersion++;
+    };
+    slot.root.add(slot.look.root);
     // Then whatever else the world already holds - the avatar's debris, a
     // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(slot, body);
@@ -617,12 +592,9 @@ export class Scene3D {
         v.setDebugShown(this.debugShown);
         v.setWaterShown(this.waterShown);
         v.setRootsShown(this.rootsShown);
-        v.setModelsShown(this.sceneShown);
-        const scenery = v.stillSurface?.scenery ?? [];
-        for (const mesh of scenery) mesh.visible = this.waterShown;
       }
     }
-    slot.dressing?.setShown(this.sceneShown);
+    slot.look?.setShown(this.sceneShown);
     slot.lights.setShadows(this.shadowsOn);
     slot.lights.previewAwake = this.glowPreview;
   }
@@ -645,8 +617,8 @@ export class Scene3D {
   }
 
   // Draw the pieces' debug geometry, or hide all of it (`BodyVisual.setDebugShown`):
-  // the game's G, so the look a level's Blender scene gives it can be seen
-  // without the instruments over it.
+  // the game's G, so the look a level's models and formations give it can be
+  // seen without the instruments over it.
   setDebugShown(shown: boolean): void {
     this.debugShown = shown;
     if (this.current) this.applyShown(this.current);
@@ -682,14 +654,12 @@ export class Scene3D {
     return changed;
   }
 
-  // Carry the bodies' decorations to where `bodies` has them, in place
-  // (`BodyVisual.moveDecorations`): a decoration dragged along its rock moves
+  // Carry the decorations to where `nodes` has them, in place
+  // (`TreeLook.moveDecorations`): a decoration dragged along its rock moves
   // what is mounted rather than rebuilding the level (the editor's
   // `sceneKeyOf` leaves where they stand out of what rebuilds).
-  moveDecorations(bodies: readonly LevelBodyData[]): void {
-    const authored = this.current?.authored ?? [];
-    if (bodies.length !== authored.length) return;
-    bodies.forEach((data, i) => authored[i]!.moveDecorations(data));
+  moveDecorations(nodes: readonly LevelNode[]): void {
+    this.current?.look?.moveDecorations(nodes);
   }
 
   // The waking lights' levels, in authored order, for a probe.
@@ -1090,7 +1060,7 @@ export class Scene3D {
     const existing = slot.bodies.get(body);
     if (existing) return existing;
     if (drawnElsewhere(body) || slot.segments.has(body) || !body.hasShape()) return null;
-    const visual = new BodyVisual(body, null, slot.lights);
+    const visual = new BodyVisual(body, null);
     slot.bodies.set(body, visual);
     slot.root.add(visual.root);
     return visual;
@@ -1235,9 +1205,8 @@ export class Scene3D {
   // The nearest drawn SURFACE under the pointer whose pick tag `accept` takes:
   // the world point the ray met (three's frame) and the face's world normal
   // there. What a light is dropped onto, so it lands on the model rather than
-  // on the gameplay plane. The scene's scenery answers with `SCENERY_TAG`
-  // (a ledge in the backdrop is a surface a lamp can hang on); what carries no
-  // tag at all - the ball, a chain - is never one.
+  // on the gameplay plane. What carries no tag at all - the ball, a chain - is
+  // never one.
   //
   // Only a hit with a face is a surface, which is what keeps the guides out of
   // it without a rule of their own: a fat line or a sprite has none.
@@ -1256,7 +1225,7 @@ export class Scene3D {
   }
 
   // The nearest DRAWN surface under the pointer, tagged or not - the water, a
-  // rock, the scenery - as a world point in three's frame, or null where the
+  // rock, a backdrop - as a world point in three's frame, or null where the
   // ray meets nothing drawn. The editor's own chrome (`editorLayer`) is not a
   // surface, and neither is anything invisible (a pick-only mesh). What the
   // editor's wheel dollies toward: what the eye is looking at, rather than the
@@ -1501,6 +1470,7 @@ export class Scene3D {
     // Standing bodies built no engine body and have no pose to follow, but a
     // drawn-only conveyor still runs its tread.
     for (const visual of slot.standing) visual.sync(alpha, treadTime, level.world.contactPulses);
+    slot.look?.sync(alpha, level.world.contactPulses, (id) => slot.engineOf.get(id) ?? null);
 
     // The cuff is drawn at the depth of whatever it bit (`BodyVisual.depth`).
     this.chains.sync(level, alpha, retract, this.depthOf, snap);
@@ -1563,7 +1533,10 @@ export class Scene3D {
     this.syncHidden();
     this.env.follow(this.camera);
 
-    useBakedLighting(this.scene, slot.dressing?.field ?? null,
+    // No level carries a baked probe field since the Blender scenes were
+    // retired (the field rode in a scene's file, bakedLighting.ts), so this
+    // only keeps the field's uniforms off.
+    useBakedLighting(this.scene, null,
       this.shadowsOn && this.bakedContactShadows && level.ball && slot.ballVisual?.root.visible
         ? { position: slot.ballVisual.root.position, radius: level.ball.radius } : undefined);
 
@@ -1612,8 +1585,8 @@ export class Scene3D {
   // every program is found compiled and this links nothing; a genuinely new
   // one is linked here, a frame early, rather than at its first sight.
   //
-  // The level's Blender scene is in by now whenever its file has been mounted
-  // before (`SceneDressing` mounts a decoded file on the spot), and a file
+  // A body's model or formation is in by now whenever its file has been
+  // decoded before (`BodyVisual` mounts a decoded file on the spot), and a file
   // still on its way is one no earlier level wore, so it has no programs here
   // to keep.
   private disposeRetired(frame: THREE.WebGLRenderTarget): void {
@@ -1637,83 +1610,21 @@ export class Scene3D {
     for (const visual of this.current?.bodies.values() ?? []) if (visual.foamSurface) yield visual.foamSurface;
   }
 
-  // The scene's own flat water (the backdrop's pool plane, `sceneryWater`)
-  // drawn as the pool it continues: the pool whose surface it lies just under
-  // (the backdrop tool lays it 2 cm down), in the pool's colour, slab ramp and
-  // mirror switch. The ripples are in world x and z and so is the ramp, so
-  // where the two meet nothing changes but which mesh is drawing.
-  // What the glass ball's pieces land on (render3d/shardCollision.ts): the
-  // scene's solid scenery and what each body draws, or null until the level's
-  // scene file has landed.
+  // What the glass ball's pieces land on (render3d/shardCollision.ts): what
+  // each body draws.
   collisionVersion(): number {
     return this.shardCollisionVersion;
   }
 
   shardCollision(): ShardCollision<CollisionObject2D> | null {
     const slot = this.current;
-    if (!slot?.sceneryLanded) return null;
-    let scenery: ShardCollision<CollisionObject2D>["scenery"] = null;
-    const dressing = slot.dressing;
-    if (dressing) {
-      const key = dressing.root.name;
-      if (this.sceneryTriangleCache?.key !== key) {
-        this.sceneryTriangleCache = { key, meshes: sceneryTriangles(dressing.root) };
-      }
-      scenery = this.sceneryTriangleCache;
-    }
+    if (!slot) return null;
     return {
-      scenery,
       bodyMeshes: (body) => {
         const visual = slot.bodies.get(body);
         return visual ? bodyTriangles(visual.root) : [];
       },
     };
-  }
-
-  private adoptSceneryWater(slot: LevelScene, scenery: THREE.Group): void {
-    const box = this.poolBox;
-    for (const mesh of sceneryWater(scenery)) {
-      box.setFromObject(mesh);
-      let pool: StillSurface | null = null;
-      let gap = SCENERY_WATER_REACH;
-      for (const surface of stillSurfacesOf(slot)) {
-        const d = Math.abs(top(surface) - box.max.y);
-        if (d < gap) {
-          gap = d;
-          pool = surface;
-        }
-      }
-      if (!pool) {
-        console.warn(`[render3d] scenery water at y ${box.max.y.toFixed(2)} lies under no pool; drawn as authored`);
-        continue;
-      }
-      const water = stillWaterMaterial(pool.color, pool.backZ, pool.frontZ, {
-        reflect: pool.reflect,
-        footprint: pool.footprint,
-      });
-      mesh.material = water.material;
-      // See-through now, so its depth no longer goes first (depthPrepass.ts):
-      // its stand-in would hide the pool's bed under it.
-      leaveDepthPrepass(mesh);
-      // Up to the pool's own surface (it was laid a little under it), so the
-      // two are one surface at one height; moved in its parent's frame.
-      const parent = mesh.parent;
-      if (parent) {
-        mesh.updateWorldMatrix(true, false);
-        const at = new THREE.Vector3().setFromMatrixPosition(mesh.matrixWorld);
-        const lifted = at.clone();
-        lifted.y += top(pool) - box.max.y;
-        mesh.position.add(parent.worldToLocal(lifted).sub(parent.worldToLocal(at)));
-        mesh.updateMatrixWorld(true);      }
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-      slot.sceneryWaterMaterials.push(water.material);
-      pool.scenery.push(mesh);
-      mesh.visible = this.waterShown;
-      // Behind the scenery water's front edge the pool's ends stand in open
-      // water, so their caps go (see `StillWaterMaterial.openBehind`).
-      pool.openBehind.value = Math.max(pool.openBehind.value, box.max.z);
-    }
   }
 
   // The scene mirrored in a pool (see planarReflection.ts): one pass a frame,
@@ -1735,16 +1646,14 @@ export class Scene3D {
     hidden.push(this.editorLayer);
     for (const surface of this.stillSurfaces()) {
       surface.reflect.value = 0;
-      hidden.push(surface.mesh, ...surface.scenery);
-      // The top face, in three's frame, and the scene's water continuing it.
+      hidden.push(surface.mesh);
+      // The top face, in three's frame.
       surface.mesh.updateWorldMatrix(true, false);
       const box = this.poolBox;
       box.min.set(-surface.halfX, surface.halfY, surface.backZ);
       box.max.set(surface.halfX, surface.halfY, surface.frontZ);
       box.applyMatrix4(surface.mesh.matrixWorld);
       const y = box.max.y;
-      surface.footprint.value.set(box.min.x, box.max.x, box.min.z, box.max.z);
-      for (const mesh of surface.scenery) box.union(this.sceneryBox.setFromObject(mesh));
       // A hidden pool (`setWaterShown`, `setPoolsShown`) mirrors nothing.
       if (!this.poolMirrorOn || !surface.mesh.visible || eye.y <= y || !this.frustum.intersectsBox(box)) continue;
       const distance = box.distanceToPoint(eye);

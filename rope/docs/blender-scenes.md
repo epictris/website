@@ -1,7 +1,10 @@
-# Blender scenes
+# Blender scenes (retired)
 
-Being retired since 2026-11-22: a level's rock and its moss, ivy and plants are made in the level editor now ([formations](formations.md)), and a level's scene is migrated into it with `bun run scene:migrate <level>` ([formations](formations.md#migrating-a-scene)).
-What follows describes the scenes still in use until then.
+Retired 2026-11-26: once `rails.json` was deleted no level named a scene, and the binding went with it ([plans/node-tree.md](../plans/node-tree.md#what-blender-drops)).
+A level's rock and its moss, ivy and plants are made in the level editor ([formations](formations.md)); what is modelled by hand is a model of the library ([blender-models](blender-models.md)).
+`LevelData.scene`, the Level panel's Scene field, the name binding (`render3d/sceneDressing.ts`, `nodeNameOf`), `just scene`, `just scene-guide`, `scene:migrate`, `assets:publish-scenes` and `src/render3d/sceneAssets.json` are gone.
+The exporter, `tools/blender/scene_export.py`, stays as the shared exporter for models, formations and decorations, and the loaders it fed live on in `render3d/exportFiles.ts`.
+The page below is kept as it stood, for its lessons; nothing in it is current.
 
 Environment lighting, shelters and [fog regions](lighting-and-surfaces.md#regional-fog) are authored and previewed in the level editor without a Blender export. Blender's Fog preview does not reproduce regional masks; judge those transitions in the level editor.
 

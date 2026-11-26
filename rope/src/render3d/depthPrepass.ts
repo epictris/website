@@ -29,7 +29,7 @@
 //
 // It is the textbook z-prepass (Babylon's `needDepthPrePass` is the same
 // draw-twice-in-one-group), applied only where it pays: big static opaque
-// meshes with expensive shading, which is what a Blender scene is made of.
+// meshes with expensive shading, which is what a Blender export is made of.
 //
 // EXACTNESS. The stand-in's depth must equal its mesh's to the bit, or the
 // real surface fails its own test and the pixel shows whatever was behind
@@ -47,11 +47,6 @@
 // anything). Back-side-only materials are out too: the stand-in draws front
 // faces, which must be a subset of what its mesh draws. A double-sided mesh's
 // back faces get no stand-in and are depth-tested as before.
-//
-// A mesh whose material is later swapped for a see-through one must LEAVE
-// (`leaveDepthPrepass`), or its stand-in hides what should show through it:
-// the scene's own water, which the pool's material replaces, is the one case
-// (`Scene3D.adoptSceneryWater`).
 
 import * as THREE from "three";
 
@@ -97,8 +92,8 @@ export function prepassRefusal(mesh: THREE.Mesh): string | null {
 }
 
 // Give `mesh` its stand-in, if it is eligible and has none. Returns whether it
-// has one now. The stand-in is a child, so a `clone(true)` of the scene (every
-// mount of a cached file, see sceneDressing.ts) carries it.
+// has one now. The stand-in is a child, so a `clone(true)` of the export (every
+// mount of a cached file, see exportFiles.ts) carries it.
 export function joinDepthPrepass(mesh: THREE.Mesh): boolean {
   if (standInOf(mesh)) return true;
   if (prepassRefusal(mesh) !== null) return false;
@@ -169,11 +164,6 @@ function addStandIn(mesh: THREE.Mesh, material: THREE.Material, renderOrder: num
   standIn.raycast = () => {};
   standIn.userData[STAND_IN] = true;
   mesh.add(standIn);
-}
-
-export function leaveDepthPrepass(mesh: THREE.Mesh): void {
-  const standIn = standInOf(mesh);
-  if (standIn) mesh.remove(standIn);
 }
 
 // Whether `o` is a stand-in: what a traversal that restyles or counts the

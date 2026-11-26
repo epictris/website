@@ -1,31 +1,28 @@
 {
-  "chains": [
+  "format": 3,
+  "nodes": [
     {
-      "a": 1,
-      "b": 2
+      "type": "Spawn2D",
+      "id": "syqogkqn",
+      "name": "Spawn",
+      "x": -450,
+      "y": 120,
+      "radius": 8
     },
     {
-      "a": 3,
-      "b": 4
-    }
-  ],
-  "player": {
-    "x": -450,
-    "y": 120,
-    "radius": 8
-  },
-  "bodies": [
-    {
-      "kind": "static",
-      "x": 0,
-      "y": 0,
-      "rot": 0,
+      "type": "StaticBody2D",
+      "id": "521750dp",
+      "name": "StaticBody2D",
+      "order": 0,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "udr0hm5u",
+          "name": "Rect",
           "x": 0,
           "y": 600,
           "rot": 0,
@@ -33,21 +30,27 @@
             "kind": "rect",
             "w": 2400,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
-      "x": 0,
-      "y": 0,
-      "rot": 0,
+      "type": "StaticBody2D",
+      "id": "h85fbtl5",
+      "name": "StaticBody2D2",
+      "order": 1,
       "color": "#6b7280",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "il875zl3",
+          "name": "Rect",
           "x": -600,
           "y": 300,
           "rot": 0,
@@ -55,10 +58,15 @@
             "kind": "rect",
             "w": 400,
             "h": 60
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "6d25j6bo",
+          "name": "Rect2",
           "x": -430,
           "y": 180,
           "rot": 0,
@@ -66,10 +74,15 @@
             "kind": "rect",
             "w": 60,
             "h": 300
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "bhz6q1rj",
+          "name": "Rect3",
           "x": -300,
           "y": 40,
           "rot": 0.5235987755982988,
@@ -77,27 +90,34 @@
             "kind": "rect",
             "w": 220.00000000000003,
             "h": 60
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 3,
+          "type": "Anchor2D",
+          "id": "3",
+          "name": "Anchor",
           "x": -638.2623387455467,
           "y": 330
         }
       ]
     },
     {
-      "kind": "static",
-      "x": 0,
-      "y": 0,
-      "rot": 0,
+      "type": "StaticBody2D",
+      "id": "x32tfsli",
+      "name": "StaticBody2D3",
+      "order": 2,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "gfyir0j6",
+          "name": "Rect",
           "x": 300,
           "y": -200,
           "rot": 0,
@@ -105,79 +125,118 @@
             "kind": "rect",
             "w": 300,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 1,
+          "type": "Anchor2D",
+          "id": "1",
+          "name": "Anchor",
           "x": 300,
           "y": -180
         }
       ]
     },
     {
-      "kind": "rigid",
-      "x": 0,
-      "y": 0,
-      "rot": 0,
+      "type": "RigidBody2D",
+      "id": "irqny8ih",
+      "name": "RigidBody2D",
+      "order": 3,
       "color": "#8a5a44",
       "opacity": 0.7,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "k0kdnk3i",
+          "name": "Circle",
           "x": 620,
           "y": 60,
           "rot": 0,
           "shape": {
             "kind": "circle",
             "r": 50
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 2,
+          "type": "Anchor2D",
+          "id": "2",
+          "name": "Anchor",
           "x": 620,
           "y": 9.999999999999998
         }
       ]
     },
     {
-      "kind": "rigid",
-      "x": 0,
-      "y": 0,
-      "rot": 0,
+      "type": "RigidBody2D",
+      "id": "58t6i0yn",
+      "name": "RigidBody2D2",
+      "order": 4,
       "color": "#4a6b8a",
       "opacity": 0.7,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "57jmg81y",
+          "name": "Circle",
           "x": 900,
           "y": 400,
           "rot": 0,
           "shape": {
             "kind": "circle",
             "r": 40
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "4zj8ne97",
+          "name": "Circle2",
           "x": 990,
           "y": 400,
           "rot": 0,
           "shape": {
             "kind": "circle",
             "r": 40
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 4,
+          "type": "Anchor2D",
+          "id": "4",
+          "name": "Anchor",
           "x": 860.0144148012207,
           "y": 398.9262326550096
         }
       ]
+    },
+    {
+      "type": "Chain",
+      "id": "ly8g6mxg",
+      "name": "Chain",
+      "order": 0,
+      "a": "1",
+      "b": "2"
+    },
+    {
+      "type": "Chain",
+      "id": "2imxk20y",
+      "name": "Chain2",
+      "order": 1,
+      "a": "3",
+      "b": "4"
     }
   ]
 }

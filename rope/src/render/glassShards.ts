@@ -88,7 +88,6 @@ export class GlassShards {
   // version of it last handed over; without one, the sim's outlines.
   private collision: ShardCollisionSource<CollisionObject2D> | null = null;
   private collisionVersion = -1;
-  private sceneryKey: string | null = null;
   private cutFor = "";
   private piecesArrived: (() => void) | null = null;
   private boundTo: World | null = null;
@@ -274,11 +273,6 @@ export class GlassShards {
     // sim's own outlines, flat.
     this.collisionVersion = this.collision?.collisionVersion() ?? -1;
     const collision = this.collision?.shardCollision() ?? null;
-    const sceneryKey = collision?.scenery?.key ?? null;
-    if (sceneryKey !== this.sceneryKey) {
-      this.sceneryKey = sceneryKey;
-      this.send(worker, { type: "scenery", scenery: collision?.scenery ?? null });
-    }
     const bodies: LevelData["bodies"][number][] = [];
     for (const body of level.world.bodies) {
       // Not the ball or its hook (the ball is followed on its own), and not a

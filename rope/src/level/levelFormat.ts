@@ -86,6 +86,7 @@ import type { MushroomParameters } from "./mushroom";
 // kind on the way through would be a field that forgets.
 import { dmath } from "../engine/dmath";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
+import { compileLevel, isLevelTree, migrateToTree, scaleTree, type LevelNode, type LevelTree } from "./nodes";
 import { DEFAULT_BERRY_FRACTIONS, type StarberrySettings } from "./starberry";
 
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water" | "finish";
@@ -466,6 +467,9 @@ export interface ObjectPlacement {
   x?: number;
   y?: number;
   rot?: number;
+  // The node this object was compiled from (`compileLevel`), so what draws it
+  // can answer a pick with the node. Never read by the sim, never on disk.
+  node?: string;
 }
 
 // A collision shape: what the body is made of, physically. It is the only object
@@ -1168,10 +1172,10 @@ export type SolidPrim =
 // a depth, a hull of points, an ellipsoid), retired 2026-11-23
 // (plans/sculpt-guides.md). Meshing one needs manifold-3d's WASM, which must
 // not reach the sim path, so they are not folded in on load: a level holding
-// one is refused, naming the one-off migration that meshes each into a mesh
-// leaf (scripts/migrate-solid-guides.ts).
+// one is refused. The one-off migration that meshed each into a mesh leaf
+// (scripts/migrate-solid-guides.ts) was run on every level and dropped with
+// the node tree (plans/node-tree.md); it is in the git history.
 export const RETIRED_SOLID_PRIMS = ["extrude", "hull", "ellipsoid"] as const;
-export const SOLID_MIGRATION = "bun run guides:migrate";
 
 // Where a primitive stands in its body's frame. `pos` is a length; `rot` is
 // Euler XYZ radians and `scale` a ratio, neither scaled with the level.
@@ -1186,17 +1190,15 @@ export interface LevelBodyData {
   // collision object; a body of pure decoration or a lone light has no physics
   // for a kind to describe.
   kind: BodyKind;
-  // A STABLE NAME for this body, and the one thing about it Blender can refer
-  // to: an object of the same name in the level's scene (`LevelData.scene`) is
-  // this body's dressing, mounted on it and carried by it (see
-  // docs/blender-scenes.md). Nothing in the sim reads it. Absent = unnamed,
-  // which is every body authored before the field, and a body Blender cannot
-  // dress. `cli levels` holds a level's names unique, since a name two bodies
-  // share would dress the first and leave the second bare with nothing to say
-  // why; it is matched as three.js spells a glTF node's name (spaces to `_`,
-  // `.`, `:`, `/` and brackets dropped), so `Ledge.001` in Blender is
-  // `Ledge001` here and `nodeNameOf` in render3d/scenes.ts is the one rule.
+  // A label: the body node's name (plans/node-tree.md "Identity"). Nothing in
+  // the sim reads it, and it is unique only among the node's siblings. It once
+  // bound a Blender scene's object to the body; that binding is retired.
   name?: string;
+  // The node this body was compiled from (`compileLevel`): its full id and
+  // its path of names. For the tools that print a body (`cli query`, `dump`,
+  // `trace`, `scan`) and the renderer that draws its subtree; never read by
+  // the sim, and absent in the flat form on disk.
+  node?: { id: string; path: string };
   // The body's own frame: where its objects are placed from. This is the
   // AUTHORED origin and is deliberately not the engine's - see `ObjectPlacement`.
   x: number;
@@ -2419,11 +2421,16 @@ export function findCheckpoint(
 // A name that matches nothing leaves the data untouched and says so with the
 // names that would have worked, because the alternative is a playtester staring
 // at the start of the level wondering which half of the URL was wrong.
-export function spawnAtCheckpoint<T extends RawLevelData>(
-  data: T,
+export function spawnAtCheckpoint(source: RawLevelData, name: string | null | undefined): RawLevelData;
+export function spawnAtCheckpoint(source: LevelSource, name: string | null | undefined): LevelSource;
+export function spawnAtCheckpoint(
+  source: LevelSource,
   name: string | null | undefined,
-): T {
-  if (!name?.trim()) return data;
+): LevelSource {
+  if (!name?.trim()) return source;
+  // A tree is moved as the flat level it compiles to, whose spawn and
+  // checkpoints are fields of their own.
+  const data = flatLevelOf(source);
   const hit = findCheckpoint(data.checkpoints, name);
   if (!hit) {
     const known = (data.checkpoints ?? []).map((c) => c.name).join(", ");
@@ -2441,6 +2448,24 @@ export function spawnAtCheckpoint<T extends RawLevelData>(
   // there, and the arrival would ignore the point entirely and play seven
   // seconds of somewhere else.
   return spawnWithoutEntry({ ...data, player: { ...data.player, x: hit.x, y: hit.y } });
+}
+
+// THE FLAT LEVEL a source is: a tree compiled (`normalizeLevelData`, its node
+// references and tree left off), a flat level as it is. For code that reads or
+// patches a level's flat fields - its spawn, its checkpoints - and for what a
+// recording embeds, which must replay as played whatever the prefabs it
+// placed become later.
+export function flatLevelOf(raw: LevelSource): RawLevelData {
+  if (!isLevelTree(raw)) return raw;
+  const { tree: _tree, ...flat } = normalizeLevelData(raw);
+  return {
+    ...flat,
+    bodies: flat.bodies.map(({ node: _n, ...b }) => ({
+      ...b,
+      ...(b.formation ? { formation: (({ node: _f, ...f }) => f)(b.formation) } : {}),
+      objects: b.objects.map(({ node: _o, ...o }) => o as SceneObjectData),
+    })),
+  };
 }
 
 // The level with NO OPENING: neither the rolling entry nor the recorded
@@ -2733,21 +2758,17 @@ export interface LevelData {
   // The 3D camera's lens and depth (see LevelCameraData). Render-only like the
   // environment, and absent means the camera every level had before it.
   camera?: LevelCameraData;
-  // The BLENDER SCENE this level is dressed in: `assets-src/scenes/<scene>.blend`,
-  // exported by `just scene <level>` to `public/scenes/<scene>/scene.glb` and
-  // drawn over the level - every object in it named like a body rides that
-  // body, every other one is scenery standing where Blender put it (see
-  // docs/blender-scenes.md). Render-only, like the environment: the sim never
-  // reads it, and absent means a level dressed by its geometry objects alone,
-  // which is every level authored before the field. A name, not a length, so
-  // it crosses `scaleLevelData` unchanged; `SCENE_NAME` in render3d/scenes.ts
-  // is what a name may be spelt as (it is a directory and a release asset).
-  scene?: string;
   // Which revision of this format the level was written in (`LEVEL_FORMAT`).
   // Absent is 1. It exists for the one migration that cannot be read off the
   // data itself (see `withDebugFromGreybox`), and `normalizeLevelData` always
   // stamps the current one, so a level that has crossed the gate says so.
   format?: number;
+  // The node tree this level was compiled from, prefab instances expanded
+  // (`compileLevel`), in the same units as the rest. What the 3D renderer
+  // draws the level's rock, decorations, models and lights from, each in its
+  // node's frame under its parent's (plans/node-tree.md "Rendering"). Never
+  // read by the sim, and never written to disk in this form.
+  tree?: LevelNode[];
 }
 
 // The current revision of the level format (`LevelData.format`).
@@ -2755,7 +2776,12 @@ export interface LevelData {
 // 2: a collision piece is drawn in 3D only by its own `debug` switch. Before
 // it, a level that named no scene drew every piece of every solid body as a
 // grey box, by an implicit rule a piece could not opt out of.
-export const LEVEL_FORMAT = 2;
+//
+// 3: the level is a NODE TREE on disk (`LevelTree`, plans/node-tree.md), the
+// flat form only what it compiles to. One number line for both forms, so it
+// is `TREE_FORMAT` too (nodeCases holds them equal): a flat level stamped 3
+// is one compiled from a tree, and every fold below 3 has been applied.
+export const LEVEL_FORMAT = 3;
 
 // ---------------------------------------------------------------------------
 // The retired flat form
@@ -2881,9 +2907,17 @@ export interface RawLevelData {
   vines?: VineData[];
   environment?: EnvironmentData;
   camera?: LevelCameraData;
+  // The retired Blender scene a level was dressed in (plans/node-tree.md
+  // "What Blender drops"). Read for one thing only: a format-1 level that named
+  // one drew no grey box (`withDebugFromGreybox`), so a recorded bundle of one
+  // still replays with the look it was played in.
   scene?: string;
   format?: number;
 }
+
+// Anything a level may be read from: the flat form in any of its retired
+// shapes, or the node tree (format 3, `nodes.ts`).
+export type LevelSource = RawLevelData | LevelTree;
 
 function isLegacyBody(b: LevelBodyData | LegacyBodyData): b is LegacyBodyData {
   return !Array.isArray((b as LevelBodyData).objects);
@@ -2955,6 +2989,22 @@ const LEGACY_EMISSIVE_PENUMBRA = 0.6;
 // they always were, and the retired light list after those, since neither builds
 // anything and neither can therefore move a build index.
 //
+// THE GATE. A node tree (format 3) compiles; anything else is folded into the
+// flat form it now is, migrated into a tree and compiled, so there is one
+// path from a level to the sim (`compileLevel`) and the round trip that proves
+// it changes nothing (`cli nodes`) is the path every load takes.
+export function normalizeLevelData(raw: LevelSource): LevelData {
+  const compiled = compileLevel(loadLevelTree(raw));
+  return { ...compiled.data, tree: compiled.nodes };
+}
+
+// The authored view of any level: the tree itself, or the flat form migrated
+// into one. What the editor, the renderer and the formation tools read.
+export function loadLevelTree(raw: LevelSource): LevelTree {
+  if (isLevelTree(raw)) return raw;
+  return migrateToTree(normalizeFlat(raw), { isMover });
+}
+
 // The migrated body's own origin is (0, 0, 0) and its objects keep the world
 // placements the flat entries carried. That is not laziness, it is the only
 // choice that is bit-identical: `buildLevelBodies` puts the engine origin at the
@@ -2962,7 +3012,12 @@ const LEGACY_EMISSIVE_PENUMBRA = 0.6;
 // authored origin of zero leaves that arithmetic reading exactly the numbers it
 // read before, down to the last bit. Re-origining a migrated body onto its
 // centre of mass would round every offset through a rotation and back.
-export function normalizeLevelData(raw: RawLevelData): LevelData {
+//
+// Since the node tree (plans/node-tree.md) this is the LEGACY half of the gate:
+// what it returns is migrated into a tree and compiled back out
+// (`normalizeLevelData`), so every level reaches the sim through
+// `compileLevel` whatever form it was written in.
+export function normalizeFlat(raw: RawLevelData): LevelData {
   const legacyBodies = raw.bodies.some(isLegacyBody);
   const panels = raw.backgrounds ?? [];
   const lights = raw.lights ?? [];
@@ -3129,7 +3184,7 @@ function finish(
     const migrated = withoutSpillSpeed(withoutConflictingSpring(withMigratedMask(body)));
     return [greybox ? withDebugFromGreybox(migrated) : migrated];
   });
-  const { backgrounds: _panels, lights: _lights, chains: _chains, ...rest } = raw;
+  const { backgrounds: _panels, lights: _lights, chains: _chains, scene: _scene, ...rest } = raw;
   return { ...rest, bodies: out, ...(chains ? { chains } : {}), format: LEVEL_FORMAT };
 }
 
@@ -3522,6 +3577,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...(o.x !== undefined ? { x: o.x * factor } : {}),
     ...(o.y !== undefined ? { y: o.y * factor } : {}),
     ...(o.rot !== undefined ? { rot: o.rot } : {}),
+    ...(o.node !== undefined ? { node: o.node } : {}),
   };
   if (o.type === "collision") {
     return {
@@ -3658,8 +3714,15 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
   return o satisfies never;
 }
 
-export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData {
-  const data = normalizeLevelData(rawData);
+export function scaleLevelData(rawData: LevelSource, factor: number): LevelData {
+  return scaleNormalized(normalizeLevelData(rawData), factor);
+}
+
+// The conversion alone, for data already through the gate. It is also the one
+// place that knows which field of every element is a length, and the node
+// tree's own conversion (`nodes.ts` `scaleTree`) asks it rather than keeping a
+// second list that could disagree.
+export function scaleNormalized(data: LevelData, factor: number): LevelData {
   // A camera region's positions, extents, offsets, locks, buffer and falloff
   // are lengths; viewportScale, priority and keepInFrame are not, and the retired
   // `blend` is dropped here rather than carried (see `CameraRegionData.blend`).
@@ -3948,11 +4011,10 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
           },
         }
       : {}),
-    // A name, not a length (see `LevelData.scene`).
-    ...(data.scene !== undefined ? { scene: data.scene } : {}),
     // A revision number, and always the current one once a level has crossed
     // the gate above.
     ...(data.format !== undefined ? { format: data.format } : {}),
+    ...(data.tree ? { tree: scaleTree(data.tree, factor) } : {}),
     ...(notes ? { notes } : {}),
     ...(checkpoints ? { checkpoints } : {}),
     ...(chains ? { chains } : {}),
@@ -3976,6 +4038,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       kind: b.kind,
       // A name, not a length (see `LevelBodyData.name`).
       ...(b.name !== undefined ? { name: b.name } : {}),
+      ...(b.node !== undefined ? { node: { ...b.node } } : {}),
       x: b.x * factor,
       y: b.y * factor,
       rot: b.rot,
@@ -4144,7 +4207,7 @@ function scaleSolidNode(n: SolidNode, factor: number): SolidNode {
       const prim = (n as { prim: string }).prim;
       throw new Error(
         (RETIRED_SOLID_PRIMS as readonly string[]).includes(prim)
-          ? `a solid guide holds a retired "${prim}" leaf: run \`${SOLID_MIGRATION}\` (scripts/migrate-solid-guides.ts) with the editor closed`
+          ? `a solid guide holds a retired "${prim}" leaf (retired 2026-11-23; the one-off migration, scripts/migrate-solid-guides.ts, is in the git history)`
           : `a solid guide holds an unknown leaf "${prim}"`,
       );
     }

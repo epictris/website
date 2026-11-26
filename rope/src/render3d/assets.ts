@@ -264,7 +264,7 @@ export interface TextureAsset {
 
 // The texture manifest: the photographed or baked surfaces the GAME wears -
 // the ball and chain's, and whatever a conveyor band names (`BeltLook.texture`).
-// A level's own surfaces are in its Blender scene. Hand-written like the prop
+// A level's own surfaces are in its formations and models. Hand-written like the prop
 // manifest, and for the same reason: an asset is a decision.
 //
 // A texture key naming nothing here falls through to the generated surfaces
@@ -665,7 +665,7 @@ export interface SurfaceRequest {
   avatar?: boolean;
   // 0..1, absent = opaque. Below 1 the surface is see-through and writes no
   // depth, so what stands behind it still draws - a piece's debug geometry
-  // seen over the Blender dressing it sits inside (`DebugDrawData.opacity`).
+  // seen over the rock or model it sits inside (`DebugDrawData.opacity`).
   opacity?: number;
 }
 
@@ -758,7 +758,7 @@ function track<T>(p: Promise<T>, what: string): Promise<T> {
   return p;
 }
 
-// For loads that live outside this module (a level's Blender scene) but must still
+// For loads that live outside this module (a Blender export, exportFiles.ts) but must still
 // hold up a headless grab: same set, same settle point.
 export function trackPending<T>(p: Promise<T>, what: string): Promise<T> {
   return track(p, what);
@@ -1063,7 +1063,7 @@ export interface MeshAsset {
 }
 
 // The prop manifest: the models the GAME draws itself. A level's own props are
-// in its Blender scene (docs/blender-scenes.md), so what is here is only what
+// its models and formations (docs/blender-models.md), so what is here is only what
 // code asks for by name. Hand-written on purpose: an asset is a decision, and a
 // directory scan would make adding a file silently change what is drawn. It is
 // also the licence record - see `source`/`license` above.

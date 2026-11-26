@@ -1,711 +1,33 @@
 {
+  "format": 3,
   "meta": {
     "title": "testing"
   },
-  "cameraRegions": [
+  "nodes": [
     {
-      "x": -993.8268179170883,
-      "y": 1895.6694740933244,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 440.00000000000006
-      },
-      "viewportScale": 0.65,
-      "lockX": 1085,
-      "lockY": 800,
-      "priority": -1,
-      "keepInFrame": false
+      "type": "Spawn2D",
+      "id": "q785wuh6",
+      "name": "Spawn",
+      "x": 0,
+      "y": -100,
+      "radius": 8
     },
     {
-      "x": 3126.1731820829123,
-      "y": 1123.1694740933249,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 610.0000000000001,
-        "h": 585
-      },
-      "offsetY": -50,
-      "viewportScale": 0.6
-    }
-  ],
-  "cameraPaths": [
-    {
-      "x": -121.48696186771204,
-      "y": 573.4164845677154,
-      "rot": 0,
-      "verts": [
-        {
-          "x": -1012.3398560493731,
-          "y": 1547.2529895256114,
-          "inX": -16.90592132714457,
-          "inY": 0.6035619961934913,
-          "outX": 4.226480331786142,
-          "outY": -0.15089049904837282,
-          "viewportScale": 0.65
-        },
-        {
-          "x": -647.3398560493767,
-          "y": 1552.2529895256116,
-          "inX": -145.14272955409825,
-          "inY": 5.483254417299932,
-          "outX": 145.14272955409825,
-          "outY": -5.483254417299932
-        },
-        {
-          "x": -277.33985604937635,
-          "y": 1547.2529895256096,
-          "inX": -51.061083607823754,
-          "inY": -5.745670946078363,
-          "outX": 51.061083607823754,
-          "outY": 5.745670946078363
-        },
-        {
-          "x": 7.6601439506234215,
-          "y": 1577.2529895256096,
-          "inX": -149.5131667840422,
-          "inY": 13.717061550461196,
-          "outX": 149.5131667840422,
-          "outY": -13.717061550461196
-        },
-        {
-          "x": 272.6601439506232,
-          "y": 1507.2529895256093,
-          "inX": -115.08506227238095,
-          "inY": 5.815793913894396,
-          "outX": 115.08506227238095,
-          "outY": -5.815793913894396
-        },
-        {
-          "x": 582.660143950623,
-          "y": 1497.2529895256093,
-          "inX": -134.7379063560279,
-          "inY": 1.0376946418391597,
-          "outX": 134.7379063560279,
-          "outY": -1.0376946418391597
-        },
-        {
-          "x": 1002.660143950623,
-          "y": 1497.2529895256093,
-          "inX": -201.49441986221143,
-          "inY": 4.932246773412174,
-          "outX": 201.49441986221143,
-          "outY": -4.932246773412174,
-          "viewportScale": 0.65
-        },
-        {
-          "x": 1222.660143950623,
-          "y": 1187.2529895256093,
-          "inX": 55.99896928875694,
-          "inY": 102.88058768135748,
-          "outX": -55.99896928875694,
-          "outY": -102.88058768135748
-        },
-        {
-          "x": 552.6601439506237,
-          "y": 1022.2529895256095,
-          "inX": 174.69445118917798,
-          "inY": 42.14202077128224,
-          "outX": -174.69445118917798,
-          "outY": -42.14202077128224
-        },
-        {
-          "x": 62.66014395062349,
-          "y": 957.2529895256095,
-          "inX": 257.14682012592505,
-          "inY": 22.90889322141627,
-          "outX": -257.14682012592505,
-          "outY": -22.90889322141627
-        },
-        {
-          "x": -347.33985604937646,
-          "y": 927.2529895256093,
-          "inX": 9.044745375449637,
-          "inY": 58.034295337921726,
-          "outX": -9.044745375449637,
-          "outY": -58.03429533792182,
-          "viewportScale": 0.65
-        },
-        {
-          "x": 132.66014395062342,
-          "y": 607.2529895256091,
-          "inX": -194.27785870166616,
-          "inY": 34.78867200320863,
-          "outX": 194.27785870166616,
-          "outY": -34.78867200320863,
-          "viewportScale": 0.7
-        },
-        {
-          "x": 642.6601439506239,
-          "y": 447.2529895256093,
-          "inX": 7.4927391402432875,
-          "inY": 212.47934571520713,
-          "outX": -7.4927391402432875,
-          "outY": -212.47934571520713
-        },
-        {
-          "x": 242.66014395062356,
-          "y": 207.25298952560937,
-          "inX": 127.43104361978332,
-          "inY": 203.78756923523332,
-          "outX": -127.43104361978332,
-          "outY": -203.78756923523332,
-          "viewportScale": 0.65
-        },
-        {
-          "x": -277.33985604937635,
-          "y": 217.2529895256093,
-          "inX": 111.30738839800449,
-          "inY": 58.51018401286849,
-          "outX": -111.30738839800452,
-          "outY": -58.51018401286849
-        },
-        {
-          "x": -411.77297057329696,
-          "y": 28.15158611979456,
-          "inX": 18.04473141475662,
-          "inY": 24.16710686473371,
-          "outX": -72.17892565902658,
-          "outY": -96.66842745893484
-        },
-        {
-          "x": -637.3398560493771,
-          "y": -172.7470104743908,
-          "inX": 85.61722268971259,
-          "inY": 3.7470048818324386,
-          "outX": -171.23444537942518,
-          "outY": -7.494009763664877,
-          "viewportScale": 0.8
-        },
-        {
-          "x": -937.339856049379,
-          "y": -92.74701047439025,
-          "inX": 107.58809690439452,
-          "inY": -51.34695161543377,
-          "outX": -107.58809690439452,
-          "outY": 51.34695161543377
-        },
-        {
-          "x": -1347.3398560493831,
-          "y": 27.252989525608704,
-          "inX": 210.8207118481454,
-          "inY": 9.120081660887092,
-          "outX": -210.8207118481454,
-          "outY": -9.120081660887092
-        },
-        {
-          "x": -1697.3398560493838,
-          "y": -102.74701047439056,
-          "inX": 117.1419616772786,
-          "inY": 80.21088781752921,
-          "outX": -117.1419616772786,
-          "outY": -80.2108878175293
-        },
-        {
-          "x": -1917.3398560493822,
-          "y": -392.74701047438975,
-          "inX": -6.1619083051621,
-          "inY": 99.26360789202022,
-          "outX": 6.1619083051621,
-          "outY": -99.26360789202022
-        },
-        {
-          "x": -1527.339856049385,
-          "y": -492.7470104743917,
-          "inX": -265.1052956710261,
-          "inY": -0.8467302286916834,
-          "outX": 265.1052956710261,
-          "outY": 0.8467302286916834
-        },
-        {
-          "x": -1047.3398560493808,
-          "y": -512.747010474392,
-          "inX": -112.23373486746073,
-          "inY": 34.49215459548469,
-          "outX": 112.23373486746073,
-          "outY": -34.49215459548469
-        },
-        {
-          "x": -587.3398560493794,
-          "y": -652.7470104743924,
-          "inX": -242.2448445687145,
-          "inY": 1.6849874363723316,
-          "outX": 242.2448445687145,
-          "outY": -1.6849874363723316
-        },
-        {
-          "x": 72.66014395061902,
-          "y": -652.7470104743917,
-          "inX": -284.0074982154743,
-          "inY": 2.103919692516776,
-          "outX": 284.0074982154743,
-          "outY": -2.103919692516776
-        },
-        {
-          "x": 902.6601439506177,
-          "y": -942.7470104743915,
-          "inX": -264.37059778397656,
-          "inY": 75.1088975129777,
-          "outX": 132.18529889198828,
-          "outY": -37.554448756488945
-        },
-        {
-          "x": 1222.6601439506178,
-          "y": -932.7470104743913,
-          "inX": -152.1641573172161,
-          "inY": 2.7583090245460795,
-          "outX": 76.0820786586077,
-          "outY": -1.3791545122730398
-        },
-        {
-          "x": 1425.0374260048945,
-          "y": -1310.751758179095,
-          "inX": -13.584721355454477,
-          "inY": 234.4786719787658,
-          "outX": 13.584721355454477,
-          "outY": -234.478671978766
-        },
-        {
-          "x": 918.5695705365962,
-          "y": -1531.430119941413,
-          "inX": 0.4209640804258896,
-          "inY": 10.706157572663244,
-          "outX": -3.367712643408538,
-          "outY": -85.64926058130489
-        }
-      ],
-      "rangeX": 250,
-      "rangeY": 180,
-      "falloffX": 400,
-      "falloffY": 400,
-      "lookaheadX": 150,
-      "lookaheadY": 120,
-      "lookaheadBufferX": 30,
-      "lookaheadBufferY": 50,
-      "viewportScale": 0.8,
-      "buffer": 0,
-      "softness": 30,
-      "priority": 1
-    }
-  ],
-  "fireflyPaths": [
-    {
-      "id": 1,
-      "x": 278.75382724420274,
-      "y": 1824.5404418352603,
-      "rot": 0,
-      "verts": [
-        {
-          "x": -857.5806451612913,
-          "y": 326.12903225806446
-        },
-        {
-          "x": -657.5806451612913,
-          "y": 291.1290322580645,
-          "inX": -46.55144282844983,
-          "inY": -0.4972779178327613,
-          "outX": 46.55144282844983,
-          "outY": 0.4972779178327613
-        },
-        {
-          "x": -447.58064516129076,
-          "y": 361.12903225806446,
-          "inX": -50.56614118551721,
-          "inY": 4.384885739396438,
-          "outX": 50.56614118551721,
-          "outY": -4.384885739396438
-        },
-        {
-          "x": -322.58064516129076,
-          "y": 296.1290322580645,
-          "inX": -31.6129427483137,
-          "inY": 14.733928955067999,
-          "outX": 31.6129427483137,
-          "outY": -14.733928955067999
-        },
-        {
-          "x": -182.58064516129087,
-          "y": 251.12903225806446,
-          "inX": -42.65986734269198,
-          "inY": 6.361936073797114,
-          "outX": 42.65986734269198,
-          "outY": -6.361936073797114
-        },
-        {
-          "x": 7.419354838709324,
-          "y": 246.12903225806448
-        },
-        {
-          "x": 222.41935483870918,
-          "y": 251.12903225806446,
-          "inX": -49.28889972459913,
-          "inY": 2.5247162804070022,
-          "outX": 49.28889972459913,
-          "outY": -2.5247162804070022
-        },
-        {
-          "x": 362.41935483870907,
-          "y": 231.12903225806454,
-          "inX": -49.870679427911924,
-          "inY": 2.4084915734313483,
-          "outX": 49.870679427911924,
-          "outY": -2.4084915734313483
-        },
-        {
-          "x": 537.4193548387091,
-          "y": 231.12903225806454,
-          "inX": -37.778101565497124,
-          "inY": -2.8240808721011312,
-          "outX": 37.778101565497124,
-          "outY": 2.8240808721011312
-        },
-        {
-          "x": 652.4193548387093,
-          "y": 251.12903225806446,
-          "inX": -34.406313736861804,
-          "inY": 2.8735544434427496,
-          "outX": 34.406313736861804,
-          "outY": -2.8735544434427496
-        },
-        {
-          "x": 742.4193548387091,
-          "y": 221.12903225806448,
-          "inX": -18.360004300390997,
-          "inY": 23.1062499205569,
-          "outX": 18.360004300390997,
-          "outY": -23.1062499205569
-        },
-        {
-          "x": 762.4193548387091,
-          "y": 151.12903225806446,
-          "inX": -9.314435286390577,
-          "inY": 29.10300376463182,
-          "outX": 9.314435286390577,
-          "outY": -29.10300376463182
-        },
-        {
-          "x": 857.4193548387093,
-          "y": 46.129032258064484,
-          "inX": -12.895187493541371,
-          "inY": 17.99043531885296,
-          "outX": 12.895187493541371,
-          "outY": -17.99043531885296
-        },
-        {
-          "x": 897.4193548387092,
-          "y": -23.870967741935534,
-          "inX": 1.2907884418300597,
-          "inY": 26.130183838808385,
-          "outX": -1.2907884418300597,
-          "outY": -26.130183838808385
-        },
-        {
-          "x": 867.4193548387091,
-          "y": -98.87096774193553,
-          "inX": 14.058008710678394,
-          "inY": 18.172057814066278,
-          "outX": -14.058008710678394,
-          "outY": -18.172057814066278
-        },
-        {
-          "x": 767.4193548387091,
-          "y": -138.87096774193552
-        },
-        {
-          "x": 492.4193548387091,
-          "y": -193.87096774193552,
-          "inX": 137.5,
-          "inY": 17.500000000000004,
-          "outX": -137.5,
-          "outY": -17.500000000000004
-        },
-        {
-          "x": 127.41935483870925,
-          "y": -208.8709677419355,
-          "inX": 67.19566569375068,
-          "inY": 1.543804632173984,
-          "outX": -33.59783284687534,
-          "outY": -0.771902316086992
-        },
-        {
-          "x": -227.58064516129082,
-          "y": -278.8709677419355,
-          "inX": 157.85054178828122,
-          "inY": 26.05702442097826,
-          "outX": -78.92527089414062,
-          "outY": -13.02851221048913
-        },
-        {
-          "x": -582.5806451612909,
-          "y": -303.8709677419355,
-          "inX": 149.0186822764649,
-          "inY": -10.757128052622278,
-          "outX": -74.50934113823244,
-          "outY": 5.378564026311139
-        },
-        {
-          "x": -1087.580645161291,
-          "y": -163.87096774193552,
-          "inX": 133.872664715442,
-          "inY": -63.655358993422205,
-          "outX": -133.87266471544183,
-          "outY": 63.655358993422205
-        },
-        {
-          "x": -1187.580645161291,
-          "y": -8.870967741935498
-        }
-      ]
-    }
-  ],
-  "notes": [
-    {
-      "kind": "text",
-      "x": -253.82681791708848,
-      "y": 2195.669474093325,
-      "rot": 0,
-      "w": 110.00000000000001,
-      "h": 20,
-      "text": "wind up chain",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": -458.82681791708853,
-      "y": 2100.669474093325,
-      "rot": 0,
-      "w": 150,
-      "h": 20,
-      "text": "demonstrate swing",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": -943.826817917087,
-      "y": 2170.6694740933253,
-      "rot": 0,
-      "w": 40,
-      "h": 20,
-      "text": "roll",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": -13.826817917088263,
-      "y": 2135.669474093325,
-      "rot": 0,
-      "w": 170.00000000000003,
-      "h": 20,
-      "text": "redeploy while wound",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": 1146.1731820829116,
-      "y": 1890.669474093325,
-      "rot": 0,
-      "w": 180,
-      "h": 20,
-      "text": "safe climbing practice",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": 383.6731820829115,
-      "y": 1588.1694740933249,
-      "rot": 0,
-      "w": 215,
-      "h": 25,
-      "text": "anchor while swinging (safe)",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": -638.8268179170884,
-      "y": 2070.669474093325,
-      "rot": 0,
-      "w": 120.00000000000001,
-      "h": 40,
-      "text": "introduce moss as anchor",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": 796.1731820829116,
-      "y": 2035.6694740933249,
-      "rot": 0,
-      "w": 190,
-      "h": 30.000000000000004,
-      "text": "redeploy while unwound",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": 281.1731820829117,
-      "y": 2040.6694740933247,
-      "rot": 0,
-      "w": 150,
-      "h": 20,
-      "text": "safe swing practice",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": 761.173182082912,
-      "y": 1645.6694740933249,
-      "rot": 0,
-      "w": 160,
-      "h": 20,
-      "text": "risky swing practice",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": 113.6731820829116,
-      "y": 1523.1694740933249,
-      "rot": 0,
-      "w": 225,
-      "h": 25,
-      "text": "anchor while swinging (risky)",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": -791.3268179170884,
-      "y": 2180.669474093325,
-      "rot": 0,
-      "w": 175,
-      "h": 20,
-      "text": "partial wind up chain",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": -533.8268179170884,
-      "y": 2225.669474093325,
-      "rot": 0,
-      "w": 110.00000000000001,
-      "h": 20,
-      "text": "wind up chain",
-      "size": 12
-    },
-    {
-      "kind": "text",
-      "x": -518.8268179170885,
-      "y": 2155.669474093325,
-      "rot": 0,
-      "w": 170.00000000000003,
-      "h": 20,
-      "text": "redeploy while wound",
-      "size": 12
-    }
-  ],
-  "checkpoints": [
-    {
-      "name": "vine",
-      "x": -1898.8268179170884,
-      "y": 205.66947409332352
-    }
-  ],
-  "chains": [
-    {
-      "a": 1,
-      "b": 2
-    },
-    {
-      "a": 8,
-      "b": 7
-    },
-    {
-      "a": 10,
-      "b": 9
-    },
-    {
-      "a": 12,
-      "b": 11
-    },
-    {
-      "a": 15,
-      "b": 18
-    },
-    {
-      "a": 19,
-      "b": 16
-    },
-    {
-      "a": 17,
-      "b": 20
-    },
-    {
-      "a": 26,
-      "b": 27
-    },
-    {
-      "a": 23,
-      "b": 28
-    },
-    {
-      "a": 24,
-      "b": 29
-    },
-    {
-      "a": 25,
-      "b": 30
-    }
-  ],
-  "vines": [
-    {
-      "anchor": 3,
-      "anchor2": 4,
-      "length": 300,
-      "stiffness": 0.3,
-      "viscosity": 0.3,
-      "color": "#bbe4a0"
-    },
-    {
-      "anchor": 13,
-      "anchor2": 14,
-      "length": 400,
-      "stiffness": 0.3,
-      "viscosity": 0.15,
-      "color": "#acd293"
-    },
-    {
-      "anchor": 5,
-      "anchor2": 6,
-      "length": 200,
-      "stiffness": 0.2,
-      "viscosity": 0.4,
-      "color": "#acd293"
-    },
-    {
-      "anchor": 22,
-      "anchor2": 21,
-      "length": 300,
-      "stiffness": 0.15,
-      "viscosity": 0.4,
-      "color": "#aace92"
-    }
-  ],
-  "player": {
-    "x": 0,
-    "y": -100,
-    "radius": 8
-  },
-  "bodies": [
-    {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "nvu8eym3",
+      "name": "StaticBody2D",
       "x": 4109.860316814277,
       "y": 1061.6402679140156,
-      "rot": 0,
+      "order": 0,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "1vp05hyg",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -734,21 +56,29 @@
                 "y": 12.247894917937167
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "wv5yyz19",
+      "name": "StaticBody2D2",
       "x": 4229.860316814277,
       "y": 887.3498670297007,
-      "rot": 0,
+      "order": 1,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "s3pr1v9c",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -777,21 +107,29 @@
                 "y": 12.247894917937167
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "32g3zcha",
+      "name": "StaticBody2D3",
       "x": 3969.860316814278,
       "y": 757.3498670297005,
-      "rot": 0,
+      "order": 2,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "01j5tp62",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -820,21 +158,29 @@
                 "y": 12.247894917937167
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ifdwfol1",
+      "name": "StaticBody2D4",
       "x": 4109.860316814277,
       "y": 527.3498670297006,
-      "rot": 0,
+      "order": 3,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "6hpblelw",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -863,21 +209,29 @@
                 "y": 12.247894917937167
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "fqu4z5sx",
+      "name": "StaticBody2D5",
       "x": 3689.8603168142786,
       "y": 497.3498670297003,
-      "rot": 0,
+      "order": 4,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "yq19sv6l",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -906,21 +260,29 @@
                 "y": 12.247894917937167
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "532mxtoc",
+      "name": "StaticBody2D6",
       "x": 3689.8603168142786,
       "y": 191.6402679140157,
-      "rot": 0,
+      "order": 5,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "58q26b7a",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -949,41 +311,57 @@
                 "y": 12.247894917937167
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "4t53u8su",
+      "name": "RigidBody2D",
       "x": 3819.5607744405365,
       "y": 1031.640267914015,
-      "rot": 0,
+      "order": 6,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
       "pivot": true,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "w3ysrmws",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 220.00000000000003
           },
-          "thickness": 5
+          "thickness": 5,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "oj96mwlp",
+      "name": "StaticBody2D7",
       "x": 657.6521075470961,
       "y": 1257.1796569629896,
-      "rot": 0,
+      "order": 7,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "iobokrnc",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1025,22 +403,31 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "suwnqg4t",
+      "name": "StaticBody2D8",
       "x": 1518.3358883546691,
       "y": 381.6189863201272,
       "rot": 0.2617993877991495,
+      "order": 8,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
       "passable": true,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "39lq2ks4",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1077,21 +464,29 @@
                 "y": -61.28176312693173
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "0yqor350",
+      "name": "StaticBody2D9",
       "x": 1604.163252672272,
       "y": 380.38141696175865,
-      "rot": 0,
+      "order": 9,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "z2ry18gx",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1132,15 +527,21 @@
                 "y": 75.28805713156741
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "ycymvcg9",
+      "name": "RigidBody2D2",
       "x": 1443.263370340839,
       "y": 217.93077362870292,
       "rot": 7.551488210698028,
+      "order": 10,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
@@ -1150,9 +551,12 @@
       "pivotY": 29.515139351331456,
       "pivotFreq": 0.29,
       "pivotDamping": 0.2,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "j00z1ocv",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1206,21 +610,29 @@
               }
             ]
           },
-          "thickness": 70
+          "thickness": 70,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "bljwbshh",
+      "name": "StaticBody2D10",
       "x": -2601.913408958544,
       "y": 1080.6083863373044,
-      "rot": 0,
+      "order": 11,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "bblnl8cq",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1294,162 +706,231 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "cdgkbyv8",
+      "name": "StaticBody2D11",
       "x": -1871.4680608549422,
       "y": -2359.3305259066738,
-      "rot": 0,
+      "order": 12,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ku0bwrwz",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "zfl9p2oc",
+      "name": "StaticBody2D12",
       "x": -1591.4680608549427,
       "y": -2359.3305259066738,
-      "rot": 0,
+      "order": 13,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "hy9us1o5",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "lmse37d6",
+      "name": "StaticBody2D13",
       "x": -1451.4680608549422,
       "y": -2359.3305259066738,
-      "rot": 0,
+      "order": 14,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "7bkyqf5b",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "b8o5csop",
+      "name": "StaticBody2D14",
       "x": -2598.8268179170886,
       "y": -2139.3305259066765,
-      "rot": 0,
+      "order": 15,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ylavlk74",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "5y07cg8d",
+      "name": "StaticBody2D15",
       "x": -1611.4680608549427,
       "y": -2194.3305259066747,
-      "rot": 0,
+      "order": 16,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "9s0btoom",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 10,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "3ixhvgb2",
+      "name": "StaticBody2D16",
       "x": -2011.468060854942,
       "y": -2359.3305259066738,
-      "rot": 0,
+      "order": 17,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "gbuzd368",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "8wcy9n1g",
+      "name": "StaticBody2D17",
       "x": -1611.4680608549425,
       "y": -2599.330525906675,
-      "rot": 0,
+      "order": 18,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "d7og8isd",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "0g8af6iw",
+      "name": "StaticBody2D18",
       "x": -1611.4680608549427,
       "y": -2584.330525906675,
-      "rot": 0,
+      "order": 19,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "wllikyw5",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 10,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "z07p2pk0",
+          "name": "Light",
           "y": 7.105427357601002e-13,
           "kind": "spot",
           "z": 0,
@@ -1461,35 +942,48 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "upk9jcxb",
+      "name": "StaticBody2D19",
       "x": -1801.4680608549422,
       "y": -2599.330525906675,
-      "rot": 0,
+      "order": 20,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "u462f41u",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 360,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ii016amq",
+      "name": "StaticBody2D20",
       "x": -1895.1474393860153,
       "y": -2043.3206389010252,
-      "rot": 0,
+      "order": 21,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "9jwnxffw",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1522,34 +1016,48 @@
                 "y": 68.99011299435023
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "rat0wjul",
+      "name": "StaticBody2D21",
       "x": -1731.4680608549425,
       "y": -2359.3305259066747,
-      "rot": 0,
+      "order": 22,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "kn0autvy",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "AnimatableBody2D",
+      "id": "mio90zxn",
+      "name": "AnimatableBody2D",
       "x": 1570.8398834700627,
       "y": 6.6694740933245455,
       "rot": -5.551115123125783e-17,
+      "order": 23,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
@@ -1582,9 +1090,12 @@
       "moveMode": "repeat",
       "moveSpeed": 300,
       "moveAlign": true,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "oh1njav7",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1622,10 +1133,15 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "g6kuheoz",
+          "name": "Poly2",
           "x": 0.4424255801993139,
           "y": -22.299895067465236,
           "shape": {
@@ -1661,15 +1177,21 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "4d559ozq",
+      "name": "RigidBody2D3",
       "x": 2031.173182082912,
       "y": 1625.6694740933249,
       "rot": -0.3142482403109045,
+      "order": 24,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
@@ -1679,9 +1201,12 @@
       "pivotY": 75.07999999999998,
       "pivotFreq": 0.45,
       "pivotDamping": 0.15,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "uqcnztss",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1731,29 +1256,43 @@
               }
             ]
           },
-          "thickness": 80
+          "thickness": 80,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "bxr36hp4",
+      "name": "StaticBody2D22",
       "x": -455.8268179170881,
       "y": 615.6694740933235,
       "rot": -1.658062789394613,
+      "order": 25,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "98qzw4jz",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "z1o17guj",
+          "name": "Rect2",
           "x": -77.08675556685397,
           "y": 9.73976272961384,
           "rot": -0.6981317007977319,
@@ -1761,21 +1300,29 @@
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "5n6ng6uu",
+      "name": "StaticBody2D23",
       "x": 413.54564897240175,
       "y": 672.7603745174762,
-      "rot": 0,
+      "order": 26,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "g7ufwvbn",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1833,30 +1380,40 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "anchor",
-          "id": 1,
+          "type": "Anchor2D",
+          "id": "1",
+          "name": "Anchor",
           "x": -887.8329281452229,
           "y": -337.1393700300197
         }
       ]
     },
     {
-      "kind": "water",
+      "type": "Area2D",
+      "id": "lndedzn6",
+      "name": "Area2D",
       "x": 921.1731820829094,
       "y": 2308.669474093325,
-      "rot": 0,
+      "order": 27,
+      "area": "water",
       "color": "#0a4247",
       "opacity": 0.5,
       "friction": 1,
       "flow": 0,
       "drag": 5,
       "waterDepth": 1200,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8n4m86jy",
+          "name": "Rect",
           "x": -1189.9999999999984,
           "y": -4.999999999999716,
           "shape": {
@@ -1868,17 +1425,23 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ayq53ncu",
+      "name": "StaticBody2D24",
       "x": -2178.8268179170886,
       "y": -3254.3305259066756,
       "rot": -0.2617993877991494,
+      "order": 28,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.1,
       "passable": true,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "4nq1ksdy",
+          "name": "Curve",
           "shape": {
             "kind": "curve",
             "width": 7.3,
@@ -1893,40 +1456,56 @@
               }
             ]
           },
-          "rail": true
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -400.8268179170912,
-      "y": 545.6694740933237,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
+          "rail": true,
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "StaticBody2D",
+      "id": "isvt58zi",
+      "name": "StaticBody2D25",
+      "x": -400.8268179170912,
+      "y": 545.6694740933237,
+      "order": 29,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "4xp2iw34",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "RigidBody2D",
+      "id": "m85ojxqg",
+      "name": "RigidBody2D4",
       "x": -474.566510058051,
       "y": 387.29475624734437,
-      "rot": 0,
+      "order": 30,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.5,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "uf7kohba",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -1966,10 +1545,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 12
+          "thickness": 12,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "hpolstgb",
+          "name": "Curve",
           "x": -7.678802591818901,
           "y": -2.8560156690327076,
           "shape": {
@@ -2002,10 +1586,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "dos43ht5",
+          "name": "Curve2",
           "x": 7.501199057935004,
           "y": -2.5643348639764696,
           "shape": {
@@ -2042,10 +1631,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "26fz8ql2",
+          "name": "Light",
           "x": -0.26030785903703446,
           "y": -1.6252821540208018,
           "z": 0,
@@ -2054,44 +1648,59 @@
           "flicker": 0.1
         },
         {
-          "type": "anchor",
-          "id": 2,
+          "type": "Anchor2D",
+          "id": "2",
+          "name": "Anchor",
           "x": -0.2661238667792887,
           "y": -23.894408802010858
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "1zykrgz8",
+      "name": "StaticBody2D26",
       "x": -303.8268179170883,
       "y": 470.6694740933241,
-      "rot": 0,
+      "order": 31,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "zhstyafs",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 10,
             "h": 130
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "fhmbqbuh",
+      "name": "StaticBody2D27",
       "x": -647.6231142133839,
       "y": 291.2250296488793,
       "rot": -1.308996938995747,
+      "order": 32,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "iigog5fy",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2132,21 +1741,29 @@
                 "y": -67.62718946771915
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ek1vxy2v",
+      "name": "StaticBody2D28",
       "x": -2030.2214022525434,
       "y": -177.042175527356,
-      "rot": 0,
+      "order": 33,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "i10z4twv",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2248,21 +1865,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "vhlxk5ia",
+      "name": "StaticBody2D29",
       "x": -1797.8773348342386,
       "y": -92.52871726491333,
-      "rot": 0,
+      "order": 34,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "f2uw2xew",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2307,140 +1932,190 @@
                 "y": 93.51123771272745
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 3,
+          "type": "Anchor2D",
+          "id": "3",
+          "name": "Anchor",
           "x": 47.17328277166537,
           "y": 73.51123771272529
         },
         {
-          "type": "anchor",
-          "id": 4,
+          "type": "Anchor2D",
+          "id": "4",
+          "name": "Anchor2",
           "x": 190.12531215796358,
           "y": 33.59959981685652
         },
         {
-          "type": "anchor",
-          "id": 5,
+          "type": "Anchor2D",
+          "id": "5",
+          "name": "Anchor3",
           "x": -124.06527575100945,
           "y": 83.3427627364781
         },
         {
-          "type": "anchor",
-          "id": 6,
+          "type": "Anchor2D",
+          "id": "6",
+          "name": "Anchor4",
           "x": -39.317066399627265,
           "y": 66.56577467501492
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "b22h0hpw",
+      "name": "RigidBody2D5",
       "x": 276.1731820829116,
       "y": -2849.330525906675,
-      "rot": 0,
+      "order": 35,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "svk3vb46",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 70,
             "h": 70
           },
-          "thickness": 70
+          "thickness": 70,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "anchor",
-          "id": 7,
+          "type": "Anchor2D",
+          "id": "7",
+          "name": "Anchor",
           "x": -0.019549506077964907,
           "y": -34.99999999999943
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "mfgfypmj",
+      "name": "StaticBody2D30",
       "x": 215.74424989477734,
       "y": -3095.123296625017,
       "rot": -1.0471975511965974,
+      "order": 36,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ghovmfr3",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 230.00000000000003,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 8,
+          "type": "Anchor2D",
+          "id": "8",
+          "name": "Anchor",
           "x": 97.55031607359716,
           "y": 10.000000000000126
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "yxrva4cy",
+      "name": "StaticBody2D31",
       "x": -235.96148312235778,
       "y": -2993.330525906675,
       "rot": 0.5235987755982991,
+      "order": 37,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "e8spifcu",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 650,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 9,
+          "type": "Anchor2D",
+          "id": "9",
+          "name": "Anchor",
           "x": -318.6601219574455,
           "y": 9.999999999999986
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "htqqmpn2",
+      "name": "StaticBody2D32",
       "x": -188.82681791708862,
       "y": -2854.3305259066756,
       "rot": 1.0471975511965979,
+      "order": 38,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "09uxdbwv",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 380,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "af6g499h",
+      "name": "RigidBody2D6",
       "x": -516.5010603413316,
       "y": -2820.4744653006146,
-      "rot": 0,
+      "order": 39,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.7,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "juuh1rza",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2470,10 +2145,15 @@
               }
             ]
           },
-          "thickness": 50
+          "thickness": 50,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "lkto9ygb",
+          "name": "Curve",
           "x": -1.325757575757791,
           "y": -43.85606060606051,
           "shape": {
@@ -2503,54 +2183,78 @@
             ]
           },
           "rail": true,
-          "material": "steel"
+          "material": "steel",
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "anchor",
-          "id": 10,
+          "type": "Anchor2D",
+          "id": "10",
+          "name": "Anchor",
           "x": -2.4353914273945065,
           "y": -80.74642675442334
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "1vsc82c6",
+      "name": "StaticBody2D33",
       "x": -176.36235182301903,
       "y": -2923.794992000743,
       "rot": -0.7853981633974481,
+      "order": 40,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "wevugz2b",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 80,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "x4z9o9ha",
+      "name": "StaticBody2D34",
       "x": 52.189771766086324,
       "y": 158.5194921205133,
       "rot": 0.3490658503988659,
+      "order": 41,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "x7zue3yj",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "sxf7ledw",
+          "name": "Poly",
           "x": 5.444444444444324,
           "y": 3.3333333333327935,
           "shape": {
@@ -2573,100 +2277,149 @@
                 "y": 6.666666666666638
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "iikik5vp",
+      "name": "StaticBody2D35",
       "x": -130.49381929135643,
       "y": -2151.1767137496017,
       "rot": 0.2617993877991494,
+      "order": 42,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ly39f7ou",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 110.00000000000001,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "2wzjru8r",
+      "name": "StaticBody2D36",
       "x": 1544.1731820829095,
       "y": -1534.3305259066706,
-      "rot": 0,
+      "order": 43,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "3tuu0uo0",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 5
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "3durn2zi",
+          "name": "Circle2",
           "y": -60.0000000000005,
           "shape": {
             "kind": "circle",
             "r": 5
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "u5kc02on",
+          "name": "Circle3",
           "y": -119.99999999999993,
           "shape": {
             "kind": "circle",
             "r": 5
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "zsprcmqd",
+          "name": "Circle4",
           "y": -180.00000000000006,
           "shape": {
             "kind": "circle",
             "r": 5
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "3sgniyd0",
+      "name": "StaticBody2D37",
       "x": -597.8268179170866,
       "y": -2912.330525906676,
-      "rot": 0,
+      "order": 44,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "dvff42tt",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 5
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "rmlcepwi",
+      "name": "StaticBody2D38",
       "x": -232.60834943274597,
       "y": -2417.06301338568,
       "rot": -1.308996938995747,
+      "order": 45,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "zin1d6v4",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2691,21 +2444,30 @@
                 "y": -6.342645568124977
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ce3g40kh",
+      "name": "StaticBody2D39",
       "x": -291.41917311773256,
       "y": -2417.57459940057,
       "rot": -2.356194490192345,
+      "order": 46,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "b433lwup",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2730,21 +2492,30 @@
                 "y": -6.342645568124977
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "j8rhqe29",
+      "name": "StaticBody2D40",
       "x": -264.22855494757124,
       "y": -2456.830116432953,
       "rot": -1.308996938995747,
+      "order": 47,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "2gzx9bmv",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2769,46 +2540,64 @@
                 "y": -3.821677473550686
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ws5u4yjk",
+      "name": "StaticBody2D41",
       "x": -439.75948531445465,
       "y": -2472.8305259066756,
       "rot": 0.5235987755982991,
+      "order": 48,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "wmzbdw1z",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 11,
+          "type": "Anchor2D",
+          "id": "11",
+          "name": "Anchor",
           "x": -3.660121957446348,
           "y": 10.00000000000071
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "k3eu09ro",
+      "name": "RigidBody2D7",
       "x": -442.07681791708853,
       "y": -2172.4138592400086,
-      "rot": 0,
+      "order": 49,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.7,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ncdnj0h5",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2838,10 +2627,15 @@
               }
             ]
           },
-          "thickness": 50
+          "thickness": 50,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "2w5pa2xo",
+          "name": "Curve",
           "x": -4.098484848484674,
           "y": -26.586473607544292,
           "shape": {
@@ -2871,27 +2665,37 @@
             ]
           },
           "rail": true,
-          "material": "steel"
+          "material": "steel",
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "anchor",
-          "id": 12,
+          "type": "Anchor2D",
+          "id": "12",
+          "name": "Anchor",
           "x": -4.098484848484674,
           "y": -58.58647360754432
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "9lkoptao",
+      "name": "StaticBody2D42",
       "x": -322.53058629256464,
       "y": -2380.0955674951447,
       "rot": -1.3089969389957474,
+      "order": 50,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "30xh5fqx",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2916,48 +2720,71 @@
                 "y": -3.821677473550686
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "q1n9c3ov",
+      "name": "StaticBody2D43",
       "x": -1034.013501428385,
       "y": 635.4068042838172,
       "rot": 2.0943951023931953,
+      "order": 51,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "77b8k83o",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "c0dxtkho",
+      "name": "StaticBody2D44",
       "x": 183.4630813662848,
       "y": 206.3679371972537,
       "rot": 0.3490658503988659,
+      "order": 52,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8f5q6qqm",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "q3tg67bu",
+          "name": "Poly",
           "x": 5.444444444444324,
           "y": 3.3333333333327935,
           "shape": {
@@ -2980,29 +2807,42 @@
                 "y": 6.666666666666638
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "mmrisf0j",
+      "name": "StaticBody2D45",
       "x": -525.8268179170872,
       "y": 40.66947409332489,
-      "rot": 0,
+      "order": 53,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "kmqs7axb",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8ak8cihw",
+          "name": "Poly",
           "x": 8.523809523809156,
           "y": 6.428571428570429,
           "shape": {
@@ -3025,57 +2865,82 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "9dmeyzri",
+      "name": "StaticBody2D46",
       "x": 2171.173182082908,
       "y": -984.3305259066707,
-      "rot": 0,
+      "order": 54,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "xfoh90k0",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "g6q1cejo",
+      "name": "StaticBody2D47",
       "x": 2641.17318208291,
       "y": -1124.3305259066744,
-      "rot": 0,
+      "order": 55,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "m5fxm0c4",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "nxirn7mo",
+      "name": "StaticBody2D48",
       "x": -1485.6202321287556,
       "y": -183.2084229328526,
       "rot": -0.7853981633974483,
+      "order": 56,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "rva9gyrg",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -3100,27 +2965,37 @@
                 "y": -0.26470288561909483
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 13,
+          "type": "Anchor2D",
+          "id": "13",
+          "name": "Anchor",
           "x": -20.74643079921869,
           "y": 1.4063362311220697
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "atasfy6q",
+      "name": "StaticBody2D49",
       "x": -1249.7996055635936,
       "y": -29.85058412579118,
       "rot": -0.7853981633974484,
+      "order": 57,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "guu4w328",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -3149,11 +3024,15 @@
                 "y": 36.87371012088576
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 14,
+          "type": "Anchor2D",
+          "id": "14",
+          "name": "Anchor",
           "x": -31.684671893244122,
           "y": 28.54063396546972,
           "rot": 1.1102230246251565e-16
@@ -3161,16 +3040,21 @@
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "sbcvvv1c",
+      "name": "RigidBody2D8",
       "x": -366.7593073685662,
       "y": -1080.322087088106,
-      "rot": 0,
+      "order": 58,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "wn8fs30h",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -3199,39 +3083,50 @@
                 "y": -34.00843881856515
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 15,
+          "type": "Anchor2D",
+          "id": "15",
+          "name": "Anchor",
           "x": -132.46997103461206,
           "y": -24.008438818565025
         },
         {
-          "type": "anchor",
-          "id": 16,
+          "type": "Anchor2D",
+          "id": "16",
+          "name": "Anchor2",
           "x": -17.495349699465024,
           "y": 108.67610382294188
         },
         {
-          "type": "anchor",
-          "id": 17,
+          "type": "Anchor2D",
+          "id": "17",
+          "name": "Anchor3",
           "x": 88.49112811121688,
           "y": -21.13385517275823
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ze3ozq58",
+      "name": "StaticBody2D50",
       "x": -408.2285273187987,
       "y": -938.0912096673562,
-      "rot": 0,
+      "order": 59,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "96v272d5",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -3260,229 +3155,324 @@
                 "y": -116.23931623931749
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 18,
+          "type": "Anchor2D",
+          "id": "18",
+          "name": "Anchor",
           "x": -94.52336293008372,
           "y": 26.167024175427755
         },
         {
-          "type": "anchor",
-          "id": 19,
+          "type": "Anchor2D",
+          "id": "19",
+          "name": "Anchor2",
           "x": 24.9455338862564,
           "y": -109.75760639865975
         },
         {
-          "type": "anchor",
-          "id": 20,
+          "type": "Anchor2D",
+          "id": "20",
+          "name": "Anchor3",
           "x": 130.5082803271576,
           "y": 23.760683760684387
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "afwzhh2l",
+      "name": "StaticBody2D51",
       "x": -1048.826817917088,
       "y": 545.6694740933237,
-      "rot": 0,
+      "order": 60,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "hk9s59af",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "acmhv3i6",
+      "name": "StaticBody2D52",
       "x": -1188.8268179170884,
       "y": 545.6694740933237,
-      "rot": 0,
+      "order": 61,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "auulhww7",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "c2alyb9d",
+      "name": "StaticBody2D53",
       "x": -1588.8268179170882,
       "y": 495.66947409332374,
       "rot": 0.7853981633974483,
+      "order": 62,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "135b9u2n",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "vd9xo9wl",
+      "name": "StaticBody2D54",
       "x": -1687.8268179170884,
       "y": 396.6694740933235,
       "rot": 0.7853981633974483,
+      "order": 63,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "4bcce1f6",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "1bjzcwpc",
+      "name": "StaticBody2D55",
       "x": -1328.8268179170884,
       "y": 545.6694740933237,
-      "rot": 0,
+      "order": 64,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "nf6ig0r2",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "9x8264b0",
+      "name": "StaticBody2D56",
       "x": -1468.8268179170877,
       "y": 545.6694740933237,
-      "rot": 0,
+      "order": 65,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "z266cyr2",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "kjqmxmk0",
+      "name": "StaticBody2D57",
       "x": -1786.8268179170882,
       "y": 297.6694740933235,
       "rot": 0.7853981633974483,
+      "order": 66,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "smvf9m8t",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "40nqeb4k",
+      "name": "StaticBody2D58",
       "x": -1899.8268179170882,
       "y": 250.6694740933236,
-      "rot": 0,
+      "order": 67,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "9ho7nt89",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "g5wahk2d",
+      "name": "StaticBody2D59",
       "x": -2038.8268179170882,
       "y": 250.6694740933236,
-      "rot": 0,
+      "order": 68,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "e0scy70c",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "k6k4zpr8",
+      "name": "StaticBody2D60",
       "x": -2388.826817917088,
       "y": -1764.3305259066708,
-      "rot": 0,
+      "order": 69,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0ww8bz0i",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "6kjm7qko",
+      "name": "StaticBody2D61",
       "x": -688.8268179170875,
       "y": -1284.330525906671,
       "rot": -0.7853981633974484,
+      "order": 70,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ydsd8v53",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -3511,231 +3501,334 @@
                 "y": 34.125254635110494
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "oddwu0or",
+      "name": "StaticBody2D62",
       "x": -1048.826817917088,
       "y": 563.6694740933237,
       "rot": 2.220446049250313e-16,
+      "order": 71,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "p2izss90",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 26,
             "h": 26
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "xihf3hk2",
+      "name": "StaticBody2D63",
       "x": -1468.826817917088,
       "y": 563.6694740933237,
       "rot": 2.220446049250313e-16,
+      "order": 72,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "arz94kpi",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 26,
             "h": 26
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "3dp2tv1y",
+      "name": "StaticBody2D64",
       "x": -1048.826817917088,
       "y": 856.669474093324,
       "rot": 2.220446049250313e-16,
+      "order": 73,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "kgpn49cr",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 26,
             "h": 26
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "jc85wxpv",
+      "name": "StaticBody2D65",
       "x": -1468.8268179170877,
       "y": 858.6694740933237,
       "rot": 2.220446049250313e-16,
+      "order": 74,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0iz23xeo",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 26,
             "h": 26
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "xkddeb59",
+      "name": "StaticBody2D66",
       "x": -1900.8268179170886,
       "y": 563.6694740933235,
       "rot": 2.220446049250313e-16,
+      "order": 75,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pnwh5suq",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 26,
             "h": 26
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "7946obxx",
+      "name": "StaticBody2D67",
       "x": -1899.8268179170886,
       "y": 268.66947409332374,
       "rot": 2.220446049250313e-16,
+      "order": 76,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "wwr50wad",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 26,
             "h": 26
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "q68q1qnp",
+      "name": "StaticBody2D68",
       "x": -1136.8268179170875,
       "y": -154.33052590667148,
-      "rot": 0,
+      "order": 77,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "b43kyo67",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 21,
+          "type": "Anchor2D",
+          "id": "21",
+          "name": "Anchor",
           "x": -0.4924243051128485,
           "y": 5.000000000000071
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "nswcfk8n",
+      "name": "StaticBody2D69",
       "x": -996.8268179170875,
       "y": -154.33052590667148,
-      "rot": 0,
+      "order": 78,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "rq8s7jnu",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 22,
+          "type": "Anchor2D",
+          "id": "22",
+          "name": "Anchor",
           "x": -6.491157522089708,
           "y": 5.000000000000071
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "cycnnxag",
+      "name": "StaticBody2D70",
       "x": -884.3623518230205,
       "y": -107.79499200073897,
       "rot": 0.7853981633974483,
+      "order": 79,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "6qdge9pe",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "u7yqomqg",
+      "name": "StaticBody2D71",
       "x": -785.3623518230204,
       "y": -8.794992000740898,
       "rot": 0.7853981633974483,
+      "order": 80,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "w20ttpko",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "w0hnyqpe",
+      "name": "StaticBody2D72",
       "x": -711.3268179170877,
       "y": -179.33052590667185,
-      "rot": 0,
+      "order": 81,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ac9r0dkh",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "la2tzzkh",
+          "name": "Rect2",
           "x": -0.5000000000000782,
           "y": 9.999999999999254,
           "rot": 1.5707963267948966,
@@ -3743,10 +3836,15 @@
             "kind": "rect",
             "w": 10.000000000000142,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "0ofjko4u",
+          "name": "Light",
           "x": -0.4999999999999005,
           "y": 14.999999999999147,
           "kind": "spot",
@@ -3756,24 +3854,34 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "8o0v5mrw",
+      "name": "StaticBody2D73",
       "x": -665.8268179170873,
       "y": 40.66947409332364,
-      "rot": 0,
+      "order": 82,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pyxt0bzs",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "yf2w350b",
+          "name": "Poly",
           "x": 8.523809523809156,
           "y": 6.428571428570429,
           "shape": {
@@ -3796,29 +3904,42 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "3bwap3sy",
+      "name": "StaticBody2D74",
       "x": -245.8268179170922,
       "y": 40.669474093326485,
-      "rot": 0,
+      "order": 83,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "wpsjcypq",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "qtn4oj7j",
+          "name": "Poly",
           "x": 8.523809523808978,
           "y": 6.428571428570429,
           "shape": {
@@ -3841,29 +3962,42 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "cr95rrov",
+      "name": "StaticBody2D75",
       "x": -385.8268179170901,
       "y": 40.66947409332524,
-      "rot": 0,
+      "order": 84,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "xcmhyeo3",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "vh1ieox5",
+          "name": "Poly",
           "x": 8.523809523809156,
           "y": 6.428571428570429,
           "shape": {
@@ -3886,29 +4020,42 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "eo37ge8x",
+      "name": "StaticBody2D76",
       "x": -105.82681791708985,
       "y": 40.66947409332524,
-      "rot": 0,
+      "order": 85,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "85aqgre7",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "7u80lok4",
+          "name": "Poly",
           "x": 8.523809523809334,
           "y": 6.428571428570429,
           "shape": {
@@ -3931,29 +4078,42 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ltrq2k3q",
+      "name": "StaticBody2D77",
       "x": 34.17318208291036,
       "y": 40.669474093326485,
-      "rot": 0,
+      "order": 86,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "oqrm19rh",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "cabldsws",
+          "name": "Poly",
           "x": 8.523809523808978,
           "y": 6.428571428570429,
           "shape": {
@@ -3976,48 +4136,69 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "64gzyae7",
+      "name": "StaticBody2D78",
       "x": 314.17318208291044,
       "y": 40.66947409332489,
-      "rot": 0,
+      "order": 87,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "3wvc1i6q",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "zhxb6e8y",
+      "name": "StaticBody2D79",
       "x": 174.17318208291022,
       "y": 40.66947409332364,
-      "rot": 0,
+      "order": 88,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "zxscsnmj",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "td6e3lyz",
+          "name": "Poly",
           "x": 8.523809523809334,
           "y": 6.428571428570429,
           "shape": {
@@ -4040,21 +4221,29 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ojuxnn0e",
+      "name": "StaticBody2D80",
       "x": 283.9831386319741,
       "y": -787.2836096735903,
-      "rot": 0,
+      "order": 89,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "9tm9qljo",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -4228,134 +4417,185 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "anchor",
-          "id": 23,
+          "type": "Anchor2D",
+          "id": "23",
+          "name": "Anchor",
           "x": 198.7414647196445,
           "y": 372.95308376691844
         },
         {
-          "type": "anchor",
-          "id": 24,
+          "type": "Anchor2D",
+          "id": "24",
+          "name": "Anchor2",
           "x": 665.8991645793254,
           "y": 212.953083766919
         },
         {
-          "type": "anchor",
-          "id": 25,
+          "type": "Anchor2D",
+          "id": "25",
+          "name": "Anchor3",
           "x": 386.05406329201236,
           "y": 272.9530837669191
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "d2jio2zo",
+      "name": "StaticBody2D81",
       "x": 454.1731820829096,
       "y": 40.66947409332364,
-      "rot": 0,
+      "order": 90,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "9v7rob15",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "onnn37pj",
+      "name": "StaticBody2D82",
       "x": 1013.1731820829102,
       "y": 40.669474093326485,
-      "rot": 0,
+      "order": 91,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8sq1f22c",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ghj34546",
+      "name": "StaticBody2D83",
       "x": 873.1731820829108,
       "y": 40.66947409332489,
-      "rot": 0,
+      "order": 92,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "rh900uu8",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ssvh8qlr",
+      "name": "StaticBody2D84",
       "x": 733.1731820829099,
       "y": 40.66947409332826,
-      "rot": 0,
+      "order": 93,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ga8tt57u",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ewtoeb3w",
+      "name": "StaticBody2D85",
       "x": 593.17318208291,
       "y": 40.669474093326485,
-      "rot": 0,
+      "order": 94,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "7u9xpioc",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "lg3pe23y",
+      "name": "StaticBody2D86",
       "x": -73.37524985912225,
       "y": 2406.8752644528,
-      "rot": 0,
+      "order": 95,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "qi7k2x58",
+          "name": "Poly",
           "x": -2.4868995751603507e-12,
           "shape": {
             "kind": "poly",
@@ -4458,29 +4698,42 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "n0cfoyam",
+      "name": "StaticBody2D87",
       "x": 1153.1731820829111,
       "y": 40.66947409332364,
-      "rot": 0,
+      "order": 96,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "l6ezjyga",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "w9g5guww",
+          "name": "Poly",
           "x": 8.523809523808268,
           "y": 6.428571428570429,
           "shape": {
@@ -4503,48 +4756,69 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "godxgdcp",
+      "name": "StaticBody2D88",
       "x": 1713.1731820829107,
       "y": -9.330525906674758,
-      "rot": 0,
+      "order": 97,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "hmwru65l",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "rqt6d0qo",
+      "name": "StaticBody2D89",
       "x": 1573.1731820829086,
       "y": 40.66947409332773,
-      "rot": 0,
+      "order": 98,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "jpksji7w",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "dlv94yyx",
+          "name": "Poly",
           "x": 8.523809523809689,
           "y": 6.428571428570429,
           "shape": {
@@ -4567,29 +4841,42 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "lrlazyi2",
+      "name": "StaticBody2D90",
       "x": 1433.1731820829089,
       "y": 40.669474093326485,
-      "rot": 0,
+      "order": 99,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "gey21ww9",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "yqv0dj2h",
+          "name": "Poly",
           "x": 8.523809523808978,
           "y": 6.428571428570429,
           "shape": {
@@ -4612,29 +4899,42 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "re11qo0v",
+      "name": "StaticBody2D91",
       "x": 1293.1731820829089,
       "y": 40.66947409332968,
-      "rot": 0,
+      "order": 100,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "qzji7vth",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "c2p71jhw",
+          "name": "Poly",
           "x": 8.523809523808978,
           "y": 6.428571428570429,
           "shape": {
@@ -4657,21 +4957,29 @@
                 "y": 8.571428571428427
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "e8i0ys1b",
+      "name": "StaticBody2D92",
       "x": 327.5392182155151,
       "y": 163.66595132452312,
-      "rot": 0,
+      "order": 101,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "7lofj7ey",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -4713,186 +5021,261 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "5zs8snti",
+      "name": "StaticBody2D93",
       "x": 2436.1731820829104,
       "y": -2019.3305259066753,
-      "rot": 0,
+      "order": 102,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "isvc12j4",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30.00000000000007,
             "h": 29.999999999999716
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "78ueoerb",
+      "name": "StaticBody2D94",
       "x": 2226.1731820829073,
       "y": -1379.330525906671,
-      "rot": 0,
+      "order": 103,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "iqil3zjl",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30.00000000000007,
             "h": 29.999999999999716
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "kx272t8u",
+      "name": "StaticBody2D95",
       "x": 2976.1731820829173,
       "y": -2019.3305259066783,
-      "rot": 0,
+      "order": 104,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "2lccajd4",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30.00000000000007,
             "h": 29.999999999999716
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "fchp03ud",
+      "name": "StaticBody2D96",
       "x": 2976.173182082918,
       "y": -2194.330525906677,
-      "rot": 0,
+      "order": 105,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ff84jzaq",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30.00000000000007,
             "h": 29.999999999999716
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "x6dm0lko",
+      "name": "StaticBody2D97",
       "x": 2436.173182082912,
       "y": -2229.330525906672,
-      "rot": 0,
+      "order": 106,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "yc7bm4t2",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30.00000000000007,
             "h": 29.999999999999716
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "6ayoqrg0",
+      "name": "StaticBody2D98",
       "x": 2581.1731820829136,
       "y": -2024.3305259066765,
-      "rot": 0,
+      "order": 107,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8e3f9g2z",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 260,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 26,
+          "type": "Anchor2D",
+          "id": "26",
+          "name": "Anchor",
           "x": 30.893261287977225,
           "y": 10.000000000000853
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "tmrw2rm1",
+      "name": "RigidBody2D9",
       "x": 2401.173182082911,
       "y": -1434.3305259066735,
-      "rot": 0,
+      "order": 108,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "2s9c4mue",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 120.00000000000001,
             "h": 10
           },
-          "thickness": 150
+          "thickness": 150,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "anchor",
-          "id": 27,
+          "type": "Anchor2D",
+          "id": "27",
+          "name": "Anchor",
           "x": 0.43967159843276704,
           "y": -5.000000000000071
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "a2kt3otx",
+      "name": "StaticBody2D99",
       "x": 2976.1731820829173,
       "y": -1534.3305259066767,
-      "rot": 0,
+      "order": 109,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "fganubl5",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30.00000000000007,
             "h": 29.999999999999716
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "8zrtxp7w",
+      "name": "StaticBody2D100",
       "x": 1741.1731820829086,
       "y": -1454.3305259066717,
       "rot": -0.7853981633974484,
+      "order": 110,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0m721ad2",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -4993,48 +5376,69 @@
                 "y": 3.4292546309991123
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "AnimatableBody2D",
+      "id": "r4i575bl",
+      "name": "AnimatableBody2D2",
       "x": 881.1731820829089,
       "y": -1694.3305259066713,
-      "rot": 0,
+      "order": 111,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
       "spinPeriod": -10,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "frixzvyc",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 180
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "nkb9nwnv",
+      "name": "StaticBody2D101",
       "x": -391.3268179170892,
       "y": -179.33052590667202,
-      "rot": 0,
+      "order": 112,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "5bgpx87d",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "dfhp4ziw",
+          "name": "Rect2",
           "x": -0.5000000000002558,
           "y": 9.999999999999254,
           "rot": 1.5707963267948966,
@@ -5042,10 +5446,15 @@
             "kind": "rect",
             "w": 10.000000000000142,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "81ryz1n0",
+          "name": "Light",
           "x": -0.5000000000002558,
           "y": 14.999999999999147,
           "kind": "spot",
@@ -5055,24 +5464,34 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "9pele5hy",
+      "name": "StaticBody2D102",
       "x": -71.32681791709139,
       "y": -179.33052590667202,
-      "rot": 0,
+      "order": 113,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "er6wvt6z",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "76f09ex2",
+          "name": "Rect2",
           "x": -0.4999999999999005,
           "y": 9.999999999999254,
           "rot": 1.5707963267948966,
@@ -5080,10 +5499,15 @@
             "kind": "rect",
             "w": 10.000000000000142,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "7tkw276z",
+          "name": "Light",
           "x": -0.4999999999999005,
           "y": 14.999999999999147,
           "kind": "spot",
@@ -5093,24 +5517,34 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "xdtfeee8",
+      "name": "StaticBody2D103",
       "x": 248.6731820829089,
       "y": -179.33052590667202,
-      "rot": 0,
+      "order": 114,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "s20jxno7",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 20
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8ifbwnud",
+          "name": "Rect2",
           "x": -0.5000000000002558,
           "y": 9.999999999999254,
           "rot": 1.5707963267948966,
@@ -5118,10 +5552,15 @@
             "kind": "rect",
             "w": 10.000000000000142,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "okw4z3i0",
+          "name": "Light",
           "x": -0.4999999999999005,
           "y": 14.999999999999147,
           "kind": "spot",
@@ -5131,16 +5570,21 @@
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "od3xv3sz",
+      "name": "RigidBody2D10",
       "x": 481.4334899419471,
       "y": -332.70524375265006,
-      "rot": 0,
+      "order": 115,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.5,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "vohool1u",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5180,10 +5624,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 12
+          "thickness": 12,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "tx6e3jlb",
+          "name": "Curve",
           "x": -7.678802591819078,
           "y": -2.8560156690328853,
           "shape": {
@@ -5216,10 +5665,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "5zbnrj46",
+          "name": "Curve2",
           "x": 7.501199057934826,
           "y": -2.5643348639764696,
           "shape": {
@@ -5256,10 +5710,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "uiyghyr3",
+          "name": "Light",
           "x": -0.2603078590372121,
           "y": -1.6252821540209794,
           "z": 0,
@@ -5268,24 +5727,30 @@
           "flicker": 0.1
         },
         {
-          "type": "anchor",
-          "id": 28,
+          "type": "Anchor2D",
+          "id": "28",
+          "name": "Anchor",
           "x": 0.046602602100520585,
           "y": -23.895926891665553
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "fq3c643q",
+      "name": "RigidBody2D11",
       "x": 951.1804896953588,
       "y": -474.1403788744634,
-      "rot": 0,
+      "order": 116,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.5,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "as6wix13",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5325,10 +5790,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 12
+          "thickness": 12,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "r77hgqhz",
+          "name": "Curve",
           "x": -7.678802591819078,
           "y": -2.8560156690328853,
           "shape": {
@@ -5361,10 +5831,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "fzyisf2k",
+          "name": "Curve2",
           "x": 7.501199057934826,
           "y": -2.5643348639764696,
           "shape": {
@@ -5401,10 +5876,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "fybrfhrw",
+          "name": "Light",
           "x": -0.26030785903756737,
           "y": -1.6252821540209794,
           "z": 0,
@@ -5413,24 +5893,30 @@
           "flicker": 0.1
         },
         {
-          "type": "anchor",
-          "id": 29,
+          "type": "Anchor2D",
+          "id": "29",
+          "name": "Anchor",
           "x": -0.10777932807961577,
           "y": -23.895177464819994
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "4e7wcm0c",
+      "name": "RigidBody2D12",
       "x": 671.4334899419463,
       "y": -422.70524375265063,
-      "rot": 0,
+      "order": 117,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.5,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "f8kowebz",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5470,10 +5956,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 12
+          "thickness": 12,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "77tc0vmy",
+          "name": "Curve",
           "x": -7.678802591819078,
           "y": -2.8560156690328853,
           "shape": {
@@ -5506,10 +5997,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0jb6snyz",
+          "name": "Curve2",
           "x": 7.501199057934826,
           "y": -2.5643348639764696,
           "shape": {
@@ -5546,10 +6042,15 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "lmlyo2lq",
+          "name": "Light",
           "x": -0.26030785903756737,
           "y": -1.6252821540209794,
           "z": 0,
@@ -5558,68 +6059,90 @@
           "flicker": 0.1
         },
         {
-          "type": "anchor",
-          "id": 30,
+          "type": "Anchor2D",
+          "id": "30",
+          "name": "Anchor",
           "x": -0.14698153773906597,
           "y": -23.894987162831427
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "lv2p28hk",
+      "name": "RigidBody2D13",
       "x": 1251.1731820829089,
       "y": -494.33052590667114,
-      "rot": 0,
+      "order": 118,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
       "springFreqX": 1,
       "springFreqY": 1,
       "springDamping": 0.1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "nt7bd07p",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 6
           },
-          "thickness": 550
+          "thickness": 550,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "kuhemesc",
+      "name": "RigidBody2D14",
       "x": 1441.1731820829086,
       "y": -644.3305259066711,
-      "rot": 0,
+      "order": 119,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
       "springFreqX": 1,
       "springFreqY": 1,
       "springDamping": 0.1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ysjqrs7f",
+          "name": "Circle",
           "shape": {
             "kind": "circle",
             "r": 6
           },
-          "thickness": 550
+          "thickness": 550,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "fp9rr54h",
+      "name": "StaticBody2D104",
       "x": 1137.3963894402937,
       "y": -864.0332392505151,
-      "rot": 0,
+      "order": 120,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pttyaeer",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5696,21 +6219,29 @@
                 "y": -34.62362067437437
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "1w0jm2ry",
+      "name": "StaticBody2D105",
       "x": 888.1289342952989,
       "y": -1112.8320008329251,
-      "rot": 0,
+      "order": 121,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "78dep26v",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5751,21 +6282,29 @@
                 "y": 158.50147492625368
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "0tlh6who",
+      "name": "StaticBody2D106",
       "x": -150.8448359351089,
       "y": 2155.4442488680997,
-      "rot": 0,
+      "order": 122,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "vnxghm0p",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5814,21 +6353,29 @@
                 "y": -49.77477477477477
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "oxsnju1a",
+      "name": "StaticBody2D107",
       "x": 1069.3959332482398,
       "y": 1704.7079547042542,
-      "rot": 0,
+      "order": 123,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "qppmlsu7",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5857,21 +6404,29 @@
                 "y": 335.96151938907053
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "y5pcafnj",
+      "name": "StaticBody2D108",
       "x": 364.395933248236,
       "y": 1701.6309934823955,
-      "rot": 0,
+      "order": 124,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "6iz5akoa",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5900,22 +6455,31 @@
                 "y": -170.96151938907082
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "hktbmq2a",
+      "name": "StaticBody2D109",
       "x": 1515.071368196092,
       "y": 607.925800316554,
       "rot": -3.11172456461791,
+      "order": 125,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
       "passable": true,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "2j94ng4z",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -5944,21 +6508,29 @@
                 "y": 4.37493981698146
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "bjkl41ml",
+      "name": "StaticBody2D110",
       "x": 1072.4188137550832,
       "y": 1538.8445423110466,
-      "rot": 0,
+      "order": 126,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "08781duq",
+          "name": "Poly",
           "x": 3.552713678800501e-13,
           "shape": {
             "kind": "poly",
@@ -6301,21 +6873,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "e2qxkwj1",
+      "name": "StaticBody2D111",
       "x": 3692.418813755084,
       "y": 1508.4944058756032,
-      "rot": 0,
+      "order": 127,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ioravvww",
+          "name": "Poly",
           "x": -569.9999999999985,
           "y": -325.00000000000017,
           "shape": {
@@ -6407,21 +6987,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "opvgnoo0",
+      "name": "StaticBody2D112",
       "x": 2431.832831080364,
       "y": 1221.4422650725264,
-      "rot": 0,
+      "order": 128,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pkdfdwno",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -6643,21 +7231,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "nur4dru8",
+      "name": "StaticBody2D113",
       "x": 2912.4465215440378,
       "y": 938.0392060267576,
-      "rot": 0,
+      "order": 129,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "d5amreko",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -6678,21 +7274,29 @@
                 "y": 97.63026806656723
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "26i0w10s",
+      "name": "StaticBody2D114",
       "x": 3012.4465215440387,
       "y": 813.2997421598919,
-      "rot": 0,
+      "order": 130,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "f5yuyc7v",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -6717,21 +7321,30 @@
                 "y": 102.36973193343286
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "otsr8pmf",
+      "name": "StaticBody2D115",
       "x": 2883.1355902883056,
       "y": 480.93163413912805,
       "rot": 0.0055450078978648565,
+      "order": 131,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "6w8uwiuv",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -6777,21 +7390,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "p95cjyck",
+      "name": "StaticBody2D116",
       "x": 123.19120010092774,
       "y": 1435.89469931855,
-      "rot": 0,
+      "order": 132,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "hniwnrhl",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -6820,21 +7441,29 @@
                 "y": 19.77477477477482
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "k81wltrj",
+      "name": "StaticBody2D117",
       "x": -304.39544536806727,
       "y": 1760.3059120018213,
-      "rot": 0,
+      "order": 133,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "o8blyc3v",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -6972,21 +7601,30 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "w1xn0dtz",
+      "name": "RigidBody2D15",
       "x": 659.4302012311601,
       "y": 2960.284272239033,
       "rot": 0.06981317007977318,
+      "order": 134,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "smvq12hb",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7024,10 +7662,15 @@
               }
             ]
           },
-          "thickness": 40
+          "thickness": 40,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "mfuzq6nv",
+          "name": "Poly2",
           "x": -0.02505678051186056,
           "y": -10.68519597650563,
           "rot": -9.992007221626409e-16,
@@ -7057,21 +7700,30 @@
             "hook",
             "chain"
           ],
-          "thickness": 40
+          "thickness": 40,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "jdnldb05",
+      "name": "StaticBody2D118",
       "x": 107.70954348509036,
       "y": 2217.9453924285517,
       "rot": 0.0055450078978648565,
+      "order": 135,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pm3gpepc",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7121,21 +7773,30 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "5my1n30g",
+      "name": "StaticBody2D119",
       "x": 49.15516406489253,
       "y": 1375.4442488680997,
       "rot": 1.308996938995747,
+      "order": 136,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "54p254v5",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7176,21 +7837,29 @@
                 "y": 25.885628276272115
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "zxloy4tw",
+      "name": "StaticBody2D120",
       "x": -86.8087998990692,
       "y": 2085.4442488680993,
-      "rot": 0,
+      "order": 137,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ahxcmut2",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7211,21 +7880,29 @@
                 "y": -49.77477477477468
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "i7c3gvdw",
+      "name": "StaticBody2D121",
       "x": 123.19120010093201,
       "y": 2005.4442488680997,
-      "rot": 0,
+      "order": 138,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8obdwsaz",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7278,26 +7955,34 @@
                 "y": 0.2252252252251813
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "water",
+      "type": "Area2D",
+      "id": "lpps2o2l",
+      "name": "Area2D2",
       "x": 701.1731820829091,
       "y": 2225.6694740933253,
-      "rot": 0,
+      "order": 139,
+      "area": "water",
       "color": "#0a4247",
       "opacity": 0.5,
       "friction": 1,
       "flow": -120,
       "drag": 50,
       "spill": 150,
-      "spillSpeed": 100,
       "waterDepth": 150,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8s6rg9a7",
+          "name": "Rect",
           "x": -105.00000000000007,
           "y": -5.000000000000426,
           "shape": {
@@ -7309,16 +7994,21 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "02ciiis5",
+      "name": "StaticBody2D122",
       "x": 339.155164064891,
       "y": 1995.4442488680997,
-      "rot": 0,
+      "order": 140,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "8htzm6jo",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7347,21 +8037,29 @@
                 "y": -39.77477477477489
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "b94ipd3k",
+      "name": "StaticBody2D123",
       "x": 459.15516406489087,
       "y": 1945.4442488680997,
-      "rot": 0,
+      "order": 141,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "r4h1l3iu",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7386,21 +8084,29 @@
                 "y": -29.774774774774926
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "juy83s45",
+      "name": "StaticBody2D124",
       "x": 579.1551640648897,
       "y": 2025.4442488680997,
-      "rot": 0,
+      "order": 142,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "tze3jmeg",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7433,21 +8139,29 @@
                 "y": -19.774774774774873
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "dneffunu",
+      "name": "StaticBody2D125",
       "x": 979.1551640648919,
       "y": 1595.4442488680997,
-      "rot": 0,
+      "order": 143,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "6ky2zjc7",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7488,21 +8202,29 @@
                 "y": -69.77477477477495
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "a44ullbl",
+      "name": "StaticBody2D126",
       "x": 1042.9504309175843,
       "y": 1921.0754379268399,
-      "rot": 0,
+      "order": 144,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "82i8jek8",
+          "name": "Poly",
           "x": -70.00000000000028,
           "y": 40.00000000000021,
           "shape": {
@@ -7553,21 +8275,29 @@
                 "y": -25.40596383351493
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "z0sjtfh0",
+      "name": "StaticBody2D127",
       "x": 1270.1093706366198,
       "y": 1853.6873403148306,
-      "rot": 0,
+      "order": 145,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "jv07rz2i",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7608,21 +8338,29 @@
                 "y": -15.405963833514935
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "v13jda71",
+      "name": "StaticBody2D128",
       "x": 659.1912001009334,
       "y": 2035.4442488680997,
-      "rot": 0,
+      "order": 146,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "cq3g6q4x",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7679,27 +8417,35 @@
                 "y": -79.77477477477493
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "water",
+      "type": "Area2D",
+      "id": "kot1bdg5",
+      "name": "Area2D3",
       "x": 1781.173182082912,
       "y": 2085.669474093325,
-      "rot": 0,
+      "order": 147,
+      "area": "water",
       "color": "#0a4247",
       "opacity": 0.5,
       "friction": 1,
       "flow": -120,
       "drag": 50,
       "spill": 200,
-      "spillSpeed": 100,
       "waterZ": 25,
       "waterDepth": 150,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pxp1jnw9",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 1260.0000000000002,
@@ -7709,16 +8455,22 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "igag45cw",
+      "name": "StaticBody2D129",
       "x": 1187.7086210740763,
       "y": 2077.945392428552,
       "rot": 0.0055450078978648565,
+      "order": 148,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "mmmtzdte",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7768,21 +8520,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ooepj2ww",
+      "name": "StaticBody2D130",
       "x": 1182.2369935292033,
       "y": 1673.6873403148309,
-      "rot": 0,
+      "order": 149,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "z8vfj75g",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7855,21 +8615,30 @@
                 "y": 61.98213377849421
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "vwo6cu79",
+      "name": "StaticBody2D131",
       "x": 587.7086210740764,
       "y": 2217.9453924285517,
       "rot": 0.0055450078978648565,
+      "order": 150,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "dbfxqogr",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7919,21 +8688,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "uer3tdth",
+      "name": "StaticBody2D132",
       "x": 866.6045546319307,
       "y": 1901.3059120018213,
-      "rot": 0,
+      "order": 151,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "jfcoixsh",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -7987,21 +8764,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "tqo1bh75",
+      "name": "StaticBody2D133",
       "x": 1019.1551640648921,
       "y": 1605.4442488680997,
-      "rot": 0,
+      "order": 152,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "gf9wunae",
+          "name": "Poly",
           "x": -80.00000000000007,
           "y": -9.999999999999964,
           "shape": {
@@ -8036,21 +8821,30 @@
                 "y": -39.77477477477493
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "yfup37wv",
+      "name": "StaticBody2D134",
       "x": -133.06034816967872,
       "y": 1098.1781485228173,
       "rot": 1.308996938995747,
+      "order": 153,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "4s34vl07",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8083,15 +8877,21 @@
                 "y": 27.520899853239992
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "AnimatableBody2D",
+      "id": "pkumkmyz",
+      "name": "AnimatableBody2D3",
       "x": -579.1601165299338,
       "y": 1012.4689640532927,
       "rot": -5.551115123125783e-17,
+      "order": 154,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
@@ -8124,9 +8924,12 @@
       "moveMode": "repeat",
       "moveSpeed": 300,
       "moveAlign": true,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "munw7qim",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8164,10 +8967,15 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "uitm97xa",
+          "name": "Poly2",
           "x": 0.4424255801993139,
           "y": -22.299895067465414,
           "shape": {
@@ -8203,21 +9011,30 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "6di8bl8b",
+      "name": "StaticBody2D135",
       "x": -26.43475904244106,
       "y": 501.24684787326055,
       "rot": 1.308996938995747,
+      "order": 155,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "d1cdkvsg",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8242,173 +9059,248 @@
                 "y": 36.599598991263434
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "xte8bzpi",
+      "name": "StaticBody2D136",
       "x": 206.17318208291167,
       "y": 1055.6694740933249,
-      "rot": 0,
+      "order": 156,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "woplsj8f",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "itorvo6r",
+      "name": "StaticBody2D137",
       "x": 76.1731820829116,
       "y": 1055.6694740933249,
-      "rot": 0,
+      "order": 157,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "91x33o26",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "fb3amuvs",
+      "name": "StaticBody2D138",
       "x": 336.17318208291135,
       "y": 1055.6694740933249,
-      "rot": 0,
+      "order": 158,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "6gkgqp2f",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "82m7jybj",
+      "name": "StaticBody2D139",
       "x": -53.826817917088476,
       "y": 1055.6694740933249,
-      "rot": 0,
+      "order": 159,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "sl5egq3j",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "f6ixqss2",
+      "name": "StaticBody2D140",
       "x": 447.1731820829078,
       "y": 1009.6694740933249,
       "rot": -0.7853981633974483,
+      "order": 160,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "oo5z40ku",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "0h4mm54z",
+      "name": "StaticBody2D141",
       "x": 538.7087159888403,
       "y": 918.2050079992564,
       "rot": -0.7853981633974483,
+      "order": 161,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "84gkbbjl",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "50naq6oi",
+      "name": "StaticBody2D142",
       "x": -183.82681791708995,
       "y": 1055.6694740933249,
-      "rot": 0,
+      "order": 162,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "tuboxrs7",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "uwb93zl4",
+      "name": "StaticBody2D143",
       "x": 642.1731820829099,
       "y": 875.6694740933245,
-      "rot": 0,
+      "order": 163,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0i2vhtte",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ctgymwlh",
+      "name": "StaticBody2D144",
       "x": 447.8971655287765,
       "y": 831.7661106629167,
       "rot": 1.308996938995747,
+      "order": 164,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "1y9lafk2",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8437,21 +9329,30 @@
                 "y": 0.8670208891226192
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "qvsj819q",
+      "name": "StaticBody2D145",
       "x": 220.3803610804112,
       "y": 811.3082905780619,
       "rot": 0.7853981633974483,
+      "order": 165,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "uyd2hx9u",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8480,21 +9381,30 @@
                 "y": 0.8670208891226192
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "finish",
+      "type": "Area2D",
+      "id": "br2i09dl",
+      "name": "Area2D4",
       "x": -171.82681791708808,
       "y": 1575.6694740933249,
-      "rot": 0,
+      "order": 166,
+      "area": "finish",
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "o9j5t307",
+          "name": "Rect",
           "x": 2.9999999999997584,
           "y": -30.00000000000007,
           "shape": {
@@ -8506,16 +9416,21 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "3y0ji9bb",
+      "name": "StaticBody2D146",
       "x": -769.9166574012222,
       "y": 2044.0291846583534,
-      "rot": 0,
+      "order": 167,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "iwhcfi0m",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8556,21 +9471,30 @@
                 "y": -33.35971056502842
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "qzgmp16v",
+      "name": "StaticBody2D147",
       "x": -461.1660867670063,
       "y": 2081.048853059854,
       "rot": 0.5235987755982987,
+      "order": 168,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "oa0mv16j",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8603,21 +9527,29 @@
                 "y": -43.35971056502874
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "eocs72ax",
+      "name": "StaticBody2D148",
       "x": -304.39544536806727,
       "y": 1760.3059120018213,
-      "rot": 0,
+      "order": 169,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "warq7iux",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8691,21 +9623,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "zh8f7f8r",
+      "name": "StaticBody2D149",
       "x": 288.1912001009305,
       "y": 1445.89469931855,
-      "rot": 0,
+      "order": 170,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0uvmbtni",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8730,21 +9670,29 @@
                 "y": -20.22522522522523
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "suhe7719",
+      "name": "StaticBody2D150",
       "x": 866.6045546319307,
       "y": 1901.3059120018213,
-      "rot": 0,
+      "order": 171,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "qm02u2d6",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8822,21 +9770,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ml1dw90z",
+      "name": "StaticBody2D151",
       "x": -73.37524985912474,
       "y": 2406.8752644528,
-      "rot": 0,
+      "order": 172,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "44celhgg",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -8898,21 +9854,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "c51o37e1",
+      "name": "StaticBody2D152",
       "x": -1011.3268179170884,
       "y": 2238.1694740933253,
-      "rot": 0,
+      "order": 173,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "k1k5z1as",
+          "name": "Poly",
           "x": 6.219711853308496,
           "y": -75.06385068762214,
           "shape": {
@@ -8955,21 +9919,29 @@
                 "y": 77.56385068762172
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "0hamrof6",
+      "name": "StaticBody2D153",
       "x": -304.39544536806727,
       "y": 1760.3059120018213,
-      "rot": 0,
+      "order": 174,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "5mi0m8th",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -9015,21 +9987,30 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "kzgi9eqj",
+      "name": "StaticBody2D154",
       "x": -196.93963806636958,
       "y": 1894.4376432731715,
       "rot": 0.5235987755982987,
+      "order": 175,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "19dap88w",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -9075,21 +10056,29 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ukhtkycu",
+      "name": "StaticBody2D155",
       "x": -304.39544536806727,
       "y": 1760.3059120018213,
-      "rot": 0,
+      "order": 176,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "s6ns8tjg",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -9159,18 +10148,25 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "Node2D",
+      "id": "qf142g7a",
+      "name": "Node2D",
       "x": -923.8268179170885,
       "y": 1075.6694740933249,
-      "rot": 0,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "czisudcm",
+          "name": "Light",
           "kind": "spot",
           "z": 0,
           "color": "#f3ecd8",
@@ -9185,24 +10181,34 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "400nb1gs",
+      "name": "StaticBody2D156",
       "x": 91.17318208291145,
       "y": 1950.6694740933249,
-      "rot": 0,
+      "order": 178,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "if3phr8e",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30,
             "h": 30
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "88vgym2r",
+          "name": "Light",
           "color": "#b070ff",
           "intensity": 6,
           "range": 400,
@@ -9214,24 +10220,34 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "aq98wrke",
+      "name": "StaticBody2D157",
       "x": 666.1731820829115,
       "y": 1940.6694740933247,
-      "rot": 0,
+      "order": 179,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "fpivh23a",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30,
             "h": 30
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "coyucelw",
+          "name": "Light",
           "color": "#b070ff",
           "intensity": 6,
           "range": 400,
@@ -9243,24 +10259,34 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "oqnnttf7",
+      "name": "StaticBody2D158",
       "x": 1391.1731820829114,
       "y": 2060.669474093325,
-      "rot": 0,
+      "order": 180,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ec7sf1kp",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30,
             "h": 30
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "1tq4p8o3",
+          "name": "Light",
           "color": "#b070ff",
           "intensity": 6,
           "range": 400,
@@ -9272,33 +10298,42 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "Node2D",
+      "id": "v6xxsnqs",
+      "name": "Node2D2",
       "x": -578.8268179170884,
       "y": 2150.669474093325,
-      "rot": 0,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "light",
+          "type": "Light3D",
+          "id": "5vbq0clz",
+          "name": "Light",
           "z": 90,
           "color": "#ffe5ad",
           "intensity": 3,
           "wake": 130,
           "fireflies": 2,
-          "path": 1
+          "path": "1"
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "isjxvzya",
+      "name": "StaticBody2D159",
       "x": -83.37524985912239,
       "y": 2406.8752644528,
-      "rot": 0,
+      "order": 182,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "jjb29iif",
+          "name": "Poly",
           "x": -2.4868995751603507e-12,
           "shape": {
             "kind": "poly",
@@ -9337,9 +10372,801 @@
               }
             ]
           },
-          "impermeable": true
+          "impermeable": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
+    },
+    {
+      "type": "CameraRegion2D",
+      "id": "o6rzd2qx",
+      "name": "CameraRegion",
+      "x": -993.8268179170883,
+      "y": 1895.6694740933244,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 170.00000000000003,
+        "h": 440.00000000000006
+      },
+      "viewportScale": 0.65,
+      "lockX": 1085,
+      "lockY": 800,
+      "priority": -1,
+      "keepInFrame": false
+    },
+    {
+      "type": "CameraRegion2D",
+      "id": "8aib3my3",
+      "name": "CameraRegion2",
+      "x": 3126.1731820829123,
+      "y": 1123.1694740933249,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 610.0000000000001,
+        "h": 585
+      },
+      "offsetY": -50,
+      "viewportScale": 0.6
+    },
+    {
+      "type": "CameraPath2D",
+      "id": "elm9nv68",
+      "name": "CameraPath",
+      "x": -121.48696186771204,
+      "y": 573.4164845677154,
+      "rot": 0,
+      "verts": [
+        {
+          "x": -1012.3398560493731,
+          "y": 1547.2529895256114,
+          "inX": -16.90592132714457,
+          "inY": 0.6035619961934913,
+          "outX": 4.226480331786142,
+          "outY": -0.15089049904837282,
+          "viewportScale": 0.65
+        },
+        {
+          "x": -647.3398560493767,
+          "y": 1552.2529895256116,
+          "inX": -145.14272955409825,
+          "inY": 5.483254417299932,
+          "outX": 145.14272955409825,
+          "outY": -5.483254417299932
+        },
+        {
+          "x": -277.33985604937635,
+          "y": 1547.2529895256096,
+          "inX": -51.061083607823754,
+          "inY": -5.745670946078363,
+          "outX": 51.061083607823754,
+          "outY": 5.745670946078363
+        },
+        {
+          "x": 7.6601439506234215,
+          "y": 1577.2529895256096,
+          "inX": -149.5131667840422,
+          "inY": 13.717061550461196,
+          "outX": 149.5131667840422,
+          "outY": -13.717061550461196
+        },
+        {
+          "x": 272.6601439506232,
+          "y": 1507.2529895256093,
+          "inX": -115.08506227238095,
+          "inY": 5.815793913894396,
+          "outX": 115.08506227238095,
+          "outY": -5.815793913894396
+        },
+        {
+          "x": 582.660143950623,
+          "y": 1497.2529895256093,
+          "inX": -134.7379063560279,
+          "inY": 1.0376946418391597,
+          "outX": 134.7379063560279,
+          "outY": -1.0376946418391597
+        },
+        {
+          "x": 1002.660143950623,
+          "y": 1497.2529895256093,
+          "inX": -201.49441986221143,
+          "inY": 4.932246773412174,
+          "outX": 201.49441986221143,
+          "outY": -4.932246773412174,
+          "viewportScale": 0.65
+        },
+        {
+          "x": 1222.660143950623,
+          "y": 1187.2529895256093,
+          "inX": 55.99896928875694,
+          "inY": 102.88058768135748,
+          "outX": -55.99896928875694,
+          "outY": -102.88058768135748
+        },
+        {
+          "x": 552.6601439506237,
+          "y": 1022.2529895256095,
+          "inX": 174.69445118917798,
+          "inY": 42.14202077128224,
+          "outX": -174.69445118917798,
+          "outY": -42.14202077128224
+        },
+        {
+          "x": 62.66014395062349,
+          "y": 957.2529895256095,
+          "inX": 257.14682012592505,
+          "inY": 22.90889322141627,
+          "outX": -257.14682012592505,
+          "outY": -22.90889322141627
+        },
+        {
+          "x": -347.33985604937646,
+          "y": 927.2529895256093,
+          "inX": 9.044745375449637,
+          "inY": 58.034295337921726,
+          "outX": -9.044745375449637,
+          "outY": -58.03429533792182,
+          "viewportScale": 0.65
+        },
+        {
+          "x": 132.66014395062342,
+          "y": 607.2529895256091,
+          "inX": -194.27785870166616,
+          "inY": 34.78867200320863,
+          "outX": 194.27785870166616,
+          "outY": -34.78867200320863,
+          "viewportScale": 0.7
+        },
+        {
+          "x": 642.6601439506239,
+          "y": 447.2529895256093,
+          "inX": 7.4927391402432875,
+          "inY": 212.47934571520713,
+          "outX": -7.4927391402432875,
+          "outY": -212.47934571520713
+        },
+        {
+          "x": 242.66014395062356,
+          "y": 207.25298952560937,
+          "inX": 127.43104361978332,
+          "inY": 203.78756923523332,
+          "outX": -127.43104361978332,
+          "outY": -203.78756923523332,
+          "viewportScale": 0.65
+        },
+        {
+          "x": -277.33985604937635,
+          "y": 217.2529895256093,
+          "inX": 111.30738839800449,
+          "inY": 58.51018401286849,
+          "outX": -111.30738839800452,
+          "outY": -58.51018401286849
+        },
+        {
+          "x": -411.77297057329696,
+          "y": 28.15158611979456,
+          "inX": 18.04473141475662,
+          "inY": 24.16710686473371,
+          "outX": -72.17892565902658,
+          "outY": -96.66842745893484
+        },
+        {
+          "x": -637.3398560493771,
+          "y": -172.7470104743908,
+          "inX": 85.61722268971259,
+          "inY": 3.7470048818324386,
+          "outX": -171.23444537942518,
+          "outY": -7.494009763664877,
+          "viewportScale": 0.8
+        },
+        {
+          "x": -937.339856049379,
+          "y": -92.74701047439025,
+          "inX": 107.58809690439452,
+          "inY": -51.34695161543377,
+          "outX": -107.58809690439452,
+          "outY": 51.34695161543377
+        },
+        {
+          "x": -1347.3398560493831,
+          "y": 27.252989525608704,
+          "inX": 210.8207118481454,
+          "inY": 9.120081660887092,
+          "outX": -210.8207118481454,
+          "outY": -9.120081660887092
+        },
+        {
+          "x": -1697.3398560493838,
+          "y": -102.74701047439056,
+          "inX": 117.1419616772786,
+          "inY": 80.21088781752921,
+          "outX": -117.1419616772786,
+          "outY": -80.2108878175293
+        },
+        {
+          "x": -1917.3398560493822,
+          "y": -392.74701047438975,
+          "inX": -6.1619083051621,
+          "inY": 99.26360789202022,
+          "outX": 6.1619083051621,
+          "outY": -99.26360789202022
+        },
+        {
+          "x": -1527.339856049385,
+          "y": -492.7470104743917,
+          "inX": -265.1052956710261,
+          "inY": -0.8467302286916834,
+          "outX": 265.1052956710261,
+          "outY": 0.8467302286916834
+        },
+        {
+          "x": -1047.3398560493808,
+          "y": -512.747010474392,
+          "inX": -112.23373486746073,
+          "inY": 34.49215459548469,
+          "outX": 112.23373486746073,
+          "outY": -34.49215459548469
+        },
+        {
+          "x": -587.3398560493794,
+          "y": -652.7470104743924,
+          "inX": -242.2448445687145,
+          "inY": 1.6849874363723316,
+          "outX": 242.2448445687145,
+          "outY": -1.6849874363723316
+        },
+        {
+          "x": 72.66014395061902,
+          "y": -652.7470104743917,
+          "inX": -284.0074982154743,
+          "inY": 2.103919692516776,
+          "outX": 284.0074982154743,
+          "outY": -2.103919692516776
+        },
+        {
+          "x": 902.6601439506177,
+          "y": -942.7470104743915,
+          "inX": -264.37059778397656,
+          "inY": 75.1088975129777,
+          "outX": 132.18529889198828,
+          "outY": -37.554448756488945
+        },
+        {
+          "x": 1222.6601439506178,
+          "y": -932.7470104743913,
+          "inX": -152.1641573172161,
+          "inY": 2.7583090245460795,
+          "outX": 76.0820786586077,
+          "outY": -1.3791545122730398
+        },
+        {
+          "x": 1425.0374260048945,
+          "y": -1310.751758179095,
+          "inX": -13.584721355454477,
+          "inY": 234.4786719787658,
+          "outX": 13.584721355454477,
+          "outY": -234.478671978766
+        },
+        {
+          "x": 918.5695705365962,
+          "y": -1531.430119941413,
+          "inX": 0.4209640804258896,
+          "inY": 10.706157572663244,
+          "outX": -3.367712643408538,
+          "outY": -85.64926058130489
+        }
+      ],
+      "rangeX": 250,
+      "rangeY": 180,
+      "falloffX": 400,
+      "falloffY": 400,
+      "lookaheadX": 150,
+      "lookaheadY": 120,
+      "lookaheadBufferX": 30,
+      "lookaheadBufferY": 50,
+      "viewportScale": 0.8,
+      "buffer": 0,
+      "softness": 30,
+      "priority": 1
+    },
+    {
+      "type": "FireflyPath2D",
+      "id": "npo8u9y6",
+      "name": "FireflyPath",
+      "x": 278.75382724420274,
+      "y": 1824.5404418352603,
+      "rot": 0,
+      "verts": [
+        {
+          "x": -857.5806451612913,
+          "y": 326.12903225806446
+        },
+        {
+          "x": -657.5806451612913,
+          "y": 291.1290322580645,
+          "inX": -46.55144282844983,
+          "inY": -0.4972779178327613,
+          "outX": 46.55144282844983,
+          "outY": 0.4972779178327613
+        },
+        {
+          "x": -447.58064516129076,
+          "y": 361.12903225806446,
+          "inX": -50.56614118551721,
+          "inY": 4.384885739396438,
+          "outX": 50.56614118551721,
+          "outY": -4.384885739396438
+        },
+        {
+          "x": -322.58064516129076,
+          "y": 296.1290322580645,
+          "inX": -31.6129427483137,
+          "inY": 14.733928955067999,
+          "outX": 31.6129427483137,
+          "outY": -14.733928955067999
+        },
+        {
+          "x": -182.58064516129087,
+          "y": 251.12903225806446,
+          "inX": -42.65986734269198,
+          "inY": 6.361936073797114,
+          "outX": 42.65986734269198,
+          "outY": -6.361936073797114
+        },
+        {
+          "x": 7.419354838709324,
+          "y": 246.12903225806448
+        },
+        {
+          "x": 222.41935483870918,
+          "y": 251.12903225806446,
+          "inX": -49.28889972459913,
+          "inY": 2.5247162804070022,
+          "outX": 49.28889972459913,
+          "outY": -2.5247162804070022
+        },
+        {
+          "x": 362.41935483870907,
+          "y": 231.12903225806454,
+          "inX": -49.870679427911924,
+          "inY": 2.4084915734313483,
+          "outX": 49.870679427911924,
+          "outY": -2.4084915734313483
+        },
+        {
+          "x": 537.4193548387091,
+          "y": 231.12903225806454,
+          "inX": -37.778101565497124,
+          "inY": -2.8240808721011312,
+          "outX": 37.778101565497124,
+          "outY": 2.8240808721011312
+        },
+        {
+          "x": 652.4193548387093,
+          "y": 251.12903225806446,
+          "inX": -34.406313736861804,
+          "inY": 2.8735544434427496,
+          "outX": 34.406313736861804,
+          "outY": -2.8735544434427496
+        },
+        {
+          "x": 742.4193548387091,
+          "y": 221.12903225806448,
+          "inX": -18.360004300390997,
+          "inY": 23.1062499205569,
+          "outX": 18.360004300390997,
+          "outY": -23.1062499205569
+        },
+        {
+          "x": 762.4193548387091,
+          "y": 151.12903225806446,
+          "inX": -9.314435286390577,
+          "inY": 29.10300376463182,
+          "outX": 9.314435286390577,
+          "outY": -29.10300376463182
+        },
+        {
+          "x": 857.4193548387093,
+          "y": 46.129032258064484,
+          "inX": -12.895187493541371,
+          "inY": 17.99043531885296,
+          "outX": 12.895187493541371,
+          "outY": -17.99043531885296
+        },
+        {
+          "x": 897.4193548387092,
+          "y": -23.870967741935534,
+          "inX": 1.2907884418300597,
+          "inY": 26.130183838808385,
+          "outX": -1.2907884418300597,
+          "outY": -26.130183838808385
+        },
+        {
+          "x": 867.4193548387091,
+          "y": -98.87096774193553,
+          "inX": 14.058008710678394,
+          "inY": 18.172057814066278,
+          "outX": -14.058008710678394,
+          "outY": -18.172057814066278
+        },
+        {
+          "x": 767.4193548387091,
+          "y": -138.87096774193552
+        },
+        {
+          "x": 492.4193548387091,
+          "y": -193.87096774193552,
+          "inX": 137.5,
+          "inY": 17.500000000000004,
+          "outX": -137.5,
+          "outY": -17.500000000000004
+        },
+        {
+          "x": 127.41935483870925,
+          "y": -208.8709677419355,
+          "inX": 67.19566569375068,
+          "inY": 1.543804632173984,
+          "outX": -33.59783284687534,
+          "outY": -0.771902316086992
+        },
+        {
+          "x": -227.58064516129082,
+          "y": -278.8709677419355,
+          "inX": 157.85054178828122,
+          "inY": 26.05702442097826,
+          "outX": -78.92527089414062,
+          "outY": -13.02851221048913
+        },
+        {
+          "x": -582.5806451612909,
+          "y": -303.8709677419355,
+          "inX": 149.0186822764649,
+          "inY": -10.757128052622278,
+          "outX": -74.50934113823244,
+          "outY": 5.378564026311139
+        },
+        {
+          "x": -1087.580645161291,
+          "y": -163.87096774193552,
+          "inX": 133.872664715442,
+          "inY": -63.655358993422205,
+          "outX": -133.87266471544183,
+          "outY": 63.655358993422205
+        },
+        {
+          "x": -1187.580645161291,
+          "y": -8.870967741935498
+        }
+      ]
+    },
+    {
+      "type": "Note2D",
+      "id": "lezg3a7c",
+      "name": "Note",
+      "kind": "text",
+      "x": -253.82681791708848,
+      "y": 2195.669474093325,
+      "rot": 0,
+      "w": 110.00000000000001,
+      "h": 20,
+      "text": "wind up chain",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "awmc0v8c",
+      "name": "Note2",
+      "kind": "text",
+      "x": -458.82681791708853,
+      "y": 2100.669474093325,
+      "rot": 0,
+      "w": 150,
+      "h": 20,
+      "text": "demonstrate swing",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "6ubagd9h",
+      "name": "Note3",
+      "kind": "text",
+      "x": -943.826817917087,
+      "y": 2170.6694740933253,
+      "rot": 0,
+      "w": 40,
+      "h": 20,
+      "text": "roll",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "61rtfzvy",
+      "name": "Note4",
+      "kind": "text",
+      "x": -13.826817917088263,
+      "y": 2135.669474093325,
+      "rot": 0,
+      "w": 170.00000000000003,
+      "h": 20,
+      "text": "redeploy while wound",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "7335ozzs",
+      "name": "Note5",
+      "kind": "text",
+      "x": 1146.1731820829116,
+      "y": 1890.669474093325,
+      "rot": 0,
+      "w": 180,
+      "h": 20,
+      "text": "safe climbing practice",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "sbgn63sc",
+      "name": "Note6",
+      "kind": "text",
+      "x": 383.6731820829115,
+      "y": 1588.1694740933249,
+      "rot": 0,
+      "w": 215,
+      "h": 25,
+      "text": "anchor while swinging (safe)",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "yv8dpjw8",
+      "name": "Note7",
+      "kind": "text",
+      "x": -638.8268179170884,
+      "y": 2070.669474093325,
+      "rot": 0,
+      "w": 120.00000000000001,
+      "h": 40,
+      "text": "introduce moss as anchor",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "yh0urza8",
+      "name": "Note8",
+      "kind": "text",
+      "x": 796.1731820829116,
+      "y": 2035.6694740933249,
+      "rot": 0,
+      "w": 190,
+      "h": 30.000000000000004,
+      "text": "redeploy while unwound",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "ce84hynx",
+      "name": "Note9",
+      "kind": "text",
+      "x": 281.1731820829117,
+      "y": 2040.6694740933247,
+      "rot": 0,
+      "w": 150,
+      "h": 20,
+      "text": "safe swing practice",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "ei835s4u",
+      "name": "Note10",
+      "kind": "text",
+      "x": 761.173182082912,
+      "y": 1645.6694740933249,
+      "rot": 0,
+      "w": 160,
+      "h": 20,
+      "text": "risky swing practice",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "h4lyz65r",
+      "name": "Note11",
+      "kind": "text",
+      "x": 113.6731820829116,
+      "y": 1523.1694740933249,
+      "rot": 0,
+      "w": 225,
+      "h": 25,
+      "text": "anchor while swinging (risky)",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "zn40eyah",
+      "name": "Note12",
+      "kind": "text",
+      "x": -791.3268179170884,
+      "y": 2180.669474093325,
+      "rot": 0,
+      "w": 175,
+      "h": 20,
+      "text": "partial wind up chain",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "elp5hpgm",
+      "name": "Note13",
+      "kind": "text",
+      "x": -533.8268179170884,
+      "y": 2225.669474093325,
+      "rot": 0,
+      "w": 110.00000000000001,
+      "h": 20,
+      "text": "wind up chain",
+      "size": 12
+    },
+    {
+      "type": "Note2D",
+      "id": "kocu1xy8",
+      "name": "Note14",
+      "kind": "text",
+      "x": -518.8268179170885,
+      "y": 2155.669474093325,
+      "rot": 0,
+      "w": 170.00000000000003,
+      "h": 20,
+      "text": "redeploy while wound",
+      "size": 12
+    },
+    {
+      "type": "Checkpoint2D",
+      "id": "r3vl5ub8",
+      "name": "vine",
+      "checkpoint": "vine",
+      "x": -1898.8268179170884,
+      "y": 205.66947409332352
+    },
+    {
+      "type": "Chain",
+      "id": "s8zmg38x",
+      "name": "Chain",
+      "order": 0,
+      "a": "1",
+      "b": "2"
+    },
+    {
+      "type": "Chain",
+      "id": "dpuefw2q",
+      "name": "Chain2",
+      "order": 1,
+      "a": "8",
+      "b": "7"
+    },
+    {
+      "type": "Chain",
+      "id": "o68lzh2w",
+      "name": "Chain3",
+      "order": 2,
+      "a": "10",
+      "b": "9"
+    },
+    {
+      "type": "Chain",
+      "id": "gdlex4cg",
+      "name": "Chain4",
+      "order": 3,
+      "a": "12",
+      "b": "11"
+    },
+    {
+      "type": "Chain",
+      "id": "dz8lora5",
+      "name": "Chain5",
+      "order": 4,
+      "a": "15",
+      "b": "18"
+    },
+    {
+      "type": "Chain",
+      "id": "x636cyy5",
+      "name": "Chain6",
+      "order": 5,
+      "a": "19",
+      "b": "16"
+    },
+    {
+      "type": "Chain",
+      "id": "3r01gph4",
+      "name": "Chain7",
+      "order": 6,
+      "a": "17",
+      "b": "20"
+    },
+    {
+      "type": "Chain",
+      "id": "8pgg5zpz",
+      "name": "Chain8",
+      "order": 7,
+      "a": "26",
+      "b": "27"
+    },
+    {
+      "type": "Chain",
+      "id": "yflx55jg",
+      "name": "Chain9",
+      "order": 8,
+      "a": "23",
+      "b": "28"
+    },
+    {
+      "type": "Chain",
+      "id": "t0r2t4fh",
+      "name": "Chain10",
+      "order": 9,
+      "a": "24",
+      "b": "29"
+    },
+    {
+      "type": "Chain",
+      "id": "dlf39jis",
+      "name": "Chain11",
+      "order": 10,
+      "a": "25",
+      "b": "30"
+    },
+    {
+      "type": "Vine",
+      "id": "ll623igv",
+      "name": "Vine",
+      "order": 0,
+      "anchor": "3",
+      "anchor2": "4",
+      "length": 300,
+      "stiffness": 0.3,
+      "viscosity": 0.3,
+      "color": "#bbe4a0"
+    },
+    {
+      "type": "Vine",
+      "id": "dcmit7sa",
+      "name": "Vine2",
+      "order": 1,
+      "anchor": "13",
+      "anchor2": "14",
+      "length": 400,
+      "stiffness": 0.3,
+      "viscosity": 0.15,
+      "color": "#acd293"
+    },
+    {
+      "type": "Vine",
+      "id": "rdsui7dv",
+      "name": "Vine3",
+      "order": 2,
+      "anchor": "5",
+      "anchor2": "6",
+      "length": 200,
+      "stiffness": 0.2,
+      "viscosity": 0.4,
+      "color": "#acd293"
+    },
+    {
+      "type": "Vine",
+      "id": "a349kb4b",
+      "name": "Vine4",
+      "order": 3,
+      "anchor": "22",
+      "anchor2": "21",
+      "length": 300,
+      "stiffness": 0.15,
+      "viscosity": 0.4,
+      "color": "#aace92"
     }
   ]
 }

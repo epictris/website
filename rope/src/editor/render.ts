@@ -50,6 +50,7 @@ import {
   type SettleGhost,
   isRouteKeyed,
   routePolyline,
+  propsOf,
 } from "./model";
 import { cubicAt, pointAtArcLength, tangentAtArcLength } from "../lib/path";
 import { isRootItem, rootIndex, rootWidthAt } from "./rootEditing";
@@ -314,7 +315,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     // water, where it aims the current, so those get the knob too rather than
     // only the rot° field.
     const base =
-      body.kind === "force" || body.kind === "water"
+      propsOf(body).kind === "force" || propsOf(body).kind === "water"
         ? worldToScreen(cam, toWorld(body, new Vec2(0, -r)))
         : null;
     return {
@@ -486,11 +487,11 @@ export function routeHandlePoints(
   model: EdModel,
   item: EdItem,
 ): { pos: Vec2; node: number; side: "in" | "out" }[] {
-  const frame = bodyFrameOf(model, item.bodyId);
+  const frame = bodyFrameOf(model, item.unit);
   return tangentGripPoints(
-    item.route,
+    propsOf(item).route,
     1 / (cam.zoom * PIXELS_PER_METER),
-    moveModeCloses(item.moveMode),
+    moveModeCloses(propsOf(item).moveMode),
   ).map((g) => ({ pos: frame.pos.add(g.local.rotated(frame.rot)), node: g.node, side: g.side }));
 }
 
@@ -1091,7 +1092,7 @@ function drawModelMark(
 function decorationPoint(model: EdModel, d: EdItem): { x: number; y: number; z: number } | null {
   const dec = d.decoration;
   if (!dec) return null;
-  const f = model.items.find((i) => i.object === "formation" && i.bodyId === d.bodyId && i.formation?.id === dec.formation);
+  const f = model.items.find((i) => i.object === "formation" && i.formation?.id === dec.formation);
   if (!f) return null;
   const p = (dec.onRock ?? dec.anchor).p;
   const w = new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(itemMatrix(f));
@@ -1642,8 +1643,8 @@ function drawGroupMarks(
   selectedIds: ReadonlySet<number>,
   worldLine: number,
 ): void {
-  const bodies = new Set<number>();
-  for (const b of visible) bodies.add(b.bodyId);
+  const bodies = new Set<string>();
+  for (const b of visible) bodies.add(b.unit);
   for (const id of bodies) {
     const allMembers = bodyMembers(all, id);
     // How the built body is MOUNTED, from the collision object the body's
@@ -1651,16 +1652,16 @@ function drawGroupMarks(
     // body of one as well - unlike the compound diamond, neither mounting is
     // visible on the canvas without a mark, and the two shapes look identical.
     const leadCollision = allMembers.find((m) => m.object === "collision");
-    if (leadCollision && leadCollision.kind === "rigid" && leadCollision.pivot) {
+    if (leadCollision && propsOf(leadCollision).kind === "rigid" && propsOf(leadCollision).pivot) {
       // An authored bearing draws where it was authored - the point the body
       // will actually swing about - and only an unauthored one falls back to
       // the centre of mass, which is what an absent point means at build.
       // `pivotAt` is in the body's frame, so it is resolved through the same
       // `bodyFrameOf` the save writes it against.
       const axle = ((): Vec2 => {
-        if (!leadCollision.pivotAt) return bodyCentroid(allMembers);
-        const f = bodyFrameOf(model, leadCollision.bodyId);
-        return f.pos.add(leadCollision.pivotAt.rotated(f.rot));
+        if (!propsOf(leadCollision).pivotAt) return bodyCentroid(allMembers);
+        const f = bodyFrameOf(model, leadCollision.unit);
+        return f.pos.add(propsOf(leadCollision).pivotAt!.rotated(f.rot));
       })();
       const ar = 6 * worldLine;
       ctx.strokeStyle = GROUP_MARK;
@@ -1679,9 +1680,9 @@ function drawGroupMarks(
     // centre of mass - the anchor the body is sprung about and the point the
     // spring force acts through - with its axis along whichever axes are
     // actually sprung, so a body that only bobs vertically LOOKS like one.
-    if (leadCollision && leadCollision.kind === "rigid" && !leadCollision.pivot) {
-      const sx = leadCollision.springFreqX > 0;
-      const sy = leadCollision.springFreqY > 0;
+    if (leadCollision && propsOf(leadCollision).kind === "rigid" && !propsOf(leadCollision).pivot) {
+      const sx = propsOf(leadCollision).springFreqX > 0;
+      const sy = propsOf(leadCollision).springFreqY > 0;
       if (sx || sy) {
         const at = bodyCentroid(allMembers);
         ctx.strokeStyle = GROUP_MARK;
@@ -1753,20 +1754,20 @@ function drawMoverMarks(
   model: EdModel,
   visible: readonly EdItem[],
   all: readonly EdItem[],
-  selectedBodyIds: ReadonlySet<number>,
+  selectedBodyIds: ReadonlySet<string>,
   worldLine: number,
   cam: Camera,
   pickedNodes: ReadonlySet<number>,
 ): void {
-  const bodies = new Set<number>();
-  for (const b of visible) bodies.add(b.bodyId);
+  const bodies = new Set<string>();
+  for (const b of visible) bodies.add(b.unit);
   for (const id of bodies) {
     const members = bodyMembers(all, id);
     const lead = members.find((m) => m.object === "collision");
-    if (!lead || lead.kind !== "static") continue;
+    if (!lead || propsOf(lead).kind !== "static") continue;
     const picked = selectedBodyIds.has(id);
 
-    if ((lead.swingAmp !== 0 && lead.swingPeriod > 0) || lead.spinPeriod !== 0) {
+    if ((propsOf(lead).swingAmp !== 0 && propsOf(lead).swingPeriod > 0) || propsOf(lead).spinPeriod !== 0) {
       const bearing = bearingOf(model, lead);
       // The arc is drawn at the radius of whatever reaches furthest from the
       // bearing, which is the swept EDGE rather than a circle round the middle,
@@ -1793,12 +1794,12 @@ function drawMoverMarks(
       ctx.arc(bearing.x, bearing.y, ar / 3, 0, Math.PI * 2);
       ctx.fillStyle = MOVER_MARK;
       ctx.fill();
-      if (reach > 0 && lead.swingAmp !== 0 && lead.swingPeriod > 0) {
+      if (reach > 0 && propsOf(lead).swingAmp !== 0 && propsOf(lead).swingPeriod > 0) {
         const rest = hang.length() > 1e-9 ? Math.atan2(hang.y, hang.x) : Math.PI / 2;
         ctx.setLineDash([4 * PX, 4 * PX]);
         ctx.lineWidth = worldLine;
         ctx.beginPath();
-        ctx.arc(bearing.x, bearing.y, reach, rest - lead.swingAmp, rest + lead.swingAmp);
+        ctx.arc(bearing.x, bearing.y, reach, rest - propsOf(lead).swingAmp, rest + propsOf(lead).swingAmp);
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -1807,7 +1808,7 @@ function drawMoverMarks(
       // of it pointing the way round the period's sign says the body turns. The
       // direction is the half of a rotor that cannot be read off a still canvas
       // at all: two blades turning opposite ways are the same picture.
-      if (reach > 0 && lead.spinPeriod !== 0) {
+      if (reach > 0 && propsOf(lead).spinPeriod !== 0) {
         ctx.setLineDash([4 * PX, 4 * PX]);
         ctx.lineWidth = worldLine;
         ctx.beginPath();
@@ -1821,7 +1822,7 @@ function drawMoverMarks(
         // sign. Screen y runs DOWN, so at the top of the circle a positive
         // rotation carries the surface to the RIGHT, which is the direction the
         // tip points.
-        const dir = lead.spinPeriod > 0 ? 1 : -1;
+        const dir = propsOf(lead).spinPeriod > 0 ? 1 : -1;
         const tx = bearing.x + dir * 8 * worldLine;
         const ty = bearing.y - reach;
         ctx.lineWidth = worldLine * 1.5;
@@ -1833,7 +1834,7 @@ function drawMoverMarks(
       }
     }
 
-    if (lead.route.length < 2) continue;
+    if (propsOf(lead).route.length < 2) continue;
     // The route as the CURVE it is: the flattened Bezier, which is what the
     // mover rides and what the picks are measured against - the node hull would
     // draw a bowed leg as the chord it is not.
@@ -1892,7 +1893,7 @@ function drawMoverMarks(
     // changes pace can be seen without clicking through every node - the same
     // mark a camera path's keyed nodes wear, and for the same reason.
     ctx.fillStyle = MOVER_MARK;
-    lead.route.forEach((n, i) => {
+    propsOf(lead).route.forEach((n, i) => {
       const w = pts[i];
       if (!w || !isRouteKeyed(n)) return;
       const d = worldLine * PATH_KEY_DIAMOND_PX;
@@ -1942,13 +1943,13 @@ function drawMoverMarks(
 // is where the de Casteljau split puts the new node: a grip drawn off the curve
 // it inserts into would jump the moment it was clicked.
 export function routeMidpoints(model: EdModel, item: EdItem): Vec2[] {
-  const frame = bodyFrameOf(model, item.bodyId);
-  const n = item.route.length;
-  const legs = moveModeCloses(item.moveMode) ? n : n - 1;
+  const frame = bodyFrameOf(model, item.unit);
+  const n = propsOf(item).route.length;
+  const legs = moveModeCloses(propsOf(item).moveMode) ? n : n - 1;
   const mids: Vec2[] = [];
   for (let i = 0; i < legs; i++) {
-    const a = item.route[i]!;
-    const b = item.route[(i + 1) % n]!;
+    const a = propsOf(item).route[i]!;
+    const b = propsOf(item).route[(i + 1) % n]!;
     const mid = cubicAt(a.p, a.p.add(a.out), b.p.add(b.in), b.p, 0.5);
     mids.push(frame.pos.add(mid.rotated(frame.rot)));
   }
@@ -1968,7 +1969,7 @@ export function routeMidpoints(model: EdModel, item: EdItem): Vec2[] {
 function drawBodyMembers(
   ctx: CanvasRenderingContext2D,
   items: readonly EdItem[],
-  bodyIds: ReadonlySet<number>,
+  bodyIds: ReadonlySet<string>,
   visibleLayers: ReadonlySet<EdLayer>,
   worldLine: number,
 ): void {
@@ -1976,7 +1977,7 @@ function drawBodyMembers(
   ctx.strokeStyle = BODY_MEMBER;
   ctx.lineWidth = worldLine * 3;
   for (const i of items) {
-    if (!bodyIds.has(i.bodyId) || !visibleLayers.has(i.layer)) continue;
+    if (!bodyIds.has(i.unit) || !visibleLayers.has(i.layer)) continue;
     // A formation, a decoration or a model has no outline of its own on the
     // plane - its shape is a placeholder at its placement point, which can be
     // anywhere relative to what it draws - so it is said by the scene (the
@@ -2041,7 +2042,7 @@ export function drawEditor(
   // The bodies selected as BODIES (see `selectedBodyIds` in editor.ts). Their
   // objects are outlined rather than haloed: the body is what is selected, and
   // nothing an edit reaches may wear the selection colour.
-  selectedBodyIds: ReadonlySet<number> = new Set<number>(),
+  selectedBodyIds: ReadonlySet<string> = new Set<string>(),
   // Which of the selected shape's VERTICES are picked out (see `selectedVerts`
   // in editor.ts). They are drawn as filled squares against the hollow ones, so
   // what an edit applies to is legible at the corner itself rather than only in
@@ -2148,7 +2149,7 @@ export function drawEditor(
       i.layer !== "fog" &&
       !isCheckpointNote(i),
   );
-  const ordered = [...geometry].sort((a, b) => Number(!a.passable) - Number(!b.passable));
+  const ordered = [...geometry].sort((a, b) => Number(!propsOf(a).passable) - Number(!propsOf(b).passable));
   // Compound bodies draw as one object rather than as their pieces - union fill,
   // and a border only where a piece is not covered by a sibling. Drawn piece by
   // piece instead, the overlaps fill twice (a darker patch) and the joins get a
@@ -2157,8 +2158,8 @@ export function drawEditor(
   // punched out of each piece, which has no union form.
   const drawnAsBody = new Set<number>();
   for (const body of ordered) {
-    if (body.passable || drawnAsBody.has(body.id)) continue;
-    const members = bodyMembers(ordered, body.bodyId).filter((m) => !m.passable);
+    if (propsOf(body).passable || drawnAsBody.has(body.id)) continue;
+    const members = bodyMembers(ordered, body.unit).filter((m) => !propsOf(m).passable);
     if (members.length < 2) continue;
     for (const m of members) drawnAsBody.add(m.id);
     const union = unionPath(ctx, members);
@@ -2184,7 +2185,7 @@ export function drawEditor(
     }
     // Breakable: the body's own mark, under the per-piece borders below (see
     // `BREAK_EDGE`). Round the whole body, because that is what breaks.
-    if (body.breakForce > 0) {
+    if (propsOf(body).breakForce > 0) {
       strokeCompoundOutline(ctx, members, () => {
         ctx.strokeStyle = BREAK_EDGE;
         ctx.lineWidth = worldLine * BREAK_HALO;
@@ -2226,25 +2227,25 @@ export function drawEditor(
     if (drawnAsBody.has(body.id)) continue;
     // Areas fill with their glyph cut out of them — the same calls the game
     // makes, so authoring shows exactly what play shows.
-    if (body.kind === "force") {
+    if (propsOf(body).kind === "force") {
       fillForceArea(
         ctx,
         body.pos,
         body.rot,
         outlineOf(body),
-        body.force,
+        propsOf(body).force,
         paint(hexToRgba(body.color, body.opacity)),
       );
-    } else if (body.kind === "water") {
+    } else if (propsOf(body).kind === "water") {
       fillWaterArea(
         ctx,
         body.pos,
         body.rot,
         outlineOf(body),
-        body.flow,
+        propsOf(body).flow,
         paint(hexToRgba(body.color, body.opacity)),
       );
-    } else if (body.kind === "killzone") {
+    } else if (propsOf(body).kind === "killzone") {
       fillKillZone(
         ctx,
         body.pos,
@@ -2252,7 +2253,7 @@ export function drawEditor(
         outlineOf(body),
         paint(hexToRgba(body.color, body.opacity)),
       );
-    } else if (body.kind === "finish") {
+    } else if (propsOf(body).kind === "finish") {
       fillFinish(
         ctx,
         body.pos,
@@ -2260,7 +2261,7 @@ export function drawEditor(
         outlineOf(body),
         paint(hexToRgba(body.color, body.opacity)),
       );
-    } else if (body.passable) {
+    } else if (propsOf(body).passable) {
       // Hook-only scenery: the same grate mesh the game punches through it.
       fillAnchor(
         ctx,
@@ -2282,7 +2283,7 @@ export function drawEditor(
       ctx.lineWidth = worldLine * 5;
       ctx.stroke();
     }
-    if (body.breakForce > 0 && body.object === "collision") {
+    if (propsOf(body).breakForce > 0 && body.object === "collision") {
       // Breakable: a broken red fringe under whatever border the piece draws
       // (see `BREAK_EDGE`), since breaking is the BODY's property and the
       // borders below are the piece's.
@@ -2308,7 +2309,7 @@ export function drawEditor(
       ctx.setLineDash(VISCOUS_DASH);
       ctx.stroke();
       ctx.setLineDash([]);
-    } else if (body.passable || body.mask !== MASK_ALL) {
+    } else if (propsOf(body).passable || body.mask !== MASK_ALL) {
       // Hook-only: dotted edge, as in game — nothing about it reads as solid.
       // A piece something passes through wears the same mark, for the same
       // reason: whatever it is, it is not in everything's way.
@@ -2352,7 +2353,7 @@ export function drawEditor(
     ctx.lineWidth = worldLine * 1.5;
     ctx.setLineDash([6 * worldLine, 4 * worldLine]);
     for (const g of settleGhosts) {
-      for (const m of bodyMembers(model.items, g.bodyId)) {
+      for (const m of bodyMembers(model.items, g.unit)) {
         if (m.object !== "collision") continue;
         const pos = g.about.add(m.pos.sub(g.about).rotated(g.drot)).add(g.dpos);
         ctx.beginPath();
@@ -2716,7 +2717,7 @@ export function drawEditor(
     ? model.items.filter((i) => i.object === "formation" && i.formation?.guide.kind === "collision")
     : [];
   for (const f of formations) {
-    const selected = selectedIds.has(f.id) || selectedBodyIds.has(f.bodyId);
+    const selected = selectedIds.has(f.id) || selectedBodyIds.has(f.unit);
     if (formationGuides ? formationGuides.shown(f) : selected) {
       drawFormationGuide(ctx, f, worldLine, formationGuides?.color(f) ?? FORMATION_MARK_COLOR, selected);
     }
@@ -3026,9 +3027,9 @@ export function drawEditor(
   // about marked at the other end of the stalk.
   const groupSel =
     selection.length > 1 &&
-    selection[0]!.bodyId !== null &&
-    selection.every((b) => b.bodyId === selection[0]!.bodyId) &&
-    bodyMembers(model.items, selection[0]!.bodyId!).length === selection.length
+    selection[0]!.unit !== null &&
+    selection.every((b) => b.unit === selection[0]!.unit) &&
+    bodyMembers(model.items, selection[0]!.unit!).length === selection.length
       ? selection
       : null;
   if (groupSel) {

@@ -5,34 +5,24 @@
 // The sim's collision is outlines in the gameplay plane, and the pieces used
 // to collide with those outlines extruded 2 m through it - a slab with flat
 // walls and flat tops, held to the depth they broke at so they could not fall
-// off its ends. What the player sees is the Blender scene: rock that rises and
+// off its ends. What the player sees is the bodies' look: rock that rises and
 // falls across its depth, ledges that run back into the cave, gaps between
 // stones. So the pieces collide with THAT, and move freely in all three
 // dimensions: a shard thrown toward the camera lands on the rock in front of
 // the plane, or falls past it, as one would.
 //
-// Two kinds of mesh are handed over (`ShardCollision`):
-//
-//   SCENERY - the scene's static meshes, at Blender's world poses (the
-//             `scenery` group of `SceneDressing`), in three's world frame.
-//   BODIES  - what a level body draws (its bound scene nodes, its props, its
-//             debug solid while shown), in the body's own frame, which the
-//             pieces' world moves with the body (a mover's platform).
+// What is handed over (`ShardCollision`) is what each level body draws (its
+// formation, its models, its debug solid while shown), in the body's own
+// frame, which the pieces' world moves with the body (a mover's platform).
 //
 // Only SOLID meshes (`solidMesh`): not leaves (ferns, ivy - alpha-cut cards),
 // not a shadow decal, not water, not a see-through surface, not the depth
 // prepass's stand-ins (each a second copy of its mesh's triangles). Printed
 // moss is alpha-cut too, but it is a cushion on the rock, and a shard lands on
-// it. Scenery wholly further than `SCENERY_REACH` from the plane is left out:
-// the far backdrop of a cave, which no shard can reach.
+// it.
 
 import * as THREE from "three";
 import { isDepthStandIn } from "./depthPrepass";
-
-// Metres either side of the gameplay plane a scenery mesh must reach into to
-// be collided with. A break throws pieces a metre or two at most before they
-// fade (render/glassShardsSim.ts `FADE_START`).
-const SCENERY_REACH = 6;
 
 // A mesh's triangles: three floats a vertex, three indices a triangle.
 export interface CollisionMesh {
@@ -41,14 +31,12 @@ export interface CollisionMesh {
 }
 
 export interface ShardCollision<Body> {
-  // The scene's static meshes, under a key naming the scene (null: none).
-  readonly scenery: { readonly key: string; readonly meshes: readonly CollisionMesh[] } | null;
   // What a body draws that is solid, in its own frame (`bodyTriangles`).
   bodyMeshes(body: Body): readonly CollisionMesh[];
 }
 
 // Where the pieces' world gets it from (`Scene3D`): `version` changes whenever
-// what it would hand over does (a level set, a scene file landing), and
+// what it would hand over does (a level set, a model file landing), and
 // `collision` is null while it is not ready, when the pieces fall back on the
 // sim's outlines.
 export interface ShardCollisionSource<Body> {
@@ -85,12 +73,11 @@ export function solidMesh(o: THREE.Object3D): o is THREE.Mesh {
     if (m.alphaTest > 0 && !m.userData.mossMound) return false;
   }
   for (const n of namesOf(mesh)) {
-    if (/\.(ivy|moss)\.shadow$/.test(n) || /\.ivy$/.test(n) || n === "backdrop pool") return false;
+    if (/\.(ivy|moss)\.shadow$/.test(n) || /\.ivy$/.test(n)) return false;
   }
   return true;
 }
 
-const box = new THREE.Box3();
 const local = new THREE.Matrix4();
 const v = new THREE.Vector3();
 
@@ -127,23 +114,6 @@ export function trianglesOf(mesh: THREE.Mesh, toFrame: THREE.Matrix4): Collision
     }
   }
   return indices.length >= 3 ? { positions, indices } : null;
-}
-
-// The scenery's solid meshes under `root`, in the world's frame.
-export function sceneryTriangles(root: THREE.Object3D): CollisionMesh[] {
-  root.updateWorldMatrix(true, true);
-  const out: CollisionMesh[] = [];
-  const world = new THREE.Matrix4();
-  root.traverse((o) => {
-    if (!solidMesh(o)) return;
-    const mesh = o;
-    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-    box.copy(mesh.geometry.boundingBox!).applyMatrix4(mesh.matrixWorld);
-    if (box.max.z < -SCENERY_REACH || box.min.z > SCENERY_REACH) return;
-    const t = trianglesOf(mesh, world);
-    if (t) out.push(t);
-  });
-  return out;
 }
 
 // What a body's root draws that is solid and shown, in the body's own frame:

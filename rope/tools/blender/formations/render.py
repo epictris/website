@@ -26,7 +26,7 @@ def far_back(ob):
 
 # The game's High depth of field (src/render3d/depthOfField.ts): the blur's
 # radius at infinity as a share of the frame's height, and the metres behind
-# the gameplay plane it focuses at. scripts/scene-export.ts reads them from
+# the gameplay plane it focuses at. scripts/blendExport.ts reads them from
 # there and the export refuses to run if these differ (`check_dof`).
 DOF_MAX_BLUR, DOF_FOCUS_BAND = 0.016, 1.5
 # Each pass's largest feature, metres: a strip's widest (slate.STRIP_WIDTH),
@@ -86,7 +86,7 @@ def smallest_detail(ob, name):
 
 
 def check_dof(given):
-    """Refuse an export whose depth of field (scene-export.ts: the game's
+    """Refuse an export whose depth of field (blendExport.ts: the game's
     DOF_MAX_BLUR.high and FOCUS_BAND) is not the one written here."""
     want = {"maxBlur": DOF_MAX_BLUR, "focusBand": DOF_FOCUS_BAND}
     if any(not math.isclose(float(given[k]), v) for k, v in want.items()):

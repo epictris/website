@@ -56,7 +56,7 @@ import {
 } from "../render/pathProgress";
 import type { CameraPathData, CameraRegionData, RawLevelData } from "../level/levelFormat";
 import { scaleLevelData } from "../level/levelFormat";
-import { modelFromDisk, modelToDisk, reversePathVerts } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk, reversePathVerts } from "../editor/model";
 import { outlineOfData, pathCorridorSweepInto, pathOutlineInset } from "../render/shapePath";
 import {
   buildPolylineIndex,
@@ -942,7 +942,7 @@ export function runCameraCases(): CameraResult[] {
     //
     // The editor rewrites the whole file every 750 ms while a level is open, so
     // a field it drops is gone from disk before anyone notices it was read.
-    // `modelFromDisk`/`modelToDisk` go through `EdItem`, which is a different
+    // `modelFromDisk`/`modelToFlatDisk` go through `EdItem`, which is a different
     // shape from `CameraPathData` entirely, so the format's own px -> m -> px
     // trip says nothing about this one.
 
@@ -978,7 +978,7 @@ export function runCameraCases(): CameraResult[] {
           },
         ],
       };
-      const back = modelToDisk(modelFromDisk(authored));
+      const back = modelToFlatDisk(modelFromDisk(authored));
       const out = back.cameraPaths?.[0];
       if (!out) return ["the path did not survive the round trip at all"];
       const bad: string[] = [];
@@ -1037,7 +1037,7 @@ export function runCameraCases(): CameraResult[] {
           },
         ],
       };
-      const out = modelToDisk(modelFromDisk(authored)).cameraPaths?.[0];
+      const out = modelToFlatDisk(modelFromDisk(authored)).cameraPaths?.[0];
       if (!out) return ["the path did not survive the round trip at all"];
       const extra = Object.keys(out).filter((k) => !["x", "y", "rot", "verts"].includes(k));
       return extra.length ? [`wrote unauthored fields: ${extra.join(", ")}`] : [];
@@ -1073,7 +1073,7 @@ export function runCameraCases(): CameraResult[] {
           },
         ],
       };
-      const out = modelToDisk(modelFromDisk(authored)).cameraRegions?.[0];
+      const out = modelToFlatDisk(modelFromDisk(authored)).cameraRegions?.[0];
       if (!out) return ["the region did not survive the round trip at all"];
       const want = authored.cameraRegions![0]!;
       const bad: string[] = [];
@@ -1088,7 +1088,7 @@ export function runCameraCases(): CameraResult[] {
       }
       // A region with nothing authored writes nothing, so a re-save stays
       // byte-stable rather than becoming a diff of defaults.
-      const bare = modelToDisk(
+      const bare = modelToFlatDisk(
         modelFromDisk({
           player: { x: 0, y: 0, radius: 20 },
           bodies: [],
@@ -1111,7 +1111,7 @@ export function runCameraCases(): CameraResult[] {
           { x: 40, y: 60, rot: 0, shape: { kind: "rect", w: 200, h: 100 }, buffer: 30 },
         ],
       };
-      const back = modelToDisk(modelFromDisk(authored));
+      const back = modelToFlatDisk(modelFromDisk(authored));
       const bad: string[] = [];
       if ("cameraPaths" in back) bad.push("minted a cameraPaths key on a level that has none");
       if (JSON.stringify(back.cameraRegions) !== JSON.stringify(authored.cameraRegions)) {
@@ -2638,7 +2638,7 @@ export function runCameraCases(): CameraResult[] {
       const loaded = scaleLevelData(authored, 0.01).cameraRegions ?? [];
       if (loaded[0]?.keepInFrame !== false) bad.push("the level gate dropped keepInFrame: false");
       if (loaded[1] && "keepInFrame" in loaded[1]) bad.push("the level gate invented keepInFrame");
-      const saved = modelToDisk(modelFromDisk(authored)).cameraRegions ?? [];
+      const saved = modelToFlatDisk(modelFromDisk(authored)).cameraRegions ?? [];
       if (saved[0]?.keepInFrame !== false) bad.push("the editor dropped keepInFrame: false");
       if (saved[1] && "keepInFrame" in saved[1]) bad.push("the editor wrote the default");
       return bad;
@@ -2664,7 +2664,7 @@ export function runCameraCases(): CameraResult[] {
           },
         ],
       };
-      const out = modelToDisk(modelFromDisk(authored)).cameraPaths?.[0];
+      const out = modelToFlatDisk(modelFromDisk(authored)).cameraPaths?.[0];
       if (!out) return ["the path did not survive the round trip at all"];
       const bad: string[] = [];
       const want = authored.cameraPaths![0]!;
@@ -3044,7 +3044,7 @@ export function runCameraCases(): CameraResult[] {
         });
       };
       const model = modelFromDisk(authored);
-      const out = modelToDisk(model).cameraPaths?.[0];
+      const out = modelToFlatDisk(model).cameraPaths?.[0];
       if (!out) return ["the path did not survive the round trip at all"];
       compare(out, [0, 1, 2], "round trip");
       const plain = Object.keys(out.verts[1] ?? {});
@@ -3053,7 +3053,7 @@ export function runCameraCases(): CameraResult[] {
       }
       const item = model.items.find((i) => i.shape.kind === "path");
       if (!item || !reversePathVerts(item)) return [...bad, "could not reverse the path"];
-      const rev = modelToDisk(model).cameraPaths?.[0];
+      const rev = modelToFlatDisk(model).cameraPaths?.[0];
       if (!rev) return [...bad, "the reversed path did not survive"];
       compare(rev, [2, 1, 0], "reversed");
       return bad;

@@ -1,9 +1,105 @@
 {
+  "format": 3,
   "meta": {
     "unlisted": true
   },
-  "cameraRegions": [
+  "environment": {
+    "envIntensity": 0.6,
+    "hdri": "golden-gate-hills"
+  },
+  "nodes": [
     {
+      "type": "Spawn2D",
+      "id": "g8cm3mew",
+      "name": "Spawn",
+      "x": -2000,
+      "y": 0,
+      "radius": 8
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "1pyv66u3",
+      "name": "StaticBody2D",
+      "y": 100,
+      "order": 0,
+      "color": "#3a3f4a",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "x3yt70jx",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 6000,
+            "h": 40
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "fhxatft4",
+      "name": "StaticBody2D2",
+      "x": -2300,
+      "y": -80,
+      "order": 1,
+      "color": "#5a6273",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "oolbay1w",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 320
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "o3ktnqr7",
+      "name": "StaticBody2D3",
+      "x": 1200,
+      "y": -400,
+      "order": 2,
+      "color": "#6b5a73",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "pl35exum",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 600,
+            "h": 40
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "CameraRegion2D",
+      "id": "0sfjb5su",
+      "name": "CameraRegion",
       "x": -1500,
       "y": -300,
       "rot": 0,
@@ -16,6 +112,9 @@
       "falloff": 200
     },
     {
+      "type": "CameraRegion2D",
+      "id": "6n98peua",
+      "name": "CameraRegion2",
       "x": -100,
       "y": -300,
       "rot": 0,
@@ -29,6 +128,9 @@
       "falloff": 200
     },
     {
+      "type": "CameraRegion2D",
+      "id": "t3wyfs7k",
+      "name": "CameraRegion3",
       "x": 1200,
       "y": -200,
       "rot": 0,
@@ -41,74 +143,6 @@
       "lockX": 1200,
       "lockY": -200,
       "priority": -1
-    }
-  ],
-  "environment": {
-    "envIntensity": 0.6,
-    "hdri": "golden-gate-hills"
-  },
-  "player": {
-    "x": -2000,
-    "y": 0,
-    "radius": 8
-  },
-  "bodies": [
-    {
-      "kind": "static",
-      "x": 0,
-      "y": 100,
-      "rot": 0,
-      "color": "#3a3f4a",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 6000,
-            "h": 40
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -2300,
-      "y": -80,
-      "rot": 0,
-      "color": "#5a6273",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 40,
-            "h": 320
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 1200,
-      "y": -400,
-      "rot": 0,
-      "color": "#6b5a73",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 600,
-            "h": 40
-          }
-        }
-      ]
     }
   ]
 }

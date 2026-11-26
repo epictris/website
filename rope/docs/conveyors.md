@@ -229,7 +229,7 @@ Every edit of the wheels or the thickness goes through `setBelt`, which refuses 
 Wheel 0 staying at the item's origin is kept by the gestures (it has no drag grip of its own, and removing it re-origins the item) rather than demanded by `setBelt`, so a hand-edited file with wheel 0 elsewhere is still editable.
 It asks the build's own loop whether the wheels make one (`beltLoopOf`), so the editor and the build cannot disagree about what is a belt.
 The editor draws, as editor marks the game does not, a thin circle at each wheel's own radius and a dot at its centre, so the wheels can be seen and grabbed; a click in the hollow between the wheels passes through the belt to whatever is inside it (`pointInBody` picks the band and the wheels, where it collides).
-A belt on a body that is not a plain static is a fact about the body rather than the shape, which a kind change or a merge can make true after the belt is drawn.
+A belt on a body that is not a plain static is a fact about the body rather than the shape, which a kind change or a move into another body can make true after the belt is drawn.
 The editor does not throw on it: its title says `DOES NOT BUILD:` with the build's message, the 3D view keeps the last scene that built and ▶ Test refuses to start.
 `cli render3d`'s `belt:` cases hold that `modelFromDisk` then `modelToDisk` keeps every field, the wheel list and the matched twin included, and that `setBelt` refuses the idler, the nested disc and the zero thickness and inserts and removes as described.
 

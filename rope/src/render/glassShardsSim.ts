@@ -21,9 +21,8 @@
 // of broken glass read as real.
 //
 // THE LEVEL is what the 3D scene draws, as triangles (render3d/
-// shardCollision.ts; Tris, 2026-10-16: "They should have 3D physics"): the
-// scene's static rock (`SceneryData`, sent once per scene and kept across
-// restarts) and what each level body draws, moving with its body, and the ball
+// shardCollision.ts; Tris, 2026-10-16: "They should have 3D physics"): what
+// each level body draws, moving with its body, and the ball
 // itself - while it is whole - as a sphere. The pieces move in all three
 // dimensions. Without a 3D scene (the 2D view) it is the sim's own collision
 // as the page hands it over: every piece of every body the ball would collide
@@ -181,13 +180,6 @@ export interface MeshData {
   readonly indices: Uint32Array;
 }
 
-// The 3D scene's static solid meshes, in three's world frame, under a key that
-// says which scene they are (the same scene's are not built twice).
-export interface SceneryData {
-  readonly key: string;
-  readonly meshes: readonly MeshData[];
-}
-
 // A body of water, in the WORLD's frame (sim frame): its convex pieces, its
 // current and its drag (see `WaterArea`).
 export interface WaterData {
@@ -202,8 +194,7 @@ export interface LevelData {
   readonly bodies: readonly LevelBodyData[];
   readonly waters: readonly WaterData[];
   // Collided as the sim's outlines in the plane (no 3D scene): the pieces are
-  // held to the depth they break at. Otherwise as `bodies`' meshes and the
-  // scenery (`SceneryData`), in 3D.
+  // held to the depth they break at. Otherwise as `bodies`' meshes, in 3D.
   readonly flat: boolean;
 }
 
@@ -242,7 +233,6 @@ export interface FrameOutput {
 export type ToWorker =
   | { readonly type: "init"; readonly spec: BreakSpec }
   | { readonly type: "level"; readonly level: LevelData }
-  | { readonly type: "scenery"; readonly scenery: SceneryData | null }
   | { readonly type: "frame"; readonly seq: number; readonly input: FrameInput }
   | { readonly type: "reset" };
 
@@ -286,8 +276,6 @@ export class ShardSim {
   private spec: BreakSpec | null = null;
 
   private world: RWorld | null = null;
-  // The scene's static rock (`SceneryData`), kept across `bind`s.
-  private scenery: { key: string; body: RBody } | null = null;
   // Whether the pieces are held to the plane (`LevelData.flat`).
   private flat = true;
   private warmed = false;
@@ -438,25 +426,7 @@ export class ShardSim {
     }
   }
 
-  // The 3D scene's static rock, replacing any other; the same scene's again is
-  // kept as it is (building its triangles into the engine's trees is a few
-  // hundred milliseconds for the river's 700 thousand).
-  setScenery(scenery: SceneryData | null): void {
-    const world = this.ensureWorld();
-    if ((scenery?.key ?? null) === (this.scenery?.key ?? null)) return;
-    if (this.scenery) world.removeRigidBody(this.scenery.body);
-    this.scenery = null;
-    if (!scenery) return;
-    const R = this.R;
-    const body = world.createRigidBody(R.RigidBodyDesc.fixed());
-    for (const m of scenery.meshes) {
-      world.createCollider(R.ColliderDesc.trimesh(m.positions, m.indices).setRestitution(RESTITUTION).setFriction(FRICTION), body);
-    }
-    this.scenery = { key: scenery.key, body };
-  }
-
-  // The one world, made on first use and kept: the scenery in it outlives a
-  // level's restart.
+  // The one world, made on first use and kept across a level's restart.
   private ensureWorld(): RWorld {
     if (this.world) return this.world;
     const world = new this.R.World({ x: 0, y: -GRAVITY, z: 0 });

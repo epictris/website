@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 
 import { PX } from "../src/engine/units";
-import { scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
+import { scaleLevelData, type LevelSource } from "../src/level/levelFormat";
 import { LEVELS } from "../src/level/registry";
 import { rootBakeFile, type RootBake } from "../src/render3d/rootBake";
 import { buildRootMeshes, rootBuildReady } from "../src/render3d/rootBuild";
@@ -25,7 +25,7 @@ import { rootMeshKey } from "../src/render3d/rootKey";
 import { sha256 } from "./assetStore";
 import { encodeRootBake } from "./rootBakeEncode";
 
-const ROPE = join(import.meta.dir, "..");
+const ROPE = join(import.meta.dirname, "..");
 const MANIFEST = join(ROPE, "src/render3d/rootBakes.json");
 
 const args = process.argv.slice(2);
@@ -43,7 +43,7 @@ for (const level of [...files].sort()) {
   if (only.length && !only.includes(level)) continue;
   // From disk, not the registry's import: the editor may have written the
   // file since this process started.
-  const raw = JSON.parse(readFileSync(join(ROPE, "levels", `${level}.json`), "utf8")) as RawLevelData;
+  const raw = JSON.parse(readFileSync(join(ROPE, "levels", `${level}.json`), "utf8")) as LevelSource;
   const data = scaleLevelData(raw, PX);
   const bodies = data.bodies.flatMap((body) => {
     const key = rootMeshKey(body);

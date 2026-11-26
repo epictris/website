@@ -319,7 +319,7 @@ function caseAbsent(): EntryResult {
 
   // The drop itself, which is one operation with two callers: a checkpoint
   // start (below) and the editor's ▶ Test, where the level is built from
-  // `spawnWithoutEntry(modelToDisk(model))` and there is no DOM here to press
+  // `spawnWithoutEntry(modelToFlatDisk(model))` and there is no DOM here to press
   // the button. It takes the entry out of the DATA, so what is asserted is that
   // the field goes and nothing else moves.
   const authored = rig(ROLL_PX);

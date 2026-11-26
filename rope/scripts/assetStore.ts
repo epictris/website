@@ -27,8 +27,7 @@ import {
   TEXTURE_ASSETS,
   textureMaps,
 } from "../src/render3d/assets";
-import { levelModelNames, levelSceneName } from "../src/render3d/levelAssets";
-import { SCENE_ASSETS, sceneFile, sceneReleaseName } from "../src/render3d/scenes";
+import { levelModelNames } from "../src/render3d/levelAssets";
 import { MODEL_ASSETS, modelFile, modelReleaseName } from "../src/render3d/models";
 import ROOT_BAKES from "../src/render3d/rootBakes.json";
 import { SOUND_ASSETS } from "../src/audio/library";
@@ -55,7 +54,7 @@ export interface StoredAsset {
   // for what the number is for).
   bytes: number;
   // The file's name in the release, when it is not the basename of `file`: a
-  // scene is always `scene.glb` on disk (see `sceneReleaseName`).
+  // model is always `model.glb` on disk (see `modelReleaseName`).
   name?: string;
 }
 
@@ -106,20 +105,9 @@ export function storedAssets(): StoredAsset[] {
       throw new Error(`texture "${key}": textureMaps() disagrees with its own map slots`);
     }
   }
-  // Blender scenes the levels name, published by `assets:publish-scenes`. One
-  // file per scene, like a prop; every one on disk is `scene.glb`, so the
-  // release name is spelled out of the scene's (see `sceneReleaseName`).
-  for (const [scene, asset] of Object.entries(SCENE_ASSETS)) {
-    out.push({
-      key: `scene:${scene}`,
-      file: sceneFile(scene),
-      sha256: asset.sha256,
-      bytes: asset.bytes,
-      name: sceneReleaseName(scene),
-    });
-  }
-  // The models the levels' bodies carry, published by `assets:publish-models`,
-  // named in the release as a scene is (see `modelReleaseName`).
+  // The models the levels' bodies carry, published by `assets:publish-models`.
+  // One file per model, like a prop; every one on disk is `model.glb`, so the
+  // release name is spelled out of the model's (see `modelReleaseName`).
   for (const [model, asset] of Object.entries(MODEL_ASSETS)) {
     out.push({
       key: `model:${model}`,
@@ -131,7 +119,7 @@ export function storedAssets(): StoredAsset[] {
   }
   // Each level's baked roots, written by `roots:bake` (see `rootBake.ts`).
   // Every bake is `<level>.glb` on disk, so its release name carries what it
-  // is, as a scene's does.
+  // is, as a model's does.
   for (const [level, bake] of Object.entries(ROOT_BAKES)) {
     out.push({ key: `roots:${level}`, file: bake.file, sha256: bake.sha256, bytes: bake.bytes, name: `roots-${level}.glb` });
   }
@@ -143,22 +131,11 @@ export function storedAssets(): StoredAsset[] {
   return out;
 }
 
-// Every Blender scene a registered level names - what the build ships and so
-// what the store must hold (`SCENE_ASSETS`). Registered levels only, as the
-// build's own `scenesInBuild` counts them: a file in `levels/` is not a level
-// until `registry.ts` lists it.
-export function levelsSceneNames(): Map<string, string[]> {
-  const out = new Map<string, string[]>(); // scene -> the levels naming it
-  for (const [id, spec] of Object.entries(LEVELS)) {
-    const scene = levelSceneName(spec.data);
-    if (scene) out.set(scene, [...(out.get(scene) ?? []), id]);
-  }
-  return out;
-}
-
 // Every model a registered level's bodies carry (`ModelObjectData`) - what the
 // build ships and so what the store must hold (`MODEL_ASSETS`) - with the
-// levels carrying it, as `levelsSceneNames` counts scenes.
+// levels carrying it. Registered levels only, as the build's own
+// `exportsInBuild` counts them: a file in `levels/` is not a level until
+// `registry.ts` lists it.
 export function levelsModelNames(): Map<string, string[]> {
   const out = new Map<string, string[]>(); // model -> the levels carrying it
   for (const [id, spec] of Object.entries(LEVELS)) {

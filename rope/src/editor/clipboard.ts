@@ -12,10 +12,13 @@
 // `clipboardVines`), which a reload emptied and a second tab never saw.
 //
 // The level format is the payload because it is already the serialisation the
-// editor is held to: `toLevelData` is what a SAVE writes, so the round-trip
-// cases that hold a save lossless hold a copy lossless, and there is no second
-// description of an item to drift from the first. It also means a payload can
-// be read - and hand-written - as what it plainly is, a fragment of a level.
+// editor is held to: since the node tree (plans/node-tree.md) a copy is a
+// FRAGMENT of the tree - the copied nodes, the bodies and groups above them,
+// the chains and vines strung between them - written exactly as a save writes
+// it (`toTree`), so the round-trip cases that hold a save lossless hold a copy
+// lossless, and there is no second description of an item to drift from the
+// first. It also means a payload can be read - and hand-written - as what it
+// plainly is, a piece of a level.
 //
 // WHAT IS NOT IN IT: the player spawn, the level block and the environment.
 // None of them is a thing in the level, so none of them is a thing to copy; a
@@ -23,97 +26,30 @@
 // edit nobody asked for.
 
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { Vec2 } from "../engine/vec2";
-import { scaleLevelData, type LevelData, type RawLevelData } from "../level/levelFormat";
-import {
-  toLevelData,
-  bodyFrameOf,
-  type EdBodyFrame,
-  type EdChain,
-  type EdItem,
-  type EdModel,
-  type EdVine,
-} from "./model";
+import { loadLevelTree, type RawLevelData } from "../level/levelFormat";
+import { isLevelTree, scaleLevelTree, TREE_FORMAT, type LevelTree } from "../level/nodes";
+import { modelFromTree, toTree, type EdItem, type EdModel } from "./model";
 
-// The payload's own key, and the version beside it. A pasted string is only
-// used when it carries this, so pasting a shopping list into the editor does
-// nothing rather than throwing; and the number is what a future change of shape
-// is refused by rather than mis-read through.
 export const CLIPBOARD_KEY = "rope-clipboard";
-export const CLIPBOARD_VERSION = 1;
+// 2: a tree fragment (`LevelTree` without a spawn). 1 was the flat form's
+// body list, which is still read.
+export const CLIPBOARD_VERSION = 2;
 
-// A fragment of a level, in on-disk pixels. Every field is the one `LevelData`
-// has, so the payload is a level file with the level-wide blocks left out.
-export interface ClipboardPayload extends Omit<LevelData, "player" | "meta" | "environment"> {
+export interface ClipboardPayload extends LevelTree {
   [CLIPBOARD_KEY]: number;
 }
 
-// The spawn a fragment is scaled against and parsed back with. It is never read
-// - the payload carries no player and the parse drops the one it is given - but
-// `LevelData` has no shape without it, and a placeholder stated here once is
-// better than the same three numbers invented at each end.
-const NO_SPAWN = { x: 0, y: 0, radius: 8 };
-
-// The items, chains and vines a copy of `items` actually holds.
-//
-// A chain needs BOTH ends inside the copy and a vine needs its anchor inside
-// it, which is the rule `cloneChainsWithin` / `cloneVinesWithin` apply one step
-// later: a chain with one end outside is a chain to a body that is not there,
-// and re-pointing it at the original across a level boundary is not even a
-// thing that could be meant.
-export function clipboardScope(
-  model: EdModel,
-  items: readonly EdItem[],
-): { items: EdItem[]; chains: EdChain[]; vines: EdVine[] } {
-  const inside = new Set(items.map((i) => i.id));
-  return {
-    items: [...items],
-    chains: model.chains.filter((c) => inside.has(c.a) && inside.has(c.b)),
-    vines: model.vines.filter((v) => inside.has(v.anchor)),
-  };
-}
-
-// The selection as the text that goes on the clipboard.
-//
-// It is `modelToDisk` on a SUB-MODEL holding exactly the copied items, which is
-// what makes it the same serialisation a save performs rather than a second one
-// written for the clipboard. The sub-model carries the frames of the bodies
-// involved, since a body's frame is not in its items (see `EdModel.bodyFrames`)
-// and a frame re-derived from a member is a bearing that moves.
+// What a copy of `items` writes: the fragment of the tree they are, in pixels.
 export function writeClipboard(model: EdModel, items: readonly EdItem[]): string {
-  const scope = clipboardScope(model, items);
-  const frames = new Map<number, EdBodyFrame>();
-  for (const id of new Set(scope.items.map((i) => i.bodyId))) {
-    frames.set(id, bodyFrameOf(model, id));
-  }
-  // ...and which of them are 3D, with their depth and tilt.
-  const bodies3d = new Map([...model.bodies3d].filter(([id]) => frames.has(id)));
-  const sub: EdModel = {
-    player: { pos: Vec2.ZERO, radius: NO_SPAWN.radius * PX, hang: false, roll: 0, arrival: "" },
-    items: scope.items,
-    chains: scope.chains,
-    vines: scope.vines,
-    bodyFrames: frames,
-    bodies3d,
-    environment: undefined,
-    camera: undefined,
-    meta: {},
-    scene: "",
-  };
-  const { player: _spawn, ...rest } = scaleLevelData(toLevelData(sub), PIXELS_PER_METER);
+  const nodes = new Set(items.map((i) => i.node));
+  const fragment = scaleLevelTree(toTree(model, (id) => nodes.has(id)), PIXELS_PER_METER);
+  const { meta: _m, environment: _e, camera: _c, fogMasked: _f, ...rest } = fragment;
   return JSON.stringify({ [CLIPBOARD_KEY]: CLIPBOARD_VERSION, ...rest });
 }
 
-// ...and back: a payload as the level data a model is built from, or null for
-// text that is not one.
-//
-// Null rather than a throw for everything, because the input is whatever
-// happened to be on the system clipboard: a paste of a sentence, of a half-copied
-// fragment, of a payload from a future version. None of those is an error the
-// author made, and the editor's answer to all of them is to do nothing at all -
-// there is no fallback behind this, and the last one made every middle-click pan
-// paste the tab's previous copy (see `pasteClipboard` in `editor.ts`).
-export function readClipboard(text: string): RawLevelData | null {
+// A pasted payload as the model it describes, in metres: what the editor
+// grafts in (`graftModel`). Null for anything that is not a payload.
+export function readClipboard(text: string): EdModel | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -122,8 +58,20 @@ export function readClipboard(text: string): RawLevelData | null {
   }
   if (typeof parsed !== "object" || parsed === null) return null;
   const payload = parsed as Record<string, unknown>;
-  if (payload[CLIPBOARD_KEY] !== CLIPBOARD_VERSION) return null;
-  if (!Array.isArray(payload.bodies)) return null;
+  const version = payload[CLIPBOARD_KEY];
   const { [CLIPBOARD_KEY]: _v, player: _spawn, meta: _meta, environment: _env, camera: _camera, ...rest } = payload;
-  return { ...rest, player: NO_SPAWN } as RawLevelData;
+  let tree: LevelTree;
+  if (version === CLIPBOARD_VERSION && isLevelTree(rest)) {
+    tree = { ...(rest as unknown as LevelTree), format: TREE_FORMAT };
+  } else if (version === 1 && Array.isArray(rest["bodies"])) {
+    // A copy made before the tree: the flat form's bodies, migrated.
+    tree = loadLevelTree({ ...rest, player: NO_SPAWN } as RawLevelData);
+  } else {
+    return null;
+  }
+  // A fragment carries no spawn of its own; a flat one was given a stand-in.
+  tree = { ...tree, nodes: tree.nodes.filter((n) => n.type !== "Spawn2D") };
+  return modelFromTree(scaleLevelTree(tree, PX));
 }
+
+const NO_SPAWN = { x: 0, y: 0, radius: 8 };

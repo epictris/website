@@ -56,7 +56,7 @@ import {
 import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, syncSceneChains } from "../level/chains";
 // The editor's own round trip, for the spawn flag it would otherwise delete
 // (see `caseSpawnHang`).
-import { modelFromDisk, modelToDisk, shapeMass } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk, shapeMass } from "../editor/model";
 import { Rope } from "../classes/rope";
 import { RopeAttachment, RopeContact, RopeWrap } from "../lib/ropeContact";
 import { RopeGeneration } from "../lib/ropeGeneration";
@@ -2221,9 +2221,9 @@ function caseSpawnHang(): ContactResult {
   const carried = scaled.player.hang === true;
   const notMinted = scaleLevelData({ player: { x: 0, y: 0, radius: 8 }, bodies: [] }, PX).player.hang === undefined;
   details.push(`scaleLevelData: carried=${carried} absent stays absent=${notMinted}`);
-  const roundTrip = modelToDisk(modelFromDisk(arena(-185))).player.hang === true;
+  const roundTrip = modelToFlatDisk(modelFromDisk(arena(-185))).player.hang === true;
   const roundTripClean =
-    modelToDisk(modelFromDisk({ player: { x: 0, y: 0, radius: 8 }, bodies: [] })).player.hang === undefined;
+    modelToFlatDisk(modelFromDisk({ player: { x: 0, y: 0, radius: 8 }, bodies: [] })).player.hang === undefined;
   details.push(`editor round trip: kept=${roundTrip} absent stays absent=${roundTripClean}`);
 
   // --- the hang -----------------------------------------------------------
@@ -5264,7 +5264,7 @@ function caseMaterials(): ContactResult {
   } as unknown as RawLevelData;
   const model = modelFromDisk(disk);
   const [edCustom, edStone] = model.items.filter((i) => i.object === "collision");
-  const back = modelToDisk(model).bodies.map((b) => (b.objects[0] as { material?: string; density?: number }));
+  const back = modelToFlatDisk(model).bodies.map((b) => (b.objects[0] as { material?: string; density?: number }));
   const editorOk =
     edCustom?.material === "custom" && edCustom.density === 5000 &&
     edStone?.material === "stone" && edStone.density === MATERIALS.stone &&

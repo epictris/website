@@ -5,11 +5,11 @@ a contributor's fork. Fetching and publishing use that repository's `assets`
 release for the map; other assets retain the default store. An explicit
 `ASSET_REPO` environment override takes precedence for complete mirrors.
 
-Five kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), raw maps (`RAW_ASSETS`, none since the water's flipbook and foam mask were retired on 2026-10-05; `public/water/`), captured skies (`.hdr` under `public/hdri/`) and the levels' Blender scenes (`public/scenes/`, see [below](#blender-scenes-in-the-store)).
+Five kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), raw maps (`RAW_ASSETS`, none since the water's flipbook and foam mask were retired on 2026-10-05; `public/water/`), and captured skies (`.hdr` under `public/hdri/`); the levels' Blender scenes (`public/scenes/`) were a fifth until they were retired on 2026-11-26 ([blender-scenes](blender-scenes.md)).
 A sixth, generated rather than authored: each level's baked roots (`public/roots/<level>.glb`, written by `bun run roots:bake`, manifest `src/render3d/rootBakes.json`, release name `roots-<level>.glb`; see [roots](roots.md#simplified-and-baked-roots)). They are simplified deliberately, to a stated error; the "no mesh simplification by default" rule below is about props passing quietly through the optimiser, not this.
 A seventh, uploaded through the editor rather than through a pipeline here: the **sound library** (`.ogg` under `public/sounds/`, manifest `src/audio/soundAssets.json`; transcoded, hashed and pinned by the editor's Sounds menu, provenance filled in there - see [sound](sound.md#the-library-in-the-store)).
-An eighth beside the scenes: the **models** of the library (`public/models/`, see [below](#blender-scenes-in-the-store)), exported and published exactly as a scene is.
-Since 2026-09-29 a level's props and surfaces live in its Blender scene (see [blender-scenes](blender-scenes.md)), so the prop and texture manifests hold only what the GAME draws itself: the ball (`iron-ball`), its iron (`painted steel`), and whatever surface a conveyor band names.
+An eighth: the **models** of the library (`public/models/`, see [below](#models-in-the-store)).
+Since 2026-09-29 a level's props and surfaces are not the manifests' (they were its Blender scene's until 2026-11-26, and are its formations' and models' now), so the prop and texture manifests hold only what the GAME draws itself: the ball (`iron-ball`), its iron (`painted steel`), and whatever surface a conveyor band names.
 Every set and prop the levels used to name was pruned then (the release still holds their files, which older commits pin); the pipeline below is still how one is added.
 Every one of those directories is **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
 They are the only binaries this tree has - every other surface is generated in code - which is why they carry a process the rest of the project does not need.
@@ -205,17 +205,18 @@ So a sync with nothing to do downloads nothing, and it never re-pins: a local fi
 An entry whose release copy is stale and that this machine cannot supply is a `FAIL` naming it, to be published from the machine that made it.
 Run `just publish` before pushing any commit that changes a pin.
 
-## Blender scenes in the store
+## Models in the store
 
-A level's Blender scene (see [blender-scenes](blender-scenes.md)) is the fifth kind: `public/scenes/<scene>/scene.glb`, exported by `just scene <level>`, manifest `src/render3d/sceneAssets.json` (scene name to `{ sha256, bytes }`), release name `scene-<scene>.glb`, listed by `storedAssets()` with the others.
-`bun run assets:publish-scenes` (in `just publish`) uploads every scene a registered level names whose local export differs from its pin, **replacing the release asset in place** and re-pinning it: a scene is re-exported for as long as the level is dressed, and a name per export would keep every draft for ever.
-The pin is what says which export a commit meant, `assets:fetch` verifies it, and an older commit whose scene was replaced fails its fetch loudly - the trade this store makes everywhere.
-An entry no level names is dropped from the manifest and left in the release, since an older commit may pin it; the script prints the `gh release delete-asset` line for when that stops mattering.
-`cli assets` fails on a scene a level names that is not pinned, on a pin no level names, and on a scene name the store cannot take, and `assets:fetch` refuses to run with a scene a level names unpinned, which stops the Docker build rather than deploying a level with no look.
-The `.blend` files under `assets-src/scenes/` are the scenes' **sources**, and are stored beside them: `bun run assets:publish-sources` (in `just publish`) uploads the `.blend` of every scene a level names and every source already pinned, as `source-<path with "/" as "-">`, replaced in place, pinned in `scripts/sceneSources.json` (path under `assets-src/` to `{ sha256, bytes }`).
+The **models** of the library ([blender-models](blender-models.md)) are the eighth kind: `public/models/<model>/model.glb`, exported by `just model <model>`, manifest `src/render3d/modelAssets.json` (model name to `{ sha256, bytes, credits }`), release name `model-<model>.glb`, listed by `storedAssets()` with the others.
+`bun run assets:publish-models` (in `just publish`, `scripts/publishExports.ts`) uploads every model a registered level's bodies carry whose local export differs from its pin, **replacing the release asset in place** and re-pinning it: a model is re-exported for as long as it is worked on, and a name per export would keep every draft for ever.
+The pin is what says which export a commit meant, `assets:fetch` verifies it, and an older commit whose model was replaced fails its fetch loudly - the trade this store makes everywhere.
+An entry no level carries is dropped from the manifest and left in the release, since an older commit may pin it; the script prints the `gh release delete-asset` line for when that stops mattering.
+`cli assets` holds the store to exactly the models the levels carry (and to names the store can take), `assets:fetch` refuses a level carrying an unpinned one, which stops the Docker build rather than deploying a body that draws nothing, and the build ships only the models some level carries.
+
+The `.blend` files under `assets-src/` are the models' **sources** (`models/<model>.blend`), and are stored beside them: `bun run assets:publish-sources` (in `just publish`) uploads the `.blend` of every model a level carries and every source already pinned, as `source-<path with "/" as "-">`, replaced in place, pinned in `scripts/sceneSources.json` (path under `assets-src/` to `{ sha256, bytes }`).
+The retired Blender scenes' sources (`scenes/*.blend`, the pictures their tools painted with) stay pinned there, so they can still be fetched.
 They are not in `storedAssets()`: the build never fetches a source, and the budget is the game's download, not the authoring files'.
 `just sources` fetches them, and leaves a local file that differs from its pin alone (unpublished work).
 See `scripts/sceneSources.ts`.
 
-The **models** of the library ([blender-models](blender-models.md)) are stored the same way as the scenes: `public/models/<model>/model.glb`, exported by `just model <model>`, manifest `src/render3d/modelAssets.json`, release name `model-<model>.glb`, published by `bun run assets:publish-models` (in `just publish`) for every model a registered level's bodies carry, replaced in place (`scripts/publishExports.ts` is the one publisher both use).
-Their `.blend` files are sources too (`models/<model>.blend`), `cli assets` holds the store to exactly the models the levels carry, `assets:fetch` refuses a level carrying an unpinned one, and the build ships only the models some level carries.
+Until 2026-11-26 a level's Blender scene was stored the same way (`public/scenes/<scene>/scene.glb`, `src/render3d/sceneAssets.json`, `scene-<scene>.glb`, `assets:publish-scenes`); it is retired with the scenes ([blender-scenes](blender-scenes.md)), and the build drops any `public/scenes/` left on a machine.

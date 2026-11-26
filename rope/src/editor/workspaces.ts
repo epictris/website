@@ -14,6 +14,7 @@
 // Nothing here touches the level: a workspace is how the author is working,
 // remembered by this browser (`readWorkspace`) and in the address bar.
 
+import type { NodeType } from "../level/nodes";
 import type { EdItem, EdLayer } from "./model";
 
 export type Workspace = "2d" | "formations" | "decorations" | "texturing";
@@ -51,8 +52,8 @@ export function workspaceLayers(ws: Workspace): readonly EdLayer[] | null {
 }
 
 // Whether an item is part of the workspace: drawn by the overlay, picked by a
-// click or a band, listed in the outliner. `is3d` says whether its body is a
-// 3D body (`EdModel.bodies3d`: no collision, free to stand at a depth).
+// click or a band, listed in the scene tree. `is3d` says whether it stands in
+// a 3D frame (`Node3D`, `Formation3D`: no collision, free to stand at a depth).
 //
 // - 2D: everything on the plane. A 3D body (a backdrop) is not, nor is a
 //   decoration: both are worked on in their own workspaces, and the scene
@@ -87,6 +88,7 @@ export function paintsRocks(ws: Workspace): boolean {
 const HIDDEN_IN_2D = ["body/Formation", "formation/Formation", "body/Decorations", "formation/Decorations", "body/Materials", "formation/Materials", "decoration/"];
 const SHOWN: Record<Exclude<Workspace, "2d">, readonly string[]> = {
   formations: [
+    "node/",
     "level/Level",
     "level/Environment",
     "level/3D camera",
@@ -94,11 +96,11 @@ const SHOWN: Record<Exclude<Workspace, "2d">, readonly string[]> = {
     "body/Formation",
     "formation/Transform",
     "formation/Formation",
-    "asset/",
     "object/Transform",
     "object/Debug",
   ],
   decorations: [
+    "node/",
     "level/Level",
     "level/Environment",
     "level/3D camera",
@@ -107,6 +109,7 @@ const SHOWN: Record<Exclude<Workspace, "2d">, readonly string[]> = {
     "decoration/",
   ],
   texturing: [
+    "node/",
     "level/Level",
     "level/Environment",
     "level/3D camera",
@@ -115,6 +118,40 @@ const SHOWN: Record<Exclude<Workspace, "2d">, readonly string[]> = {
     "decoration/",
   ],
 };
+
+// WHAT A CLICK ON THE CANVAS STOPS AT, per workspace (plans/node-tree.md
+// "Workspaces"): a group root whose class is clickable here selects first; the
+// others pass the click through to what is under them. So in Decorations a
+// click on a fern selects the fern, though the body above it is grouped.
+const CLICKABLE: Record<Workspace, ReadonlySet<NodeType>> = {
+  "2d": new Set<NodeType>([
+    "Node2D",
+    "StaticBody2D",
+    "AnimatableBody2D",
+    "RigidBody2D",
+    "Area2D",
+    "CollisionShape2D",
+    "Anchor2D",
+    "Spawn2D",
+    "Checkpoint2D",
+    "CameraRegion2D",
+    "CameraPath2D",
+    "FireflyPath2D",
+    "Shelter2D",
+    "FogRegion2D",
+    "Note2D",
+    "Chain",
+    "Vine",
+    "Instance",
+  ]),
+  formations: new Set<NodeType>(["Node3D", "Formation3D", "Model3D", "Light3D", "Instance"]),
+  decorations: new Set<NodeType>(["Decoration3D"]),
+  texturing: new Set<NodeType>([]),
+};
+
+export function clickableIn(ws: Workspace, type: NodeType): boolean {
+  return CLICKABLE[ws].has(type);
+}
 
 // A key matches an entry equal to it, or under it when the entry ends in "/".
 const matches = (key: string, entry: string): boolean => (entry.endsWith("/") ? key.startsWith(entry) : key === entry);
@@ -134,6 +171,8 @@ export const PRIMARY_SECTIONS: readonly string[] = [
   "body/Materials",
   "formation/Materials",
   "decoration/Decoration",
+  // A placed prefab's: which prefab, what this instance changes in it.
+  "node/Prefab",
 ];
 
 // What the inspector says with nothing selected, in the 3D workspaces (2D says

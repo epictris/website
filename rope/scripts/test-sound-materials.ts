@@ -3,7 +3,7 @@ import { World } from "../src/engine/world";
 import { RigidBody2D } from "../src/engine/body";
 import { buildLevelBodies } from "../src/level/buildBodies";
 import { scaleLevelData, type RawLevelData, type CollisionObjectData } from "../src/level/levelFormat";
-import { modelFromDisk, modelToDisk, syncBodyProps, shapeMass } from "../src/editor/model";
+import { modelFromDisk, modelToFlatDisk, shapeMass } from "../src/editor/model";
 import { surfaceOf } from "../src/audio/surfaces";
 import { soundMaterialOf } from "../src/lib/soundMaterial";
 import { resolveSlot, SOUND_BANK } from "../src/audio/slots";
@@ -38,14 +38,16 @@ assert.equal(surfaceOf(shape, ivy), "wood", "automatic audio never reads physica
 const model = modelFromDisk(raw());
 const pieces = model.items.filter(i => i.object === "collision");
 assert.deepEqual(pieces.map(p => p.soundMaterial), ["ivy", "stone"]);
-syncBodyProps(pieces);
+// A body's properties are held once, on its node, and a piece's sound is its
+// own: one body never collapses its pieces' sound identity.
+assert.equal(pieces[0]!.body, pieces[1]!.body, "the pieces share one body");
 assert.deepEqual(pieces.map(p => p.soundMaterial), ["ivy", "stone"], "grouping must not collapse per-shape sound identity");
 const mass = shapeMass(pieces[0]!);
 pieces[0]!.soundMaterial = "glass";
 assert.equal(shapeMass(pieces[0]!), mass, "editor sound selection cannot change mass");
 pieces[0]!.material = "lead";
 assert.equal(pieces[0]!.soundMaterial, "glass", "physics selection cannot change sound selection");
-const saved = modelToDisk(model);
+const saved = modelToFlatDisk(model);
 const back = modelFromDisk(saved).items.filter(i => i.object === "collision");
 assert.deepEqual(back.map(p => p.soundMaterial), ["glass", "stone"], "save/reload retains both per-shape choices");
 assert.equal(back[0]!.material, "lead");

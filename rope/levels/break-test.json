@@ -1,4 +1,5 @@
 {
+  "format": 3,
   "meta": {
     "unlisted": true
   },
@@ -6,220 +7,306 @@
     "envIntensity": 0.6,
     "hdri": "golden-gate-hills"
   },
-  "player": {
-    "x": -1400,
-    "y": 640,
-    "radius": 8
-  },
-  "bodies": [
+  "nodes": [
     {
-      "kind": "static",
-      "x": 0,
+      "type": "Spawn2D",
+      "id": "g8cm3mew",
+      "name": "Spawn",
+      "x": -1400,
+      "y": 640,
+      "radius": 8
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "1pyv66u3",
+      "name": "StaticBody2D",
       "y": 700,
-      "rot": 0,
+      "order": 0,
       "color": "#3a3f4a",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "x3yt70jx",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 6000,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "fhxatft4",
+      "name": "StaticBody2D2",
       "x": -1100,
       "y": 520,
-      "rot": 0,
+      "order": 1,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "oolbay1w",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 300,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "o3ktnqr7",
+      "name": "StaticBody2D3",
       "x": -900,
       "y": 360,
-      "rot": 0,
+      "order": 2,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pl35exum",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 300,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "6n98peua",
+      "name": "StaticBody2D4",
       "x": -700,
       "y": 200,
-      "rot": 0,
+      "order": 3,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0sfjb5su",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 300,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "xsz4v18n",
+      "name": "StaticBody2D5",
       "x": 750,
       "y": 100,
-      "rot": 0,
+      "order": 4,
       "color": "#3a3f4a",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "t3wyfs7k",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 2200,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
-      "x": 0,
+      "type": "StaticBody2D",
+      "id": "27qd9e7p",
+      "name": "StaticBody2D6",
       "y": 300,
-      "rot": 0,
+      "order": 5,
       "color": "#7a4a3a",
       "opacity": 0.5,
       "friction": 1,
       "breakForce": 2500,
       "durability": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "lruzuqlo",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 400,
             "h": 30
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "uzd0twi2",
+      "name": "StaticBody2D7",
       "x": 500,
       "y": 300,
-      "rot": 0,
+      "order": 6,
       "color": "#7a4a3a",
       "opacity": 0.5,
       "friction": 1,
       "breakForce": 5000,
       "durability": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ju3t1v57",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 400,
             "h": 30
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ubdbdhk0",
+      "name": "StaticBody2D8",
       "x": 1000,
       "y": 300,
-      "rot": 0,
+      "order": 7,
       "color": "#7a4a3a",
       "opacity": 0.5,
       "friction": 1,
       "breakForce": 4000,
       "durability": 3,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "hgceq1d5",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 400,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "x7soqsyj",
+      "name": "StaticBody2D9",
       "x": 1550,
       "y": 300,
-      "rot": 0,
+      "order": 8,
       "color": "#7a4a3a",
       "opacity": 0.5,
       "friction": 1,
       "breakForce": 4000,
       "durability": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "rx7dd4bn",
+          "name": "Rect",
           "x": 0,
           "y": 0,
           "shape": {
             "kind": "rect",
             "w": 300,
             "h": 30
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "bcg9mjz3",
+          "name": "Rect2",
           "x": 135,
           "y": -85,
           "shape": {
             "kind": "rect",
             "w": 30,
             "h": 200
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "727xfle7",
+      "name": "RigidBody2D",
       "x": 1900,
       "y": 640,
-      "rot": 0,
+      "order": 9,
       "color": "#5a5f6a",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "7mj7385c",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 80,
             "h": 80
           },
-          "material": "stone"
+          "material": "stone",
+          "debug": {
+            "on": true
+          }
         }
       ]
     }

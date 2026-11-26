@@ -217,10 +217,10 @@ What the tree adds (`editor/rootEditing.ts`):
   That node cannot be deleted or Alt-clicked away.
 - **Delete takes a branch and everything growing out of it.**
 - **A branch whose parent is no longer a root in its own body becomes a trunk where it stands** (the one place the rule is stated, in `syncRoots`).
-  That is what makes Ctrl+G a gesture rather than an error: moving a branch into a body of its own is how ONE branch of a static root is made to spring.
+  That is what makes moving a branch into a body of its own (**New body**, or a drag in the scene tree) a gesture rather than an error: it is how ONE branch of a static root is made to spring.
   Duplicating or copying a branch alone does the same, since the copy is in a new body; copied with its parent, it grows out of the copy.
 
-The item panel of a root piece has `start width` (the base), `tip width`, a `grows from` readout (`the ground (a trunk)` or `N% along its root`) and the piece count; the outliner names them `root` and `branch`.
+The item panel of a root piece has `start width` (the base), `tip width`, a `grows from` readout (`the ground (a trunk)` or `N% along its root`) and the piece count; in the scene tree each piece is a `CollisionShape2D` node of its body, a branch naming its parent piece by node id.
 
 ### Springing
 

@@ -31,7 +31,7 @@ import {
 import { deepestEmbedding } from "./query";
 import { BallLevel } from "../level/ballLevel";
 import { PIXELS_PER_METER } from "../engine/units";
-import { spawnAtCheckpoint, type RawLevelData } from "../level/levelFormat";
+import { flatLevelOf, spawnAtCheckpoint, type LevelSource, type RawLevelData } from "../level/levelFormat";
 
 export type PlaytestAction =
   | "move_left"
@@ -175,7 +175,7 @@ export interface PlaytestScript {
   // it — a ceiling and an anchor, a floor and nothing else — and pinning those
   // scenarios to whatever the authored level happens to look like this month
   // would make them fail for reasons that are not the mechanic's.
-  data?: RawLevelData;
+  data?: LevelSource;
   controller?: "grapple" | "ball";
   // Where the avatar starts, in METRES (the rest of the level format is in
   // scene pixels). Overrides the level's own spawn without editing it.
@@ -267,13 +267,14 @@ export function scriptSpec(script: PlaytestScript, specOverride?: LevelSpec): Le
     ? { ...base, data: spawnAtCheckpoint(base.data, script.checkpoint) }
     : base;
   if (!script.spawn) return named;
+  const flat = flatLevelOf(named.data);
   return {
     ...named,
     data: {
-      ...named.data,
+      ...flat,
       // The script speaks metres; the level format is authored in scene pixels.
       player: {
-        ...named.data.player,
+        ...flat.player,
         x: script.spawn.x * PIXELS_PER_METER,
         y: script.spawn.y * PIXELS_PER_METER,
       },

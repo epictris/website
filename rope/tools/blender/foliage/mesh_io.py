@@ -6,7 +6,7 @@ piece, stems and the crown the atlas's solid white cell. One slot because
 Blender 5.2's glTF exporter writes a second slot's COLOR_0 as white when it
 reads the same colour attribute as the first (docs/blender-ivy.md, "Why one
 material"). The game finds the material by name and dresses it as it dresses
-the ivy's leaves (render3d/sceneDressing.ts): two-sided with one normal, lit
+the ivy's leaves (render3d/exportFiles.ts): two-sided with one normal, lit
 through, and finer shadow biases so a frond shades the frond below it."""
 
 import os

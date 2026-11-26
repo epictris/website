@@ -226,10 +226,10 @@ interface BuiltLight {
 }
 
 // A material whose emission follows a waking light: a glowing part of the same
-// body's Blender dressing (see `BodyVisual.adoptDressing`), on the body's own
-// copy of it so no other object in the level pulses with it. `authored` is the
-// emission the scene was exported with, taken when the copy was made rather
-// than read off the material, which this rig has been writing.
+// body's look (see `BodyVisual.adoptLook`), on the body's own copy of it so no
+// other object in the level pulses with it. `authored` is the emission the
+// file was exported with, taken when the copy was made rather than read off
+// the material, which this rig has been writing.
 export interface DrivenEmission {
   material: THREE.MeshStandardMaterial;
   authored: number;

@@ -132,10 +132,10 @@ Now the anchor **is** the end: moving a body moves its anchors, turning it turns
 Anchors are **appended** to their body's object list, which is what keeps it bit-identical: collision objects build a body's shapes in authored order and an anchor is not one of them.
 The anchors are folded in by **copying** the bodies that gained one, never by pushing into `body.objects` - for a file already in the nested form those arrays *are* the caller's, and mutating them made a second load find the first load's anchors and add another set beside them.
 
-In the editor an anchor is an ordinary `EdItem` with `object: "anchor"`: a row in the outliner, a panel of its own, and a member of its body, so a body drag, nudge, rotate, duplicate or paste carries it with no special case.
+In the editor an anchor is an `Anchor2D` node, its item an ordinary `EdItem` with `object: "anchor"`: a row in the scene tree, a panel of its own, and a child of its body, so a body drag, nudge, rotate, duplicate or paste carries it with no special case.
 It is deliberately **not** pickable on the canvas (`hitsItem`) and not caught by a rubber band on its own account - its canvas presence is the ring its chain already draws at it, and that ring is already the drag handle; an invisible 30 cm box sitting on the wall it is bolted to would just steal clicks meant for the wall.
-`pruneChains` and `pruneAnchors` are mirrors and both run on delete, since either end may be what was deleted; `splitIntoBodies` sends an anchor out with its body's **first collision object** rather than into a body of its own, which would leave the chain tied to something that builds nothing.
-`EdItem.anchorId` is preserved through a load and a save rather than minted fresh, because the id is content: a level that goes through the editor untouched comes back naming the same anchors.
+`pruneChains` and `pruneAnchors` are mirrors and both run on delete, since either end may be what was deleted.
+An anchor's node id is preserved through a load and a save rather than minted fresh, because the id is content: a level that goes through the editor untouched comes back naming the same anchors (in the tree a chain names its anchors by node id; the compile numbers them for the sim, a numeric id keeping its number).
 
 (Hook-only scenery used to share the word as a `BodyKind`; it is the `passable` flag now, so an anchor is only ever a chain's tie point.)
 
@@ -146,7 +146,7 @@ The loader applies the same rule rather than trusting the file, so a hand-edited
 `length` absent means **taut** between the two anchors as they land, re-derived at load, which is what dragging one out gives; the inspector's `length` field authors slack, with a live readout of how much.
 A chain whose two anchors are in the same body (merged together, say) is refused in the editor and dropped at load - it has nothing to constrain - as is one naming an anchor the level does not contain.
 Chains carry their own selection, exclusive with the item and body selections: a chain has no shape, no placement and no properties in common with an item, so a mixed selection would have nothing an inspector panel could say about it.
-The outliner lists them in a **`Chains (N)` section after the bodies**, and after rather than inside because that is what a chain is - its two anchors are objects and appear under their own bodies, while the chain itself belongs to neither. Each row is named by the two bodies it holds (their outliner numbers, so the name says where to look) with its authored `length` on the right, and clicking one selects that chain. Without it a chain was the one thing in a level with no row at all, findable only by clicking the rope on the canvas.
+A chain is a `Chain` node of its own, a row in the scene tree beside the bodies rather than inside either: its two anchors are under their own bodies, while the chain itself belongs to neither, and it carries a build order key since the sim builds chains in list order. Clicking its row selects that chain; without a row a chain was the one thing in a level findable only by clicking the rope on the canvas.
 They are picked by a screen-space band around their span and edited by two round endpoint handles; dragging one **moves the anchor object**, and re-anchoring onto another body is the same act said differently - the anchor changes which body it is in - so sliding an end along its own body and moving it to a different one are one gesture.
 In game they draw with the same forged links the ball & chain hangs on, laid along the wrap path and resolved against the render transforms; the editor draws them **straight**, because a span between wrap nodes *is* straight and a guessed sag would be a drawing of something the level does not contain.
 
@@ -185,7 +185,7 @@ Deleting a wrap point's body drops it from the route and keeps the chain (`prune
 ## Tied chains
 
 A chain may be **knotted through** bodies: `ChainData.through` is an ordered list of anchor ids the chain is tied to on its way from `a` to `b`, beside `via`, which is the ids it is routed over.
-A rope bridge is one such chain - `a` on the left post, through slat 1's left and right anchors, slat 2's, ..., `b` on the right post - one row in the outliner, one selection, one colour, one sleep decision.
+A rope bridge is one such chain - `a` on the left post, through slat 1's left and right anchors, slat 2's, ..., `b` on the right post - one row in the scene tree, one selection, one colour, one sleep decision.
 Two consecutive knots on one body are the body itself and no rope; a knot and the next knot on a different body are one **segment**, a straight piece of rope with a length of its own that nothing slides across.
 Nothing assumes the slats are evenly spaced or the same size: the chain is the list, each segment's length is its own (`lengths`, one per segment), and `slack` is the author's shorthand for every segment without one (its authored gap times `1 + slack`).
 A bridge authored with no slack at all is a cable under transverse load, whose tension is unbounded as the sag goes to zero; it builds, hangs stretched by what its load needs on the softness below, and the loader says so once.

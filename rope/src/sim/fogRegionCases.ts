@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk } from "../editor/model";
 import { PX } from "../engine/units";
 import { scaleLevelData, type FogRegionData, type RawLevelData } from "../level/levelFormat";
 import { fogRegionUniforms, fogRegionWeight, setFogRegions } from "../render3d/fogRegions";
@@ -17,11 +17,11 @@ export function fogRegionCases(): CaseResult[] {
   ] };
   const metres = scaleLevelData(disk, PX).fogRegions!;
   const model = modelFromDisk(disk);
-  const back = modelToDisk(model).fogRegions!;
+  const back = modelToFlatDisk(model).fogRegions!;
   const roundtrip = JSON.stringify(back) === JSON.stringify(disk.fogRegions);
   model.items = model.items.filter((i) => i.layer !== "fog");
-  const deleted = modelToDisk(model).fogRegions;
-  const absent = modelToDisk(modelFromDisk({ player: disk.player, bodies: [] })).fogRegions;
+  const deleted = modelToFlatDisk(model).fogRegions;
+  const absent = modelToFlatDisk(modelFromDisk({ player: disk.player, bodies: [] })).fogRegions;
   const shared = THREE.UniformsUtils.merge([THREE.UniformsLib.fog]).fogRegions?.value;
   setFogRegions([region]);
   const observes = shared === fogRegionUniforms().fogRegions?.value && shared.count === 1 && shared.enabled === 1;

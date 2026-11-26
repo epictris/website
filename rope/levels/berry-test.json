@@ -1,42 +1,35 @@
 {
+  "format": 3,
   "meta": {
     "title": "Berry garden",
     "unlisted": true
   },
-  "player": {
-    "x": -100,
-    "y": 45,
-    "radius": 12
-  },
   "environment": {
     "envIntensity": 0.65
   },
-  "cameraRegions": [
+  "nodes": [
     {
-      "x": 220,
-      "y": 0,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 2000,
-        "h": 1600
-      },
-      "lockX": 210,
-      "lockY": -115,
-      "viewportScale": 1.45,
-      "keepInFrame": false
-    }
-  ],
-  "bodies": [
+      "type": "Spawn2D",
+      "id": "2kwo4vi0",
+      "name": "Spawn",
+      "x": -100,
+      "y": 45,
+      "radius": 12
+    },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "2pwcpxu2",
+      "name": "StaticBody2D",
       "x": 250,
       "y": 130,
-      "rot": 0,
+      "order": 0,
       "color": "#33483d",
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ny3u6k0h",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 2000,
@@ -49,14 +42,19 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ddjv71e4",
+      "name": "StaticBody2D2",
       "x": 220,
       "y": -375,
-      "rot": 0,
+      "order": 1,
       "color": "#33483d",
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "tqo7flyy",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 1450,
@@ -68,29 +66,51 @@
           }
         },
         {
-          "type": "anchor",
-          "id": 901,
+          "type": "Anchor2D",
+          "id": "901",
+          "name": "Anchor",
           "x": -220,
           "y": 20
         },
         {
-          "type": "anchor",
-          "id": 902,
+          "type": "Anchor2D",
+          "id": "902",
+          "name": "Anchor2",
           "x": 60,
           "y": 20
         },
         {
-          "type": "anchor",
-          "id": 903,
+          "type": "Anchor2D",
+          "id": "903",
+          "name": "Anchor3",
           "x": 350,
           "y": 20
         }
       ]
-    }
-  ],
-  "vines": [
+    },
     {
-      "anchor": 901,
+      "type": "CameraRegion2D",
+      "id": "f7hf5zgq",
+      "name": "CameraRegion",
+      "x": 220,
+      "y": 0,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 2000,
+        "h": 1600
+      },
+      "lockX": 210,
+      "lockY": -115,
+      "viewportScale": 1.45,
+      "keepInFrame": false
+    },
+    {
+      "type": "Vine",
+      "id": "luvwbxls",
+      "name": "Vine",
+      "order": 0,
+      "anchor": "901",
       "length": 340,
       "stiffness": 0.78,
       "starberry": {
@@ -107,7 +127,11 @@
       }
     },
     {
-      "anchor": 902,
+      "type": "Vine",
+      "id": "iwnbe7j1",
+      "name": "Vine2",
+      "order": 1,
+      "anchor": "902",
       "length": 285,
       "stiffness": 0.78,
       "starberry": {
@@ -123,7 +147,11 @@
       }
     },
     {
-      "anchor": 903,
+      "type": "Vine",
+      "id": "3ipslioc",
+      "name": "Vine3",
+      "order": 2,
+      "anchor": "903",
       "length": 320,
       "braidSeed": 1701
     }

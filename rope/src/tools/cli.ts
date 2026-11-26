@@ -61,6 +61,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { LEVELS } from "../level/registry";
+import { bodyNodePaths } from "../level/buildBodies";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -735,7 +736,8 @@ function printFrameView(view: FrameView, bodies: BodyView[]): void {
     console.log(
       `        body#${String(b.id).padStart(3)} ${(b.name || b.type).padEnd(14)} ${kinds.padEnd(8)} ` +
         `pos=(${b.px.toFixed(3)},${b.py.toFixed(3)}) rot=${b.rot.toFixed(3)} ` +
-        `vel=(${b.vx.toFixed(3)},${b.vy.toFixed(3)}) w=${b.w.toFixed(3)}${embed}${stick}`,
+        `vel=(${b.vx.toFixed(3)},${b.vy.toFixed(3)}) w=${b.w.toFixed(3)}${embed}${stick}` +
+        (b.node ? ` node=${b.node}` : ""),
     );
   }
 }
@@ -1207,6 +1209,27 @@ function treeStampLine(rec: Recording): string {
 
 function printTreeStamp(rec: Recording): void {
   console.log("  " + treeStampLine(rec));
+  const nodes = bodyNodesLine(rec);
+  if (nodes) console.log("  " + nodes);
+}
+
+// Every engine body by build index beside the node it was built from
+// (plans/node-tree.md: the replay tools print node paths beside body indices),
+// read off a fresh build of the bundle's level, so `body#34` in any line below
+// can be looked up as `Rocks/Ledge`. Bodies the level did not author (the
+// avatar, chain links, debris) have no node and are left out.
+function bodyNodesLine(rec: Recording): string | null {
+  let level: ReturnType<typeof levelFromRecording>;
+  try {
+    level = levelFromRecording(rec);
+  } catch {
+    return null;
+  }
+  const named = level.world.bodies.flatMap((b) => {
+    const path = bodyNodePaths.get(b);
+    return path ? [`#${b.buildIndex}=${path}`] : [];
+  });
+  return named.length ? `nodes: ${named.join(" ")}` : null;
 }
 
 // The bundle's own verdict on itself, from the machine that recorded it (see
@@ -2276,6 +2299,9 @@ switch (cmd) {
   case "sleep":
     void cmdSleep();
     break;
+  case "nodes":
+    void cmdNodes(arg);
+    break;
   case "rails":
     void cmdRails();
     break;
@@ -2314,7 +2340,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|corners|tangents|decompose|dmath|nodes|contacts|spring|movers|vines|rails|belts|viscous|breaks|render3d|camera|assets|levels|finish|entry> [file] [options]",
     );
 }
 
@@ -2876,6 +2902,22 @@ async function cmdSleep(): Promise<void> {
 // with grip, stuck inside the static cone. So both are asserted directly, like
 // `spring`; and like `vines` a rail reaches no invariant, so this is the whole
 // of its coverage.
+// The node tree's proof (plans/node-tree.md): every level and every bundle in
+// the corpus round-trips through `migrateToTree` and `compileLevel` to exactly
+// what the sim read before, and a tree compiles and validates as the plan says.
+// An argument narrows the round trips to sources whose name contains it.
+async function cmdNodes(filter: string | undefined): Promise<void> {
+  const { runNodeCases, runNodeTreeCases } = await import("../sim/nodeCases");
+  const results = [...runNodeCases(filter), ...(filter ? [] : runNodeTreeCases())];
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.pass ? "PASS " : "FAIL "} ${r.name} - ${r.detail}`);
+    if (!r.pass) failed++;
+  }
+  console.log(`[nodes] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
 async function cmdRails(): Promise<void> {
   const { runRailCases } = await import("../sim/railCases");
   const results = runRailCases();

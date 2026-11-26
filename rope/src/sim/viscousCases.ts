@@ -35,7 +35,7 @@ import {
 } from "../lib/viscous";
 import { MANACLE_MOUTH, MANACLE_REACH } from "../lib/manacle";
 import { PX } from "../engine/units";
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk } from "../editor/model";
 import { isCollisionObject } from "../level/levelFormat";
 import { checkBallInvariants, TunnelMonitor, type Violation } from "./trace";
 import { viscousRopeImpulse } from "../level/chains";
@@ -701,10 +701,10 @@ function caseFormat(): ViscousResult {
     hook.physicsStep(DT);
   }
   c.check("a hook-proof mud face deflects the hook (hook-proof wins)", !attached);
-  const rt = modelToDisk(modelFromDisk(raw));
+  const rt = modelToFlatDisk(modelFromDisk(raw));
   const rtObjs = rt.bodies[0]!.objects.filter(isCollisionObject);
   c.check(
-    "the editor's modelFromDisk/modelToDisk keeps the number, and writes it only where it is set",
+    "the editor's modelFromDisk/modelToFlatDisk keeps the number, and writes it only where it is set",
     rtObjs[0]!.viscosity === 2.5 && rtObjs[1]!.viscosity === undefined,
   );
   c.check(
@@ -716,7 +716,7 @@ function caseFormat(): ViscousResult {
   const unmud = modelFromDisk(raw);
   const first = unmud.items.find((i) => i.viscosity === 2.5)!;
   first.viscosity = 0;
-  const unmudObjs = modelToDisk(unmud).bodies[0]!.objects.filter(isCollisionObject);
+  const unmudObjs = modelToFlatDisk(unmud).bodies[0]!.objects.filter(isCollisionObject);
   c.check("...and not on a face that is no longer mud", unmudObjs[0]!.slipFloor === undefined);
   return ok("viscous-format — the flag survives the format, the build and the editor, and hook-proof wins", c.passed(), c.details);
 }

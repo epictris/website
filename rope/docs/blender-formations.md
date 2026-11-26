@@ -25,6 +25,8 @@ The scene exporter imports the package from the repo itself and needs none of th
 
 ## Asset masters and export scenes
 
+The export step below (`bun run scene:export`) is retired with the Blender scenes on 2026-11-26 ([blender-scenes](blender-scenes.md)); a level's rock is made in the level editor ([formations](formations.md)). The masters and Build Export Scene are as they stood.
+
 Since 2026-11-21, formations are reusable **full-detail masters**. Solid generation uses the guide's local coordinates and physical stone sizes. It needs no game camera, never changes quality with placement, and no longer offers Depth floor, Fixed LOD or Automatic depth detail. Existing meshes stay untouched until you explicitly regenerate them; old recipes' depth controls are ignored on that rebuild. Apply a guide's object scale before generation when its local units should match world metres.
 
 Work in one authoring file, such as `river.blend`. Generate and arrange masters there, or keep several reusable models together in a library such as `rocks.blend`. A separate file per asset is optional.

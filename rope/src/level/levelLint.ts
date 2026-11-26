@@ -31,11 +31,11 @@
 // its line as thin as the gate it stands in, and the lint has nothing to say
 // about the size of one.
 
-import { collides, isCollisionObject, isModelObject, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
+import { collides, flatLevelOf, isCollisionObject, isModelObject, loadLevelTree, normalizeLevelData, scaleLevelData, type LevelData } from "./levelFormat";
+import { prefabLibrary, validateTree } from "./nodes";
 import { rootProblems } from "./roots";
 import { PX } from "../engine/units";
 import { LEVELS, listedLevels } from "./registry";
-import { nodeNameOf } from "../render3d/scenes";
 import { isModelName } from "../render3d/models";
 import { FORMATION_SCHEMA, generatorsFor } from "../formation/recipe";
 
@@ -129,7 +129,7 @@ export function runLevelChecks(formationStored?: (hash: string) => boolean): Lev
   // start it hanging (see `SpawnData.roll`). The build says so too, but it says
   // it into the console of whoever happens to play that level, which is not a
   // place an authoring mistake is found.
-  const contradictory = Object.entries(LEVELS).filter(([, s]) => s.data.player.hang && s.data.player.roll);
+  const contradictory = Object.entries(LEVELS).filter(([, s]) => flatLevelOf(s.data).player.hang && flatLevelOf(s.data).player.roll);
   checks.push({
     name: "levels: no spawn asks to roll in and to start hanging",
     pass: contradictory.length === 0,
@@ -139,23 +139,6 @@ export function runLevelChecks(formationStored?: (hash: string) => boolean): Lev
         : `${contradictory.map(([id]) => id).join(", ")}: a hanging ball has nothing to roll on, so the entry would be ignored.`,
   });
 
-  // Body names are what a Blender scene binds its objects to (see
-  // `LevelBodyData.name`), so within a level they must be unique - as three
-  // spells them, since `Ledge.001` and `Ledge001` are one node. Two bodies of
-  // one name would dress the first and leave the second bare, with nothing on
-  // screen to say why. Every level, listed or not, since a sandbox may be
-  // dressed too.
-  const sameName: string[] = [];
-  for (const [id, spec] of Object.entries(LEVELS)) {
-    const seen = new Map<string, number>();
-    normalizeLevelData(spec.data).bodies.forEach((b, i) => {
-      if (!b.name) return;
-      const node = nodeNameOf(b.name);
-      const first = seen.get(node);
-      if (first === undefined) seen.set(node, i);
-      else sameName.push(`${id}: bodies ${first} and ${i} are both "${node}"`);
-    });
-  }
   // A MODEL object (`ModelObjectData`) names a model of the library, which is a
   // directory, a `.blend` and a release asset, so its name is held to that
   // spelling; and its size is a positive factor, since a scale of 0 or below
@@ -225,12 +208,6 @@ export function runLevelChecks(formationStored?: (hash: string) => boolean): Lev
     detail: roots.length === 0 ? "every branch starts on its junction" : roots.join("; "),
   });
 
-  checks.push({
-    name: "levels: no two bodies in a level share a name",
-    pass: sameName.length === 0,
-    detail: sameName.length === 0 ? "every named body is the only one of its name" : sameName.join("; "),
-  });
-
   // A 3D BODY IS ONLY DRAWN (`LevelBodyData.space`): it may stand off the
   // gameplay plane and tilt only because nothing in it collides. A collision
   // object in one would be built in the plane while drawn elsewhere.
@@ -245,6 +222,35 @@ export function runLevelChecks(formationStored?: (hash: string) => boolean): Lev
     pass: solid3d.length === 0,
     detail: solid3d.length === 0 ? "every 3D body is drawn only" : solid3d.join("; "),
   });
+
+  // The NODE TREE's rules (plans/node-tree.md "States the editor refuses"),
+  // asked of every level as the editor reads it - a flat file migrated, a tree
+  // as written - since a state the editor would refuse is one where it and the
+  // game disagree about the level. Warnings are reported, not failed.
+  for (const [id, spec] of Object.entries(LEVELS)) {
+    const problems = validateTree(loadLevelTree(spec.data).nodes);
+    const errors = problems.filter((p) => p.error);
+    const warnings = problems.filter((p) => !p.error);
+    checks.push({
+      name: `levels: ${id}'s node tree is one the editor accepts`,
+      pass: errors.length === 0,
+      detail:
+        errors.length === 0
+          ? `no refused state${warnings.length ? `; ${warnings.length} warning(s): ${warnings.slice(0, 3).map((w) => w.message).join("; ")}` : ""}`
+          : errors.slice(0, 5).map((e) => e.message).join("; "),
+    });
+  }
+
+  // ...and of every PREFAB (`prefabs/<name>.json`) by a prefab's own rules:
+  // no spawn or checkpoint of its own, no instance of itself.
+  for (const [name, prefab] of Object.entries(prefabLibrary())) {
+    const errors = validateTree([prefab.root], { prefab: true }).filter((p) => p.error);
+    checks.push({
+      name: `levels: the prefab ${name} is one the editor accepts`,
+      pass: errors.length === 0,
+      detail: errors.length === 0 ? "no refused state" : errors.slice(0, 5).map((e) => e.message).join("; "),
+    });
+  }
 
   return checks;
 }

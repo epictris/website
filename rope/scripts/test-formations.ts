@@ -35,7 +35,7 @@ import { decorationRequest } from "../src/formation/decoration";
 import { readPaintUvMeshes } from "./paintUvMesh";
 import { decorationDelta } from "../src/render3d/formations";
 import { alignCollisionToGuide, collisionMatchesGuide, formationItemOf, guideFromCollision } from "../src/editor/formationEdit";
-import { modelFromDisk, modelToDisk } from "../src/editor/model";
+import { modelFromDisk, modelToFlatDisk } from "../src/editor/model";
 import { PaintCoverage, samplesOf } from "../src/editor/paintCoverage";
 import { PaintCursor } from "../src/editor/paintCursor";
 import { isGroup, moveEntry, setMode, stackOf, treeOf } from "../src/formation/solidStack";
@@ -103,12 +103,12 @@ const level: LevelData = {
   );
   // The editor: load, take the guide from the collision, save.
   const model = modelFromDisk(disk);
-  const bodyId = model.items[0]!.bodyId;
+  const bodyId = model.items[0]!.unit;
   const item = formationItemOf(model, bodyId)!;
   check("the editor loads a formation as an item of its body", !!item && item.formation?.id === "f1");
   item.formation = { ...item.formation!, guide: guideFromCollision(model, bodyId) };
-  const saved = modelToDisk(model);
-  const reloaded = scaleLevelData(modelToDisk(modelFromDisk(saved)), PX).bodies[0]!.formation!;
+  const saved = modelToFlatDisk(model);
+  const reloaded = scaleLevelData(modelToFlatDisk(modelFromDisk(saved)), PX).bodies[0]!.formation!;
   const savedF = scaleLevelData(saved, PX).bodies[0]!.formation!;
   check("the recipe hash survives the editor's save and load", formationHash(reloaded) === formationHash(savedF), `${formationHash(reloaded)} vs ${formationHash(savedF)}`);
   check(
@@ -130,32 +130,38 @@ const level: LevelData = {
       { player: { x: 0, y: 0, radius: 0.1 }, bodies: [{ kind: "static", x: 4, y: -2, rot: 0.3, space: "3d", z: -6, tilt: [0.2, -0.4], objects: [], formation: solid }] } as LevelData,
       PIXELS_PER_METER,
     );
-    const round3d = scaleLevelData(modelToDisk(modelFromDisk(disk3d as unknown as RawLevelData)), PX).bodies[0]!;
+    const round3d = scaleLevelData(modelToFlatDisk(modelFromDisk(disk3d as unknown as RawLevelData)), PX).bodies[0]!;
     check(
       "a 3D body's frame, depth and tilt survive the disk and the editor",
       round3d.space === "3d" && near(round3d.x, 4) && near(round3d.y, -2) && near(round3d.rot, 0.3) && near(round3d.z, -6) &&
         near(round3d.tilt?.[0], 0.2) && near(round3d.tilt?.[1], -0.4),
       JSON.stringify({ space: round3d.space, x: round3d.x, y: round3d.y, rot: round3d.rot, z: round3d.z, tilt: round3d.tilt }),
     );
-    const flat = scaleLevelData(modelToDisk(modelFromDisk(disk)), PX).bodies[0]!;
+    const flat = scaleLevelData(modelToFlatDisk(modelFromDisk(disk)), PX).bodies[0]!;
     check("a 2D body stays one", flat.space === undefined && flat.z === undefined && flat.tilt === undefined);
   }
 
   // 3. Align: edit a piece, then put the guide back.
-  const before = JSON.stringify(scaleLevelData(modelToDisk(model), PX).bodies[0]!.objects);
+  const before = JSON.stringify(scaleLevelData(modelToFlatDisk(model), PX).bodies[0]!.objects);
   const guide = item.formation!.guide;
   check("the collision matches the guide it was just taken from", guide.kind === "collision" && collisionMatchesGuide(model, bodyId, guide));
-  const piece = model.items.find((i) => i.bodyId === bodyId && i.object === "collision")!;
+  const piece = model.items.find((i) => i.unit === bodyId && i.object === "collision")!;
   piece.pos = piece.pos.add(new Vec2(0.3, 0));
   check("an edited collision no longer matches", guide.kind === "collision" && !collisionMatchesGuide(model, bodyId, guide));
   alignCollisionToGuide(model, bodyId, item);
-  const after = JSON.stringify(scaleLevelData(modelToDisk(model), PX).bodies[0]!.objects);
+  const after = JSON.stringify(scaleLevelData(modelToFlatDisk(model), PX).bodies[0]!.objects);
   const sameObjects = (a: string, b: string): boolean => {
     const pa = JSON.parse(a) as Record<string, unknown>[];
     const pb = JSON.parse(b) as Record<string, unknown>[];
     const round = (v: unknown): unknown =>
-      typeof v === "number" ? Math.round(v * 1e6) / 1e6 : Array.isArray(v) ? v.map(round) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, round(x)])) : v;
-    return JSON.stringify(round(pa)) === JSON.stringify(round(pb));
+      typeof v === "number" ? Math.round(v * 1e6) / 1e6 || 0 : Array.isArray(v) ? v.map(round) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, round(x)])) : v;
+    // A placement left out is a placement of zero: a piece put back through
+    // its rock's frame is at zero to the micrometre, not to the bit.
+    const placed = (o: Record<string, unknown>): Record<string, unknown> => {
+      const { node: _n, x, y, rot, ...rest } = o;
+      return { x: x ?? 0, y: y ?? 0, rot: rot ?? 0, ...rest };
+    };
+    return JSON.stringify(round(pa.map(placed))) === JSON.stringify(round(pb.map(placed)));
   };
   check("\"Align collision to guide\" puts back every piece and every field", sameObjects(before, after), `${before}\n        ${after}`);
   check("...and then it matches", guide.kind === "collision" && collisionMatchesGuide(model, bodyId, guide));

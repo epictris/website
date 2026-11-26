@@ -24,7 +24,7 @@ import { BallLevel } from "../level/ballLevel";
 import { BreakTracker, removeBrokenBody, type BreakEvent } from "../level/breakable";
 import { buildLevelBodies } from "../level/buildBodies";
 import { scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk } from "../editor/model";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import { PX } from "../engine/units";
 import { checkBallInvariants, type Violation } from "./trace";
@@ -481,9 +481,9 @@ function caseFormat(): BreakResult {
     "nonsense is clamped rather than obeyed: no negative threshold, no fractional durability",
     bodies[3]!.breakForce === 0 && bodies[3]!.durability === 1,
   );
-  const rt = modelToDisk(modelFromDisk(raw));
+  const rt = modelToFlatDisk(modelFromDisk(raw));
   c.check(
-    "the editor's modelFromDisk/modelToDisk keeps the pair, and writes it only where it is set",
+    "the editor's modelFromDisk/modelToFlatDisk keeps the pair, and writes it only where it is set",
     rt.bodies[0]!.breakForce === 12_500 &&
       rt.bodies[0]!.durability === 3 &&
       rt.bodies[1]!.breakForce === undefined &&

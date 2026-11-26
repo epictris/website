@@ -1,5 +1,5 @@
 // Populate `public/meshes/`, `public/textures/` (and the other stored kinds,
-// the levels' Blender scenes among them) from the release store. Run by hand after a clone
+// the models the levels' bodies carry among them) from the release store. Run by hand after a clone
 // (`bun run assets:fetch`) and by the Dockerfile before `bun run build`, so the
 // bytes reach the image without ever entering git.
 //
@@ -13,24 +13,20 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SCENE_ASSETS } from "../src/render3d/scenes";
 import { MODEL_ASSETS } from "../src/render3d/models";
-import { assetName, assetUrl, levelsModelNames, levelsSceneNames, sha256, storedAssets } from "./assetStore";
+import { assetName, assetUrl, levelsModelNames, sha256, storedAssets } from "./assetStore";
 import { fetchFormations } from "./formationBundles";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
 
-// A Blender scene a level names and the store does not hold would ship a level
-// with no look at all - the build succeeds and the level draws nothing but its
-// water and the ball - so it stops the fetch, and with it the Docker build,
-// before the empty-manifest early exit below can wave it through.
-// A model a body carries is the same failure on a smaller scale: the body
-// draws nothing at all.
-const unpublished = [
-  ...[...levelsSceneNames()].filter(([scene]) => !SCENE_ASSETS[scene]).map(([scene, levels]) => `scene "${scene}" (${levels.join(", ")})`),
-  ...[...levelsModelNames()].filter(([model]) => !MODEL_ASSETS[model]).map(([model, levels]) => `model "${model}" (${levels.join(", ")})`),
-];
+// A model a body carries that the store does not hold would ship a body that
+// draws nothing at all - the build succeeds and nothing says why - so it stops
+// the fetch, and with it the Docker build, before the empty-manifest early
+// exit below can wave it through.
+const unpublished = [...levelsModelNames()]
+  .filter(([model]) => !MODEL_ASSETS[model])
+  .map(([model, levels]) => `model "${model}" (${levels.join(", ")})`);
 if (unpublished.length) {
   for (const what of unpublished) console.error(`  FAIL  ${what} is not in the store`);
   console.error(`\n[assets] publish them from the machine that exported them: \`just publish\`.`);

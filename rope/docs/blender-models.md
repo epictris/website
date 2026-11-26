@@ -22,7 +22,8 @@ So no model edit can change how the ball rolls.
 
 ## The level side: the `model` object
 
-A model is placed by a scene object of its own, `{ type: "model", model, x, y, rot, z, rotX, rotY, scale }` (`ModelObjectData` in `level/levelFormat.ts`), in its body's frame like a light or an anchor.
+A model is placed by a `Model3D` node of the level's tree ([level-format](level-format.md#the-node-tree)), in its parent's frame: under a body it rides the body, on its own it stands where it is put.
+It compiles to a scene object, `{ type: "model", model, x, y, rot, z, rotX, rotY, scale }` (`ModelObjectData` in `level/levelFormat.ts`), in its body's frame like a light or an anchor; its fields are these.
 
 - `model` names the model: `assets-src/models/<model>.blend`, held to lower-case letters, digits and dashes (`MODEL_NAME` in `render3d/models.ts`), since it is a directory and a release asset too.
 - `x`, `y`, `rot` are the placement every object has: an offset in the body's frame and a turn in the plane.
@@ -54,9 +55,9 @@ just model lantern
 
 `just model <model>` (`scripts/model-export.ts`) exports `assets-src/models/<model>.blend` to `public/models/<model>/model.glb` and writes `meta.json` beside it: Blender's account of the export, the shipped file's sha256 and size, and the model's **bounds** in its own frame, which the editor's panel shows as a size.
 It takes the scene recipe's flags (`--raw`, `--no-cache`, `--stale-occlusion`, `--blender PATH`), and its caches are `.cache/model-bake/<model>/` and `.cache/model-encode/<model>/`.
-Running Blender, optimising and checking what ships is `scripts/blendExport.ts`, shared with `just scene`, so a model is held to every check a scene is (every baked map encoded as one, every picture lossless).
+Running Blender, optimising and checking what ships is `scripts/blendExport.ts`, shared with a formation's build and a decoration's (and with `just scene` until the scenes were retired on 2026-11-26), so a model is held to every check they are (every baked map encoded as one, every picture lossless).
 
-In the editor, **`+ Model`** places a model with a click: into the selected body when one is selected, so selecting a lantern's body and clicking puts the lantern on it, otherwise as a body of its own.
+In the editor, **`+ Model`** places a model with a click: into the selected body when one is selected, so selecting a lantern's body and clicking puts the lantern on it, otherwise as a `Model3D` standing on its own.
 It places the last model picked.
 The model's panel offers the models exported here or published (`GET /api/models` on the dev server), and says how big the export is, when it was made and whether it is published.
 The model draws in the 3D view and is picked by clicking it; on the plane it is a dashed cube mark with its name, and the depth handle and the gizmo's blue arrow move its `z`.
@@ -65,9 +66,9 @@ The gizmo's rings turn it about all three axes (the in-plane ring is `rot`, the 
 ## How it is drawn
 
 `BodyVisual.mountModels` (`render3d/bodyVisuals.ts`) puts a holder for each model object on the body's group, placed against the frame the visual is built in and carrying the depth, tilts and scale, and clones the loaded file into it.
-The file is loaded once a page through the same loader a scene's is (`loadModelFile` in `render3d/sceneDressing.ts`), so the same rules apply to its meshes: ivy and plants cast leaf shadows, opaque meshes lay their depth first, pictures after.
+The file is loaded once a page through the loader every Blender export goes through (`loadModelFile` in `render3d/exportFiles.ts`), so the same rules apply to its meshes: ivy and plants cast leaf shadows, opaque meshes lay their depth first, pictures after.
 A model already decoded is mounted on the spot, so an editor rebuild never draws a frame without it.
-A model on a body that collides always casts, wherever it has been set back to, and one on a body that collides with nothing keeps the scenery's rule (behind the plane it casts nothing), as a dressing node does.
+A model on a body that collides always casts, wherever it has been set back to, and one on a body that collides with nothing casts nothing behind the plane (`noShadowBehindPlane`).
 A body with a waking light drives the glow of its model's emissive materials, as it drives its dressing's.
 A model answers a pick with its own object, so clicking it in the editor selects the model rather than its body.
 The editor's scene toggle hides models with the scene: both are the look.

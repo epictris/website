@@ -1,4 +1,5 @@
 {
+  "format": 3,
   "meta": {
     "unlisted": true
   },
@@ -6,48 +7,59 @@
     "envIntensity": 0.6,
     "hdri": "golden-gate-hills"
   },
-  "chains": [
+  "nodes": [
     {
-      "a": 11,
-      "b": 10
-    }
-  ],
-  "player": {
-    "x": 0,
-    "y": 60,
-    "radius": 8
-  },
-  "bodies": [
+      "type": "Spawn2D",
+      "id": "aqd3bxk0",
+      "name": "Spawn",
+      "x": 0,
+      "y": 60,
+      "radius": 8
+    },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "00kleh94",
+      "name": "StaticBody2D",
       "x": 800,
       "y": -10,
-      "rot": 0,
+      "order": 0,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "xzfzs7qh",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 16,
             "h": 180
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "vp0i5kek",
+      "name": "StaticBody2D2",
       "x": -10.00000000000001,
       "y": -649.9999999999999,
       "rot": -0.4363323129985824,
+      "order": 1,
       "color": "#9db8c6",
       "opacity": 0.9,
       "friction": 0.1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "fq3swldf",
+          "name": "Curve",
           "shape": {
             "kind": "curve",
             "width": 4,
@@ -64,45 +76,62 @@
           },
           "rail": true,
           "material": "steel",
-          "thickness": 4
+          "thickness": 4,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "9t0o8n92",
+      "name": "StaticBody2D3",
       "x": 1000,
       "y": -240,
-      "rot": 0,
+      "order": 2,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "q3gvbys6",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 200,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 11,
+          "type": "Anchor2D",
+          "id": "11",
+          "name": "Anchor",
           "y": 20.000000000000018
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "43ireqdt",
+      "name": "RigidBody2D",
       "x": 1000,
       "y": -150,
-      "rot": 0,
+      "order": 3,
       "color": "#8a7b6a",
       "opacity": 0.9,
       "friction": 0.6,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "y7ievzgt",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 44,
@@ -110,10 +139,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 2
+          "thickness": 2,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "bmvy1tel",
+          "name": "Rect2",
           "y": 10.999999999999988,
           "shape": {
             "kind": "rect",
@@ -122,10 +156,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 2
+          "thickness": 2,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "dbnk5pfz",
+          "name": "Circle",
           "y": 50,
           "shape": {
             "kind": "circle",
@@ -133,10 +172,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 2
+          "thickness": 2,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "mp2wqmsi",
+          "name": "Rect3",
           "y": 100,
           "shape": {
             "kind": "rect",
@@ -145,10 +189,15 @@
           },
           "impermeable": true,
           "material": "steel",
-          "thickness": 2
+          "thickness": 2,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "bxm1yij6",
+          "name": "Curve",
           "shape": {
             "kind": "curve",
             "width": 4,
@@ -185,10 +234,15 @@
           },
           "rail": true,
           "material": "steel",
-          "thickness": 2
+          "thickness": 2,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "oxwh4ftl",
+          "name": "Curve2",
           "shape": {
             "kind": "curve",
             "width": 4,
@@ -225,26 +279,36 @@
           },
           "rail": true,
           "material": "steel",
-          "thickness": 2
+          "thickness": 2,
+          "debug": {
+            "on": true
+          }
         },
         {
-          "type": "anchor",
-          "id": 10,
+          "type": "Anchor2D",
+          "id": "10",
+          "name": "Anchor",
           "y": -5.000000000000004
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "54vdi539",
+      "name": "StaticBody2D4",
       "x": 1320.2196458611397,
       "y": -30.821717024103663,
       "rot": 0.5235987755982987,
+      "order": 4,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 0.8,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "a42w4ddh",
+          "name": "Curve",
           "shape": {
             "kind": "curve",
             "width": 4.7466,
@@ -259,28 +323,47 @@
               }
             ]
           },
-          "rail": true
+          "rail": true,
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "yl1yapuz",
+      "name": "StaticBody2D5",
       "x": -740,
       "y": -310.00000000000006,
-      "rot": 0,
+      "order": 5,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "402nadrv",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 20.000000000000018,
             "h": 20.000000000000018
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
+    },
+    {
+      "type": "Chain",
+      "id": "8ouwh9lo",
+      "name": "Chain",
+      "order": 0,
+      "a": "11",
+      "b": "10"
     }
   ]
 }

@@ -389,8 +389,9 @@ Pool lights cast none, `castShadow` on a waking light is ignored, and the editor
 A light is point-only to wake at all (`wakeParams` answers null for a spot), because the pool is point lights; the editor clears `wake` when a light is turned into a spot.
 
 **The emission follows the light.**
-What glows is the body's dressing in the level's Blender scene, whose materials are shared by every object that wears them, which is why a flickering lamp's emission does not flicker.
-A body carrying a waking light is the exception: when its dressing node lands, `BodyVisual.adoptDressing` gives it its own copy of every emissive material in the node (an emissive colour that is not black, or an emission map), shared with nothing else and freed with the body, and hands the copies to its lights (`DrivenEmission`).
+What glows is the body's look (its model or formation), whose materials are shared by every object that wears them, which is why a flickering lamp's emission does not flicker.
+A body carrying a waking light is the exception: when a node of its look lands, the level's look (`TreeLook`, [render3d](render3d.md#the-look-from-the-node-tree)) gives the body its own copy of every emissive material in the node (an emissive colour that is not black, or an emission map), shared with nothing else and freed with the level, and hands the copies to its lights (`DrivenEmission`).
+What a waking light drives is everything under its carrier: its nearest body, or the top-level frame a lamp with no body stands in.
 The rig drives `emissiveIntensity = authored * level` on them, a uniform write with no recompile; a material with no emission, the stalk under the cap, is left alone.
 A body with several waking lights follows the brightest.
 `authored` is the intensity the scene was exported with, taken when the copy is made rather than read off the material, which the rig has been writing, and the rig hands it back when the body goes.

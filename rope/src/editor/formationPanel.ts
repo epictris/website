@@ -21,7 +21,7 @@ import type { FormationGenerator, SolidVariant } from "../level/levelFormat";
 import { autoTier, forgetFormationFiles } from "../render3d/formations";
 import { alignCollisionToGuide, applyFit, collisionMatchesGuide, enclosingItem, formationItemOf, guideFromCollision, previewFit } from "./formationEdit";
 import type { FormationJobs, JobState } from "./formationJobs";
-import { bodyFrameOf, bodyLead, bodyMembers, formationItem, modelFromDisk, newBodyId, type EdFormation, type EdItem, type EdModel } from "./model";
+import { addItem, bodyFrameOf, bodyMembers, formationItem, type EdFormation, type EdItem, type EdModel } from "./model";
 import { describe, fieldRow } from "./panelUi";
 
 export interface FormationHost {
@@ -34,7 +34,7 @@ export interface FormationHost {
   markDirty(): void;
   rebuildInspector(): void;
   // A label for the body in the jobs panel.
-  bodyName(bodyId: number): string;
+  bodyName(unit: string): string;
   // Sculpt mode on this formation's guide (editor/sculpt.ts), where the
   // editor has it, and the formation item being sculpted now.
   sculpt?(item: EdItem): void;
@@ -107,7 +107,7 @@ const div = (cls: string, text = ""): HTMLDivElement => {
 // workspace's "Generate N out of date").
 export function requestFormationBuild(host: FormationHost, item: EdItem, kind: "geometry" | "bake"): void {
   const f = item.formation!;
-  host.jobs.ask(kind, { ...f }, host.bodyName(item.bodyId)).then(
+  host.jobs.ask(kind, { ...f }, host.bodyName(item.unit)).then(
     () => host.rebuildInspector(),
     (e: Error) => showToast(`The job runner refused the build: ${e.message}`, "warn"),
   );
@@ -148,21 +148,20 @@ export function lastRecipe(kind: "collision" | "solid"): Recipe | null {
   return { generator: r.generator, ...(r.variant ? { variant: r.variant } : {}), params: { ...r.params } };
 }
 
-// A formation for `bodyId` that is not in the level yet: its guide taken from
+// A formation for `unit` that is not in the level yet: its guide taken from
 // the body's collision, at the body's frame, its recipe the last one set.
-function newFormationFor(model: EdModel, bodyId: number, generator: FormationGenerator): EdItem {
-  const members = bodyMembers(model.items, bodyId);
-  const frame = bodyFrameOf(model, bodyId);
+function newFormationFor(model: EdModel, unit: string, generator: FormationGenerator): EdItem {
+  const frame = bodyFrameOf(model, unit);
   const taken = new Set(model.items.flatMap((i) => (i.formation ? [i.formation.id] : [])));
   const last = lastRecipe("collision");
-  const item = formationItem(bodyLead(members) ?? members[0]!, frame.pos, frame.rot, {
+  const item = formationItem(frame.pos, frame.rot, {
     id: newFormationId(taken),
     generator: last?.generator ?? generator,
     ...(last?.variant ? { variant: last.variant } : {}),
     params: last?.params ?? {},
     guide: { kind: "collision", pieces: [] },
   });
-  item.formation = { ...item.formation!, guide: guideFromCollision(model, bodyId) };
+  item.formation = { ...item.formation!, guide: guideFromCollision(model, unit) };
   return item;
 }
 
@@ -176,31 +175,37 @@ function newFormationFor(model: EdModel, bodyId: number, generator: FormationGen
 
 // The draft into the level, its guide taken from the collision as it is
 // now, as one undo step.
-function commitDraft(host: FormationHost, bodyId: number, draft: EdItem): EdItem {
+function commitDraft(host: FormationHost, unit: string, draft: EdItem): EdItem {
   const model = host.model();
   host.beginAction();
-  const members = bodyMembers(model.items, bodyId);
-  const item = newFormationFor(model, bodyId, draft.formation!.generator);
+  const item = newFormationFor(model, unit, draft.formation!.generator);
   item.formation = { ...draft.formation!, id: item.formation!.id, guide: item.formation!.guide };
-  const last = model.items.lastIndexOf(members[members.length - 1]!);
-  model.items.splice(last + 1, 0, item);
+  // The body's rock, a child of the body beside the pieces it dresses.
+  addItem(model, item, model.tree.nodes.has(unit) ? unit : null);
   host.markDirty();
   return item;
 }
 
-export function buildFormationSection(outerHost: FormationHost, parent: HTMLElement, bodyId: number): void {
+export function buildFormationSection(outerHost: FormationHost, parent: HTMLElement, unit: string): void {
   const model = outerHost.model();
-  const inLevel = formationItemOf(model, bodyId);
-  const pieces = bodyMembers(model.items, bodyId).filter(enclosingItem);
+  const inLevel = formationItemOf(model, unit);
+  const pieces = bodyMembers(model.items, unit).filter(enclosingItem);
 
   if (!inLevel && !pieces.length) {
     parent.appendChild(div("ed-hint", "No collision piece encloses anything here to grow a rock from."));
     return;
   }
+  // A placed prefab's rock is the prefab's: one recipe and one build shared by
+  // every instance (`PREFAB_ROCK_RECIPE`), so it is re-made only in the prefab.
+  const node = inLevel ? model.tree.nodes.get(inLevel.node) : undefined;
+  if (node && (node.instance || node.extra["inInstance"] !== undefined)) {
+    parent.appendChild(div("ed-hint", "This rock is a prefab's: open the prefab (its Prefab section, Open prefab) to change its recipe or guide. Every instance follows."));
+    return;
+  }
   // No formation yet: the draft's recipe (see `drafts`), edited with nothing
   // marked as an edit of the level, until Generate puts it there.
   const isDraft = !inLevel;
-  const item = inLevel ?? newFormationFor(model, bodyId, FORMATION_SCHEMA.outline[0]!);
+  const item = inLevel ?? newFormationFor(model, unit, FORMATION_SCHEMA.outline[0]!);
   const host: FormationHost = isDraft ? { ...outerHost, beginAction: () => {}, markDirty: () => {} } : outerHost;
   if (isDraft) {
     parent.appendChild(div("ed-hint", `Set the recipe, then Generate: the guide is taken from ${pieces.length} piece${pieces.length === 1 ? "" : "s"} of this body's collision.`));
@@ -332,7 +337,7 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
   const actions = div("ed-row");
   const gen = button(f.built ? "Regenerate" : "Generate", () => {
     // A draft goes into the level first, with the recipe as it was set.
-    const target = isDraft ? commitDraft(outerHost, bodyId, item) : item;
+    const target = isDraft ? commitDraft(outerHost, unit, item) : item;
     requestFormationBuild(outerHost, target, "geometry");
     if (isDraft) outerHost.rebuildInspector();
   }, "Build the rock from the guide and the parameters as they stand. Fast: the iteration look, no bake.");
@@ -403,7 +408,7 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
         }
         host.beginAction();
         const subset = chosen.size === pieces.length ? undefined : [...chosen].sort((a, b) => a - b);
-        replace({ guide: guideFromCollision(host.model(), bodyId, subset) });
+        replace({ guide: guideFromCollision(host.model(), unit, subset) });
         host.markDirty();
         host.rebuildInspector();
       });
@@ -415,7 +420,7 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
   }
 
   // Whether the collision is the guide: information, not a warning.
-  const matches = collisionMatchesGuide(model, bodyId, guide);
+  const matches = collisionMatchesGuide(model, unit, guide);
   parent.appendChild(div("ed-hint", matches
     ? "The collision matches the guide."
     : "The collision differs from the guide (expected after a fit). Align collision to guide before reshaping it."));
@@ -436,8 +441,8 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
     const meta = f.built ? formationMeta(f.built.hash, () => {}) : null;
     if (!meta) return;
     host.beginAction();
-    const preview = previewFit(host.model(), bodyId, meta.section, fitAccuracy);
-    applyFit(host.model(), bodyId, item, preview);
+    const preview = previewFit(host.model(), unit, meta.section, fitAccuracy);
+    applyFit(host.model(), unit, item, preview);
     host.markDirty();
     host.rebuildInspector();
   }, "Replace this body's collision with the outline of the rock where it meets the play plane, within the accuracy. Pieces with different properties are fitted each on its own. Recordings made before diverge.");
@@ -458,7 +463,7 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
       fitButton.disabled = true;
       return;
     }
-    const p = previewFit(host.model(), bodyId, meta.section, fitAccuracy);
+    const p = previewFit(host.model(), unit, meta.section, fitAccuracy);
     const polys = p.polygons.flat().length;
     count.textContent = `${p.vertices} vertices in ${polys} piece${polys === 1 ? "" : "s"}` +
       (p.classes.length > 1 ? `, ${p.classes.length} kinds of piece fitted each on its own` : "") +
@@ -481,14 +486,14 @@ export function buildFormationSection(outerHost: FormationHost, parent: HTMLElem
   const align = div("ed-row");
   const toGuide = button("Align collision to guide", () => {
     host.beginAction();
-    alignCollisionToGuide(host.model(), bodyId, item);
+    alignCollisionToGuide(host.model(), unit, item);
     host.markDirty();
     host.rebuildInspector();
   }, "Put the collision back exactly as the guide was taken: before reshaping the rock by editing the collision.");
   toGuide.disabled = matches;
   const toCollision = button("Align guide to collision", () => {
     host.beginAction();
-    replace({ guide: guideFromCollision(host.model(), bodyId, guide.subset) });
+    replace({ guide: guideFromCollision(host.model(), unit, guide.subset) });
     host.markDirty();
     host.rebuildInspector();
   }, "Take the guide again from the collision as it is now; the rock is then stale until regenerated.");
@@ -506,44 +511,28 @@ export function olderFormations(model: EdModel, fingerprint: string): EdItem[] {
 
 const DEG = 180 / Math.PI;
 
-// A new body behind the play plane holding nothing but a formation on a solid
-// guide (a background guide: docs/formations.md), at `at` in the level, made
-// through the editor's own load so it is a body like any other.
+// A new BACKGROUND ROCK: a top-level `Formation3D` on a solid guide
+// (docs/formations.md, plans/node-tree.md "Formations"), with no body - it is
+// only drawn, so free to stand off the plane and tilt - at `at` in the level.
 //
 // `shape` (the Formations dock's Primitives, Shift+A with nothing selected)
-// makes the guide that one primitive at the body's origin, and `at.z` stands
-// the body at that depth: the primitive appears where the view is looking.
+// makes the guide that one primitive at the rock's origin, and `at.z` stands
+// the rock at that depth: the primitive appears where the view is looking.
 // Without it, the default backdrop: a box 2.5 m behind the plane.
 export function createBackdrop(host: FormationHost, at: { x: number; y: number; z?: number }, shape?: SolidPrim): EdItem | null {
   const model = host.model();
   const taken = new Set(model.items.flatMap((i) => (i.formation ? [i.formation.id] : [])));
-  const data: LevelData = {
-    player: { x: 0, y: 0, radius: 0.1 },
-    bodies: [{
-      kind: "static",
-      x: at.x,
-      y: at.y,
-      rot: 0,
-      objects: [],
-      formation: {
-        id: newFormationId(taken),
-        // The last solid recipe set, else Cliff at its defaults.
-        generator: lastRecipe("solid")?.generator ?? "solid",
-        variant: lastRecipe("solid")?.variant ?? "cliff",
-        params: lastRecipe("solid")?.params ?? {},
-        guide: { kind: "solid", tree: { op: "union", of: [shape ?? { prim: "box", size: [3, 2, 2], pos: [0, 1, -2.5] }] } },
-      },
-    }],
-  };
-  const made = modelFromDisk(scaleLevelData(data, PIXELS_PER_METER)).items.find((i) => i.object === "formation");
-  if (!made) return null;
+  const made = formationItem(new Vec2(at.x, at.y), 0, {
+    id: newFormationId(taken),
+    // The last solid recipe set, else Cliff at its defaults.
+    generator: lastRecipe("solid")?.generator ?? "solid",
+    variant: lastRecipe("solid")?.variant ?? "cliff",
+    params: lastRecipe("solid")?.params ?? {},
+    guide: { kind: "solid", tree: { op: "union", of: [shape ?? { prim: "box", size: [3, 2, 2], pos: [0, 1, -2.5] }] } },
+  });
+  made.z = at.z ?? 0;
   host.beginAction();
-  made.bodyId = newBodyId();
-  model.items.push(made);
-  // A backdrop is a 3D body (`LevelBodyData.space`): only drawn, so free to
-  // stand off the plane and tilt, its frame stated where it was made.
-  model.bodyFrames.set(made.bodyId, { pos: new Vec2(at.x, at.y), rot: 0 });
-  model.bodies3d.set(made.bodyId, { z: at.z ?? 0, tilt: [0, 0] });
+  addItem(model, made, null);
   host.markDirty();
   return made;
 }

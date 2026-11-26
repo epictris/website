@@ -1,5 +1,5 @@
-// One level's drawn objects - its bodies' visuals, its Blender scene, its
-// lights, its vines and its ball - under one group of their own, so that a
+// One level's drawn objects - its bodies' visuals, its lights, its vines and
+// its ball - under one group of their own, so that a
 // level can be taken down and put back up without being rebuilt (see
 // `Scene3D.show`).
 //
@@ -22,9 +22,9 @@ import * as THREE from "three";
 import type { CollisionObject2D } from "../engine/body";
 import type { BallVisual } from "./ballVisual";
 import type { BodyVisual } from "./bodyVisuals";
+import type { TreeLook } from "./treeLook";
 import { LightRig } from "./lights";
 import type { Scene3DLevel } from "./scene";
-import type { SceneDressing } from "./sceneDressing";
 import type { SceneLens } from "./space";
 import { ShelterWalls } from "./shelterCover";
 import { VineLayer } from "./vineVisual";
@@ -53,13 +53,10 @@ export class LevelScene {
   // Every AUTHORED body's visual, built or standing, in the level's body order
   // - the order an edited copy of the level lists them in (`restyleDebug`).
   readonly authored: BodyVisual[] = [];
-  // The level's Blender scene, when it names one (see `SceneDressing`), and
-  // whether it has landed (or there is none).
-  dressing: SceneDressing | null = null;
-  sceneryLanded = false;
-  // The pool's water worn by the scene's own flat water
-  // (`Scene3D.adoptSceneryWater`), freed with the level.
-  readonly sceneryWaterMaterials: THREE.Material[] = [];
+  // The level's look, drawn from its node tree (treeLook.ts), and the engine
+  // body each body node built, which carries the mushrooms on it.
+  look: TreeLook | null = null;
+  readonly engineOf = new Map<string, CollisionObject2D>();
   ballVisual: BallVisual | null = null;
   // The glass ball's glow on the world (see `Scene3D.setLevel`).
   ballGlow: THREE.PointLight | null = null;
@@ -87,10 +84,10 @@ export class LevelScene {
     for (const visual of this.standing) visual.dispose();
     this.standing.length = 0;
     this.authored.length = 0;
-    this.dressing?.dispose();
-    this.dressing = null;
-    for (const m of this.sceneryWaterMaterials) m.dispose();
-    this.sceneryWaterMaterials.length = 0;
+    // Before the rig, which takes its lights back.
+    this.look?.dispose();
+    this.look = null;
+    this.engineOf.clear();
     this.ballVisual?.dispose();
     this.ballVisual = null;
     this.ballGlow?.dispose();

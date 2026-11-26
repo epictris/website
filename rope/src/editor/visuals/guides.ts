@@ -58,6 +58,7 @@ import {
   type EdItem,
   type EdLayer,
   type EdModel,
+  propsOf,
 } from "../model";
 import {
   BODY_MEMBER,
@@ -86,7 +87,7 @@ export interface GuideView {
   // rather than comparing the model.
   readonly rev: number;
   readonly selectedIds: ReadonlySet<number>;
-  readonly selectedBodyIds: ReadonlySet<number>;
+  readonly selectedBodyIds: ReadonlySet<string>;
   // Which vertices of the selected polygon are picked (`selectedVerts`).
   readonly selectedVerts: ReadonlySet<number>;
   readonly visibleLayers: ReadonlySet<EdLayer>;
@@ -355,6 +356,12 @@ export class Guides {
   private readonly hashId = (id: number): void => {
     this.hashAcc = (this.hashAcc + Math.imul((id ^ this.hashSalt) | 0, 0x9e3779b1)) | 0;
   };
+  // ...and a node id, which is a string.
+  private readonly hashNode = (id: string): void => {
+    let h = 0;
+    for (let k = 0; k < id.length; k++) h = Math.imul(h ^ id.charCodeAt(k), 0x01000193);
+    this.hashId(h);
+  };
   private readonly hashLayer = (l: EdLayer): void => {
     this.hashAcc = (this.hashAcc + Math.imul(ED_LAYERS.indexOf(l) + 1 + this.hashSalt, 0x85ebca6b)) | 0;
   };
@@ -394,7 +401,7 @@ export class Guides {
     this.hashSalt = 0x1234567;
     view.selectedIds.forEach(this.hashId);
     this.hashSalt = 0x2345678;
-    view.selectedBodyIds.forEach(this.hashId);
+    view.selectedBodyIds.forEach(this.hashNode);
     this.hashSalt = 0x3456789;
     view.selectedVerts.forEach(this.hashId);
     this.hashSalt = 0x456789a;
@@ -530,7 +537,7 @@ export class Guides {
       for (const item of model.items) {
         if (item.layer !== "scene" || item.object !== "collision") continue;
         const selected = view.selectedIds.has(item.id);
-        const member = !selected && view.selectedBodyIds.has(item.bodyId);
+        const member = !selected && view.selectedBodyIds.has(item.unit);
         this.outline(item, 0, this.collisionStroke(item, selected, member), pickable("scene") ? guideTag("outline", item.id) : null, "outline");
       }
     }
@@ -707,7 +714,7 @@ export class Guides {
       ? DASH_STEEL
       : item.viscosity > 0
         ? DASH_MUD
-        : item.passable || item.mask !== MASK_ALL
+        : propsOf(item).passable || item.mask !== MASK_ALL
           ? DASH_DOTTED
           : null;
     if (selected) return { color: SELECT, px: SELECTED_OUTLINE_PX, dash };

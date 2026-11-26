@@ -72,7 +72,7 @@ def activate(context, job=None):
     # Read and build before touching the active lighting: a missing runtime
     # or invalid level file leaves the user's scene as it was.
     job = read_river() if job is None else job
-    builder = emission_preview.module("scene_guide")
+    builder = emission_preview.module("game_lighting")
     world, lights = builder.build_lighting(job, "game.light-preview.river", "River model preview")
     scene.collection.children.unlink(lights)
     world.use_fake_user = False

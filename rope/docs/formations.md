@@ -8,12 +8,12 @@ The design and its reasons are in [plans/editor-owns-the-level.md](../plans/edit
 
 | | What | Where |
 |---|---|---|
-| Formation | A recipe (generator, variant, parameters) and a guide, on a body | `LevelBodyData.formation`, `FormationData` in `src/level/levelFormat.ts` |
-| Guide | A copy of the body's collision pieces, or a boolean tree of solids | `CollisionGuide`, `SolidGuide` |
-| Decoration | Moss, ivy, a fern, a vine, mushrooms, orbs, glow flora, grown on a formation's rock | `DecorationObjectData`, a body object |
-| Paint | A painted decoration's strokes | `levels/paint/<level>.json` |
+| Formation | A recipe (generator, variant, parameters) and a guide: a `Formation3D` node, under a body or standing on its own | `FormationNode` in `src/level/nodes.ts`; compiled, `LevelBodyData.formation` (`FormationData` in `src/level/levelFormat.ts`) |
+| Guide | A copy of the collision pieces of the body above it (its `subset` naming `CollisionShape2D` node ids), or a boolean tree of solids | `CollisionGuide`, `SolidGuide` |
+| Decoration | Moss, ivy, a fern, a vine, mushrooms, orbs, glow flora, a material layer, grown on a formation's rock | a `Decoration3D` node, always a child of its formation; compiled, `DecorationObjectData` |
+| Paint | A painted decoration's strokes, by decoration id | `levels/paint/<level>.json`, a prefab's `prefabs/paint/<prefab>.json` |
 | Store | Every built result, by the hash of what built it | `public/generated/<hash>/` |
-| Asset | A reusable rock for the model library, from a free guide | `formation-assets/<name>.json` |
+| Prefab | A shared rock: a prefab holding a `Formation3D` and its decorations, built once and drawn by every instance | `prefabs/<name>.json`, [prefabs](prefabs.md) |
 
 ## Recipes and the hash
 
@@ -28,7 +28,7 @@ The schema, `src/level/formationSchema.json`, is written from the formations add
 `tools/blender/test_formation_schema.py` holds it to the add-on (every worker default, and the fields `draw` shows for every variant).
 
 Units: the guide is level geometry and scales with the level; `params` are the generator's, in metres, and do not; the build record (`built`) is the store's, in metres.
-A formation has its own placement in its body (`x`, `y`, `rot`), so moving a body's origin does not move its rock.
+A formation has its own placement in its parent's frame (`x`, `y`, `rot`, and off the plane `z` and `tilt`), so moving a body's origin does not move its rock; it is never scaled, so a rock is resized by its guide and regenerated (only a prefab instance scales the rock it draws).
 
 ## Frames
 
@@ -49,12 +49,13 @@ Blender's (x, y, z) is the 3D view's (x, z, -y): the play plane is Blender y = 0
 - `meshes/<sha256>.bin`: a solid guide's applied, sculpted or cut meshes, binary (`src/formation/meshBin.ts`: a 16-byte little-endian header - `RMSH`, version 1, vertex and triangle counts - then `Float32` positions and `Uint32` indices; 12 bytes a vertex and 12 a triangle where the JSON was ~60 a vertex), named by the hash of its bytes; the leaf's `file` carries the `.bin`. The editor hashes the bytes itself, so a guide names its mesh in the same edit that makes it, and a job waits for uploads still on their way (`meshesStored`).
 
 A save never removes anything.
-`bun run formation:sweep` lists what no level file and no pinned bundle names; `--delete` removes it.
+`bun run formation:sweep` lists what no level file, no prefab file and no pinned bundle names; `--delete` removes it.
+Named is every `Formation3D` node's build and the meshes its solid guide uses, and every `Decoration3D` node's build and its material layer's maps (`built.maps`), disabled nodes included.
 An editor's undo history can still name a removed build, so sweep with the editors closed.
 
 ## Building
 
-`scripts/formation-build.ts` (`bun run formation:build <recipe.json> [--bake]`, or `--level <level> --body <index>`):
+`scripts/formation-build.ts` (`bun run formation:build <recipe.json> [--bake]`, or `--level <level> --node <id or path>`, a `Formation3D` node's recipe or a body node's collision as a guide; it writes nothing to the level):
 
 1. **Geometry.**
    `tools/blender/formations/worker.py` builds `rock.blend` from the worker recipe.
@@ -66,6 +67,10 @@ An editor's undo history can still name a removed build, so sweep with the edito
 
 A folder appears whole or not at all (built beside and renamed).
 
+`bun run formation:build-level <level> [--bake] [--only <node id or path>] [--solid-only] [--jobs N]` (`scripts/formation-build-level.ts`) builds every `Formation3D` node of a level (or those at or under the `--only` node) and grows each one's `Decoration3D` children on the new rock, then writes what was built onto the nodes, the level written back as a tree (`scripts/levelTree.ts`) and nothing else in it touched.
+A decoration grown already from the request it would make now is left as it is.
+Close any editor that has the level open first: it autosaves over what this writes.
+
 Measured 2026-11-22: the geometry path is 1.5 to 3.3 s for a small rock (2.6 s of it generating), 35.6 s for an 8 m fitted outline (239,656 triangles); a bake is 14.8 s plus 3.7 s of tiers for a small rock.
 A cold Blender start is 0.3 s, so a warm Blender would save about 0.6 s of a geometry job; it was not built.
 
@@ -73,21 +78,22 @@ A cold Blender start is 0.3 s, so a warm Blender would save about 0.6 s of a geo
 
 `src/server/formations.ts`, in the dev server:
 
-- `POST /api/jobs` with `{kind: geometry|bake, formation}`, `{kind: decoration, request}` or `{kind: asset, asset}` answers a job id;
+- `POST /api/jobs` with `{kind: geometry|bake, formation}` (a `Formation3D` node or a compiled `FormationData`; the guide's `subset` is dropped, as the hash drops it), `{kind: decoration, request}` or `{kind: material, material}` answers a job id;
 - `GET /api/jobs?client=<id>` is a server-sent stream of every job's state;
 - `DELETE /api/jobs/<id>` cancels (the process group is killed);
 - `GET /api/jobs/<id>/log` is a job's whole output;
 - `POST /api/jobs/hold` holds the GPU jobs while an editor's ▶ Test runs (released when its stream closes).
 
 A job is keyed by the hash it will produce: asking for one that is running joins it, and one the store holds is answered done at once.
-Geometry and decorations run three at a time; a bake and an asset's accept hold the GPU and run one at a time.
+Geometry and decorations run three at a time; a bake holds the GPU, so a bake or a material bake starts only while no bake runs.
 Progress is the scripts' own `<tag> step i/n: label` lines.
 A failure carries the last lines of the output and the path of the log.
 The editor's Jobs panel (`src/editor/formationJobs.ts`) shows every job from every tab, in the canvas's bottom-right corner while there are any.
 
 ## In the editor
 
-A formation is an item of its body (`EdFormation`), so it rides every move of the body, is undone, copied (with a fresh id) and deleted like any object.
+A formation is a `Formation3D` node, and the editor's item of it carries its recipe and guide (`EdFormation`), so under a body it rides every move of the body, and it is undone, copied (with a fresh id) and deleted like any node.
+A body may hold any number of them; the compiled level gives the body its first one in the plane and every other its own collisionless body ([level-format](level-format.md#compiling-the-sim-never-sees-the-tree)).
 A body's panel has a Formation section; selecting the formation itself shows it too.
 Both are the **Formations workspace's** ([editor](editor.md#workspaces-2d-formations-decorations-texturing)): there it opens first and the body's physics sections are left out, and the dock offers Backdrop, the stack's Add shape and **Generate N out of date**, which builds every rock not generated or stale in one go.
 
@@ -103,19 +109,20 @@ The collision guide workflow:
 5. **Align guide to collision** takes the guide again; the rock is stale until regenerated.
 
 The panel says whether the collision matches the guide; after a fit it does not, and that is information.
-Merge and Split are refused where they would put two formations in a body or take one from its collision and decorations.
+**Fit collision to geometry**, **Align guide to collision** and **Align collision to guide** act between a formation and the shapes of its nearest body ancestor; a formation with no body above it is a background asset, and none of them applies.
 
-Background guides: each of the Formations dock's **Primitives** (or Shift+A with nothing selected) makes a **3D body** (`LevelBodyData.space`: no collision, so free to stand at a depth and tilt, with the full gizmo; see [level-format](level-format.md)) holding a formation on a solid guide of that one shape, standing where the view is looking; Union / Subtract / Intersect fold other guides into it ([editor](editor.md#workspaces-2d-formations-decorations-texturing)).
+Background guides: each of the Formations dock's **Primitives** (or Shift+A with nothing selected) makes a top-level **`Formation3D`** with no body (it collides with nothing, so it is free to stand at a depth and tilt, with the full gizmo; see [level-format](level-format.md#2d-and-3d-bodies)) on a solid guide of that one shape, standing where the view is looking; Union / Subtract / Intersect fold other guides into it ([editor](editor.md#workspaces-2d-formations-decorations-texturing)).
 Its guide is edited as a **stack of shapes** (`src/formation/solidStack.ts`, since 2026-11-22), as Blender's boolean cutters and MagicaCSG have it: an ordered list, each shape **Add**, **Subtract** or **Intersect**, applied top to bottom onto the first.
 The shapes are boxes, cylinders (standing along their y) and meshes in the store: imported (`.glb`/`.gltf`, welded) or made by **Apply**, a sculpt or a cut ([Sculpting](#sculpting)).
 The orthographic route's leaves - ellipsoids, hulls of points, outlines pushed through a depth with a taper, and the Orthographic Studio's three-outline preset - were retired on 2026-11-23 ([plans/sculpt-guides.md](../plans/sculpt-guides.md)).
-Meshing one needs manifold-3d, which must not reach the sim path, so they are not folded in by `normalizeLevelData`: a level holding one is refused on load with the command that fixes it, `bun run guides:migrate` (`scripts/migrate-solid-guides.ts`, editor closed), which meshes each retired leaf exactly as the editor did into a stored mesh leaf with its pose kept, holds every migrated guide to the volume it had (manifold-3d's `volume()`, to 1e-6 relative), and leaves every other guide, and so its rock's hash, as it was.
-In the panel each row's badge cycles its mode and a row is dragged to reorder; **Shift+A** in the view adds a shape (in the middle of the guide, `guideCentre`); a cut is drawn red and an intersection amber, and any shape but the base (which is the rock: a click on it is a click on the body) is picked by a click in the view.
+Meshing one needs manifold-3d, which must not reach the sim path, so they are not folded in on load: a level holding one is refused, naming the leaf.
+The one-off migration that meshed each retired leaf into a stored mesh leaf (`bun run guides:migrate`, held to the volume it had) was deleted on 2026-11-26 once no level held one (plans/node-tree.md, "Tools that read levels"); it is in the history for a level from before then.
+In the panel each row's badge cycles its mode and a row is dragged to reorder; **Shift+A** in the view adds a shape (in the middle of the guide, `guideCentre`); a cut is drawn red and an intersection amber, and any shape but the base (which is the rock: a click on it is a click on the formation) is picked by a click in the view.
 The level format is unchanged by the stack: it is read from the tree as a left fold and written back as one, so a guide nobody edits keeps its hash, and a subtree that is not part of the fold is one group row.
 The picked shape is moved, turned and sized with the gizmo; the guide is meshed live with manifold-3d and drawn through the scene (`src/editor/solidGuides.ts`), in its body's 3D frame: its edges as lines, and its volume as a translucent, lit, faceted shell (depth-tested, stronger while selected), each guide in its own colour, in the Formations workspace only and as its Guides / Rocks / Guide-Rock-Both settings say ([editor](editor.md#workspaces-2d-formations-decorations-texturing)).
-A click on a guide selects its formation's body, as a click on a mesh does (`SolidGuideView.pickGuides`), so a backdrop nobody has generated is selected by its guide; where the ray meets the guide only beyond the gameplay plane, whatever the plane holds at that point is picked first (`pickCandidatesAt`), and the backdrop is the next click into the stack.
+A click on a guide selects its formation, as a click on a mesh does (`SolidGuideView.pickGuides`), so a backdrop nobody has generated is selected by its guide; where the ray meets the guide only beyond the gameplay plane, whatever the plane holds at that point is picked first (`pickCandidatesAt`), and the backdrop is the next click into the stack.
 Backdrops behind the plane are picked among themselves nearest first along the ray (the nearer of the rock and its guide), not by the plane's stacking or by which outline holds which: none of them is an outline on the plane, and before 2026-11-23 a rock standing in front of the waterfall cliff lost the click to it.
-The handles of a body with no collision and a solid guide (a backdrop) stand on, and it turns about, the middle of its solids - each guide's own centre, carried with its placement - rather than on its frame or its placement points; see [editor](editor.md#the-transform-gizmo).
+The handles of a rock with no collision under it and a solid guide (a backdrop) stand on, and it turns about, the middle of its solids - each guide's own centre, carried with its placement - rather than on its frame or its placement points; see [editor](editor.md#the-transform-gizmo).
 A solid variant that fills an opening its guide leaves (the Wall variant over an arch fills all of it) is reported in the panel as a warning: measured on the guide's front silhouette's convex hull.
 
 The tier the game loads is chosen per formation: automatic picks tier k where the rock stands far enough behind the plane that 2^k is no larger than (D + depth) / D, D the camera's distance from the plane at the level's zoom (8.8 m).
@@ -202,6 +209,9 @@ It cannot draw the 0.5 m occlusion, the shading Bevel's rounding, the chamfer st
 It has not yet been judged against the bake by Tris.
 
 ## Decorations
+
+A decoration is a `Decoration3D` node, always a child of the `Formation3D` it grows on: the parent link is what ties it to its rock (the compiled `DecorationObjectData.formation` is that parent's id), and placing or painting one creates it there.
+Its id is what its paint is filed under, and was kept through the move to the node tree, so no paint sidecar changed.
 
 A decoration is tied to its formation's guide, which a regenerate leaves where it was: its `anchor` is the nearest point of the guide's surface to where the rock was clicked, with the guide's normal there.
 Where it is drawn (`onRock`) is the anchor carried along the normal onto the rock that is drawn now (`src/editor/decorations.ts`).
@@ -323,10 +333,8 @@ The split: Blender decides what a material looks like, the editor decides where 
 
 ## The Assets tab
 
-**Assets** beside Level and Visuals puts the level aside (its model, its undo and its name) and opens an asset document instead: one body at the origin with a formation on a free guide, an outline drawn as the body's collision or a solid.
-Both views and every tool work on it; it saves itself to `formation-assets/<name>.json`.
-**Accept into the library** (`scripts/formation-asset.ts`) builds the rock if the store lacks it, copies it to `assets-src/models/<name>.blend`, and exports it as a library model exactly as `just model <name>` does; `+ Model` then places it, drawn from one file however many times.
-Pressing Assets again gives the level back as it was.
+Retired 2026-11-26: a shared rock is a prefab holding a `Formation3D` and its decorations, and the tab became the prefab library ([prefabs](prefabs.md)).
+Its accept into the model library (`scripts/formation-asset.ts`), its documents (`formation-assets/<name>.json`, none ever made) and their API (`/api/formation-assets`) are deleted, and the job runner refuses an `asset` job.
 
 ## Publishing
 
@@ -335,8 +343,11 @@ The pins are `src/render3d/formationAssets.json`; a region whose hashes are its 
 `bun run assets:fetch` unpacks the pinned bundles into the store, so a collaborator carries on editing.
 The game never downloads a bundle: the build keeps of each formation only the file it draws (`formationServedFile`) and drops the rest of `public/generated` (`exportsInBuild` in `vite.config.ts`), and the preload list names those files.
 `cli assets` fails on a formation that is drawn and not published or not in the local store, and counts the drawn files in the total.
+A level's formations are read from its compiled form, prefab instances expanded, so a prefab's rock ships in the bundles of every level that places it ([prefabs](prefabs.md#tools)).
 
 ## Migrating a scene
+
+Retired 2026-11-26 with the Blender scenes ([blender-scenes](blender-scenes.md)): the script and its Blender half are deleted, and so is `ball-migrated.json`, its output from the river scene. What follows is kept as it stood, for the record.
 
 `bun run scene:migrate <level>` (`scripts/migrate-scene.ts`, `tools/blender/migrate_scene_dump.py`) reads the level's Blender scene and writes `levels/<level>-migrated.json` and its paint, never the level itself:
 
@@ -353,7 +364,7 @@ For the river on 2026-11-22: 40 formations (14 onto the collision bodies they we
 ## Tests
 
 - `scripts/test-formations.ts` (in `bun run test`): the hash, the disk and editor round trips, the align and match workflow, the fit, and the coordinates through a real build.
-- `scripts/test-sculpt.ts` (in `bun run test`): the binary store's round trip and refusals; the cut solid in both lenses (a point just inside and just outside the polygon's edge far from the camera included, where a prism would be wrong); Dyntopo (no edge over 4/3, closed and two-manifold, no face turned in, a settled region left as it is); undo and redo slot by slot; the commit round trip; a pinch opened for the generator (red without `separatePinches`); the migration's volumes and the refusal of a retired leaf.
+- `scripts/test-sculpt.ts` (in `bun run test`): the binary store's round trip and refusals; the cut solid in both lenses (a point just inside and just outside the polygon's edge far from the camera included, where a prism would be wrong); Dyntopo (no edge over 4/3, closed and two-manifold, no face turned in, a settled region left as it is); undo and redo slot by slot; the commit round trip; a pinch opened for the generator (red without `separatePinches`); the refusal of a retired leaf, in a flat level or a tree.
 - `tools/blender/test_formation_schema.py` (by hand): the schema against the add-on.
 - `cli levels`: formation ids unique, a generator its guide offers, the built hash in the store.
 - `cli assets`: the drawn formations published and present.

@@ -1,4 +1,4 @@
-# Force areas, surface friction and area glyphs
+# Force areas, surface friction, area glyphs and areas of several shapes
 
 ## Force areas and surface friction
 
@@ -185,3 +185,19 @@ body is the mark (see [**Levels**](levels.md#the-finish-line)). Drawn, it was a 
 chequerboard at a different pitch laid over the first, in front of the gate the player is
 aiming at. The glyph stays for the two places an invisible volume has to be visible — the
 editor, and `cli render`'s snapshot.
+
+## Areas of several shapes
+
+An area - a killzone, a force area, water or a finish line, an `Area2D` node in the level ([level-format](level-format.md#the-node-tree)) - may have any number of `CollisionShape2D` pieces, since 2026-11-26.
+Nothing in the sim had to change for it: a concave area outline was already cut into convex pieces at load, so the overlap test (`areaOverlapsBody`), a force area's push, water's drag and submersion (`submergedFraction`), the killzone and the finish line all go through every piece of the area (`getShapes()`), never only its first.
+What changed is outside the sim: the editor no longer refuses to give an area a second piece (draw one with the area selected, or put pieces under it in the scene tree), and water draws every piece ([water](water.md#drawing-a-body-of-water)).
+
+**One direction for the whole area.**
+A force area's push and a water area's current are the area's own frame, shared by all its pieces, so the pieces of one area cannot point different ways.
+Water that turns a corner is two areas.
+
+**Submersion at a seam** is the deepest single piece, not the sum of them: `submergedFraction` takes the best overlap of the body with any one piece, so a ball straddling the join of two touching pieces reads about half wet.
+A concave outline cut into pieces has had the same seam all along.
+If it shows in play, the fix is to measure coverage against the pieces' union instead.
+
+An area's pieces are its own: a body may not sit under an `Area2D`, and neither may an anchor ([level-format](level-format.md#states-the-editor-refuses)), so a killzone blade on a pendulum is still a second body driven in step rather than a piece of the pendulum ([plans/node-tree.md](../plans/node-tree.md#bodies-under-bodies)).

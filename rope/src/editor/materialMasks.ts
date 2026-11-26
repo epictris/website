@@ -253,7 +253,8 @@ export class MaterialMasks {
   }
 
   private hostOf(d: EdItem): string | null {
-    const f = this.model().items.find((i) => i.bodyId === d.bodyId && i.object === "formation" && i.formation?.id === d.decoration?.formation);
+    // Its rock: the formation it grows on, its parent.
+    const f = this.model().items.find((i) => i.object === "formation" && i.formation?.id === d.decoration?.formation);
     return f?.formation?.built?.hash ?? null;
   }
 }

@@ -45,7 +45,7 @@ import { RopeAttachment } from "../lib/ropeContact";
 import { strokeCurve, STROKE_TOLERANCE } from "../lib/stroke";
 import { cubicAt, pathNodesOf } from "../lib/path";
 import { PX } from "../engine/units";
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk } from "../editor/model";
 import { isCollisionObject } from "../level/levelFormat";
 import { checkBallInvariants, TunnelMonitor, type Violation } from "./trace";
 
@@ -1075,10 +1075,10 @@ function caseFormat(): RailResult {
   }
   c.check("a hook-proof rail deflects the hook (hook-proof wins)", !attached);
   // The editor's round trip.
-  const rt = modelToDisk(modelFromDisk(raw));
+  const rt = modelToFlatDisk(modelFromDisk(raw));
   const rtObjs = rt.bodies[0]!.objects.filter(isCollisionObject);
   const rtFirst = rtObjs[0]!.shape;
-  c.check("the editor's modelFromDisk/modelToDisk keeps the flag", rtObjs[0]!.rail === true);
+  c.check("the editor's modelFromDisk/modelToFlatDisk keeps the flag", rtObjs[0]!.rail === true);
   c.check(
     `...and the curve it is on, handles and width included (${rtFirst.kind})`,
     rtFirst.kind === "curve" &&
@@ -1241,8 +1241,8 @@ function caseRod(): RailResult {
 
   // The editor's round trip keeps the flag on a circle.
   const raw = { player: { x: 0, y: 0, radius: 8 }, bodies: [rods([{ x: 0, y: -120 }])] } as RawLevelData;
-  const rt = modelToDisk(modelFromDisk(raw)).bodies[0]!.objects.filter(isCollisionObject)[0]!;
-  c.check("the editor's modelFromDisk/modelToDisk keeps `rail` on a circle", rt.rail === true && rt.shape.kind === "circle");
+  const rt = modelToFlatDisk(modelFromDisk(raw)).bodies[0]!.objects.filter(isCollisionObject)[0]!;
+  c.check("the editor's modelFromDisk/modelToFlatDisk keeps `rail` on a circle", rt.rail === true && rt.shape.kind === "circle");
   return ok("rail-rod — a rod through the plane: the cuff closes round it centred and turns freely", c.passed(), c.details);
 }
 

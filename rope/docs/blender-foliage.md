@@ -246,7 +246,7 @@ Checked on 2026-11-14: a grove grown in Blender on flat ground, exported and opt
 `render3d/glowFlora.ts` dresses a mesh found by its `_glow` attribute (not by its material's name: the optimiser may merge identical materials or swap untextured ones for a palette material) with the original's material: three's physical surface with its iridescent sheen and clear coat, emission per vertex with a slow pulse, glowing gill lines under a cap and rib lines on a bulb, a stem lit from inside, a fresnel rim, and the wind sway, coherent between neighbours and growing with height.
 The clock is the scene's (`waterTime`, pinnable for shots); `setGlowFloraLook({ glow, pulse, sway, rim })` sets the look for every glow plant at once.
 The game's default surface glow is 0.22 of the generator's emission, keeping the pastel body colours and shading visible on mushrooms, lantern blooms, ferns and reeds. This also softens their bloom, but leaves the grove's baked lighting and authored light sources unchanged. Set `glow: 1` when comparing against the original generator's full-emission look.
-The sway is applied in the world and taken back into the mesh's frame, so a turned plant still sways across the screen; the plants cast through depth materials with the same sway, put back on every mount (three's clone drops `customDepthMaterial`; `sceneDressing.mountExport`).
+The sway is applied in the world and taken back into the mesh's frame, so a turned plant still sways across the screen; the plants cast through depth materials with the same sway, put back on every mount (three's clone drops `customDepthMaterial`; `exportFiles.mountExport`).
 A glow plant keeps out of the depth prepass (its material is patched), and the bloom pass re-runs the patch on its emission-only copy, so the glow blooms; `emissive` is the emission's overall multiplier (white), which is also the bloom pass's sign that it emits.
 The game logs `[render3d] scene "<scene>": N glow flora meshes glow and sway`.
 
@@ -284,7 +284,7 @@ One slot, because Blender 5.2's glTF exporter writes a second slot's `COLOR_0` w
 The optimiser takes the atlas at up to 2048 (`scripts/encode-textures.mjs`, "foliage atlas, 2k"), not the 1k of every other map: a frond 0.45 m long is 90 pixels on a 1080-line screen, and at 1k it would draw from about 80 texels of its painted card, at 2k from 160.
 Bump `library.ATLAS_VERSION` to redraw the atlas (a file that packed the old one drops it) and `mesh_io.MATERIAL_VERSION` to rebuild the material in every file.
 
-**In the game** a mesh wearing `Foliage` is dressed as the ivy's leaves are (`render3d/sceneDressing.ts`, `wearIvyLeaves` in `render3d/ivyLeaves.ts`): it casts and receives, two-sided with the front's normal on both sides (karin's ferns did the same), lit through (karin's ferns had their own translucency term; the ivy's is used instead, so foliage and ivy light alike), and with the leaves' finer shadow biases so a frond shades the frond below it.
+**In the game** a mesh wearing `Foliage` is dressed as the ivy's leaves are (`render3d/exportFiles.ts`, `wearIvyLeaves` in `render3d/ivyLeaves.ts`): it casts and receives, two-sided with the front's normal on both sides (karin's ferns did the same), lit through (karin's ferns had their own translucency term; the ivy's is used instead, so foliage and ivy light alike), and with the leaves' finer shadow biases so a frond shades the frond below it.
 The game logs `[render3d] scene "<scene>": N plant meshes cast and receive leaf shadows` when it finds them.
 
 ## Export

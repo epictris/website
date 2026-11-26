@@ -16,7 +16,7 @@ import { PAINTED_DECORATIONS, type DecorationAnchor, type DecorationKind, type P
 import { showToast } from "../render/toast";
 import { anchorAt, formationMatrix, markPos, projectOnRock, reproject, reprojectStrokes, rockOf, toFormation, v3 } from "./decorations";
 import type { FormationJobs, JobState } from "./formationJobs";
-import { bodyMembers, newBodyId, type EdDecoration, type EdItem, type EdModel } from "./model";
+import { addItem, bodyMembers, newBodyId, removeItems, type EdDecoration, type EdItem, type EdModel } from "./model";
 import { DEFAULT_THRESHOLD, PaintCoverage, samplesOf } from "./paintCoverage";
 import { PaintCursor } from "./paintCursor";
 import type { GizmoHandlers } from "./gizmo";
@@ -139,9 +139,18 @@ export class DecorationController {
   private item(id: number): EdItem | null {
     return this.host.model().items.find((i) => i.id === id) ?? null;
   }
+  // A decoration's rock is its parent node (plans/node-tree.md).
   private formationOf(d: EdItem): EdItem | null {
-    const f = this.host.model().items.find((i) => i.bodyId === d.bodyId && i.object === "formation");
-    return f && f.formation?.id === d.decoration?.formation ? f : null;
+    const model = this.host.model();
+    const parent = model.tree.nodes.get(d.node)?.parent;
+    return model.items.find((i) => i.node === parent && i.object === "formation") ?? null;
+  }
+
+  // What grows on a rock: the decorations that are its children.
+  private decorationsOn(f: EdItem): EdItem[] {
+    const model = this.host.model();
+    const kids = new Set(model.tree.nodes.get(f.node)?.children ?? []);
+    return model.items.filter((i) => i.object === "decoration" && kids.has(i.node));
   }
 
   // The formation item a gesture now would land on: the one being placed on,
@@ -255,8 +264,8 @@ export class DecorationController {
     if (!rock) return;
     let changed = false;
     let lost = 0;
-    for (const d of bodyMembers(this.host.model().items, f.bodyId)) {
-      if (d.object !== "decoration" || !d.decoration || d.decoration.formation !== f.formation?.id) continue;
+    for (const d of this.decorationsOn(f)) {
+      if (!d.decoration) continue;
       const dec = d.decoration;
       if (isPainted(dec.kind)) {
         const carried = reprojectStrokes(rock, dec.strokes ?? []);
@@ -299,7 +308,7 @@ export class DecorationController {
   // Esc, Done or a click off the rock did: picking another item in the
   // outliner left the brush on with no panel to say so, its coverage dots
   // drawn over the rock and a click on the rock still painting.
-  followSelection(selected: readonly EdItem[], selectedBodies: ReadonlySet<number>): void {
+  followSelection(selected: readonly EdItem[], selectedBodies: ReadonlySet<string>): void {
     if (this.painting && !this.painting.palette) {
       if (selected.length !== 1 || selected[0]!.id !== this.painting.itemId) this.end();
       return;
@@ -308,7 +317,7 @@ export class DecorationController {
     // stays armed until Esc, its button or a press off every rock.
     if (this.placing && this.placing.formationId !== null) {
       const f = this.item(this.placing.formationId);
-      if (!f || !(selectedBodies.has(f.bodyId) || selected.some((i) => i.bodyId === f.bodyId))) this.end();
+      if (!f || !(selectedBodies.has(f.unit) || selected.some((i) => i.unit === f.unit))) this.end();
     }
   }
 
@@ -343,15 +352,16 @@ export class DecorationController {
         const now = this.item(id);
         if (!was) {
           if (now) {
-            model.items.splice(model.items.indexOf(now), 1);
+            removeItems(model, [now]);
             dropped = true;
           }
         } else if (now) {
           now.decoration = { ...now.decoration!, strokes: was.strokes };
         } else {
           const back: EdItem = { ...was.item, decoration: { ...was.item.decoration!, strokes: was.strokes } };
-          const members = bodyMembers(model.items, back.bodyId);
-          model.items.splice(members.length ? model.items.lastIndexOf(members.at(-1)!) + 1 : model.items.length, 0, back);
+          // Back on its rock, under the id it had, which its paint is filed by.
+          const rock = model.items.find((i) => i.object === "formation" && i.formation?.id === back.decoration!.formation);
+          if (rock) addItem(model, back, rock.node, undefined, undefined, back.node);
         }
       }
       this.host.markDirty();
@@ -519,11 +529,9 @@ export class DecorationController {
   // (and of a material layer, that material), but one that could not follow
   // its rock.
   private patchesOn(f: EdItem, kind: DecorationKind, material?: string): EdItem[] {
-    return bodyMembers(this.host.model().items, f.bodyId).filter(
+    return this.decorationsOn(f).filter(
       (i) =>
-        i.object === "decoration" &&
         i.decoration?.kind === kind &&
-        i.decoration.formation === f.formation?.id &&
         !i.decoration.lost &&
         (kind !== "material" || materialOf(i.decoration) === material),
     );
@@ -564,8 +572,7 @@ export class DecorationController {
     this.touch(into);
     this.touch(from);
     into.decoration = { ...into.decoration!, strokes: [...(into.decoration!.strokes ?? []), ...(from.decoration!.strokes ?? [])] };
-    const at = model.items.indexOf(from);
-    if (at >= 0) model.items.splice(at, 1);
+    removeItems(model, [from]);
     this.session.delete(from.id);
     this.asked.delete(from.id);
     this.fields.get(from.id)?.field.dispose();
@@ -611,8 +618,8 @@ export class DecorationController {
       formation: null,
       decoration,
     };
-    const at = model.items.lastIndexOf(bodyMembers(model.items, f.bodyId).at(-1)!);
-    model.items.splice(at + 1, 0, item);
+    // A child of the rock it grows on, its id its node's.
+    addItem(model, item, f.node, undefined, undefined, id);
     this.host.markDirty();
     if (select) this.host.select([item.id]);
     return item;
@@ -839,9 +846,7 @@ export class DecorationController {
   // `materials` (the Texturing workspace's) its material layers, which the
   // palette paints.
   buildList(parent: HTMLElement, f: EdItem, materials = false): void {
-    const items = bodyMembers(this.host.model().items, f.bodyId).filter(
-      (i) => i.object === "decoration" && i.decoration?.formation === f.formation?.id && (i.decoration?.kind === "material") === materials,
-    );
+    const items = this.decorationsOn(f).filter((i) => (i.decoration?.kind === "material") === materials);
     const list = div("ed-solid-tree");
     for (const d of items) {
       const dec = d.decoration!;

@@ -1,13 +1,20 @@
 // Build one formation from its recipe into the store (docs/formations.md).
 //
 //   bun run formation:build <recipe.json> [--bake] [options]
-//   bun run formation:build --level <level> --body <index> [--generator fitted|boulders] [--bake] [options]
+//   bun run formation:build --level <level> --node <id or path> [--generator fitted|boulders] [--bake] [options]
 //
 // A recipe file is a formation's recipe in metres: `{generator, variant?,
 // params, guide}` as a level holds it in memory, or `{generator, params,
 // outline: [[x, z], ...]}` with the outline in the rock's frame (x right, z
-// up, metres) as the worker takes it. `--level`/`--body` take the guide from a
-// level's body instead: its collision pieces, as "Generate" in the editor does.
+// up, metres) as the worker takes it. `--level`/`--node` take it from a level
+// instead (plans/node-tree.md): a `Formation3D` node's own recipe, or a body
+// node's rock's; given `--generator`, or for a body with no rock, a collision
+// guide taken from the body's enclosing collision pieces, as "Generate" in
+// the editor does, in the rock's frame where the body has one. The node is named
+// by its id or its path of names (`Rocks/Ledge`). This builds into the store
+// and writes nothing to the level; `formation:build-level` is what writes
+// builds back. The retired `--body <index>` named a body by its place in the
+// flat list, which a tree has no stable notion of.
 //
 // Two stages, each run only when the store lacks what it makes:
 //
@@ -30,7 +37,7 @@
 //
 // The last line on success is `FORMATION_BUILT <json>`: the hash, the
 // generator's fingerprint, the recipe version and the tiers, which is what a
-// level's `formation.built` records. The job runner (src/server/jobs.ts)
+// level's `formation.built` records. The job runner (src/server/formations.ts)
 // reads it, and every `<tag> step i/n: ...` line before it for its bar.
 
 import { spawn } from "node:child_process";
@@ -42,13 +49,15 @@ import { formationRecipe, RECIPE_VERSION, recipeHash } from "../src/formation/re
 import { readStoredMesh } from "../src/formation/meshBin";
 import { meshFiles, solidWorkerRecipe, type SolidMesh } from "../src/formation/solid";
 import { FORMATION_HASH, GEOMETRY_FILE, meshFileName, MESHES, META_FILE, ROCK_FILE, tierFileName, type FormationMeta, type SectionLoop } from "../src/formation/store";
-import { isCollisionObject, scaleLevelData, type FormationData, type FormationTier, type RawLevelData, type SolidNode } from "../src/level/levelFormat";
+import { isCollisionObject, normalizeLevelData, scaleFormation, scaleNormalized, type FormationData, type FormationTier, type GuidePiece, type SolidNode } from "../src/level/levelFormat";
+import { BODY_TYPES, enclosesShape, IDENTITY_2D, poseOf, relative2D } from "../src/level/nodes";
 import { exportBlend, ROOT } from "./blendExport";
+import { formationOf, readLevelTree, resolveNode } from "./levelTree";
 import { StepProgress } from "./stepProgress";
 
 const TAG = "[formation]";
 const usage =
-  "usage: bun run formation:build <recipe.json> | --level <level> --body <index> [--generator G] [--bake] [--blender PATH] [--python PATH] [--store DIR] [--triangles N] [--map-max N] [--tiers N] [--force]";
+  "usage: bun run formation:build <recipe.json> | --level <level> --node <id or path> [--generator G] [--bake] [--blender PATH] [--python PATH] [--store DIR] [--triangles N] [--map-max N] [--tiers N] [--force]";
 
 function fail(msg: string): never {
   console.error(`${TAG} ${msg}`);
@@ -56,7 +65,8 @@ function fail(msg: string): never {
 }
 
 const argv = process.argv.slice(2);
-const VALUED = new Set(["--level", "--body", "--generator", "--blender", "--python", "--store", "--triangles", "--map-max", "--tiers"]);
+if (argv.includes("--body")) fail(`--body <index> is retired: name the node instead, --level <level> --node <id or path>\n${usage}`);
+const VALUED = new Set(["--level", "--node", "--generator", "--blender", "--python", "--store", "--triangles", "--map-max", "--tiers"]);
 const BARE = new Set(["--bake", "--force"]);
 const flag = (name: string): string | undefined => {
   const i = argv.indexOf(name);
@@ -83,23 +93,28 @@ type Recipe = Pick<FormationData, "generator" | "variant" | "params" | "guide">;
 function loadRecipe(): Recipe {
   const level = flag("--level");
   if (level) {
-    const body = Number(flag("--body"));
+    const ref = flag("--node") ?? fail(`--level needs --node <id or path>\n${usage}`);
     const file = join(ROOT, "levels", `${level}.json`);
     if (!existsSync(file)) fail(`no ${relative(ROOT, file)}`);
-    const data = scaleLevelData(JSON.parse(readFileSync(file, "utf8")) as RawLevelData, PX);
-    const b = data.bodies[body];
-    if (!Number.isInteger(body) || !b) fail(`${level} has no body ${flag("--body")} (0 to ${data.bodies.length - 1})`);
-    const pieces = b.objects.filter(isCollisionObject).map((o) => ({
-      ...(o.x !== undefined ? { x: o.x } : {}),
-      ...(o.y !== undefined ? { y: o.y } : {}),
-      ...(o.rot !== undefined ? { rot: o.rot } : {}),
-      shape: o.shape,
-    }));
-    if (!pieces.length) fail(`${level} body ${body} has no collision pieces to take a guide from`);
-    const generator = (flag("--generator") ?? b.formation?.generator ?? "fitted") as Recipe["generator"];
-    return b.formation && !flag("--generator")
-      ? b.formation
-      : { generator, params: {}, guide: { kind: "collision", pieces } };
+    const tree = readLevelTree(file);
+    const node = resolveNode(tree.nodes, ref);
+    if (!node) fail(`${level} has no node with the id or path "${ref}"`);
+    if (node.type !== "Formation3D" && !BODY_TYPES.has(node.type)) fail(`${level} node "${ref}" is a ${node.type}: name a Formation3D or a body`);
+    const generator = flag("--generator") as Recipe["generator"] | undefined;
+    // The formation's own recipe, its guide in metres.
+    if (node.type === "Formation3D" && !generator) return scaleFormation(formationOf(node), PX);
+    // The body the node is, or the one its rock is compiled onto: compiling
+    // composes everything between them.
+    const data = scaleNormalized(normalizeLevelData(tree), PX);
+    const b = data.bodies.find((x) => (node.type === "Formation3D" ? x.formation?.id === node.id : x.node?.id === node.id));
+    if (!b) fail(`${level} node "${ref}" compiles to no body (is it, or something above it, disabled?)`);
+    // A body's rock as it is, unless another generator is asked for.
+    if (b.formation && !generator) return b.formation;
+    // Else a guide from the body's collision, in its rock's frame.
+    const frame = b.formation ? poseOf(b.formation) : IDENTITY_2D;
+    const pieces = b.objects.filter(isCollisionObject).filter(enclosesShape).map((o): GuidePiece => ({ ...relative2D(frame, poseOf(o)), shape: o.shape }));
+    if (!pieces.length) fail(`${level} node "${ref}" has no enclosing collision pieces to take a guide from${node.type === "Formation3D" ? " (a rock with no body is a background rock: build its own recipe, without --generator)" : ""}`);
+    return { generator: generator ?? b.formation?.generator ?? "fitted", params: {}, guide: { kind: "collision", pieces } };
   }
   const path = positional[0] ?? fail(usage);
   const raw = JSON.parse(readFileSync(path, "utf8")) as Recipe & { outline?: [number, number][] };

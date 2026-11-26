@@ -147,7 +147,15 @@ const FRONT_ROWS = 6;
 //            below it; read back as the depth under the waterline
 //   aAlpha - opacity
 //   aUp    - 1 on the top face, 0 on the front sheet and the caps
-export function poolGeometry(halfX: number, halfY: number, frontZ: number, backZ: number): THREE.BufferGeometry {
+// `walls` leaves out a side wall another piece of the same water stands
+// against, so a pool of several pieces shows no seam through its surface.
+export function poolGeometry(
+  halfX: number,
+  halfY: number,
+  frontZ: number,
+  backZ: number,
+  walls: { left: boolean; right: boolean } = { left: true, right: true },
+): THREE.BufferGeometry {
   const pos: number[] = [];
   const nor: number[] = [];
   const lit: number[] = [];
@@ -199,6 +207,7 @@ export function poolGeometry(halfX: number, halfY: number, frontZ: number, backZ
   grid(FRONT_ROWS, cols, (t, u) => [x(u), halfY - depth * t, frontZ], [0, 0, 1], (t) => [frontLit(t), frontAlpha(t), 0]);
   // The caps, so the slab is not an open box from any view but the game's.
   for (const sign of [-1, 1]) {
+    if (!(sign < 0 ? walls.left : walls.right)) continue;
     grid(FRONT_ROWS, 4, (t, u) => [sign * halfX, halfY - depth * t, backZ + (frontZ - backZ) * u], [sign, 0, 0], (t) => [
       frontLit(t),
       frontAlpha(t),
@@ -221,24 +230,11 @@ export function poolGeometry(halfX: number, halfY: number, frontZ: number, backZ
 
 // A pool's material and the switch for its mirror: on only for the pool the
 // scene drew the reflection for this frame (see `Scene3D.mirrorPool`), so a
-// pool never reads a reflection taken in another pool's plane. And the world z
-// behind which the slab's end caps are not drawn: where the scene's own water
-// continues the pool past its ends (`Scene3D.adoptSceneryWater`), a cap is a
-// wall standing in open water, and its waterline showed as a pale seam. And
-// the pool's top face in the world (min x, max x, min z, max z), set by the
-// scene every frame (`Scene3D.mirrorPool`): the scene's water continuing the
-// pool is not drawn under it.
+// pool never reads a reflection taken in another pool's plane.
 export interface StillWaterMaterial {
   material: THREE.MeshBasicMaterial;
   reflect: { value: number };
-  openBehind: { value: number };
-  footprint: { value: THREE.Vector4 };
 }
-
-// `openBehind` with nothing continuing the pool: every cap drawn.
-const CAPS_CLOSED = -1e9;
-// How far the scene's water reaches in under the pool's top face, metres.
-const FOOTPRINT_OVERLAP = 0.01;
 
 // THE WAKE is foam, drawn as a fall's foam is (waterLook.ts, impactPaint;
 // Tris, 2026-10-06: the ripple rings went, and the white ring strokes were
@@ -314,9 +310,6 @@ const FOOTPRINT_OVERLAP = 0.01;
 // (Until 2026-10-06 the wake was rings after Tris's stylised ripple
 // reference: crests as narrow waves in the slopes and white strokes broken
 // into tapered arcs.)
-//
-// Shared by every still water material, so the trail carries on from the
-// pool onto the scene's water beyond it.
 //
 // A capsule is closed and the next one starts from its end once it is
 // WAKE_SPACING long and WAKE_INTERVAL old, so a slot is never taken back
@@ -561,25 +554,10 @@ export const BALL_FOAM_GLSL = `
 
 // `backZ`/`frontZ` are the slab's z range, which is the world's: a water body's
 // root stands on the gameplay plane. The deep-to-shallow ramp runs over it in
-// world z, so anything else wearing a pool's water continues its colours.
-//
-// `plane` is that anything else: the scene's own flat water beyond the pool
-// (the backdrop's "backdrop pool", see `Scene3D.adoptSceneryWater`), worn with
-// the pool's colour, slab and mirror switch so the two meet without a seam.
-// It is a plain surface with none of the slab's attributes, opaque, drawn
-// before the slab, at the pool's own height and not under the pool's top face
-// (`footprint`): one surface at one height, so there is no step at the join
-// and the mirror is sampled from the same plane on both sides of it.
-export function stillWaterMaterial(
-  color: string | undefined,
-  backZ: number,
-  frontZ: number,
-  plane: { reflect: { value: number }; footprint: { value: THREE.Vector4 } } | null = null,
-): StillWaterMaterial {
+// world z.
+export function stillWaterMaterial(color: string | undefined, backZ: number, frontZ: number): StillWaterMaterial {
   const { deep, shallow, light } = studyPalette(color);
-  const reflect = plane ? plane.reflect : { value: 0 };
-  const openBehind = { value: CAPS_CLOSED };
-  const footprint = plane ? plane.footprint : { value: new THREE.Vector4() };
+  const reflect = { value: 0 };
   // Unlit (the water's colour is the study's, not the cave lights') and not
   // tone mapped (the study's colours are display colours, and so is the
   // reflection it mixes with; see planarReflection.ts).
@@ -594,27 +572,24 @@ export function stillWaterMaterial(
   // WRITES DEPTH, translucent front sheet and all. The depth of field draws
   // anything see-through that writes none sharp over its blur, whole (it
   // cannot blur what it has no depth for); a pool reaching back to the far
-  // wall then stayed crisp against the blurred rocks it meets, and a shade
-  // off the scene's water beyond its ends, which blurs (Tris, 2026-10-05).
+  // wall then stayed crisp against the blurred rocks it meets (Tris,
+  // 2026-10-05).
   // With depth, the blur reads the water's own: sharp at the plane, soft
   // toward the far wall, as the rocks standing in it are.
   const mat = new THREE.MeshBasicMaterial({
     color: shallow,
-    transparent: !plane,
+    transparent: true,
     depthWrite: true,
     side: THREE.DoubleSide,
     toneMapped: false,
     fog: false,
   });
-  if (plane) mat.defines = { SW_PLANE: "" };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, reflectionUniforms);
     shader.uniforms.uTime = waterTime;
     shader.uniforms.uSurfaceMap = { value: waterSurfaceMap() };
     Object.assign(shader.uniforms, impactUniforms);
     shader.uniforms.uReflect = reflect;
-    shader.uniforms.uOpenBehind = openBehind;
-    shader.uniforms.uFootprint = footprint;
     shader.uniforms.uSlabZ = { value: new THREE.Vector2(backZ, Math.max(frontZ - backZ, 1e-3)) };
     shader.uniforms.uDeep = { value: deep };
     shader.uniforms.uShallow = { value: shallow };
@@ -622,35 +597,23 @@ export function stillWaterMaterial(
     Object.assign(shader.uniforms, ballFoamUniforms);
 
     shader.vertexShader = `
-      #ifndef SW_PLANE
-        attribute float aLit;
-        attribute float aAlpha;
-        attribute float aUp;
-      #endif
+      attribute float aLit;
+      attribute float aAlpha;
+      attribute float aUp;
       uniform mat4 uReflectionMatrix;
       uniform vec2 uSlabZ;
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
       varying float vDepth;
-      varying float vCap;
       varying vec3 vWorld;
       varying vec4 vReflection;
     ${shader.vertexShader}`.replace(
       "#include <begin_vertex>",
       `#include <begin_vertex>
-      #ifdef SW_PLANE
-        vLit = 1.0;
-        vAlpha = 1.0;
-        vUp = 1.0;
-        vCap = 0.0;
-      #else
-        vLit = aLit;
-        vAlpha = aAlpha;
-        vUp = aUp;
-        // The end caps face along x; the top and the front sheet do not.
-        vCap = abs(normal.x);
-      #endif
+      vLit = aLit;
+      vAlpha = aAlpha;
+      vUp = aUp;
       vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
       // Back of the slab 0, front 1.
       vDepth = (vWorld.z - uSlabZ.x) / uSlabZ.y;
@@ -665,8 +628,6 @@ export function stillWaterMaterial(
       uniform mat4 uReflectionInverse;
       uniform vec4 uReflectionArea;
       uniform float uReflect;
-      uniform float uOpenBehind;
-      uniform vec4 uFootprint;
       uniform vec3 uDeep;
       uniform vec3 uShallow;
       uniform vec3 uLight;
@@ -674,7 +635,6 @@ export function stillWaterMaterial(
       varying float vAlpha;
       varying float vUp;
       varying float vDepth;
-      varying float vCap;
       varying vec3 vWorld;
       varying vec4 vReflection;
       ${IMPACT_GLSL}
@@ -714,15 +674,6 @@ export function stillWaterMaterial(
       .replace(
         "#include <color_fragment>",
         `#include <color_fragment>
-      // An end cap where the scene's water carries on past it.
-      if (vCap > 0.5 && vWorld.z < uOpenBehind) discard;
-      #ifdef SW_PLANE
-        // The scene's water under the pool's top face, which draws there. A
-        // hair inside it, so the two overlap rather than leave a crack; where
-        // they overlap they are the same colour at the same height.
-        if (vWorld.x > uFootprint.x + ${fmt(FOOTPRINT_OVERLAP)} && vWorld.x < uFootprint.y - ${fmt(FOOTPRINT_OVERLAP)}
-          && vWorld.z > uFootprint.z + ${fmt(FOOTPRINT_OVERLAP)} && vWorld.z < uFootprint.w - ${fmt(FOOTPRINT_OVERLAP)}) discard;
-      #endif
       // THE SURFACE, the study's shader (see the header). Lengths are in the
       // pattern's units.
       vec2 swP = vWorld.xz / vec2(${fmt(PATCH_SIZE)}, ${fmt(PATCH_SIZE * DEPTH_STRETCH)});
@@ -808,14 +759,13 @@ export function stillWaterMaterial(
       swFront = mix(swFront, mix(uLight, vec3(1.0), 0.5), ${fmt(WATERLINE_W)} * swLine);
 
       diffuseColor.rgb = max(mix(swFront, swCol, vUp), vec3(0.0));
-      // The top face opaque, as the study's water and the scene's water
-      // continuing it are: at the slab's 0.97 the bed showed through and the
-      // pool read a shade off the water beyond its ends.
+      // The top face opaque, as the study's water is: at the slab's 0.97 the
+      // bed showed through.
       diffuseColor.a = mix(vAlpha, 1.0, vUp);`,
       );
   };
-  mat.customProgramCacheKey = () => (plane ? "still-water-plane" : "still-water");
-  return { material: mat, reflect, openBehind, footprint };
+  mat.customProgramCacheKey = () => "still-water";
+  return { material: mat, reflect };
 }
 
 // ---------------------------------------------------------------------------
@@ -841,12 +791,6 @@ export interface FoamSurface {
 export interface StillSurface extends FoamSurface {
   mesh: THREE.Mesh;
   reflect: { value: number };
-  openBehind: { value: number };
-  footprint: { value: THREE.Vector4 };
-  // The pool's colour, for the scene's own water that continues it, and that
-  // water once adopted (see `Scene3D.adoptSceneryWater`).
-  color: string | undefined;
-  scenery: THREE.Mesh[];
 }
 
 // The ball as the detector reads it: where it is DRAWN this frame, the sim

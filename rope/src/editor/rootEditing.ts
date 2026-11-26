@@ -26,6 +26,7 @@ import {
   toWorld,
   type EdItem,
   type EdModel,
+  propsOf,
 } from "./model";
 
 // What a trunk drawn with the root tool starts as: 16 cm at its base, 2.5 cm at
@@ -52,8 +53,8 @@ export function isRootItem(i: EdItem): i is RootItem {
 
 // All branches in one body share their bark, including across fused joins.
 export function setRootBark(model: EdModel, selected: readonly EdItem[], bark: RootBarkVariant): void {
-  const bodies = new Set(selected.filter(isRootItem).map(i => i.bodyId));
-  for (const item of model.items) if (isRootItem(item) && bodies.has(item.bodyId)) item.root = { ...item.root, bark };
+  const bodies = new Set(selected.filter(isRootItem).map(i => i.unit));
+  for (const item of model.items) if (isRootItem(item) && bodies.has(item.unit)) item.root = { ...item.root, bark };
 }
 
 // A branch's centreline in world metres, indexed for arc length: the very
@@ -144,7 +145,7 @@ export function syncRoots(model: EdModel): boolean {
   for (const i of roots) {
     if (i.root.parent === null) continue;
     const p = byId.get(i.root.parent);
-    const ok = p !== undefined && p !== i && isRootItem(p) && p.bodyId === i.bodyId && !closesLoop(byId, i);
+    const ok = p !== undefined && p !== i && isRootItem(p) && p.unit === i.unit && !closesLoop(byId, i);
     if (!ok) {
       i.root = { ...i.root, parent: null, at: 0 };
       changed = true;
@@ -201,25 +202,25 @@ export function rootBase(items: readonly EdItem[]): Vec2 | null {
 // Make the roots whose bodies `leads` lead SPRING about their base, or stand
 // static again (the body panel's Root `springs`): rigid, on a pivot whose
 // bearing is the trunk's first node in the body's own frame, with a torsion
-// return spring - `ROOT_SPRING_FREQ` unless one is already authored. The caller
-// carries the lead's properties across its body (`syncBodyProps`).
+// return spring - `ROOT_SPRING_FREQ` unless one is already authored. They are
+// the body node's own (`EdBody`), so every branch under it reads the same.
 export function setRootSprings(model: EdModel, leads: readonly EdItem[], on: boolean): void {
   for (const b of leads) {
     if (!on) {
-      b.kind = "static";
-      b.pivot = false;
-      b.pivotAt = null;
+      propsOf(b).kind = "static";
+      propsOf(b).pivot = false;
+      propsOf(b).pivotAt = null;
       continue;
     }
-    const base = rootBase(bodyMembers(model.items, b.bodyId));
-    const f = bodyFrameOf(model, b.bodyId);
-    b.kind = "rigid";
-    b.pivot = true;
+    const base = rootBase(bodyMembers(model.items, b.unit));
+    const f = bodyFrameOf(model, b.unit);
+    propsOf(b).kind = "rigid";
+    propsOf(b).pivot = true;
     // A pivot and a linear spring are exclusive (docs/pivot-and-spring-bodies.md).
-    b.springFreqX = 0;
-    b.springFreqY = 0;
-    b.pivotAt = base ? base.sub(f.pos).rotated(-f.rot) : null;
-    if (!(b.pivotFreq > 0)) b.pivotFreq = ROOT_SPRING_FREQ;
+    propsOf(b).springFreqX = 0;
+    propsOf(b).springFreqY = 0;
+    propsOf(b).pivotAt = base ? base.sub(f.pos).rotated(-f.rot) : null;
+    if (!(propsOf(b).pivotFreq > 0)) propsOf(b).pivotFreq = ROOT_SPRING_FREQ;
   }
 }
 

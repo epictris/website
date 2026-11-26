@@ -1,27 +1,30 @@
 {
-  "chains": [
+  "format": 3,
+  "nodes": [
     {
-      "a": 1,
-      "b": 2
-    }
-  ],
-  "player": {
-    "x": 0,
-    "y": -100,
-    "radius": 8
-  },
-  "bodies": [
+      "type": "Spawn2D",
+      "id": "mvb55ci1",
+      "name": "Spawn",
+      "x": 0,
+      "y": -100,
+      "radius": 8
+    },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "w3fwn7sa",
+      "name": "StaticBody2D",
       "x": -190.00000000000003,
       "y": -325,
-      "rot": 0,
+      "order": 0,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "gzs1nk63",
+          "name": "Poly",
           "shape": {
             "kind": "poly",
             "verts": [
@@ -42,40 +45,61 @@
                 "y": -4.999999999999991
               }
             ]
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 1,
+          "type": "Anchor2D",
+          "id": "1",
+          "name": "Anchor",
           "x": 0.26074551119597,
           "y": 4.999999999999982
         }
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "hzi4vtl8",
+      "name": "RigidBody2D",
       "x": -192.00000000000003,
       "y": -170.00000000000003,
-      "rot": 0,
+      "order": 1,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "lesbusez",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 150,
             "h": 10
+          },
+          "debug": {
+            "on": true
           }
         },
         {
-          "type": "anchor",
-          "id": 2,
+          "type": "Anchor2D",
+          "id": "2",
+          "name": "Anchor",
           "x": -0.008998430666062873,
           "y": -5.000000000000004
         }
       ]
+    },
+    {
+      "type": "Chain",
+      "id": "3ful9gkg",
+      "name": "Chain",
+      "order": 0,
+      "a": "1",
+      "b": "2"
     }
   ]
 }

@@ -34,7 +34,8 @@ import { buildPolylineIndex, cubicAt, pathNodesOf, pointAtArcLength, tangentAtAr
 import { PX } from "../engine/units";
 import { BallHook } from "../classes/ballHook";
 import { BallPlayer } from "../classes/ballPlayer";
-import { modelFromDisk, modelToDisk, setPathVerts, toLevelData, toWorld, type EdModel } from "../editor/model";
+import { addFrameNode, addItem, defaultBody, modelFromDisk, modelToFlatDisk, moveNode, propsOf, setPathVerts, toLevelData, toWorld, type EdModel } from "../editor/model";
+import { nextOrder } from "../editor/tree";
 import {
   isRootItem,
   projectOntoRoot,
@@ -155,7 +156,8 @@ function grownModel(): { model: EdModel; trunk: RootItem; branch: RootItem; twig
       },
       root: { parent: parent.id, at },
     } as RootItem;
-    model.items.push(item);
+    // A node of its own beside its parent, as the editor grows one.
+    addItem(model, item, model.tree.nodes.get(parent.node)?.parent ?? parent.unit);
     return item;
   };
   const branch = grow(trunk, 0.5, new Vec2(0.4, 1.4));
@@ -332,7 +334,7 @@ function caseFormat(): RootResult {
   );
   const { model } = grownModel();
   setRootBark(model, [model.items.find(isRootItem)!], "broad");
-  const disk = modelToDisk(model);
+  const disk = modelToFlatDisk(model);
   const rootFiles = levelStoredFiles(disk).filter(f => f.file.includes("painted-root"));
   c.check("preloading fetches only the chosen bark variant", rootFiles.length === 1 && rootFiles[0]!.file.endsWith("painted-root-broad-base.webp"));
   const objs = disk.bodies.flatMap((b) => b.objects);
@@ -342,16 +344,18 @@ function caseFormat(): RootResult {
     `the editor writes the three branches into the root's one body (${disk.bodies.length} body, ${objs.length} objects)`,
     disk.bodies.length === 1 && tags.filter((t) => t !== undefined).length === 3,
   );
-  // Indices: the light was listed first on disk and is written LAST, so the
-  // trunk is object 0 now, and every parent index must say so.
+  // Indices: a parent is named by its index among the body's objects as
+  // WRITTEN. The node tree keeps the authored order (the light, listed first
+  // on disk, stays first), so the trunk is object 1 and every parent index
+  // must say so.
   const trunkAt = tags.findIndex((t) => t !== undefined && t.parent === undefined);
   const branchAt = tags.findIndex((t) => t?.parent === trunkAt);
   const twigAt = tags.findIndex((t) => t?.parent === branchAt);
   c.check(
     `...each naming its parent by its NEW index (trunk ${trunkAt}, branch ${branchAt} -> ${tags[branchAt]?.parent}, twig ${twigAt} -> ${tags[twigAt]?.parent})`,
-    trunkAt === 0 && branchAt > 0 && twigAt > 0 && near(tags[branchAt]!.at ?? -1, 0.5, 1e-12) && near(tags[twigAt]!.at ?? -1, 0.6, 1e-12),
+    trunkAt === 1 && branchAt > 0 && twigAt > 0 && near(tags[branchAt]!.at ?? -1, 0.5, 1e-12) && near(tags[twigAt]!.at ?? -1, 0.6, 1e-12),
   );
-  const again = modelToDisk(modelFromDisk(disk));
+  const again = modelToFlatDisk(modelFromDisk(disk));
   c.check("...and a second round trip writes the same level", JSON.stringify(again.bodies) === JSON.stringify(disk.bodies));
   const metres = scaleLevelData(disk, PX);
   c.check("bark choice survives save, load and unit scaling on every branch", metres.bodies[0]!.objects
@@ -365,7 +369,7 @@ function caseFormat(): RootResult {
   if (isCollisionObject(branchOnDisk) && branchOnDisk.root) {
     branchOnDisk.root.bends = [{ at: 0.4, freq: 2, damping: 0.1, limit: 50 } as RootBendData];
   }
-  const resaved = modelToDisk(modelFromDisk(retired)).bodies[0]!.objects[branchAt];
+  const resaved = modelToFlatDisk(modelFromDisk(retired)).bodies[0]!.objects[branchAt];
   const bend = resaved && isCollisionObject(resaved) ? resaved.root?.bends?.[0] : undefined;
   c.check(
     `a bend carrying a retired limit saves back without it (${JSON.stringify(bend)})`,
@@ -441,7 +445,6 @@ function caseSpring(): RootResult {
   const c = claims();
   const { model, trunk } = grownModel();
   setRootSprings(model, [trunk], true);
-  for (const m of model.items) if (m.bodyId === trunk.bodyId && m !== trunk) Object.assign(m, { kind: trunk.kind, pivot: trunk.pivot, pivotAt: trunk.pivotAt, pivotFreq: trunk.pivotFreq });
   const data = toLevelData(model);
   const b = data.bodies[0]!;
   c.check(`springs makes it a rigid pivot with a return spring (${b.kind}, pivot ${b.pivot}, ${b.pivotFreq} Hz)`, b.kind === "rigid" && b.pivot === true && (b.pivotFreq ?? 0) > 0);
@@ -460,7 +463,7 @@ function caseSpring(): RootResult {
     Math.abs(body.globalRotation - spawn) < 1e-4 && body.globalPosition.distanceTo(base) < 1e-9,
   );
   setRootSprings(model, [trunk], false);
-  c.check("unticked, it is a static root again", trunk.kind === "static" && !trunk.pivot && trunk.pivotAt === null);
+  c.check("unticked, it is a static root again", propsOf(trunk).kind === "static" && !propsOf(trunk).pivot && propsOf(trunk).pivotAt === null);
   return { name: "root-spring - a sprung root hinges at its trunk's base", passed: c.passed(), details: c.details };
 }
 
@@ -503,7 +506,8 @@ function caseTree(): RootResult {
   // Ctrl+G the branch into a body of its own: it is a trunk where it stands,
   // and the twig - still in the old body - is then a trunk too.
   const at = toWorld(branch, branch.shape.verts[0]!);
-  branch.bodyId = 99_999;
+  const own = addFrameNode(model, "StaticBody2D", null, { pos: branch.pos, body: defaultBody(nextOrder(model.tree)), grouped: true });
+  moveNode(model, branch.node, own.id, undefined);
   syncRoots(model);
   setRootBark(model, [branch], "broad");
   c.check("changing a separated root does not recolour another body", branch.root.bark === "broad" && trunk.root.bark === "original" && twig.root.bark === "original");
@@ -520,7 +524,7 @@ function caseTree(): RootResult {
 // ---------------------------------------------------------------------------
 function caseLint(): RootResult {
   const c = claims();
-  const metres = scaleLevelData(modelToDisk(grownModel().model), PX).bodies[0]!;
+  const metres = scaleLevelData(modelToFlatDisk(grownModel().model), PX).bodies[0]!;
   const withObjects = (mut: (o: LevelBodyData["objects"]) => void): LevelBodyData => {
     const copy = JSON.parse(JSON.stringify(metres)) as LevelBodyData;
     mut(copy.objects);
@@ -1122,7 +1126,7 @@ function caseBendDraw(): RootResult {
   const root = built.bodies[1]!;
   const segments = root.segments!;
   // Debug forced on, roots not grown: the geometry checked is the collision's.
-  const visual = new BodyVisual(root.body, root, undefined, true, false);
+  const visual = new BodyVisual(root.body, root, true, false);
   // Turn the segments by hand, the way a bend would.
   const rest = segments.map((s) => ({ pos: s.globalPosition, rot: s.globalRotation }));
   segments.forEach((s, j) => {
@@ -1202,7 +1206,7 @@ async function bendCrease(c: ReturnType<typeof claims>, bendAt: number): Promise
     c.check(`${tag}: the branch builds a segment and a hinge`, false);
     return false;
   }
-  const visual = new BodyVisual(root.body, root, undefined, false, true);
+  const visual = new BodyVisual(root.body, root, false, true);
   for (let i = 0; i < 50 && visual.root.getObjectsByProperty("type", "SkinnedMesh").length === 0; i++) await new Promise((r) => setTimeout(r, 20));
   // Bend it 35° about the hinge, by hand.
   const turn = 0.6;
@@ -1478,7 +1482,7 @@ function caseHidden(): RootResult {
   const c = claims();
   const data = scaleLevelData(rootLevel(), PX);
   const built = buildLevelBodies(new World(), data, () => {}).bodies[0]!;
-  const visual = new BodyVisual(built.body, built, undefined, false, false);
+  const visual = new BodyVisual(built.body, built, false, false);
   const drawn = (): THREE.Mesh[] => {
     const out: THREE.Mesh[] = [];
     visual.root.traverse((o) => {

@@ -268,8 +268,8 @@ chain deploys through it, so wrapping it would double-count the one piece of
 geometry the chain is already threaded through.
 
 The second form is what the level editor authors: selecting several shapes and
-pressing Ctrl+G tags them into one `group`, and `buildLevelBodies` builds the
-group as a single body whose origin is the pieces' combined centre of mass, each
+pressing **New body** puts them under one body node, and `buildLevelBodies` builds
+it as a single body whose origin is the pieces' combined centre of mass, each
 piece mounted at its own local offset and angle. Choosing between the two forms
 is a real decision and not a preference. Several bodies are several bodies: the
 rope wraps the corner where two of them meet. One body with several shapes is

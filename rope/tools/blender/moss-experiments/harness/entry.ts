@@ -31,7 +31,7 @@ const root = gltf.scene;
 const mats: string[] = [];
 root.traverse((o) => { if ((o as THREE.Mesh).isMesh) { const m = o as THREE.Mesh; m.castShadow = m.receiveShadow = true;
   const mat = m.material as THREE.MeshStandardMaterial;
-  /* The game's rule (sceneDressing.ts): the Blender names of the mesh and its ancestors - GLTFLoader strips the dots
+  /* The game's rule (exportFiles.ts): the Blender names of the mesh and its ancestors - GLTFLoader strips the dots
      from `name` and keeps the original in userData.name, and the optimiser can leave the mesh on an unnamed child. */
   const names: string[] = []; for (let p: THREE.Object3D | null = m; p; p = p.parent) { const n = (p.userData.name as string | undefined) ?? p.name; if (n) names.push(n); }
   const decal = names.some((n) => /\.(ivy|moss)\.shadow$/.test(n));

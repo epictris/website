@@ -10,7 +10,8 @@ right button, or a **left** drag on anything not selected), wheel-zoom about the
 click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
 The editor is arranged as four **workspaces**, one per workflow - 2D, Formations, Decorations and Texturing ([below](#workspaces-2d-formations-decorations-texturing)).
-The editor authors what the game simulates and lights; what a level LOOKS like is its Blender scene ([blender-scenes](blender-scenes.md)), and a collision shape is drawn in 3D only by its own **debug geometry** ([below](#debug-geometry)).
+The editor edits the level's **node tree** ([level-format](level-format.md#the-node-tree)), listed in the **scene tree** bottom-left, with groups, data layers and prefabs ([editor-model](editor-model.md), [prefabs](prefabs.md)).
+What a level LOOKS like is what its nodes carry - formations and the decorations grown on them ([formations](formations.md)), models of the library ([blender-models](blender-models.md)) - and a collision shape is drawn in 3D only by its own **debug geometry** ([below](#debug-geometry)).
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
 The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
@@ -50,9 +51,9 @@ On the canvas the wake is a dashed ring in the light's colour, with longer dashe
 The label says `wakes N`.
 
 **`+ Glow`** (beside `+ Light`) places a glowing mushroom with one click: one static body filled `GLOW_COLOR` `#8a3fd6`, holding a collision square (`GLOW_CUBE`, 0.3 m) and a waking point light at its centre (colour `GLOW_EMISSIVE` `#b070ff`, `range` 4 m, `intensity` 6, `wake` 3 m, `wakeDelay` 0.25, `wakeRise` 0.6, `wakeFall` 1.5).
-It goes through the same loader a level and a paste come in by (`glowModel`), so it is exactly what a file holding that body loads as, and it is one body, so the outliner shows one row and it drags as one.
+It goes through the same loader a level and a paste come in by (`glowModel`), so it is exactly what a file holding that body loads as, and it is one body, so the scene tree shows one body node and it drags as one.
 Those numbers are editor defaults in `editor/model.ts`, not format defaults, and all of them wait on a play; a mushroom on a far wall can lose its collision object.
-What it looks like is the scene's: a Blender object named like the body is its dressing, and its emissive materials follow the light as it wakes (see [blender-scenes](blender-scenes.md)); a level with no scene shows the square as its debug geometry, in the body's purple.
+It is seen by the square's debug geometry, in the body's purple; a model or rock put under the body is its look, and the emissive materials of whatever the body carries follow the light as it wakes ([waking lights](lighting-and-surfaces.md#waking-lights)).
 
 **The 3D preview shows every waking light AWAKE** (`Scene3D.setGlowPreview(true)`, `LightRig.previewAwake`): each source is held at full without stepping its state, and the pool is spent nearest the view's centre instead of the ball.
 There is nobody in the editor's scene to wake anything, and an author has to see what a mushroom lights before anyone does.
@@ -105,7 +106,7 @@ A stroke started ON a root grows a branch out of it, at any depth; anywhere else
 While the tool is armed the toolbar's `start width` and `tip` (px) set the widths new roots are drawn at, remembered by the browser; mid-draw they set the root or branch being drawn.
 While the tool is armed the selection's handles and gizmo stand down, so a press on a root always starts a branch.
 With the select tool a branch is edited like any curve, except that its first node is its junction: dragging it slides the branch along its parent, and it cannot be removed.
-Delete takes a branch and everything growing out of it; Ctrl+G of a branch into a body of its own makes it a trunk where it stands.
+Delete takes a branch and everything growing out of it; moving a branch into a body of its own (**New body**, or a drag in the scene tree) makes it a trunk where it stands.
 The item panel has `start width`, `tip width` and `grows from`; the body panel's **Root** section has `springs`, which hinges the root at its trunk's base on a torsion spring.
 
 ## Conveyor belts
@@ -121,11 +122,11 @@ The item's own position IS wheel 0, so the ordinary move gesture places the belt
 
 Every one of those, the inspector's fields and the gizmo's scale go through `setBelt`, which **refuses wheels that make no belt** - a wheel inside the hull the others make, a disc inside another, a radius or a thickness under a pixel - asking the build's own loop, so the grip stalls at the last belt, as a polygon's corner stalls at the last simple loop, because the editor rebuilds the level from the model on every edit and a belt the build refuses would take the preview down mid-drag.
 The panel has `thickness` (the band's depth in the plane, px as every length there), `speed m/s` (signed: positive runs the loop clockwise on screen), the picked wheel's `r`, two readouts, the loop's **perimeter** and one **lap** of its surface, `P / |speed|`, and the band's look (`BeltLook`, on the shape): `width` (how wide the band is across the pulleys), `texture` (`color` is the flat fill, which keeps the cleats), `band colour` (absent takes the body's fill) and `tile scale`.
-The band is the one look the editor authors, because the game draws it itself: its surface runs round the loop, which a mesh in the Blender scene cannot.
+The band is the one look the editor authors, because the game draws it itself: its surface runs round the loop, which an exported mesh cannot.
 The outline is `outlineOfData`'s, the one the game draws - the band, hollow inside - with the tread ticks STANDING STILL (nothing runs in the editor) and a small arrowhead over the middle of the longest run saying which way it runs, which a still tread cannot.
 The wheels are drawn as editor marks the game does not draw: a thin circle at each wheel's own radius and a dot at its centre.
 A click in the hollow between the wheels passes through the belt to whatever is inside it; the band and the wheels pick it, which is where it collides.
-A belt builds only on a static body that does not move, and that is a fact about the BODY: a kind change or a merge can break it after the belt is drawn.
+A belt builds only on a static body that does not move, and that is a fact about the BODY: a kind change or a move into another body can break it after the belt is drawn.
 The editor does not throw on it - the title says `DOES NOT BUILD:` and the build's own message, the 3D view keeps the last scene that built, and ▶ Test refuses to start - so the author sees what to undo.
 The file still saves, and the game refuses it as loudly as the build does.
 
@@ -177,9 +178,11 @@ so a hook-proof piece's dashed steel edge stays legible while selected.
 **system clipboard**, so a copy in one tab pastes into another - and into another LEVEL, which is
 how an assembly built once (a finish gantry, a lamp, a rail rig) reaches the rest
 of the game. What is on the clipboard is a fragment of a level file in the on-disk pixel form
-(`src/editor/clipboard.ts`), produced by the same `toLevelData` a save runs, so the round-trip
+(`src/editor/clipboard.ts`, version 2 since the node tree): the copied nodes, the bodies and groups above them and the chains and vines strung wholly between them, produced by the same `toTree` a save runs, so the round-trip
 cases that hold a save lossless hold a copy lossless too - and a payload can be read, edited or
 written by hand.
+A version 1 payload (the flat form's body list, from before 2026-11-26) still pastes, migrated as a level is.
+The spawn, the level block and the environment are never in it: none of them is a thing in the level to copy.
 Paste re-centres the group's bounding box on the pointer (with snap on, its top-left corner lands
 on the grid), leaving the new bodies selected so it can be repeated. `Ctrl+D` duplicates in place
 at a 2-cell offset and touches no clipboard.
@@ -202,7 +205,7 @@ gaining a copy of something.
 
 A paste **remints anchor ids**, which are content in the file rather than page state: pasting into
 a level that already holds anchor 1 would otherwise leave two of them and a chain naming either.
-It also carries each body's **frame** (`EdModel.bodyFrames`), so a compound body whose origin was
+It also carries each body's **frame** (its node's own placement), so a compound body whose origin was
 deliberately put at its bearing arrives turning about that bearing rather than about a corner of
 whichever piece was written first - which `Ctrl+D` got wrong until the frames were carried too.
 **Arrow keys** nudge the whole selection one grid cell (10 cm), or 1 cm with **Ctrl** held; the
@@ -218,13 +221,13 @@ Everything is mirrored as its mirror image would behave: outlines, curves and th
 A placement is a position and an angle, and an angle cannot hold a mirror, so each item turns one of its own axes over: most take `-rot` with their own x negated (a box at 0° stays at 0°, a text note stays readable); a force area, a water area and an arrow note take `π - rot` with their own y negated, because their angle IS a direction.
 A body's frame and what is measured in it (bearing, route) are mirrored only when the whole body is selected, the rule every move and turn follows.
 Two things are turned rather than mirrored: a library **model** has no mirror switch, so it keeps its handedness and takes the mirrored placement with its vertical-axis turn negated; and a vine's crooked line comes from its seed.
-**The level's Blender scene does not move.** The flip changes the collision, which is the editor's; the meshes that dress it are the `.blend`'s, bound to bodies by `name`, so they have to be mirrored in Blender to match.
+**A rock is not reflected**: a formation takes the mirrored placement like any item, and its guide and its build are left as they are, so a lopsided rock keeps its handedness.
 One undo step.
 
 Panels are split the way the format is, and **each is reached by selecting the thing it edits**.
 An object panel carries what an object has - its form, its placement in its body, its material,
 thickness and hook-proof flag - and nothing else; kind, friction, force and fill are the
-body's, and they appear only when the **body** is selected (outliner row, or a canvas click on an
+body's, and they appear only when the **body** is selected (its scene tree row, or a canvas click on an
 unselected body).
 There is deliberately no body section above a selected object: that is exactly what made a
 collision shape look like it had a `kind: static` and a friction of its own, when the file has
@@ -232,15 +235,16 @@ never had a place to put them.
 
 ### Inspector layout: sections and hover help
 
-A selection's panel keeps its title (`Collision #12`, `Body #3 — rigid`) in view, and every property under it sits in a **collapsible section**, collapsed by default: Transform, Surface and Material on an object; Transform, Physics, Bounce, Breakable, Pivot, Spring, Mover, Blender and Fill on a body; and so on for chains, vines, camera regions and paths, lights and notes.
+A selection's panel keeps its title (`Collision #12`, `Body #3 — rigid`) in view, and every property under it sits in a **collapsible section**, collapsed by default: Transform, Surface and Material on an object; Transform, Physics, Bounce, Breakable, Pivot, Spring, Mover and Fill on a body; and so on for chains, vines, camera regions and paths, lights and notes.
+Every node's panel opens with its **Node** section: its name, its class and path (its id on hover), whether it is grouped, and the data layers it is in ([editor-model](editor-model.md#groups)).
 The level-wide blocks at the top (Level, Player spawn, Environment, 3D camera) are sections of their own.
-Action buttons (Merge, Split, Duplicate, Delete) stay outside the sections, always in view.
+Action buttons (New body, Group or Ungroup, Duplicate, Delete) stay outside the sections, always in view.
 A section's open state is keyed by name per panel kind (`object/Surface`, `body/Mover`), so opening Surface on one wall opens it on the next, and it survives the inspector's rebuilds and a reload (localStorage, `rope.editor.openSections`).
 A section a build leaves empty is dropped (`pruneEmptySections`).
 
 Descriptions are not printed in the panel.
 They are **hover help**: a name with a dotted underline (a field's label, a section's header, a panel's title) shows its description in a popup beside the inspector while the pointer rests on it, and at no other time.
-Live status stays printed: warnings (a vine's light links, a missing firefly path, the shadow budget), readouts, the checkpoint URL, the scene's binding.
+Live status stays printed: warnings (a vine's light links, a missing firefly path, the shadow budget), readouts, the checkpoint URL.
 The helpers are `src/editor/panelUi.ts` (`section`, `fieldRow`, `heading`, `describe`); new panel text goes through `describe`, never a paragraph under the field.
 
 The kind picker covers `static`, `rigid`, `killzone`, `force`, `water`; the **hook-proof**
@@ -252,8 +256,7 @@ The canvas marks all three: a pendulum's swept arc, a rotor's whole swept circle
 Both the arc and the circle are drawn at `sweptReach` - the farthest CORNER from the bearing, which is the same geometry the `cm/frame` readout is computed from, so the picture and the number it is judged by cannot be about different shapes.
 Measured off the shapes' centres instead, which is what it did first, a cross drawn round its own axle has every piece centred on the bearing and draws a circle of no radius at all.
 The route is shaped on the canvas rather than in the panel: an amber dashed polyline with a square at every waypoint, dragged to move one, its midpoint handles clicked to insert one and Alt+click to remove one, and the body itself is waypoint zero - so moving the body carries the whole route with it, which is what makes the waypoints frame-local in the model (the same argument `pivotAt` makes).
-Body fields read and write the body's **collision lead** - the object its record is written from -
-and `syncBodyProps` pushes the values to the rest.
+Body fields read and write the body node itself, which holds each of them once for every piece under it.
 Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
 Everything that is a piece of stuff rather than a region of space - every kind but the three areas, hook-only bodies included - also carries a **material**, a **density** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`). The material is a PRESET density: picking one sets the **density** field (kg/m³) to its value, and typing a density makes the material **custom** (the picker shows so as it is typed; `custom` is never picked, there being no density for it to set).
 The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See [**Mass and materials**](physics-foundations.md#mass-and-materials); both are per shape, so a selection spanning a compound body edits its pieces individually.
@@ -293,7 +296,7 @@ So the resize handles, the rubber band and the draw tools' previews all go with 
 
 **What does not go is what a click MEANS.**
 Those two were run together for as long as a pick was resolved on the plane by the 2D camera, and they are different questions: a ray answers for the models (`Scene3D.pick`) and meets the gameplay plane for everything resolved against it (`unprojectToPlane`, `canvasWorld` in `editor.ts`), both at any angle.
-So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane it is drawn in (a light at its `z`, so it stays under the pointer), and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
+So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the scene tree - and dragging one carries it along the plane it is drawn in (a light at its `z`, so it stays under the pointer), and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
 That pairing is the point of the orbit: turn the view to see the depth, then drag the blue arrow to author it, on the thing you turned the view to look at.
 `unprojectToPlane` is `projectToView` backwards, and `cli render3d` asserts it as a round trip through three's own projection at a spread of orbits, plus that it is the 2D answer head on and is NOT it turned - an implementation that quietly returned the 2D answer passes the round trip at zero orbit and puts every turned-view click somewhere else.
 The one thing zoom gives up there is zooming about the cursor: the zoom is a dolly along the view direction rather than a scale about the screen, so the correction would want a ray through a camera that is not built until the frame is drawn, and a turned view zooms about its centre instead.
@@ -307,8 +310,7 @@ Ctrl is on the orbit rather than on the pan because panning is how you get aroun
 What the ray can meet, and what each answers with (`pickTagOf`):
 
 - a piece's **debug geometry** answers with the collision object it is the extrusion of;
-- a body's **Blender dressing** answers with the body's first object, so a click on a dressed ledge selects the ledge's body;
-- the scene's **scenery** answers with `SCENERY_TAG`, which names no item and so selects nothing;
+- a **model**, **formation**, **decoration** or **light** answers with its node's id (`TreeLook`, [render3d](render3d.md#the-look-from-the-node-tree)), which the editor maps to the node's item, so the group rule then decides what the click selects;
 - in the Visuals workspace, a **guide** answers with its guide tag.
 
 `pickOrder`'s rules (the active layer, then a collision object winning over a light whose reach it sits inside) still decide which of the things under the pointer wins, so **click the body, then click into it, then into what is behind it** cycles exactly as before.
@@ -321,8 +323,8 @@ A collision curve, on the scene layer, is a bar with a width and keeps the ordin
 Once a path is selected a press on its line may land on its own handles (a node, a grip, an edge midpoint, which inserts a node), so to reach what is under a selected path, click just beside the line.
 The chain tool still asks the plane, because an anchor is placed on a body's collision outline.
 
-The chain from a mesh under the pointer back to a row in the outliner is three links: `BodyVisual` (or `dressScene`) stamps the drawn group with the authored object it stands for, `toLevelData` records which ITEM wrote each object it writes, and the editor rebuilds that map with the scene so it can never name an item the picture was not built from.
-The middle link is the one that can break silently - `toLevelData` writing one object per item, in item order, is an invariant nothing else in the suite depends on - so `cli render3d`'s `pick:` cases assert it directly.
+The chain from a mesh under the pointer back to a row in the scene tree is three links: the renderer stamps the drawn group with what it stands for (a piece's debug geometry with its compiled collision object, the look with its node's id), `toLevelData` records which ITEM each compiled element came from (through `compileLevel`'s `nodeOf`), and the editor rebuilds that map with the scene so it can never name an item the picture was not built from.
+The middle link is the one that can break silently, so `cli render3d`'s `pick:` cases assert it directly.
 
 **Selection is shown on the model** (`Scene3D.setHighlight`), in the overlay's own colours - the selection orange, and the blue that means "this is what the selected body is made of" - applied as an emissive over the surface the piece already wears.
 
@@ -330,17 +332,15 @@ In the **2D view** there is no scene to ask, and the outline is both what is dra
 An **orbited** view picks by exactly these rules: the ray answers for what the scene draws as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
 What it does not offer there is the plane HANDLES: a handle that is not drawn must not be grabbable either.
 
-## Blender scenes: the `scene` and `name` fields
+## Names
 
-The Level panel's **`scene`** names the Blender scene the level is dressed in (`LevelData.scene`, held to lower-case letters, digits and dashes as it is typed), with a line under it saying what the current export holds - how many objects, how many on bodies, the triangles, when - or that it is not exported yet.
-With the field blank the line says `No scene: the level is seen by its shapes' debug geometry.`
-The body panel's **`name`** (`LevelBodyData.name`, held on every member of the body) is what an object in that scene is matched to; the field offers the exported objects' names, and the line under it says whether this name is dressed (`Dressed by "Ledge.001" (1,240 triangles)`), missing from the export (the body is then not dressed: nothing in the scene draws it), or shared with another body.
-Both read the export's `meta.json`, fetched once per scene per page; a re-export is seen on the next load.
-The whole loop is in [blender-scenes](blender-scenes.md).
+Every node's **`name`** is a label: what the scene tree lists it by and what the replay tools print beside an engine body index, unique among its siblings (a clash takes the next free number as it is typed), and never what anything refers to it by ([level-format](level-format.md#the-node-tree)).
+It is edited in the Node section, in the body panel, or by a double-click on its scene tree row.
+Until 2026-11-26 the Level panel had a **`scene`** field naming the Blender scene the level was dressed in, and a body's name was what that scene's objects were bound to; both went with the scenes ([blender-scenes](blender-scenes.md)).
 
 ## Models: `+ Model`
 
-**`+ Model`** places a 3D model of the library ([blender-models](blender-models.md)) with one click: into the selected body when one is selected (a lantern on the chained body it hangs as), otherwise as a body of its own.
+**`+ Model`** places a 3D model of the library ([blender-models](blender-models.md)) with one click: into the selected body when one is selected (a lantern on the chained body it hangs as), otherwise as a `Model3D` standing on its own.
 It places the model last picked or selected, else the first the editor offers.
 Its panel names the model (typed, held to a model's spelling, offered the models exported here or published from `GET /api/models`) with a line saying the export's triangles, size and age and whether it is published, then `z`, `tilt x°`, `tilt y°` and `scale`.
 A model is picked by clicking it in the 3D view (body, then object, as everywhere); on the plane it is a dashed cube mark with its name, which is what a click lands on where no scene is drawn.
@@ -354,7 +354,7 @@ Under it the section offers **colour** (the body's fill until one is picked; **b
 They are offered ticked or not: unticking keeps them, so a shape switched back on comes back as it was, and an unticked shape can be tuned before it is switched on, or while **all debug** draws it.
 A belt has no Debug section: it draws its own band.
 
-A shape drawn in a level with no scene starts ticked, since that is what a block-out is seen by; one drawn in a dressed level starts unticked, since its look is the Blender scene's.
+A shape drawn on the scene layer starts ticked, since a new piece is seen by its debug geometry, as every piece a level is blocked out in is.
 A level saved before the switch existed opens with the shapes its grey box used to draw ticked ([level-format](level-format.md)).
 **G** hides every shape's debug geometry in ▶ Test, as in the game; every test opens with it shown, and authoring always shows it.
 
@@ -384,8 +384,8 @@ Ticking it again grows each root as it now is, and a root nothing changed comes 
 Only the picture goes: the hook still bites the roots.
 It is the renderer's (`Scene3D.setRootsShown` → `BodyVisual.setRootsShown`), never written to the level.
 
-The **scene** box (ticked by default) hides the level's Blender scene: the scenery and the nodes dressing the bodies alike, so the collision and what the game draws itself (water, belts, chains, lights, the ball) stand alone, in the editor's view and in ▶ Test.
-It is the renderer's (`Scene3D.setSceneShown` → `SceneDressing.setShown`), held for a file that has not landed yet, and never written to the level.
+The **scene** box (ticked by default) hides the level's look: its formations, decorations and models alike, on a body or standing on their own, so the collision and what the game draws itself (water, belts, chains, lights, the ball) stand alone, in the editor's view and in ▶ Test.
+It is the renderer's (`Scene3D.setSceneShown` → `TreeLook.setShown`), held for a file that has not landed yet, and never written to the level.
 Hidden scenery is not picked and not dropped onto: `Scene3D.hitsAt` skips any hit whose object or an ancestor is invisible, because three's raycaster tests hidden objects too.
 
 The toolbar's view boxes - **snap**, **edge clamp**, **all debug**, **reflections**, **shadows**, **water**, **roots** and **scene** - are remembered by the browser (`localStorage` key `rope.editor.view`, `editor/prefs.ts`), so the editor opens as it was last left; each box writes itself back when it changes.
@@ -425,15 +425,18 @@ The policy is one module, `src/editor/workspaces.ts`; the editor asks it.
 | | 2D | Formations | Decorations | Texturing |
 |---|---|---|---|---|
 | View | the gameplay plane head on, locked | free 3D | free 3D | free 3D |
-| Dock | the draw tools grouped (Collision, Gameplay, Scene), `kind`, the root widths, the layers | Level / Assets, Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision | the material library (a button a material), Bake N out of date, Show Collision |
-| Drawn and picked | everything on the plane, all layers; not 3D bodies or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations but material layers | the scene layer's formations and their material layers |
+| Dock | the draw tools grouped (Collision, Gameplay, Scene), `kind`, the root widths, the type layers and the data layers | Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision | the material library (a button a material), Bake N out of date, Show Collision |
+| Drawn and picked | everything on the plane, all layers; not what stands in 3D (a rock or model with no body above it) or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations but material layers | the scene layer's formations and their material layers |
 | Inspector | everything but the Formation, Decorations and Materials sections | Level, Environment, 3D camera, a body's Transform and Formation | Level, Environment, 3D camera, a rock's Decorations, a decoration's panel | Level, Environment, 3D camera, a rock's Materials, a material layer's panel |
 
-**What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), what a click or a band picks (`pickableItems`), and what the outliner lists ("Rocks" in the 3D workspaces, numbered as the level numbers its bodies, so a body is the same number in all three).
+**What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), what a click or a band picks (`pickableItems`), and what the scene tree lists (in the 3D workspaces, only the nodes in the workspace and those holding one).
+What a click on a grouped node stops at is the workspace's too (`clickableIn`, [editor-model](editor-model.md#groups)): in Decorations a click on a fern selects the fern, though the body above it is grouped.
 Chains, vines, berries and the spawn marker are the plane's and are picked in 2D only; the solid guides are drawn and picked in Formations only, where in the others they were wireframe in front of the rock.
 The scene itself is drawn whole in every workspace: the rocks are the reference 2D is drawn against, and the collision outlines are a formation's guide.
 Switching drops from the selection whatever the new workspace does not hold, as hiding a layer does: it could be neither seen nor clicked, but a nudge, a field or a Delete would still reach it.
-The draw tools are 2D's (`setTool` refuses one elsewhere, so their keys arm nothing), the Assets tab is Formations' (leaving it closes the asset and brings the level back), and the brush ends whenever the workspace changes.
+The draw tools are 2D's (`setTool` refuses one elsewhere, so their keys arm nothing), and the brush ends whenever the workspace changes.
+**Level** and **Prefabs**, above the dock in every workspace, say which document is being edited: the level, or the prefab library and an open prefab ([prefabs](prefabs.md#in-the-editor)).
+They replaced the Formations dock's **Level** / **Assets** pair (retired 2026-11-26), whose reusable rocks are prefabs now.
 Texturing is painting a rock with materials from the library, live: [formations](formations.md#material-layers).
 
 **The inspector** is filtered by section key (`sectionShown`, applied by `pruneEmptySections`), so a rock's panel in Formations is its recipe rather than its bounce, friction and mover first.
@@ -455,7 +458,7 @@ A hidden rock is hidden as an H-hidden body is (`Scene3D.setHidden`, from `syncH
 Outside Formations the rocks are always drawn and the guides are not.
 Until this change a generated rock's guide was drawn only while it was selected; now Guides decides.
 
-**Primitives** (Formations, 2026-11-23): **+ Box** and **+ Cylinder** - the starting shapes a guide is sculpted from; outlines, the three-outline preset, hulls and ellipsoids were retired the same day ([formations](formations.md#in-the-editor), `bun run guides:migrate`) - each make a new guide of their own - a 3D body holding one formation whose solid guide is that one shape (`createBackdrop` with a shape) - standing at the view's target, depth included, and selected, as Blender adds at the 3D cursor; **Shift+A** with no guide selected offers the same.
+**Primitives** (Formations, 2026-11-23): **+ Box** and **+ Cylinder** - the starting shapes a guide is sculpted from; outlines, the three-outline preset, hulls and ellipsoids were retired the same day ([formations](formations.md#in-the-editor)) - each make a new guide of their own - a top-level `Formation3D` with no body, whose solid guide is that one shape (`createBackdrop` with a shape) - standing at the view's target, depth included, and selected, as Blender adds at the 3D cursor; **Shift+A** with no guide selected offers the same.
 With a solid guide selected the dock adds **Add to selected guide** (the same shapes into its stack, as Shift+A then does) and **Combine with other guides**.
 The cylinder is a primitive of the format since this change (`prim: "cylinder"`, `size` its full extents, standing along its y), meshed by manifold-3d like the others; the generator is handed the guide's mesh, so nothing in Blender changed.
 
@@ -463,12 +466,12 @@ The cylinder is a primitive of the format since this change (`prim: "cylinder"`,
 **C** outside the mode cuts the selected guide's whole stack to a polygon drawn on the view.
 All of it is in [formations](formations.md#sculpting).
 
-**Combining guides**: with a solid guide selected, **Union**, **Subtract** or **Intersect**, then a click on each other guide to fold in (in the view or its outliner row; again to leave it out), **Enter** (or Apply) to apply, **Esc** to drop it.
+**Combining guides**: with a solid guide selected, **Union**, **Subtract** or **Intersect**, then a click on each other guide to fold in (in the view or its scene tree row; again to leave it out), **Enter** (or Apply) to apply, **Esc** to drop it.
 Each picked guide is carried into the selected guide's frame (`carryTree` with `frameBetween` in `solidGuides.ts`: the two body frames are rigid, so each leaf's pose re-decomposes exactly over its own scale) and appended to its stack in that mode (`appendEntry`); a guide that is one shape becomes one row, a larger one a group row.
 It is destructive and one undo step: the picked guides leave the level, with the decorations tied to them, and the notice says how many.
 The picked guides are drawn in front and tinted (`COMBINE_PICK`) while it is chosen; selecting anything else ends it.
 
-**Grab, Rotate, Scale** (**G**, **R**, **S**, any workspace, 2026-11-23, Blender's modal transforms): what the gizmo would move, turn or size follows the pointer - a body, a 3D body, a guide's picked shape, a multi-selection - through the gizmo's own handlers (`handlersFor`), so each does exactly what the matching handle drag would, as one undo step (`startTransform` and friends in editor.ts).
+**Grab, Rotate, Scale** (**G**, **R**, **S**, any workspace, 2026-11-23, Blender's modal transforms): what the gizmo would move, turn or size follows the pointer - a body, a rock or frame standing in 3D, a guide's picked shape, a multi-selection - through the gizmo's own handlers (`handlersFor`), so each does exactly what the matching handle drag would, as one undo step (`startTransform` and friends in editor.ts).
 A click or **Enter** places; **Esc** or a right click puts it back and takes the undo step away again; **X**, **Y**, **Z** hold it to that axis, and **Shift+X**, **Y**, **Z** to the plane of the other two (the same key again frees it; a turn held to a plane turns about the axis left out, as Blender's does).
 The gizmo is put away meanwhile, so the placing click cannot land on a handle.
 A readout over the viewport's top left says what it is doing and which keys apply (`xformReadout`), as Blender's header does; the title bar's notice sits under the dock's tools, out of sight in Formations.
@@ -489,7 +492,7 @@ A typed amount is applied with the grid snap off (`applyTransform`), since the h
 
 **R** and **S** take the key only when the selection has something to turn or size; otherwise they arm the Rect and Checkpoint tools in 2D as before.
 
-**The gizmo's centre box** (2026-11-23) moves the target in the plane facing the camera, so a 3D body is placed in one drag rather than one per axis.
+**The gizmo's centre box** (2026-11-23) moves the target in the plane facing the camera, so a rock standing in 3D is placed in one drag rather than one per axis.
 It is three's own move-centre handle (`XYZ`) drawn as a box (`reshapeHandle` in `gizmo.ts`); the uniform-scale box that held the centre until then is gone, and a model's one-number scale follows any one axis box.
 
 **The palette** (`DecorationController.arm`) arms a kind for the next click on any generated rock; before, a decoration was started from a button in one rock's panel and landed on that rock only.
@@ -510,7 +513,7 @@ The workspace is remembered by the browser (`rope.editor.workspace`) and written
 ## The 3D view (since 2026-11-22)
 
 The editor has one view: a free 3D camera, navigated as 3D editors are, with the overlay drawn through it at any angle ([plans/editor-ux-pass.md](../plans/editor-ux-pass.md)).
-The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and **Assets** (in the Formations workspace's dock) say what is being edited rather than how it is seen, and the 2D workspace locks this view head on ([Workspaces](#workspaces-2d-formations-decorations-texturing)).
+The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and **Prefabs** say what is being edited rather than how it is seen, and the 2D workspace locks this view head on ([Workspaces](#workspaces-2d-formations-decorations-texturing)).
 
 | Gesture or key | Does |
 |---|---|
@@ -524,7 +527,7 @@ The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and
 | **Numpad 1**, `Align camera to plane` | the gameplay plane head on, where the view is looking |
 | **Numpad 0**, `Game camera` | the game's camera where the view is looking |
 | `Overlays` | the overlay over the scene, or the scene alone |
-| **H**, Shift+H, Alt+H, the outliner's eye | hide the selected bodies, hide every other one, show them all; a body's eye toggles it |
+| **H**, Shift+H, Alt+H, the scene tree's eye | hide the selected nodes, hide every other one, show them all; a row's eye toggles that node and everything under it |
 
 **Hiding** is Blender's viewport hide: a hidden body is not drawn (not in the overlay, the scene - `Scene3D.setHidden` - or the solid guides) and not picked, and is deselected as it goes. It is a view setting of the session, never in the level, and ▶ Test plays the level whole.
 
@@ -641,9 +644,9 @@ The two features are a pair - orbit to see the depth, drag the blue arrow to aut
 **The gizmo is offered for one object, one body, or the whole selection** (`gizmoSpec`), ordered by how much is known about the target rather than by how many things it holds: one object offers what it has of a depth, a turn and a size; one body turns about the centre of mass the engine mounts it at; anything wider is an ARRANGEMENT, and what an arrangement has is a place and an angle.
 
 **A backdrop turns about the middle of its solids** (`bodyTurnPoint`, `solidCentre`), whichever control turns it - the gizmo, the 2D knob, the panel's `rot°`.
-A body with nothing that collides has no centre of mass to agree with, and its placement points are not where it is: a solid guide is a mesh standing anywhere in its frame, and the backdrops migrated from the river's Blender scene keep the scene's coordinates with their frame at the level's origin (or on a decoration's anchor), so until 2026-11-23 their handles stood at the top-left of the level, at z 0, metres in front of a rock 18 m deep.
+A rock with nothing that collides under it has no centre of mass to agree with, and its placement points are not where it is: a solid guide is a mesh standing anywhere in its frame, and the backdrops migrated from the river's Blender scene kept the scene's coordinates with their frame at the level's origin (or on a decoration's anchor), so until 2026-11-23 their handles stood at the top-left of the level, at z 0, metres in front of a rock 18 m deep.
 The middle is each guide's own box centre carried by its placement, a point OF the solid, so it turns with the rock and the handles do not hop at the end of a turn as they would on a box measured in the world.
-A 3D body's handles do the same through `pivoted` (they stand at the middle, the handlers are handed the pose of the frame, and a turn swings the frame round the handles), and so does a single formation picked inside one, whose handles are also carried into the body's 3D frame (`lifted`) rather than drawn where it would be on an untilted plane.
+A rock standing in 3D (no body above it) does the same through `pivoted` (they stand at the middle, the handlers are handed the pose of the frame, and a turn swings the frame round the handles), and so does a single formation picked inside one, whose handles are also carried into the body's 3D frame (`lifted`) rather than drawn where it would be on an untilted plane.
 
 **A handle is offered only where the format has somewhere to put its answer** (`GizmoHandlers.axes`), so what is on screen is the level's real degrees of freedom rather than three of everything:
 
@@ -663,7 +666,7 @@ Three things decide whether it behaves:
   A mean is a fixed point of its own rotation, so the handles stay put across a turn where a bounding box would hop sideways the moment one was released; and `bodyCentroid` answers a different question - it is mass-weighted over the COLLIDING shapes alone, because a body has to turn about the point the engine mounts it at, so a lamp selected beside a wall would be ignored entirely and a small dense block would drag the handles off the middle of what is lit up.
 - **The transform is measured from the pose the drag began in** (`captureGroupPose` / `placeGroup`), because a drag re-applies its whole displacement on every pointer move.
   A delta-per-move reads identically for one move and accumulates the snap grid's rounding over a slow one.
-- **A body carries its frame only when the whole body is in the selection**, which is `carryBodyFrames`' rule and the one every other group edit already follows: dragging two objects out of a compound body moves those two and leaves the body they came from where it was.
+- **A body carries its frame only when the whole body is in the selection**, which is `framesCarriedBy`'s rule and the one every other group edit already follows: dragging two objects out of a compound body moves those two and leaves the body they came from where it was.
 
 **The blue arrow moves what has a depth and passes over what does not.** It is offered as soon as ONE member has a z - a light's own `z` - and every member that has one moves by the drag while a collision shape in the selection stays in the plane.
 The stricter reading (no depth handle unless every member could move) was rejected because a level's collision IS the gameplay plane and is never anywhere else, so it would mean that a lamp selected with its bracket's collision could never be pulled forward.

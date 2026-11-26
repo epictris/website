@@ -25,14 +25,14 @@
 //                that nothing can draw; a `.glb` is self-contained, so there is
 //                no sidecar that would legitimately be unreferenced.
 //   PROVENANCE - an entry with no `source`/`license`. See `MeshAsset`.
-//   UNPUBLISHED - a Blender scene a registered level names that the store
-//                does not hold (`just publish`), or a store entry no level
-//                names any more.
+//   UNPUBLISHED - a model or formation a registered level carries that the
+//                store does not hold (`just publish`), or a store entry no
+//                level carries any more.
 //   UNDRAWN    - a prop or texture entry nothing draws: not named by the code
 //                that draws the game's own things (`BALL_MESH`,
 //                `IRON_SURFACE`) nor worn by a registered level's conveyor. A
-//                level's look is its Blender scene, so an entry the levels
-//                used to name is left behind by the scene taking it over.
+//                level's look is its formations and models, so an entry the
+//                levels used to name is left behind by them taking it over.
 //
 // Then the budget itself.
 
@@ -51,14 +51,13 @@ import {
   surfaceName,
   TEXTURE_ASSETS,
 } from "../render3d/assets";
-import { SCENE_ASSETS, isSceneName } from "../render3d/scenes";
 import { MODEL_ASSETS, isModelName } from "../render3d/models";
 import { normalizeLevelData, scaleLevelData, type RawLevelData } from "../level/levelFormat";
 import { LEVELS } from "../level/registry";
 import { PX } from "../engine/units";
 import { rootMeshKey } from "../render3d/rootKey";
 import ROOT_BAKES from "../render3d/rootBakes.json";
-import { assetName, levelsModelNames, levelsSceneNames, storedAssets } from "../../scripts/assetStore";
+import { assetName, levelsModelNames, storedAssets } from "../../scripts/assetStore";
 import { levelRegions, pinnedBundles } from "../../scripts/formationBundles";
 import { levelFormationFiles } from "../render3d/levelAssets";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
@@ -96,7 +95,7 @@ const ASSET_DIRS = [
 // way.
 export const TOTAL_BUDGET_BYTES = 100 * 1024 * 1024;
 // A single prop or texture map this big has not been through `gltf-transform`
-// (a level's Blender scene is not held to it, only to the total). The style this
+// (a level's formations are not held to it, only to the total). The style this
 // game is drawn in (see docs/asset-store.md) puts a textured prop at well under 1 MB, so
 // 8 MB is not a target to author up to - it is the bar that catches a raw
 // Blender export with 2k PNGs in it before that becomes the habit.
@@ -135,15 +134,7 @@ function mb(bytes: number): string {
 
 export function runAssetChecks(): AssetCheck[] {
   const stored = storedAssets();
-  // `public/scenes/` is not walked: beside each `scene.glb` is the export's
-  // `meta.json`, and a scene no level names any more stays on disk until
-  // someone deletes it. The pinned ones are the store's, so they are held to it
-  // and to the budget like any prop (the build ships them).
-  const sceneFiles = stored
-    .filter((a) => a.key.startsWith("scene:"))
-    .map((a) => join(PUBLIC_DIR, a.file.replace(/^\//, "")))
-    .filter((path) => existsSync(path));
-  const files = [...ASSET_DIRS.flatMap(walk), ...sceneFiles].sort();
+  const files = ASSET_DIRS.flatMap(walk).sort();
   const checks: AssetCheck[] = [];
 
   // Props and texture maps in one list (`storedAssets`), so neither manifest can
@@ -209,7 +200,7 @@ export function runAssetChecks(): AssetCheck[] {
   });
 
   // One flat namespace in the release, keyed by name (the basename, or a
-  // scene's `sceneReleaseName`) - so two entries whose files
+  // model's `modelReleaseName`) - so two entries whose files
   // differ only by directory would overwrite each other on publish and then
   // both fetch the same bytes, which is a level quietly wearing the wrong prop
   // rather than any kind of error.
@@ -227,30 +218,12 @@ export function runAssetChecks(): AssetCheck[] {
       : `${byName.size} distinct filename(s)`,
   });
 
-  // The store holds exactly the Blender scenes the levels name: a scene
-  // missing is a level that deploys with no look at all (the fetch refuses it
-  // too, so this is the same failure found before the push rather than in the
-  // build), an extra is bytes the build fetches and drops. And a level can only name a scene the store can
-  // hold: the name is a directory and a release asset (see `SCENE_NAME`).
-  const scenes = levelsSceneNames();
-  const misnamed = [...scenes].filter(([scene]) => !isSceneName(scene));
-  const unpublishedScenes = [...scenes].filter(([scene]) => !SCENE_ASSETS[scene]);
-  const unnamedScenes = Object.keys(SCENE_ASSETS).filter((scene) => !scenes.has(scene));
-  checks.push({
-    name: "assets: the store holds exactly the Blender scenes the levels name",
-    pass: misnamed.length === 0 && unpublishedScenes.length === 0 && unnamedScenes.length === 0,
-    detail:
-      misnamed.length || unpublishedScenes.length || unnamedScenes.length
-        ? [
-            ...misnamed.map(([scene, levels]) => `"${scene}" (${levels.join(", ")}) is not a scene name (lower-case letters, digits and dashes)`),
-            ...unpublishedScenes.map(([scene, levels]) => `${scene} (${levels.join(", ")}) not published - run \`just publish\``),
-            ...unnamedScenes.map((scene) => `${scene} named by no level - run \`just publish\``),
-          ].join(", ")
-        : `${scenes.size} scene(s) published`,
-  });
-
-  // ...and exactly the models the levels' bodies carry, by the same argument:
-  // a model missing is a body that deploys drawing nothing.
+  // The store holds exactly the models the levels' bodies carry: a model
+  // missing is a body that deploys drawing nothing (the fetch refuses it too,
+  // so this is the same failure found before the push rather than in the
+  // build), an extra is bytes the build fetches and drops. And a level can only
+  // name a model the store can hold: the name is a directory and a release
+  // asset (see `MODEL_NAME`).
   const models = levelsModelNames();
   const misnamedModels = [...models].filter(([model]) => !isModelName(model));
   const unpublishedModels = [...models].filter(([model]) => !MODEL_ASSETS[model]);
@@ -342,7 +315,7 @@ export function runAssetChecks(): AssetCheck[] {
     name: "assets: every prop and texture entry is drawn by something",
     pass: undrawn.length === 0,
     detail: undrawn.length
-      ? `drawn by nothing (a level's look is its Blender scene) - remove the entry: ${undrawn.join(", ")}`
+      ? `drawn by nothing (a level's look is its formations and models) - remove the entry: ${undrawn.join(", ")}`
       : `${Object.keys(MESH_ASSETS).length + Object.keys(TEXTURE_ASSETS).length} entr(ies) drawn`,
   });
 
@@ -476,22 +449,20 @@ export function runAssetChecks(): AssetCheck[] {
 
   const sizes = files.map((f) => ({ file: relative(ROOT, f), bytes: statSync(f).size }));
   // ...and what the build ships of the formations: each one's drawn file
-  // (`levelFormationFiles`), which answers to the total as a scene does - a
-  // formation is a piece of a level's look, held down by its tier, not by a
-  // prop's per-file bar.
+  // (`levelFormationFiles`), which answers to the total only - a formation is
+  // a piece of a level's look, held down by its tier, not by a prop's per-file
+  // bar (Tris, 2026-10-04, of the Blender scenes that came before: "that was
+  // intended for single props, not for entire levels").
   const formationSizes = [...new Set(Object.values(LEVELS).flatMap((spec) => levelFormationFiles(spec.data).map((f) => f.file)))]
     .map((f) => join(PUBLIC_DIR, f.slice(1)))
     .filter((p) => existsSync(p))
     .map((p) => statSync(p).size);
   const total = sizes.reduce((a, s) => a + s.bytes, 0) + formationSizes.reduce((a, b) => a + b, 0);
 
-  // The per-file bar is a prop's. A level's Blender scene is the whole level
-  // in one file (Tris, 2026-10-04: "that was intended for single props, not
-  // for entire levels"), so it answers only to the total.
-  const sceneGlbs = new Set(sceneFiles.map((f) => relative(ROOT, f)));
-  const oversized = sizes.filter((s) => !sceneGlbs.has(s.file) && s.bytes > FILE_BUDGET_BYTES);
+  // The per-file bar is a prop's.
+  const oversized = sizes.filter((s) => s.bytes > FILE_BUDGET_BYTES);
   checks.push({
-    name: `assets: no single prop or map over ${mb(FILE_BUDGET_BYTES)} (scenes answer to the total)`,
+    name: `assets: no single prop or map over ${mb(FILE_BUDGET_BYTES)}`,
     pass: oversized.length === 0,
     detail: oversized.length
       ? `run \`bun run assets:optimize\`: ` +

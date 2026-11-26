@@ -24,6 +24,8 @@
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";
 import type { LevelBodyData } from "../level/levelFormat";
+import { Vec2 } from "../engine/vec2";
+import { threeRotation, threeY } from "./space";
 import {
   BALL_FOAM_GLSL,
   ballFoamUniforms,
@@ -1406,16 +1408,79 @@ export interface WaterBuild {
 // (`spill`, the drop off the downstream end; how fast it leaves the lip
 // follows from the current, see `brinkOf`),
 // the slab through z (`waterZ`, `waterDepth`) and the tint (`color`). Water is
-// drawn by the game rather than by the level's Blender scene, because the
-// current moves its surface every frame (plans/blender-owns-appearance.md).
+// drawn by the game rather than by a Blender export, because the current moves
+// its surface every frame (plans/blender-owns-appearance.md).
+//
+// An area may have any number of pieces (plans/node-tree.md "Area2D with
+// several shapes"), and every one is drawn: each at its own placement in the
+// body, the walls two touching pools share left out so the seam is not seen
+// through, and the fall off the one piece furthest downstream (the current
+// runs along the body's own x, which every piece shares). The mirror and the
+// splash foam read one surface, so they are built for a water of one piece.
 export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyData): WaterBuild {
-  const shape = body.primaryShape();
-  const s = shape.shape;
-  if (s.kind !== "circle" && s.kind !== "rect") {
-    return { geometries: [], materials: [], objects: [], still: null, foam: null, release: () => {} };
+  const pieces = body.getShapes().filter((p) => p.shape.kind === "circle" || p.shape.kind === "rect");
+  if (pieces.length === 0) return { geometries: [], materials: [], objects: [], still: null, foam: null, release: () => {} };
+  const half = (p: (typeof pieces)[number]): { x: number; y: number } => {
+    const shape = p.shape;
+    if (shape.kind === "rect") return { x: shape.size.x / 2, y: shape.size.y / 2 };
+    if (shape.kind === "circle") return { x: shape.radius, y: shape.radius };
+    return { x: 0, y: 0 };
+  };
+  // One piece at the body's origin is every water authored before areas took
+  // several: drawn exactly as it always was.
+  if (pieces.length === 1 && pieces[0]!.localOffset.x === 0 && pieces[0]!.localOffset.y === 0 && pieces[0]!.localRotation === 0) {
+    const h = half(pieces[0]!);
+    return buildWaterPiece(root, body, data, h.x, h.y, true, { left: true, right: true });
   }
-  const halfX = s.kind === "rect" ? s.size.x / 2 : s.radius;
-  const halfY = s.kind === "rect" ? s.size.y / 2 : s.radius;
+  const side = (data.spill ?? 0) > 0 ? (body.flow < 0 ? -1 : 1) : body.flow < 0 ? -1 : 1;
+  let downstream = 0;
+  pieces.forEach((p, i) => {
+    if (p.localOffset.x * side + half(p).x > pieces[downstream]!.localOffset.x * side + half(pieces[downstream]!).x) downstream = i;
+  });
+  // A wall is shared when another piece covers the point just past it.
+  const covered = (x: number, y: number, except: number): boolean =>
+    pieces.some((q, k) => {
+      if (k === except) return false;
+      const h = half(q);
+      const d = new Vec2(x - q.localOffset.x, y - q.localOffset.y).rotated(-q.localRotation);
+      return q.shape.kind === "rect" ? Math.abs(d.x) <= h.x + 1e-6 && Math.abs(d.y) <= h.y + 1e-6 : d.length() <= h.x + 1e-6;
+    });
+  const builds = pieces.map((p, i) => {
+    const h = half(p);
+    const group = new THREE.Group();
+    group.position.set(p.localOffset.x, threeY(p.localOffset.y), 0);
+    group.rotation.z = threeRotation(p.localRotation);
+    root.add(group);
+    const wall = (sign: number): boolean => {
+      const at = new Vec2(sign * (h.x + 1e-3), 0).rotated(p.localRotation).add(p.localOffset);
+      return !covered(at.x, at.y, i);
+    };
+    return { group, build: buildWaterPiece(group, body, data, h.x, h.y, i === downstream, { left: wall(-1), right: wall(1) }) };
+  });
+  return {
+    geometries: builds.flatMap((b) => b.build.geometries),
+    materials: builds.flatMap((b) => b.build.materials),
+    objects: builds.flatMap((b) => b.build.objects),
+    still: null,
+    foam: null,
+    release: () => {
+      for (const b of builds) b.build.release();
+    },
+  };
+}
+
+// One piece of water: a pool or a current of the given half extents under
+// `root`, its fall only where `spills` (the downstream piece), and its side
+// walls only where nothing else of the water lies beyond them.
+function buildWaterPiece(
+  root: THREE.Group,
+  body: WaterArea,
+  data: LevelBodyData,
+  halfX: number,
+  halfY: number,
+  spills: boolean,
+  walls: { left: boolean; right: boolean },
+): WaterBuild {
   // The slab through z, in the extruder's convention: depth centred on the
   // plane, shifted by `z`.
   const depth = data.waterDepth ?? DEFAULT_WATER_DEPTH;
@@ -1423,7 +1488,7 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   const backZ = frontZ - depth;
   // The spill: off the end the flow points at. A run with no current spills
   // off its +x end.
-  const drop = data.spill ?? 0;
+  const drop = spills ? (data.spill ?? 0) : 0;
   const spill: SpillSpec | null =
     drop > 0
       ? {
@@ -1440,7 +1505,7 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
   // Water with no current and nothing pouring off it is a POOL, and a pool is
   // drawn as the cave-pool study (stillWater.ts) rather than as a current.
   if (body.flow === 0 && !spill) {
-    const geometry = poolGeometry(halfX, halfY, frontZ, backZ);
+    const geometry = poolGeometry(halfX, halfY, frontZ, backZ, walls);
     const pool = stillWaterMaterial(color, backZ, frontZ);
     const mesh = new THREE.Mesh(geometry, pool.material);
     mesh.castShadow = false;
@@ -1458,10 +1523,6 @@ export function buildWater(root: THREE.Group, body: WaterArea, data: LevelBodyDa
       drift: 0,
       mesh,
       reflect: pool.reflect,
-      openBehind: pool.openBehind,
-      footprint: pool.footprint,
-      color,
-      scenery: [],
     };
     return {
       geometries: [geometry],

@@ -11,7 +11,7 @@ import {
   TEST_TRAMPOLINE,
   TEST_VINES,
 } from "./testLevel";
-import type { RawLevelData } from "./levelFormat";
+import type { LevelSource, RawLevelData } from "./levelFormat";
 
 // A registry entry: the level's data, and the `levels/<file>.json` it was
 // bundled from for the levels that are a file the editor owns rather than
@@ -23,7 +23,10 @@ import type { RawLevelData } from "./levelFormat";
 // movers through, were retired on 2026-10-19 - a mover is authored in the
 // data now (`LevelBodyData.swingAmp`, routes).
 export interface LevelSpec {
-  data: RawLevelData;
+  // The level as authored: a node tree (format 3, every file since
+  // plans/node-tree.md phase 4) or the flat form (the generated Godot level and
+  // the sandboxes in testLevel.ts). Both reach the sim through one gate.
+  data: LevelSource;
   file?: string;
 }
 // The hand-authored ball arena, bundled straight from the editor's on-disk
@@ -32,12 +35,6 @@ export interface LevelSpec {
 // built app, which has no server. JSON widens string literals (`kind: string`),
 // hence the cast — the file is written by the editor against this schema.
 import ballLevelJson from "../../levels/ball.json";
-// The rails level: the third of the authored arenas, a descent along ziplines
-// and bars the cuff clamps onto and slides down (see `lib/rail.ts`). Registered
-// here because a file in `levels/` is not a level until it is - the menu's list
-// is built from THIS map, through the preload manifest (see `listedLevels`
-// below and docs/levels.md).
-import railsJson from "../../levels/rails.json";
 // The rail sandbox: a low-friction zipline between two posts, a peg, and a
 // hanging lantern whose handles are rails and whose lid, bulb and base are
 // hook-proof (see `lib/rail.ts`). Hand-authored, so `levels/ball.json` - which
@@ -101,31 +98,28 @@ export const LEVELS: Record<string, LevelSpec> = {
   // Ball & chain controller in its own authored arena. Any mover in it is one
   // the FILE authored - a swinging body (see `LevelBodyData.swingAmp`) - since
   // the ball driver takes no `init` hook.
-  BALL: { data: ballLevelJson as RawLevelData, file: "ball" },
-  // The rails descent (see the import): listed, so it carries a finish line and
-  // a title of its own and `cli levels` holds it to both.
-  RAILS: { data: railsJson as RawLevelData, file: "rails" },
+  BALL: { data: ballLevelJson as LevelSource, file: "ball" },
   // Rails to clamp and slide along, driven with the ball (see `lib/rail.ts`).
-  RAIL_TEST: { data: railTestJson as RawLevelData, file: "rail-test" },
+  RAIL_TEST: { data: railTestJson as LevelSource, file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
-  MUD_TEST: { data: mudTestJson as RawLevelData, file: "mud-test" },
+  MUD_TEST: { data: mudTestJson as LevelSource, file: "mud-test" },
   // Conveyor belts to ride, drop crates on and hook, driven with the ball (see
   // `lib/belt.ts`). Unlisted, like every sandbox.
-  TEST_BELT: { data: beltTestJson as RawLevelData, file: "belt-test" },
+  TEST_BELT: { data: beltTestJson as LevelSource, file: "belt-test" },
   // A rope bridge to roll across and hang from (see `docs/scene-chains.md`,
   // "Tied chains"). Unlisted, like every sandbox.
-  ROPE_BRIDGE: { data: ropeBridgeJson as RawLevelData, file: "rope-bridge" },
+  ROPE_BRIDGE: { data: ropeBridgeJson as LevelSource, file: "rope-bridge" },
   // Geometry that gives way: swing off the ceiling and drop through it (see
   // `docs/breakable.md`). The three ledges are 2.5 kN, 5 kN, and 4 kN three
   // times over; the L at the end is one body of two pieces, so it goes as one.
-  BREAK_TEST: { data: breakTestJson as RawLevelData, file: "break-test" },
+  BREAK_TEST: { data: breakTestJson as LevelSource, file: "break-test" },
   // Camera regions that blend, and a priority island that does not (see
   // `docs/camera.md`). Nothing to grapple: roll right and watch the framing.
-  CAMERA_TEST: { data: cameraTestJson as RawLevelData, file: "camera-test" },
+  CAMERA_TEST: { data: cameraTestJson as LevelSource, file: "camera-test" },
   // The finish gantry on its own, to swing through and to roll into (see
   // `docs/levels.md`). Unlisted like every other sandbox.
-  FINISH_TEST: { data: finishTestJson as RawLevelData, file: "finish-test" },
-  BERRY_TEST: { data: berryTestJson as RawLevelData, file: "berry-test" },
+  FINISH_TEST: { data: finishTestJson as LevelSource, file: "finish-test" },
+  BERRY_TEST: { data: berryTestJson as LevelSource, file: "berry-test" },
   // The arena the retired grapple controller was built around, played with the
   // ball (see `levelData.ts`).
   BALL_LEVEL_2: { data: LEVEL_2 },

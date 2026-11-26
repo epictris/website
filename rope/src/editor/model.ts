@@ -46,6 +46,34 @@ import { catenaryPolyline } from "../level/catenary";
 import { restingSpanPath } from "../level/vines";
 import { buildMoveRoute, moveAngleAt, type MoveRoute } from "../level/movers";
 import { DEFAULT_SPRING_DAMPING, buildLevelBodies, worldPlacement } from "../level/buildBodies";
+import {
+  compileLevel,
+  compose2D,
+  compose3D,
+  enclosesShape,
+  findNode,
+  frameOf,
+  invert3D,
+  poseOf,
+  poseOfFrame,
+  relative2D,
+  scaleLevelTree,
+  TREE_FORMAT,
+  walkNodes,
+  type LevelNode,
+  type LevelTree,
+  type NodeFormationGuide,
+  type NodeRootBranch,
+  type NodeType,
+  type Pose3D,
+  newNodeId,
+  expandInstances,
+  prefabLibrary,
+  prefabsAt,
+  PREFAB_ROCK_RECIPE,
+  scaleGeometry,
+} from "../level/nodes";
+import { ancestors, bodyAbove, canParent, childrenOf, descendants, freeName, isBodyType, nextOrder, removeSubtree, reparent, treeOf, type EdBody, type EdNode, type EdTree } from "./tree";
 import { World } from "../engine/world";
 import { wrapAngle } from "../engine/mathf";
 import { MASK_ALL, RigidBody2D } from "../engine/body";
@@ -76,6 +104,14 @@ import {
   moveModeOf,
   moveNodesOf,
   scaleLevelData,
+  scaleNormalized,
+  loadLevelTree,
+  isLightObject,
+  isAreaKind,
+  type LevelSource,
+  type CameraPathVert,
+  type CollisionObjectData,
+  type FormationGuide,
   type BodyKind,
   type MoveEase,
   movePeakFactor,
@@ -135,9 +171,9 @@ import { FIREFLY_COLOR, FIREFLY_INTENSITY, FIREFLY_RANGE, FOLLOW_Z } from "../re
 // `notes` the authoring annotations (invisible in play).
 //
 // There is deliberately NO decoration layer, and no drawn shape at all: what a
-// level LOOKS like is its Blender scene (`LevelData.scene`,
-// docs/blender-scenes.md), bound to the bodies here by their `name`. The editor
-// authors what the game simulates and lights.
+// level LOOKS like is what its bodies carry - formations, the decorations
+// grown on them, models (docs/formations.md, docs/blender-models.md). The
+// editor authors what the game simulates and lights.
 //
 // `lights` is the level's own light sources (see `LightData`). It is a layer
 // rather than a property of a body because a light is not a piece of stuff: it
@@ -567,71 +603,44 @@ export interface EdItem {
   // What kind of scene object this is. Only meaningful on the `scene` layer;
   // camera regions and notes carry "shape" and never read it.
   object: EdObject;
-  // WHICH BODY THIS OBJECT IS IN. Always set: an item is a scene object, and
-  // every scene object is in exactly one body, so an item on its own is a body
-  // of one rather than a body of none.
-  //
-  // This replaced "grouping", and the difference is not only vocabulary. A group
-  // was an optional tag layered on top of items that were otherwise
-  // free-standing, so every path had to answer "is this grouped?" before it
-  // could answer anything else, and "no group" and "a group of one" were two
-  // states meaning the same thing. A body is the container itself: the question
-  // is always just which body, and Ctrl+G moves objects into one rather than
-  // welding loose things together.
-  //
-  // What being in one body MEANS is unchanged. Its collision objects build into
-  // ONE engine body carrying all their shapes, so the rope and ledge detection
-  // treat the join between two pieces as an interior seam rather than as a
-  // corner. A non-colliding object in the same body is drawn in that body's
-  // frame, so decoration on a rigid assembly swings and falls with it while
-  // bringing no shape, no mass and no seam. A light in the same body rides its
-  // fitting. And a body of nothing but decoration, or nothing but a light, is a
-  // legitimate thing to author - it simply builds no engine body.
-  //
-  // The camera and notes layers each sit in a body of their own and never share
-  // one: neither is drawn in play, and neither has anything a body could carry
-  // it in.
-  //
-  // The id is editor-local and never leaves it. `toLevelData` groups by it and
-  // writes the objects into one body; loading mints one id per authored body.
-  bodyId: number;
-  pos: Vec2; // metres
-  rot: number; // radians
+  // THE NODE THIS ITEM IS (plans/node-tree.md): every item is the payload of
+  // one node of the level's tree (`EdModel.tree`) - a collision shape, an
+  // anchor, a light, a model, a rock, a decoration, a volume or a note - and
+  // the node is what is selected, named, grouped, layered and parented.
+  node: string;
+  // The nearest BODY above that node, and its properties: what this item
+  // collides as, if it collides, and what carries it. Derived from the tree
+  // (`relink`), held here because nearly everything that reads an item asks
+  // it. The properties are the body node's own object, shared by every item
+  // under it, so a body's friction is one number however many pieces it has.
+  // Null for an item no body carries: a rock or a lamp standing on its own,
+  // a camera region, a note.
+  bodyOf: string | null;
+  body: EdBody | null;
+  // What this item moves and is picked as ONE THING with: its body's node,
+  // or its own node when no body carries it. The editor's gestures and panels
+  // that act on "the body this piece is in" act on this (`relink` keeps it).
+  unit: string;
+  pos: Vec2; // metres, world
+  rot: number; // radians, world
+  // A 3D node's depth (metres, toward the camera) and tilt about x then y
+  // (radians, before the turn in the plane): a rock standing off the plane.
+  // Zero for everything in it.
+  z: number;
+  tilt: [number, number];
   shape: EdShape; // metres
-  // The scene layer authors these (the 2D view's fill, and the colour a piece's
-  // debug geometry falls back to); camera regions and notes take the fixed
-  // editor-furniture colours below.
+  // The fill of a 2D item that is not in a body (camera regions, notes and
+  // the like take the fixed editor-furniture colours) and a light's colour.
+  // A collision piece is filled with its BODY's colour (`fillOf`).
   color: string; // hex fill colour
   opacity: number; // 0..1 fill opacity (a body's border draws fully opaque)
-  kind: BodyKind;
-  // The body's stable NAME (see `LevelBodyData.name`), "" for unnamed. What a
-  // Blender object in the level's scene is matched to, so it is per BODY, and
-  // it is held on EVERY member rather than on the collision leads alone - a body
-  // of lights alone may be dressed too - and written from whichever member
-  // `toLevelData` writes the body from.
-  name: string;
-  friction: number; // surface friction, 0 (ice) .. 1 (rubber)
-  // The trampoline pair (see `LevelBodyData.bounce`): the coefficient of
-  // restitution, 0 (dead) .. 1 (perfect), and the floor under the outgoing
-  // speed in m/s that makes a pad a launcher rather than a bouncy floor. Per
-  // BODY, like the friction beside them, so `syncBodyProps` carries both across
-  // a compound one: half a pad is not a thing a level can mean.
-  bounce: number;
-  launch: number;
-  // Breakable (see `LevelBodyData.breakForce`): the newtons a hit has to carry
-  // to hurt this body, and how many such hits it survives before it comes
-  // apart. 0 is unbreakable, which is every body that authors nothing. Per BODY
-  // like the trampoline pair above - breaking destroys the whole thing, so
-  // `syncBodyProps` carries both across a compound one.
-  breakForce: number;
-  durability: number;
   // There is no body depth here, and none on a collision item either: a body is
   // a thing in the gameplay plane and so is the shape it collides as (see
   // `LevelBodyData`). Depth is a light's `z`, and a water body's slab below.
   // Hook-proof (see `LevelBodyData.impermeable`): still solid, but the grapple
-  // hook is destroyed on it and the ball's is deflected. Per SHAPE, so it is
-  // among the properties `syncBodyProps` leaves alone - a compound wall with
-  // one attachable ledge among hook-proof faces is what it is for.
+  // hook is destroyed on it and the ball's is deflected. Per SHAPE, not a
+  // property of the body node (`EdBody`) - a compound wall with one
+  // attachable ledge among hook-proof faces is what it is for.
   impermeable: boolean;
   // What this piece collides with (see `CollisionObjectData.passes`), as the
   // engine's own bitmask. `MASK_ALL` - everything - is the default and what
@@ -662,8 +671,7 @@ export interface EdItem {
   slipFloor: number;
   // What the shape is made of, and how thick it is through z - the dimension
   // the 2D view cannot show (see `LevelBodyData.material` / `thickness`). Per
-  // SHAPE, so they are the one geometry property `syncBodyProps` leaves alone:
-  // a compound body's mass, centre of mass and inertia are sums over its
+  // SHAPE, not properties of the body node (`EdBody`): a compound body's mass, centre of mass and inertia are sums over its
   // pieces, and a piece brings its own material to them.
   //
   // The material is a PRESET density: `density` is what the piece weighs per
@@ -681,83 +689,6 @@ export interface EdItem {
   // every other piece. Only ever set on a scene-layer curve. Replaced whole on
   // an edit, like `debug`.
   root: EdRoot | null;
-  force: number; // force areas only: m/s² along the item's rotation
-  // Water areas only: the current's speed in m/s along the item's rotation, and
-  // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
-  flow: number;
-  drag: number;
-  // Water areas only: the fall off the downstream end - its drop in metres
-  // (0 = none). See `LevelBodyData.spill`.
-  spill: number;
-  // Water areas only: the slab through z - its middle's offset from the plane
-  // in metres, + toward the camera, and its depth (null = the renderer's
-  // default). See `LevelBodyData.waterZ` / `waterDepth`.
-  waterZ: number;
-  waterDepth: number | null;
-  // Hook-only (see `LevelBodyData.passable`): the hook catches on it and
-  // everything else - the avatar, the rope, loose debris - passes through. Per
-  // BODY, so `syncBodyProps` carries it across a group: a body half in the way
-  // is not a thing a level can mean.
-  passable: boolean;
-  // Rigid bodies only: bolted to a bearing at the centre of mass - spins, never
-  // translates (see `LevelBodyData.pivot`).
-  pivot: boolean;
-  // Pivot bodies only: where the bearing sits, in the body's own frame
-  // (`bodyFrameOf`), or null for the centre of mass every plain pivot means
-  // (see `LevelBodyData.pivotX`). Frame-local on purpose: every gesture that
-  // moves or turns the whole body carries its frame, so the bearing rides
-  // along with no gesture knowing the field exists.
-  pivotAt: Vec2 | null;
-  // ...and the torsion return spring about it (see `LevelBodyData.pivotFreq`):
-  // frequency in Hz, 0 = a free-spinning bearing, which is how "absent" is
-  // spelled in a model whose fields are always present.
-  pivotFreq: number;
-  pivotDamping: number;
-  // Rigid bodies only: held at the authored position by a two-axis
-  // spring-damper - sags under load, springs back (see
-  // `LevelBodyData.springFreqX`). Frequencies in Hz, 0 = that axis pinned; a
-  // body with both at 0 has no spring at all, which is how "absent" is spelled
-  // in a model whose fields are always present.
-  springFreqX: number;
-  springFreqY: number;
-  springDamping: number;
-  // Static bodies only: the kinematic pendulum (see `LevelBodyData.swingAmp`).
-  // Half-amplitude in RADIANS like every angle the model holds (the inspector
-  // shows degrees, as it does for `rot`), period in seconds, phase in cycles.
-  // An amplitude or a period of 0 is a body that does not swing, which is how
-  // "absent" is spelled in a model whose fields are always present - the same
-  // convention `springFreqX` follows. Its bearing is `pivotAt`, shared with the
-  // rigid pivot because it is the same point.
-  swingAmp: number;
-  swingPeriod: number;
-  swingPhase: number;
-  // Static bodies only: the kinematic rotor (see `LevelBodyData.spinPeriod`).
-  // Seconds of one full turn, SIGNED - the sign is which way round - and a phase
-  // in cycles. A period of 0 is a body that does not spin, which is the same
-  // "absent" the pendulum's zero spells, and the bearing is `pivotAt` again
-  // because it is the same point once more.
-  spinPeriod: number;
-  spinPhase: number;
-  // Static bodies only: the route the body travels (see
-  // `LevelBodyData.moveNodes`), as the whole node list - NODE ZERO IS THE BODY,
-  // pinned at the frame origin, which is what makes the route ride the body
-  // through every gesture that moves or turns it, exactly as `pivotAt` does.
-  // Frame-local for the same reason and held the same way: replaced rather than
-  // mutated, since `syncBodyProps` hands one array to every member of a body.
-  //
-  // Empty is a body with no route at all; a route that exists is two nodes or
-  // more, node zero included, which is how "absent" is spelled in a model whose
-  // fields are always present.
-  route: EdRouteNode[];
-  moveMode: MoveMode;
-  // ...and how it is travelled: the base speed in METRES per second (the
-  // inspector shows the file's px/s, as it does for every other length), the
-  // phase in cycles, the ease, and whether the body turns with the route. A
-  // speed of 0 or an empty route is a body that stands still.
-  moveSpeed: number;
-  movePhase: number;
-  moveEase: MoveEase;
-  moveAlign: boolean;
   // Camera layer:
   cam: EdCamera;
   // Lights layer:
@@ -948,12 +879,9 @@ export interface EdBodyFrame {
   rot: number; // radians
 }
 
-// A 3D body's depth (metres, toward the camera) and tilt (radians about
-// three's x then y, before the frame's turn): see `EdModel.bodies3d`.
-export interface EdBody3d {
-  z: number;
-  tilt: [number, number];
-}
+// A node's depth (metres, toward the camera) and tilt (radians about three's x
+// then y, before the frame's turn), as `EdItem.z`/`tilt` and `EdNode` hold
+// them: what a 3D frame (`Node3D`, `Formation3D`) stands off the plane by.
 
 export interface EdModel {
   // Preserve an explicit empty mask after its last region is deleted.
@@ -972,37 +900,16 @@ export interface EdModel {
   items: EdItem[];
   chains: EdChain[];
   vines: EdVine[];
-  // THE FRAME EACH BODY'S OBJECTS ARE PLACED IN, by body id.
-  //
-  // It is STORED rather than read off a member, and that is the whole point. It
-  // used to be "wherever the body's FIRST object is", which made that object
-  // secretly the body itself: nudging it moved the body, and since every sibling
-  // is recorded as an offset from the frame, every sibling's offset changed by
-  // the same amount to compensate. One object moved 10 cm and the file recorded
-  // the body moving 10 cm and every other object moving 10 cm back - the same
-  // geometry, written as an edit nobody made, in a panel that then read as the
-  // body having moved.
-  //
-  // Stored, a body's frame is its own: an edit to one object inside it changes
-  // that object's offset and nothing else, and the frame moves only when the
-  // BODY moves (`translateItems` / `rotateItemsAbout` carry it exactly when the
-  // whole body is in the set being moved).
-  //
-  // Absent means "wherever the body's first object is", which is where a body's
-  // frame has always been measured from and is what a freshly loaded level
-  // carries. That is exact for the body of ONE object almost every body is - any
-  // move of that object is a move of the whole body - so a level of simple
-  // bodies stores nothing and saves byte-for-byte as it did. What makes it safe
-  // for the rest is that every body holding more than one object has its frame
-  // written down before anything is edited (`pinBodyFrame`, from the editor's
-  // `beginAction`), so a body that can be edited a piece at a time always has one.
-  bodyFrames: Map<number, EdBodyFrame>;
-  // THE 3D BODIES (`LevelBodyData.space`): a body id here is drawn off the
-  // gameplay plane, at its depth and tilt about its frame above. Kept beside
-  // the frame rather than in it, since the frame's own rules (derived from the
-  // first object, pinned before an edit) are about the plane and stay so. A
-  // body holding collision is never in it.
-  bodies3d: Map<number, EdBody3d>;
+  // THE LEVEL'S NODE TREE (editor/tree.ts): every node, its parent and its
+  // children in order, the body properties on the body nodes, and the world
+  // placement of every node that is not an item (a body's frame, a group's,
+  // a 3D frame's). An item's node is `item.node`; a chain's and a vine's are
+  // theirs. A body's frame is its node's placement, stored and moved only
+  // when the body is: an edit to one of its pieces moves that piece alone.
+  tree: EdTree;
+  // The level's data layers, by name (`LevelTree.layers`): what a node's
+  // `layers` may name.
+  dataLayers: string[];
   // The level's light and air (see `EnvironmentData`). One object rather than a
   // list, because it is a property of the LEVEL and not of anything in it.
   //
@@ -1034,11 +941,6 @@ export interface EdModel {
   // Empty is what a level that authors nothing has, and an empty block is
   // written back as no block at all (see `toLevelData`).
   meta: LevelMetaData;
-  // The Blender scene the level is dressed in (`LevelData.scene`), "" for
-  // none. Carried for the reason the blocks above are - the editor rewrites
-  // the whole file - and offered on the Level panel, since naming the scene is
-  // half of binding a body to it (the other half is the body's `name`).
-  scene: string;
 }
 
 // Every field of the environment block, in the order the inspector shows them,
@@ -1140,9 +1042,8 @@ export const defaultNote = (): EdNote => ({
 // `+ Glow`: what one click drops. EDITOR defaults, not format defaults - a light
 // object on disk with `wake` and nothing else gets the renderer's
 // `DEFAULT_WAKE_*` - and every number here is a starting point to be played.
-// What it looks like is the Blender scene's: an object named like the body is
-// its dressing, and whatever glows in that dressing follows the light
-// (`BodyVisual.adoptDressing`).
+// What it looks like is what the body carries (a model, a formation), and
+// whatever glows in that follows the light (`BodyVisual.adoptLook`).
 export const GLOW_CUBE = 0.3; // metres, the collision square's side
 export const GLOW_COLOR = "#8a3fd6"; // the body's fill: the 2D view and its debug geometry
 export const GLOW_EMISSIVE = "#b070ff"; // the light's colour
@@ -1185,7 +1086,7 @@ export function glowBody(pos: Vec2): LevelBodyData {
 // ...as editor items, through the same loader a level comes in by, so the
 // `+ Glow` tool adds exactly what a level file holding that body would load as.
 export function glowModel(pos: Vec2): EdModel {
-  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [glowBody(pos)] });
+  return modelFromTree(loadLevelTree({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [glowBody(pos)] }));
 }
 
 // The values a light object's absent `color`, `intensity` and `range` take in
@@ -1234,7 +1135,7 @@ export function fireflyBody(pos: Vec2): LevelBodyData {
 // ...as editor items, through the same loader a level comes in by (see
 // `glowModel`).
 export function fireflyModel(pos: Vec2): EdModel {
-  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [fireflyBody(pos)] });
+  return modelFromTree(loadLevelTree({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [fireflyBody(pos)] }));
 }
 
 // Camera regions and notes are editor-only furniture — they are never drawn in
@@ -1374,580 +1275,203 @@ function materialOf(o: { material?: string; density?: number; soundMaterial?: st
 }
 
 // Metre-space LevelData → editor model.
-function fromLevelData(data: LevelData): EdModel {
-  // ONE ITEM PER SCENE OBJECT, and the objects of one body share a group id.
-  // That is exactly what the retired `group` TAG meant, so the editor's grouping
-  // machinery - selecting, moving and rotating a body as one - carries over
-  // unchanged, and what it gains is that a LIGHT can be in the group too.
-  //
-  // Placement is flattened to WORLD here and re-derived on the way out. The
-  // editor manipulates items in world metres throughout - every drag, handle and
-  // marquee is written that way - and a body's frame is a property of the file
-  // rather than of the gesture.
-  const bodies: EdItem[] = [];
-  // Which item stands for each authored body, so a chain naming a body by index
-  // finds something to hold. The first COLLISION item, since that is what a
-  // chain is bolted to; a body with none is a body a chain cannot name.
-  const itemOfBody: (EdItem | null)[] = [];
-  // Filled per body, for the bodies whose frame the file actually states (see
-  // `authoredFrame` below); the rest are left to be derived from their first
-  // object, which is where a body's frame has always been measured from.
-  const bodyFrames = new Map<number, EdBodyFrame>();
-  const bodies3d = new Map<number, EdBody3d>();
-  for (const b of data.bodies) {
-    const firstOfBody = bodies.length;
-    // ONE ITEM PER SCENE OBJECT. Nothing is folded together: a barrel is a body
-    // holding a collision box and a mesh, and it arrives here as two items in
-    // one body rather than as one item that is secretly both.
-    const bodyId = newBodyId();
-    // THE FRAME THIS BODY'S OBJECTS ARE PLACED IN (see `EdModel.bodyFrames`).
-    //
-    // The file states one - it is the body's own `x`/`y`/`rot` - and it is taken
-    // as stated whenever it is not simply where the first object sits. That is
-    // the only reading under which a body whose origin was deliberately put
-    // somewhere no object is survives being reopened: the frame is not in the
-    // model's items, so a load that re-derived it from a member would quietly
-    // move the origin back onto that member and the next autosave would write
-    // the move to disk (`originToCentroid` is what puts one there).
-    //
-    // Where the two DO coincide - every body an editor save has written, whose
-    // first object is at the frame and so carries no offset at all - nothing is
-    // recorded and the frame stays derived, which is what keeps a level opened
-    // and saved untouched byte-stable and what leaves `framedByItself` true for
-    // the body of one object almost every body is.
-    //
-    // (0, 0, 0) IS NOT A STATED FRAME. It is what a body migrated out of a
-    // retired flat entry is given - the objects keep the world placements the
-    // flat entries carried and the body's own origin is left at zero, which is
-    // the only migration that is bit-identical (see `normalizeLevelData`). Read
-    // as stated it would leave such a body measuring from the world origin
-    // instead of from its own shape, so a frame of all zeroes with nothing at it
-    // goes on being re-origined onto the first object as it always was.
-    const filedFrame = { pos: new Vec2(b.x, b.y), rot: b.rot };
-    const leadFrame = b.objects[0] ? worldPlacement(b, b.objects[0]) : filedFrame;
-    const authoredFrame =
-      (b.x !== 0 || b.y !== 0 || b.rot !== 0) &&
-      (filedFrame.pos.x !== leadFrame.pos.x ||
-        filedFrame.pos.y !== leadFrame.pos.y ||
-        filedFrame.rot !== leadFrame.rot);
-    const frame = authoredFrame ? filedFrame : leadFrame;
-    if (authoredFrame) bodyFrames.set(bodyId, frame);
-    // A 3D body's depth and tilt are about the frame the FILE states, so that
-    // frame is kept as stated whatever its first object says.
-    if (b.space === "3d") {
-      bodies3d.set(bodyId, { z: b.z ?? 0, tilt: b.tilt ? [b.tilt[0], b.tilt[1]] : [0, 0] });
-      if (!authoredFrame) bodyFrames.set(bodyId, filedFrame);
-    }
-    // An authored bearing, carried into that frame. For a body whose frame the
-    // file states it is already measured there and comes back unchanged; for one
-    // whose frame is the first object's, the same world point is re-measured
-    // against that object - which is what the save's re-origining already does
-    // to every object placement.
-    const pivotAt = (() => {
-      // Read for either mounting that HAS a bearing - a rigid `pivot` or a
-      // swinging static (see `LevelBodyData.pivotX`) - since the two mean the
-      // same point and the model holds one field for it.
-      if (!hasBearing(b) || (b.pivotX === undefined && b.pivotY === undefined)) return null;
-      if (!b.objects[0]) return null;
-      const bearing = worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 });
-      return bearing.pos.sub(frame.pos).rotated(-frame.rot);
-    })();
-    // ...and the route, carried into the same frame and for the same reason: a
-    // route node is a point in the body, so it is measured against the frame the
-    // model holds the body in rather than the one the file wrote. A handle is an
-    // OFFSET from its node, so it takes the turn and not the shift; a key is a
-    // number and takes neither.
-    //
-    // NODE ZERO IS THE BODY and is pinned at the model frame's own origin, which
-    // is what the file means by writing it at (0, 0) - it is the one node no
-    // gesture drags, because moving the body is what moves it.
-    const routeIn: EdRouteNode[] = moveNodesOf(b).map((n, i) => {
-      const turn = b.rot - frame.rot;
-      return {
-        p: i === 0 ? Vec2.ZERO : worldPlacement(b, n).pos.sub(frame.pos).rotated(-frame.rot),
-        in: new Vec2(n.inX ?? 0, n.inY ?? 0).rotated(turn),
-        out: new Vec2(n.outX ?? 0, n.outY ?? 0).rotated(turn),
-        rot: n.rot ?? null,
-        speed: n.speed ?? null,
-      };
-    });
-    const base = {
-      layer: "scene" as const,
-      bodyId,
-      kind: b.kind,
-      color: b.color ?? DEFAULT_BODY_COLOR,
-      opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
-      friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
-      bounce: b.bounce ?? DEFAULT_BOUNCE,
-      launch: b.launch ?? DEFAULT_LAUNCH,
-      breakForce: b.breakForce ?? 0,
-      durability: b.durability ?? 1,
-      name: b.name ?? "",
-      force: b.force ?? 0,
-      flow: b.flow ?? 0,
-      drag: b.drag ?? 0,
-      spill: b.spill ?? 0,
-      waterZ: b.waterZ ?? 0,
-      waterDepth: b.waterDepth ?? null,
-      passable: b.passable === true,
-      pivot: b.pivot === true,
-      pivotAt,
-      pivotFreq: b.pivotFreq ?? 0,
-      pivotDamping: b.pivotDamping ?? DEFAULT_SPRING_DAMPING,
-      springFreqX: b.springFreqX ?? 0,
-      springFreqY: b.springFreqY ?? 0,
-      springDamping: b.springDamping ?? DEFAULT_SPRING_DAMPING,
-      swingAmp: b.swingAmp ?? 0,
-      swingPeriod: b.swingPeriod ?? 0,
-      swingPhase: b.swingPhase ?? 0,
-      spinPeriod: b.spinPeriod ?? 0,
-      spinPhase: b.spinPhase ?? 0,
-      route: routeIn,
-      moveMode: moveModeOf(b),
-      moveSpeed: b.moveSpeed ?? 0,
-      movePhase: b.movePhase ?? 0,
-      moveEase: b.moveEase ?? "linear",
-      moveAlign: b.moveAlign === true,
-      cam: defaultCamera(),
-      light: defaultLight(),
-      note: defaultNote(),
-      modelRef: defaultModelRef(),
-      formation: null, decoration: null,
-      shelter: defaultShelter(),
-      anchorId: 0,
-      pathId: 0,
-    };
-    for (const o of b.objects) {
-      const w = worldPlacement(b, o);
-      if (isCollisionObject(o)) {
-        bodies.push({
-          ...base,
-          id: newBodyId(),
-          object: "collision",
-          pos: w.pos,
-          rot: w.rot,
-          shape: edShape(o.shape),
-          impermeable: o.impermeable === true,
-          // The authored list as the mask itself. `normalizeLevelData` has
-          // already folded the retired `wrappable: false` into it, so there is
-          // one spelling by the time the editor sees a level.
-          mask: maskFromPasses(o.passes),
-          rail: o.rail === true,
-          viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
-          slipFloor: typeof o.slipFloor === "number" && o.slipFloor > 0 ? o.slipFloor : 0,
-          ...materialOf(o),
-          thickness: o.thickness ?? DEFAULT_THICKNESS,
-          debug: edDebug(o.debug),
-          // Filled in below, once every object of the body has its item: a
-          // branch names its parent by index.
-          root: null,
-        });
-        continue;
-      }
-      if (isAnchorObject(o)) {
-        bodies.push({
-          ...base,
-          id: newBodyId(),
-          object: "anchor",
-          pos: w.pos,
-          rot: w.rot,
-          // A point has no size. The gizmo is what the canvas draws and what a
-          // click has to land on.
-          shape: { kind: "rect", w: ANCHOR_GIZMO, h: ANCHOR_GIZMO },
-          impermeable: false,
-          mask: MASK_ALL,
-          rail: false,
-          viscosity: 0,
-          slipFloor: 0,
-          material: DEFAULT_MATERIAL,
-          density: DEFAULT_DENSITY,
-          thickness: DEFAULT_THICKNESS,
-          debug: NO_DEBUG(),
-          root: null,
-          anchorId: o.id,
-          pathId: 0,
-        });
-        continue;
-      }
-      if (isModelObject(o)) {
-        bodies.push({
-          ...base,
-          id: newBodyId(),
-          object: "model",
-          pos: w.pos,
-          rot: w.rot,
-          // The model is drawn by the 3D scene, where a click on it picks it;
-          // on the plane it is this marker, as an anchor is its gizmo.
-          shape: { kind: "rect", w: MODEL_MARK, h: MODEL_MARK },
-          impermeable: false,
-          mask: MASK_ALL,
-          rail: false,
-          viscosity: 0,
-          slipFloor: 0,
-          material: DEFAULT_MATERIAL,
-          density: DEFAULT_DENSITY,
-          thickness: DEFAULT_THICKNESS,
-          debug: NO_DEBUG(),
-          root: null,
-          modelRef: {
-            name: o.model,
-            ...(o.mushroom ? { mushroom: { ...o.mushroom } } : {}),
-            z: o.z ?? 0,
-            rotX: o.rotX ?? 0,
-            rotY: o.rotY ?? 0,
-            scale: o.scale ?? 1,
-          },
-        });
-        continue;
-      }
-      if (isDecorationObject(o)) {
-        // Its mark on the plane: where it is drawn, through its formation's
-        // placement in the body (the anchor is in the formation's frame, y up).
-        const fw = worldPlacement(b, b.formation ?? {});
-        const at = o.onRock ?? o.anchor;
-        const { type: _t, x: _x, y: _y, rot: _r, ...data } = o;
-        bodies.push({
-          ...base,
-          id: newBodyId(),
-          object: "decoration",
-          pos: fw.pos.add(new Vec2(at.p[0], -at.p[1]).rotated(fw.rot)),
-          rot: 0,
-          shape: { kind: "rect", w: MODEL_MARK / 2, h: MODEL_MARK / 2 },
-          impermeable: false,
-          mask: MASK_ALL,
-          rail: false,
-          viscosity: 0,
-          slipFloor: 0,
-          material: DEFAULT_MATERIAL,
-          density: DEFAULT_DENSITY,
-          thickness: DEFAULT_THICKNESS,
-          debug: NO_DEBUG(),
-          root: null,
-          decoration: data,
-        });
-        continue;
-      }
-      bodies.push(lightItem(o as LightObjectData, w.pos, w.rot, bodyId));
-    }
-    // The body's formation, an item of its own placed where the file puts it
-    // in the body (`EdFormation`): after the objects, so a body's objects keep
-    // the items an index into them names.
-    if (b.formation) {
-      const w = worldPlacement(b, b.formation);
-      const { x: _x, y: _y, rot: _rot, ...data } = b.formation;
-      bodies.push(formationItem(base, w.pos, w.rot, data));
-    }
-    const made = bodies.slice(firstOfBody);
-    itemOfBody.push(made.find((i) => i.object === "collision") ?? null);
-    // A root branch names the piece it grows out of by its index in the
-    // body's objects, and every object made exactly one item, in order - so
-    // the index is the item at that place in `made`. One that names nothing
-    // in the body loads as a trunk (`syncRoots` would make it one anyway).
-    b.objects.forEach((o, k) => {
-      const item = made[k];
-      if (!item || !isCollisionObject(o) || !o.root || item.shape.kind !== "path") return;
-      const parent = o.root.parent !== undefined ? made[o.root.parent] : undefined;
-      item.root = {
-        parent: parent && parent !== item ? parent.id : null,
-        at: o.root.at ?? 0,
-        ...(o.root.bark ? { bark: o.root.bark } : {}),
-        ...(o.root.bends !== undefined && o.root.bends.length > 0 ? { bends: o.root.bends.map(bendFields) } : {}),
-      };
-    });
+// --- loading -------------------------------------------------------------------
+//
+// THE LEVEL AS THE EDITOR HOLDS IT, from its node tree (plans/node-tree.md
+// "Editor"). The tree is read twice over: compiled, for each element's own
+// fields in the flat form every converter below is written against, and walked,
+// for the structure and the world placement of every node. Placements are
+// composed down the tree exactly as `compileLevel` composes them, so an item's
+// world placement is the one the game builds it at and a level opened and saved
+// untouched writes back the numbers it was read with (`toTree`).
+
+// Nodes placed in the scene rather than the plane: a depth and a tilt as well.
+const POSE_3D: ReadonlySet<NodeType> = new Set(["Node3D", "Formation3D", "Instance"]);
+
+export interface World3 {
+  pos: Vec2;
+  rot: number;
+  z: number;
+  tilt: [number, number];
+}
+
+export const WORLD_ORIGIN: World3 = Object.freeze({ pos: Vec2.ZERO, rot: 0, z: 0, tilt: [0, 0] as [number, number] });
+
+const tilted = (w: { tilt: readonly [number, number] }): boolean => w.tilt[0] !== 0 || w.tilt[1] !== 0;
+
+function asPose(w: World3): Pose3D {
+  return { x: w.pos.x, y: w.pos.y, rot: w.rot, z: w.z, tilt: [w.tilt[0], w.tilt[1]] };
+}
+
+// A node's world placement from its parent's and its own. In the plane it is
+// `compileLevel`'s arithmetic, to the bit; only a tilt above takes the full
+// rotation.
+export function composeWorld(parent: World3, local: Pose3D): World3 {
+  if (!tilted(parent)) {
+    const f = compose2D({ x: parent.pos.x, y: parent.pos.y, rot: parent.rot }, poseOf(local));
+    return { pos: new Vec2(f.x, f.y), rot: f.rot, z: parent.z + (local.z ?? 0), tilt: local.tilt ? [local.tilt[0], local.tilt[1]] : [0, 0] };
   }
+  const p = poseOfFrame(compose3D(frameOf(asPose(parent)), frameOf(local)));
+  return { pos: new Vec2(p.x, p.y), rot: p.rot, z: p.z, tilt: p.tilt };
+}
 
-  const regionItem = (r: CameraRegionData): EdItem => ({
-    id: newBodyId(),
-    layer: "camera",
-    object: "collision",
-    bodyId: newBodyId(), // its own body: neither layer is drawn in play
-    kind: "static", // unused on this layer; keeps the field total
-    pos: new Vec2(r.x, r.y),
-    rot: r.rot,
-    shape: edShape(r.shape),
-    color: CAMERA_REGION_COLOR,
-    opacity: CAMERA_REGION_OPACITY,
-    friction: DEFAULT_SURFACE_FRICTION,
-    bounce: DEFAULT_BOUNCE,
-    launch: DEFAULT_LAUNCH,
-    breakForce: 0,
-    durability: 1,
-    name: "",
-    impermeable: false,
-    mask: MASK_ALL,
-    rail: false,
-    viscosity: 0,
-    slipFloor: 0,
-    material: DEFAULT_MATERIAL,
-    density: DEFAULT_DENSITY,
-    thickness: DEFAULT_THICKNESS,
-    debug: NO_DEBUG(),
-    root: null,
-    force: 0,
-    flow: 0,
-    drag: 0,
-    spill: 0,
-    waterZ: 0,
-    waterDepth: null,
-    passable: false,
-    pivot: false,
-    pivotAt: null,
-    pivotFreq: 0,
-    pivotDamping: DEFAULT_SPRING_DAMPING,
-    springFreqX: 0,
-    springFreqY: 0,
-    springDamping: DEFAULT_SPRING_DAMPING,
-    swingAmp: 0,
-    swingPeriod: 0,
-    swingPhase: 0,
-    spinPeriod: 0,
-    spinPhase: 0,
-    route: [],
-    moveMode: "backAndForth",
-    moveSpeed: 0,
-    movePhase: 0,
-    moveEase: "linear",
-    moveAlign: false,
-    cam: {
-      offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
-      viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
-      lockX: r.lockX ?? null,
-      lockY: r.lockY ?? null,
-      buffer: r.buffer ?? null,
-      bufferLeft: r.bufferLeft ?? null,
-      bufferRight: r.bufferRight ?? null,
-      bufferTop: r.bufferTop ?? null,
-      bufferBottom: r.bufferBottom ?? null,
-      falloff: r.falloff ?? null,
-      priority: r.priority ?? 0,
-      keepInFrame: r.keepInFrame ?? true,
-      // A region has no corridor and no lookahead.
-      rangeX: null,
-      rangeY: null,
-      falloffX: null,
-      falloffY: null,
-      lookaheadX: null,
-      lookaheadY: null,
-      lookaheadBufferX: null,
-      lookaheadBufferY: null,
-      softness: null,
-      reactionTime: null,
-      windBuffer: null,
-    },
-    light: defaultLight(),
-    note: defaultNote(),
-    modelRef: defaultModelRef(),
-    formation: null, decoration: null,
-    shelter: defaultShelter(),
-    anchorId: 0,
-    pathId: 0,
-  });
-  const regions = (data.cameraRegions ?? []).map(regionItem);
-  // Shelters: a camera region's item moved onto the shelter layer - an
-  // outline drawn and edited by exactly the same gestures - with no framing
-  // and the shelter's own field.
-  const shelters = (data.shelters ?? []).map(
-    (s): EdItem => ({
-      ...regionItem({ x: s.x, y: s.y, rot: s.rot, shape: s.shape }),
-      layer: "shelter",
-      ...newItemStyle("shelter", "collision"),
-      cam: defaultCamera(),
-      shelter: { front: s.front ?? null },
-    }),
-  );
+// ...and back: where a world placement is in a parent's frame.
+export function relativeLocal(parent: World3, world: World3): Pose3D {
+  if (!tilted(parent)) {
+    const f = relative2D({ x: parent.pos.x, y: parent.pos.y, rot: parent.rot }, { x: world.pos.x, y: world.pos.y, rot: world.rot });
+    return { x: f.x, y: f.y, rot: f.rot, z: world.z - parent.z, tilt: [world.tilt[0], world.tilt[1]] };
+  }
+  return poseOfFrame(compose3D(invert3D(frameOf(asPose(parent))), frameOf(asPose(world))));
+}
 
-  const fogRegions = (data.fogRegions ?? []).map((r): EdItem => ({
-    ...regionItem({ x: r.x, y: r.y, rot: r.rot, shape: r.shape }),
-    layer: "fog", ...newItemStyle("fog", "collision"), cam: defaultCamera(),
-    ...(r.falloff !== undefined ? { fogFalloff: r.falloff } : {}),
-  }));
+export function sameWorld(a: World3, b: World3): boolean {
+  return a.pos.x === b.pos.x && a.pos.y === b.pos.y && a.rot === b.rot && a.z === b.z && a.tilt[0] === b.tilt[0] && a.tilt[1] === b.tilt[1];
+}
 
-  // Camera paths: the same item type as a region, distinguished by its shape
-  // kind. One item type per layer rather than a union is what keeps a path
-  // dragged, rotated, rubber-banded, duplicated and undone by exactly the code
-  // a region already goes through.
-  const camPathItem = (c: CameraPathData): EdItem => ({
-    id: newBodyId(),
-    layer: "camera",
-    object: "collision",
-    bodyId: newBodyId(), // its own body: this layer is not drawn in play
-    kind: "static", // unused on this layer; keeps the field total
-    pos: new Vec2(c.x, c.y),
-    rot: c.rot,
-    shape: {
-      kind: "path",
-      verts: c.verts.map((v) => new Vec2(v.x, v.y)),
-      handles: c.verts.map((v) => ({
-        in: new Vec2(v.inX ?? 0, v.inY ?? 0),
-        out: new Vec2(v.outX ?? 0, v.outY ?? 0),
-      })),
-      keys: c.verts.map((v) => {
-        const k = NO_KEY();
-        for (const f of PATH_KEY_FIELDS) if (v[f] !== undefined) k[f] = v[f]!;
-        return k;
-      }),
-      // Unused on this layer: a camera path is a line with no thickness.
-      width: DEFAULT_CURVE_WIDTH,
-    },
-    color: CAMERA_REGION_COLOR,
-    opacity: CAMERA_REGION_OPACITY,
-    friction: DEFAULT_SURFACE_FRICTION,
-    bounce: DEFAULT_BOUNCE,
-    launch: DEFAULT_LAUNCH,
-    breakForce: 0,
-    durability: 1,
-    name: "",
-    impermeable: false,
-    mask: MASK_ALL,
-    rail: false,
-    viscosity: 0,
-    slipFloor: 0,
-    material: DEFAULT_MATERIAL,
-    density: DEFAULT_DENSITY,
-    thickness: DEFAULT_THICKNESS,
-    debug: NO_DEBUG(),
-    root: null,
-    force: 0,
-    flow: 0,
-    drag: 0,
-    spill: 0,
-    waterZ: 0,
-    waterDepth: null,
-    passable: false,
-    pivot: false,
-    pivotAt: null,
-    pivotFreq: 0,
-    pivotDamping: DEFAULT_SPRING_DAMPING,
-    springFreqX: 0,
-    springFreqY: 0,
-    springDamping: DEFAULT_SPRING_DAMPING,
-    swingAmp: 0,
-    swingPeriod: 0,
-    swingPhase: 0,
-    spinPeriod: 0,
-    spinPhase: 0,
-    route: [],
-    moveMode: "backAndForth",
-    moveSpeed: 0,
-    movePhase: 0,
-    moveEase: "linear",
-    moveAlign: false,
-    cam: {
-      // A path IS the position rule, so it has no offset and no lock to compose
-      // with (see "Explicitly out of scope" in plans/camera-tracking.md).
-      offset: Vec2.ZERO,
-      viewportScale: c.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
-      lockX: null,
-      lockY: null,
-      buffer: c.buffer ?? null,
-      bufferLeft: null,
-      bufferRight: null,
-      bufferTop: null,
-      bufferBottom: null,
-      // A path fades through `falloffX/falloffY`; the scalar band is a region's.
-      falloff: null,
-      priority: c.priority ?? 0,
-      keepInFrame: true,
-      rangeX: c.rangeX ?? null,
-      rangeY: c.rangeY ?? null,
-      falloffX: c.falloffX ?? null,
-      falloffY: c.falloffY ?? null,
-      lookaheadX: c.lookaheadX ?? null,
-      lookaheadY: c.lookaheadY ?? null,
-      lookaheadBufferX: c.lookaheadBufferX ?? null,
-      lookaheadBufferY: c.lookaheadBufferY ?? null,
-      softness: c.softness ?? null,
-      reactionTime: c.reactionTime ?? null,
-      windBuffer: c.windBuffer ?? null,
-    },
-    light: defaultLight(),
-    note: defaultNote(),
-    modelRef: defaultModelRef(),
-    formation: null, decoration: null,
-    shelter: defaultShelter(),
-    anchorId: 0,
-    pathId: 0,
-  });
-  const camPaths = (data.cameraPaths ?? []).map(camPathItem);
-  // Firefly paths: the camera path's item moved onto the fireflies layer, with
-  // no keys and no framing - the curve is the same, and so is every gesture
-  // that edits it - carrying the id swarms name it by.
-  const fireflyPaths = (data.fireflyPaths ?? []).map(
-    (p): EdItem => ({
-      ...camPathItem(p),
-      layer: "fireflies",
-      ...newItemStyle("fireflies", "collision"),
-      cam: defaultCamera(),
-      pathId: p.id,
-    }),
-  );
-// One light OBJECT as the editor item that edits it. The lights layer is a view
-// over light objects wherever they live rather than a list of its own: a light
-// with no fitting is a body containing only this, and a lamp's light is this
-// grouped into the body its fitting is in. Both are the same item.
-function lightItem(
-  l: LightObjectData,
-  pos: Vec2,
-  rot: number,
-  bodyId: number,
-): EdItem {
-  const d = lightDefaultsFor(l.kind !== "spot" && (l.fireflies ?? 0) > 0);
+// Every field of an item at its default, which each kind below starts from.
+export function blankItem(layer: EdLayer, object: EdObject, node: string): EdItem {
   return {
     id: newBodyId(),
-    layer: "scene",
-    object: "light",
-    bodyId,
-    kind: "static", // unused on this layer; keeps the field total
-    pos,
-    // A light's item rotation IS its object rotation, which is what turns a
-    // spot's aim: the direction is authored in the object's own frame.
-    rot,
-    // The reach IS the shape - see `EdLight`.
+    layer,
+    object,
+    node,
+    bodyOf: null,
+    body: null,
+    unit: node,
+    pos: Vec2.ZERO,
+    rot: 0,
+    z: 0,
+    tilt: [0, 0],
+    shape: { kind: "rect", w: MODEL_MARK, h: MODEL_MARK },
+    color: DEFAULT_BODY_COLOR,
+    opacity: DEFAULT_BODY_OPACITY,
+    impermeable: false,
+    mask: MASK_ALL,
+    rail: false,
+    viscosity: 0,
+    slipFloor: 0,
+    material: DEFAULT_MATERIAL,
+    density: DEFAULT_DENSITY,
+    thickness: DEFAULT_THICKNESS,
+    debug: NO_DEBUG(),
+    root: null,
+    cam: defaultCamera(),
+    light: defaultLight(),
+    note: defaultNote(),
+    shelter: defaultShelter(),
+    modelRef: defaultModelRef(),
+    formation: null,
+    decoration: null,
+    anchorId: 0,
+    pathId: 0,
+  };
+}
+
+// A body's properties as its node carries them, from its compiled flat form.
+// The bearing and the route are in the body's own frame on disk, and so here.
+export function edBodyOf(b: LevelBodyData, order: number): EdBody {
+  return {
+    kind: b.kind,
+    order,
+    color: b.color ?? DEFAULT_BODY_COLOR,
+    opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
+    friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
+    bounce: b.bounce ?? DEFAULT_BOUNCE,
+    launch: b.launch ?? DEFAULT_LAUNCH,
+    breakForce: b.breakForce ?? 0,
+    durability: b.durability ?? 1,
+    force: b.force ?? 0,
+    flow: b.flow ?? 0,
+    drag: b.drag ?? 0,
+    spill: b.spill ?? 0,
+    waterZ: b.waterZ ?? 0,
+    waterDepth: b.waterDepth ?? null,
+    passable: b.passable === true,
+    pivot: b.pivot === true,
+    pivotAt: hasBearing(b) && (b.pivotX !== undefined || b.pivotY !== undefined) ? new Vec2(b.pivotX ?? 0, b.pivotY ?? 0) : null,
+    pivotFreq: b.pivotFreq ?? 0,
+    pivotDamping: b.pivotDamping ?? DEFAULT_SPRING_DAMPING,
+    springFreqX: b.springFreqX ?? 0,
+    springFreqY: b.springFreqY ?? 0,
+    springDamping: b.springDamping ?? DEFAULT_SPRING_DAMPING,
+    swingAmp: b.swingAmp ?? 0,
+    swingPeriod: b.swingPeriod ?? 0,
+    swingPhase: b.swingPhase ?? 0,
+    spinPeriod: b.spinPeriod ?? 0,
+    spinPhase: b.spinPhase ?? 0,
+    route: moveNodesOf(b).map((n, i) => ({
+      p: i === 0 ? Vec2.ZERO : new Vec2(n.x, n.y),
+      in: new Vec2(n.inX ?? 0, n.inY ?? 0),
+      out: new Vec2(n.outX ?? 0, n.outY ?? 0),
+      rot: n.rot ?? null,
+      speed: n.speed ?? null,
+    })),
+    moveMode: moveModeOf(b),
+    moveSpeed: b.moveSpeed ?? 0,
+    movePhase: b.movePhase ?? 0,
+    moveEase: b.moveEase ?? "linear",
+    moveAlign: b.moveAlign === true,
+  };
+}
+
+// A fresh body's properties: a plain static.
+export function defaultBody(order: number): EdBody {
+  return edBodyOf({ kind: "static", x: 0, y: 0, rot: 0, objects: [] }, order);
+}
+
+function cameraOf(r: Partial<CameraRegionData & CameraPathData>): EdCamera {
+  return {
+    offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
+    viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
+    lockX: r.lockX ?? null,
+    lockY: r.lockY ?? null,
+    buffer: r.buffer ?? null,
+    bufferLeft: r.bufferLeft ?? null,
+    bufferRight: r.bufferRight ?? null,
+    bufferTop: r.bufferTop ?? null,
+    bufferBottom: r.bufferBottom ?? null,
+    falloff: r.falloff ?? null,
+    priority: r.priority ?? 0,
+    keepInFrame: r.keepInFrame ?? true,
+    rangeX: r.rangeX ?? null,
+    rangeY: r.rangeY ?? null,
+    falloffX: r.falloffX ?? null,
+    falloffY: r.falloffY ?? null,
+    lookaheadX: r.lookaheadX ?? null,
+    lookaheadY: r.lookaheadY ?? null,
+    lookaheadBufferX: r.lookaheadBufferX ?? null,
+    lookaheadBufferY: r.lookaheadBufferY ?? null,
+    softness: r.softness ?? null,
+    reactionTime: r.reactionTime ?? null,
+    windBuffer: r.windBuffer ?? null,
+  };
+}
+
+function pathShape(c: { verts: readonly CameraPathVert[] }): EdShape {
+  return {
+    kind: "path",
+    verts: c.verts.map((v) => new Vec2(v.x, v.y)),
+    handles: c.verts.map((v) => ({
+      in: new Vec2(v.inX ?? 0, v.inY ?? 0),
+      out: new Vec2(v.outX ?? 0, v.outY ?? 0),
+    })),
+    keys: c.verts.map((v) => {
+      const k = NO_KEY();
+      for (const f of PATH_KEY_FIELDS) if (v[f] !== undefined) k[f] = v[f]!;
+      return k;
+    }),
+    width: DEFAULT_CURVE_WIDTH,
+  };
+}
+
+// One light object as the item that edits it.
+function lightItem(l: LightObjectData, node: string): EdItem {
+  const d = lightDefaultsFor(l.kind !== "spot" && (l.fireflies ?? 0) > 0);
+  return {
+    ...blankItem("scene", "light", node),
     shape: { kind: "circle", r: l.range ?? d.range },
     color: l.color ?? d.color,
     opacity: LIGHT_FILL_OPACITY,
-    friction: DEFAULT_SURFACE_FRICTION,
-    bounce: DEFAULT_BOUNCE,
-    launch: DEFAULT_LAUNCH,
-    breakForce: 0,
-    durability: 1,
-    name: "",
-    impermeable: false,
-    mask: MASK_ALL,
-    rail: false,
-    viscosity: 0,
-    slipFloor: 0,
-    material: DEFAULT_MATERIAL,
-    density: DEFAULT_DENSITY,
-    thickness: DEFAULT_THICKNESS,
-    debug: NO_DEBUG(),
-    root: null,
-    force: 0,
-    flow: 0,
-    drag: 0,
-    spill: 0,
-    waterZ: 0,
-    waterDepth: null,
-    passable: false,
-    pivot: false,
-    pivotAt: null,
-    pivotFreq: 0,
-    pivotDamping: DEFAULT_SPRING_DAMPING,
-    springFreqX: 0,
-    springFreqY: 0,
-    springDamping: DEFAULT_SPRING_DAMPING,
-    swingAmp: 0,
-    swingPeriod: 0,
-    swingPhase: 0,
-    spinPeriod: 0,
-    spinPhase: 0,
-    route: [],
-    moveMode: "backAndForth",
-    moveSpeed: 0,
-    movePhase: 0,
-    moveEase: "linear",
-    moveAlign: false,
-    cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
       intensity: l.intensity ?? d.intensity,
@@ -1969,151 +1493,227 @@ function lightItem(
       fireflies: l.fireflies ?? 0,
       path: l.path ?? null,
     },
-    note: defaultNote(),
-    modelRef: defaultModelRef(),
-    formation: null, decoration: null,
-    shelter: defaultShelter(),
-    anchorId: 0,
-    pathId: 0,
   };
 }
 
-  // One notes-layer item. The layer is loaded from two lists - the annotations
-  // and the checkpoints - which differ in nothing but their box and their
-  // `note`, so they are built through one function rather than through two
-  // copies of a fifty-field literal that would drift apart.
-  const noteItem = (pos: Vec2, rot: number, shape: EdShape, note: EdNote): EdItem => ({
-    id: newBodyId(),
-    layer: "notes",
-    object: "collision",
-    bodyId: newBodyId(), // its own body: neither layer is drawn in play
-    kind: "static", // unused on this layer; keeps the field total
-    pos,
-    rot,
+// The item a scene object of a body becomes (not a decoration or a rock,
+// which are built against their formation below).
+function objectItem(o: SceneObjectData, node: string): EdItem | null {
+  if (isCollisionObject(o)) {
+    return {
+      ...blankItem("scene", "collision", node),
+      shape: edShape(o.shape),
+      impermeable: o.impermeable === true,
+      mask: maskFromPasses(o.passes),
+      rail: o.rail === true,
+      viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
+      slipFloor: typeof o.slipFloor === "number" && o.slipFloor > 0 ? o.slipFloor : 0,
+      ...materialOf(o),
+      thickness: o.thickness ?? DEFAULT_THICKNESS,
+      debug: edDebug(o.debug),
+    };
+  }
+  if (isAnchorObject(o)) {
+    return { ...blankItem("scene", "anchor", node), shape: { kind: "rect", w: ANCHOR_GIZMO, h: ANCHOR_GIZMO }, anchorId: o.id };
+  }
+  if (isModelObject(o)) {
+    return {
+      ...blankItem("scene", "model", node),
+      modelRef: {
+        name: o.model,
+        ...(o.mushroom ? { mushroom: { ...o.mushroom } } : {}),
+        z: o.z ?? 0,
+        rotX: o.rotX ?? 0,
+        rotY: o.rotY ?? 0,
+        scale: o.scale ?? 1,
+      },
+    };
+  }
+  if (isLightObject(o)) return lightItem(o, node);
+  return null;
+}
+
+// The model of a level from its tree, in metres.
+export function modelFromTree(tree: LevelTree): EdModel {
+  const compiled = compileLevel(tree);
+  const data = compiled.data;
+  const nodeOf = compiled.nodeOf;
+
+  // The structure, each node placed in the world as the compile placed it.
+  // Read off the EXPANDED tree, so a placed prefab's insides are nodes here
+  // too (marked below), drawn, picked and edited like any others, their edits
+  // written back as the instance's overrides (`toTree`).
+  const edTree = treeOf(compiled.nodes, (n, parent) => {
+    const up = parent && parent.type !== "Node" ? { pos: parent.pos, rot: parent.rot, z: parent.z, tilt: parent.tilt } : WORLD_ORIGIN;
+    const own = n as LevelNode & Pose3D;
+    const local: Pose3D = POSE_3D.has(n.type) ? own : { x: own.x, y: own.y, rot: own.rot };
+    return composeWorld(up, local);
+  });
+
+  // PLACED PREFABS: the instance node stands where its prefab's root was
+  // expanded (taking the root's class, `rootType`), and every node the prefab
+  // brought is marked as the outermost instance's (`inInstance`).
+  walkNodes(tree.nodes, (n) => {
+    if (n.type !== "Instance") return;
+    const e = edTree.nodes.get(n.id);
+    if (!e) return "skip";
+    e.extra = { rootType: e.type, order: n.order };
+    e.type = "Instance";
+    e.instance = { prefab: n.prefab, scale: n.scale ?? 1, overrides: structuredClone(n.overrides ?? {}), editable: false };
+    const prefix = `${n.id}/`;
+    const mark = (id: string): void => {
+      const k = edTree.nodes.get(id);
+      if (!k) return;
+      if (k.id.startsWith(prefix) && k.extra["inInstance"] === undefined) k.extra = { ...k.extra, inInstance: n.id };
+      for (const c of k.children) mark(c);
+    };
+    for (const c of e.children) mark(c);
+  });
+
+  // The extra fields of a node this editor does not model, carried untouched.
+  const items: EdItem[] = [];
+  const itemOfNode = new Map<string, EdItem>();
+  // An item whose node is not in the tree is inside a placed prefab, which is
+  // edited as overrides on its instance rather than as items of its own.
+  const add = (item: EdItem): EdItem => {
+    const n = edTree.nodes.get(item.node);
+    if (!n) return item;
+    {
+      item.pos = n.pos;
+      item.rot = n.rot;
+      item.z = n.z;
+      item.tilt = [n.tilt[0], n.tilt[1]];
+      n.item = item.id;
+    }
+    items.push(item);
+    itemOfNode.set(item.node, item);
+    return item;
+  };
+
+  // Bodies: their properties onto their nodes, their objects into items.
+  data.bodies.forEach((b) => {
+    const id = b.node?.id;
+    const node = id ? edTree.nodes.get(id) : undefined;
+    if (node && (isBodyType(node.type) || isBodyType((node.extra["rootType"] ?? "Node") as NodeType))) {
+      node.body = edBodyOf(b, (findNodeData(compiled.nodes, node.id) as { order?: number } | null)?.order ?? 0);
+    }
+    b.objects.forEach((o) => {
+      if (isDecorationObject(o)) return;
+      const nodeId = o.node ?? nodeOf.get(o);
+      if (!nodeId) return;
+      const item = objectItem(o, nodeId);
+      if (item) add(item);
+    });
+    if (b.formation) {
+      const { x: _x, y: _y, rot: _r, node: _n, ...f } = b.formation;
+      add({ ...blankItem("scene", "formation", f.id), formation: f });
+    }
+  });
+  // Decorations: grown on their rock, so placed where their anchor lands on it.
+  for (const b of data.bodies) {
+    for (const o of b.objects) {
+      if (!isDecorationObject(o)) continue;
+      const rock = edTree.nodes.get(o.formation);
+      const at = o.onRock ?? o.anchor;
+      const { type: _t, x: _x, y: _y, rot: _r, node: _n, ...decoration } = o;
+      const item = add({ ...blankItem("scene", "decoration", o.id), shape: { kind: "rect", w: MODEL_MARK / 2, h: MODEL_MARK / 2 }, decoration });
+      if (rock) {
+        item.pos = rock.pos.add(new Vec2(at.p[0], -at.p[1]).rotated(rock.rot));
+        item.rot = 0;
+      }
+    }
+  }
+  // Root branches name their parent branch by item.
+  for (const b of data.bodies) {
+    b.objects.forEach((o) => {
+      if (!isCollisionObject(o) || !o.root || !o.node) return;
+      const item = itemOfNode.get(o.node);
+      if (!item || item.shape.kind !== "path") return;
+      const parentObject = o.root.parent !== undefined ? b.objects[o.root.parent] : undefined;
+      const parent = parentObject?.node ? itemOfNode.get(parentObject.node) : undefined;
+      item.root = {
+        parent: parent && parent !== item ? parent.id : null,
+        at: o.root.at ?? 0,
+        ...(o.root.bark ? { bark: o.root.bark } : {}),
+        ...(o.root.bends !== undefined && o.root.bends.length > 0 ? { bends: o.root.bends.map(bendFields) } : {}),
+      };
+    });
+  }
+
+  // The volumes, paths and marks of the plane.
+  const region = (layer: EdLayer, node: string, shape: ShapeData): EdItem => ({
+    ...blankItem(layer, "collision", node),
+    shape: edShape(shape),
+    ...newItemStyle(layer, "collision"),
+  });
+  for (const r of data.cameraRegions ?? []) {
+    const node = nodeOf.get(r);
+    if (node) add({ ...region("camera", node, r.shape), color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY, cam: cameraOf(r) });
+  }
+  for (const c of data.cameraPaths ?? []) {
+    const node = nodeOf.get(c);
+    if (node) add({ ...blankItem("camera", "collision", node), shape: pathShape(c), color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY, cam: { ...cameraOf(c), offset: Vec2.ZERO, lockX: null, lockY: null, keepInFrame: true } });
+  }
+  for (const p of data.fireflyPaths ?? []) {
+    const node = nodeOf.get(p);
+    if (node) add({ ...blankItem("fireflies", "collision", node), shape: pathShape(p), ...newItemStyle("fireflies", "collision"), pathId: p.id });
+  }
+  for (const s of data.shelters ?? []) {
+    const node = nodeOf.get(s);
+    if (node) add({ ...region("shelter", node, s.shape), shelter: { front: s.front ?? null } });
+  }
+  for (const f of data.fogRegions ?? []) {
+    const node = nodeOf.get(f);
+    if (node) add({ ...region("fog", node, f.shape), ...(f.falloff !== undefined ? { fogFalloff: f.falloff } : {}) });
+  }
+  const noteItem = (node: string, shape: EdShape, note: EdNote): EdItem => ({
+    ...blankItem("notes", "collision", node),
     shape,
     color: NOTE_COLOR,
     opacity: NOTE_OPACITY,
-    friction: DEFAULT_SURFACE_FRICTION,
-    bounce: DEFAULT_BOUNCE,
-    launch: DEFAULT_LAUNCH,
-    breakForce: 0,
-    durability: 1,
-    name: "",
-    impermeable: false,
-    mask: MASK_ALL,
-    rail: false,
-    viscosity: 0,
-    slipFloor: 0,
-    material: DEFAULT_MATERIAL,
-    density: DEFAULT_DENSITY,
-    thickness: DEFAULT_THICKNESS,
-    debug: NO_DEBUG(),
-    root: null,
-    force: 0,
-    flow: 0,
-    drag: 0,
-    spill: 0,
-    waterZ: 0,
-    waterDepth: null,
-    passable: false,
-    pivot: false,
-    pivotAt: null,
-    pivotFreq: 0,
-    pivotDamping: DEFAULT_SPRING_DAMPING,
-    springFreqX: 0,
-    springFreqY: 0,
-    springDamping: DEFAULT_SPRING_DAMPING,
-    swingAmp: 0,
-    swingPeriod: 0,
-    swingPhase: 0,
-    spinPeriod: 0,
-    spinPhase: 0,
-    route: [],
-    moveMode: "backAndForth",
-    moveSpeed: 0,
-    movePhase: 0,
-    moveEase: "linear",
-    moveAlign: false,
-    cam: defaultCamera(),
-    light: defaultLight(),
-    modelRef: defaultModelRef(),
-    formation: null, decoration: null,
-    shelter: defaultShelter(),
-    anchorId: 0,
-    pathId: 0,
     note,
   });
+  for (const n of data.notes ?? []) {
+    const node = nodeOf.get(n);
+    if (node) add(noteItem(node, { kind: "rect", w: n.w, h: n.h }, { kind: n.kind, text: n.text ?? "", size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX }));
+  }
+  for (const c of data.checkpoints ?? []) {
+    const node = nodeOf.get(c);
+    if (node) add(noteItem(node, checkpointBox(data.player.radius), { kind: "checkpoint", text: c.name, size: DEFAULT_NOTE_TEXT_SIZE * PX }));
+  }
 
-  const notes: EdItem[] = [
-    ...(data.notes ?? []).map((n) =>
-      noteItem(
-        new Vec2(n.x, n.y),
-        n.rot,
-        { kind: "rect", w: n.w, h: n.h },
-        { kind: n.kind, text: n.text ?? "", size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX },
-      ),
-    ),
-    // A checkpoint is a named POINT (see `CheckpointData`): its box is derived
-    // from the avatar it marks the spawn of and it has no rotation, so neither
-    // is read back from disk and neither is written there.
-    ...(data.checkpoints ?? []).map((c) =>
-      noteItem(new Vec2(c.x, c.y), 0, checkpointBox(data.player.radius), {
-        kind: "checkpoint",
-        text: c.name,
-        size: DEFAULT_NOTE_TEXT_SIZE * PX,
-      }),
-    ),
-  ];
-  // Chains name their two ends by ANCHOR id, and each anchor is an item above -
-  // so the whole of the conversion is looking the two up. A chain naming an
-  // anchor the level does not contain (a hand-edited file) is dropped rather
-  // than left dangling.
+  // Chains and vines, their ends by anchor item.
   const itemOfAnchor = new Map<number, EdItem>();
-  for (const i of bodies) if (i.object === "anchor") itemOfAnchor.set(i.anchorId, i);
+  for (const i of items) if (i.object === "anchor") itemOfAnchor.set(i.anchorId, i);
   const chains: EdChain[] = [];
   for (const c of data.chains ?? []) {
+    const node = nodeOf.get(c);
     const a = itemOfAnchor.get(c.a);
     const b = itemOfAnchor.get(c.b);
-    if (!a || !b) continue;
-    // A wrap point naming an anchor the file does not contain is skipped and the
-    // chain kept - as the loader does (`buildOne`), and as a vine keeps hanging
-    // when its second anchor is gone.
-    const via: number[] = [];
-    for (const id of c.via ?? []) {
-      const item = itemOfAnchor.get(id);
-      if (item) via.push(item.id);
-    }
-    // A tie point naming an anchor the file does not contain is skipped the
-    // same way, and the segments either side join (as the loader joins them).
-    const through: number[] = [];
-    for (const id of c.through ?? []) {
-      const item = itemOfAnchor.get(id);
-      if (item) through.push(item.id);
-    }
-    chains.push({
+    if (!node || !a || !b) continue;
+    const chain: EdChain = {
       id: newBodyId(),
       a: a.id,
       b: b.id,
-      via,
-      through,
+      via: (c.via ?? []).flatMap((id) => itemOfAnchor.get(id)?.id ?? []),
+      through: (c.through ?? []).flatMap((id) => itemOfAnchor.get(id)?.id ?? []),
       lengths: (c.lengths ?? []).map((l) => (l > 0 ? l : null)),
       slack: c.slack ?? null,
       substeps: c.substeps ?? null,
       length: c.length ?? null,
       color: c.color ?? null,
-    });
+    };
+    chains.push(chain);
+    const n = edTree.nodes.get(node);
+    if (n) n.chain = chain.id;
   }
-
-  // A vine names ONE anchor, and is dropped the same way a chain is when the
-  // anchor it names is not in the file.
   const vines: EdVine[] = [];
   for (const v of data.vines ?? []) {
+    const node = nodeOf.get(v);
     const a = itemOfAnchor.get(v.anchor);
-    if (!a) continue;
-    // A dead second anchor falls back to hanging rather than dropping the vine
-    // - one anchor is still a complete vine (see `VineData.anchor2`).
+    if (!node || !a) continue;
     const a2 = v.anchor2 !== undefined ? itemOfAnchor.get(v.anchor2) : undefined;
-    vines.push({
+    const vine: EdVine = {
       id: newBodyId(),
       anchor: a.id,
       anchor2: a2 && a2 !== a ? a2.id : null,
@@ -2126,10 +1726,22 @@ function lightItem(
       braidSeed: v.braidSeed ?? null,
       rope: v.braidSeed !== undefined && v.rope === true,
       ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
-    });
+    };
+    vines.push(vine);
+    const n = edTree.nodes.get(node);
+    if (n) n.vine = vine.id;
   }
 
-  return {
+  // What a node carries that this editor holds beside it.
+  walkNodes(compiled.nodes, (n) => {
+    const e = edTree.nodes.get(n.id);
+    if (!e) return;
+    if (n.type === "Spawn2D") e.extra = { ...e.extra, spawn: true };
+    // A chain's and a vine's build order key (the sim builds them in it).
+    if (n.type === "Chain" || n.type === "Vine") e.extra = { ...e.extra, order: n.order };
+  });
+
+  const model: EdModel = {
     player: {
       pos: new Vec2(data.player.x, data.player.y),
       radius: data.player.radius,
@@ -2137,24 +1749,33 @@ function lightItem(
       roll: data.player.roll ?? 0,
       arrival: data.player.arrival ?? "",
     },
-    items: [...bodies, ...shelters, ...fogRegions, ...regions, ...camPaths, ...fireflyPaths, ...notes],
-    ...(data.fogRegions !== undefined ? { fogRegionsEnabled: true } : {}),
+    items,
+    ...(tree.fogMasked ? { fogRegionsEnabled: true } : {}),
     chains,
     vines,
-    // Only the bodies whose file frame is somewhere no object sits. Everything
-    // else is derived from its first object until something is edited
-    // (`EdModel.bodyFrames`), which is the origin this has always re-measured
-    // against on the way back out - so a level opened and saved untouched is
-    // byte-stable exactly as it was.
-    bodyFrames,
-    bodies3d,
-    // Copied rather than shared, since everything else here hands the caller a
-    // fresh object, and undo snapshots this by value.
-    environment: data.environment ? { ...data.environment } : undefined,
-    camera: data.camera ? { ...data.camera } : undefined,
-    meta: { ...data.meta },
-    scene: data.scene ?? "",
+    tree: edTree,
+    dataLayers: [...(tree.layers ?? [])],
+    environment: tree.environment ? { ...tree.environment } : undefined,
+    camera: tree.camera ? { ...tree.camera } : undefined,
+    meta: { ...tree.meta },
   };
+  relink(model);
+  return model;
+}
+
+function findNodeData(nodes: readonly LevelNode[], id: string): LevelNode | null {
+  return findNode(nodes, id);
+}
+
+// Point every item at the body above its node (`EdItem.bodyOf`/`body`). Run
+// after anything that changes the tree's structure or replaces the model.
+export function relink(model: EdModel): void {
+  for (const item of model.items) {
+    const body = bodyAbove(model.tree, item.node);
+    item.bodyOf = body?.id ?? null;
+    item.body = body?.body ?? null;
+    item.unit = body?.id ?? item.node;
+  }
 }
 
 // Editor model → metre-space LevelData. Each layer writes its own list, and
@@ -2259,59 +1880,941 @@ export function fogRegionInner(i: EdItem): EdItem | null {
 
 // What a drawn thing in the 3D scene is tagged with, which `toLevelData`'s
 // `itemOf` maps back to the item that wrote it: an object, or a formation.
-export type SceneTag = SceneObjectData | FormationData;
+// --- saving --------------------------------------------------------------------
+//
+// The model back to its node tree, in metres (`toTree`), and the flat level the
+// sim, the renderer and a test read, compiled from that tree exactly as the
+// game compiles a level file (`toLevelData`): one path from what is edited to
+// what is played.
 
-export function toLevelData(model: EdModel, itemOf?: Map<SceneTag, number>): LevelData {
-  // A camera PATH has no ShapeData form at all - an open polyline is not one of
-  // the three shapes - so it never reaches here: the camera layer is split by
-  // shape kind below, and a path is written as a `CameraPathData` instead.
-  const shapeOf = (i: EdItem): ShapeData => {
-    if (i.shape.kind === "rect") return { kind: "rect", w: i.shape.w, h: i.shape.h };
-    if (i.shape.kind === "circle") return { kind: "circle", r: i.shape.r };
-    // A path on the SCENE layer is an authored curve: the same nodes, plus the
-    // width of the bar. (A camera path never reaches here - see above.) A
-    // handle that is zero is written as absent, exactly as a camera path's is,
-    // so a curve of corners stores nothing extra.
-    if (i.shape.kind === "path") {
-      const handles = i.shape.handles;
-      return {
-        kind: "curve",
-        width: i.shape.width,
-        ...(i.shape.tip !== undefined ? { tip: i.shape.tip } : {}),
-        verts: i.shape.verts.map((v, k) => {
-          const h = handles[k];
-          return {
-            x: v.x,
-            y: v.y,
-            ...(h && h.in.x !== 0 ? { inX: h.in.x } : {}),
-            ...(h && h.in.y !== 0 ? { inY: h.in.y } : {}),
-            ...(h && h.out.x !== 0 ? { outX: h.out.x } : {}),
-            ...(h && h.out.y !== 0 ? { outY: h.out.y } : {}),
-          };
-        }),
+// An item's shape as the flat form spells it. A camera path never reaches
+// here: it is written as a `CameraPathData`.
+export function shapeDataOf(i: EdItem): ShapeData {
+  if (i.shape.kind === "rect") return { kind: "rect", w: i.shape.w, h: i.shape.h };
+  if (i.shape.kind === "circle") return { kind: "circle", r: i.shape.r };
+  // A path on the SCENE layer is an authored curve: the same nodes, plus the
+  // width of the bar. A handle that is zero is written as absent, exactly as
+  // a camera path's is, so a curve of corners stores nothing extra.
+  if (i.shape.kind === "path") {
+    const handles = i.shape.handles;
+    return {
+      kind: "curve",
+      width: i.shape.width,
+      ...(i.shape.tip !== undefined ? { tip: i.shape.tip } : {}),
+      verts: i.shape.verts.map((v, k) => {
+        const h = handles[k];
+        return {
+          x: v.x,
+          y: v.y,
+          ...(h && h.in.x !== 0 ? { inX: h.in.x } : {}),
+          ...(h && h.in.y !== 0 ? { inY: h.in.y } : {}),
+          ...(h && h.out.x !== 0 ? { outX: h.out.x } : {}),
+          ...(h && h.out.y !== 0 ? { outY: h.out.y } : {}),
+        };
+      }),
+    };
+  }
+  if (i.shape.kind === "belt") return beltShapeData(i.shape);
+  return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
+}
+
+// A light item's fields as written: a field left at its default is not.
+function lightFields(i: EdItem): Omit<LightObjectData, "type" | "x" | "y" | "rot" | "path"> & { pathId?: number } {
+  const d = defaultLight();
+  const spot = i.light.kind === "spot";
+  const fill = lightDefaultsFor(!spot && i.light.fireflies > 0);
+  return {
+    ...(spot ? { kind: "spot" as const } : {}),
+    ...(i.light.z !== d.z ? { z: i.light.z } : {}),
+    ...(i.color !== fill.color ? { color: i.color } : {}),
+    ...(i.light.intensity !== fill.intensity ? { intensity: i.light.intensity } : {}),
+    ...(i.shape.kind === "circle" && i.shape.r !== fill.range ? { range: i.shape.r } : {}),
+    ...(spot
+      ? {
+          ...(i.light.angle !== d.angle ? { angle: i.light.angle } : {}),
+          ...(i.light.penumbra !== d.penumbra ? { penumbra: i.light.penumbra } : {}),
+          ...(i.light.dir.x !== d.dir.x ? { dirX: i.light.dir.x } : {}),
+          ...(i.light.dir.y !== d.dir.y ? { dirY: i.light.dir.y } : {}),
+          ...(i.light.dirZ !== d.dirZ ? { dirZ: i.light.dirZ } : {}),
+        }
+      : {}),
+    ...(i.light.castShadow ? { castShadow: true } : {}),
+    ...(i.light.castShadow && i.light.shadowNear !== null ? { shadowNear: i.light.shadowNear } : {}),
+    ...(i.light.castShadow && i.light.shadowRadius !== null ? { shadowRadius: i.light.shadowRadius } : {}),
+    ...(i.light.flicker !== 0 ? { flicker: i.light.flicker } : {}),
+    ...(spot && i.light.beam !== 0 ? { beam: i.light.beam } : {}),
+    ...(spot && i.light.dust !== 0 ? { dust: i.light.dust } : {}),
+    ...(!spot && i.light.wake > 0
+      ? {
+          wake: i.light.wake,
+          ...(i.light.fireflies > 0
+            ? {}
+            : {
+                ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
+                ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
+                ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
+              }),
+        }
+      : {}),
+    ...(!spot && i.light.fireflies > 0 ? { fireflies: i.light.fireflies } : {}),
+    ...(!spot && i.light.fireflies > 0 && i.light.path !== null ? { pathId: i.light.path } : {}),
+  };
+}
+
+// A collision item's fields as written.
+function collisionFields(i: EdItem, rootParent: (id: number) => string | null): Omit<CollisionObjectData, "type" | "x" | "y" | "rot" | "root"> & { root?: NodeRootBranch } {
+  const root = i.root && i.shape.kind === "path" ? i.root : null;
+  const parent = root && root.parent !== null ? rootParent(root.parent) : null;
+  return {
+    shape: shapeDataOf(i),
+    ...(i.impermeable ? { impermeable: true } : {}),
+    ...(passesFromMask(i.mask).length > 0 ? { passes: passesFromMask(i.mask) } : {}),
+    ...(i.rail && (i.shape.kind === "path" || i.shape.kind === "circle") ? { rail: true } : {}),
+    ...(i.viscosity > 0 ? { viscosity: i.viscosity } : {}),
+    ...(i.viscosity > 0 && i.slipFloor > 0 ? { slipFloor: i.slipFloor } : {}),
+    ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
+    ...((i.soundMaterial ?? "auto") !==
+    soundMaterialOf({
+      ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
+      viscosity: i.viscosity,
+      root: i.root ?? undefined,
+      shape: { kind: i.shape.kind },
+    })
+      ? { soundMaterial: i.soundMaterial ?? "auto" }
+      : {}),
+    ...(i.material === CUSTOM_MATERIAL ? { density: i.density } : {}),
+    ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
+    ...(i.shape.kind !== "belt" && debugData(i.debug) ? { debug: debugData(i.debug) } : {}),
+    ...(root
+      ? {
+          root: {
+            ...(parent !== null ? { parent, at: root.at } : {}),
+            ...(root.bark ? { bark: root.bark } : {}),
+            ...(root.bends !== undefined && root.bends.length > 0 ? { bends: root.bends.map((k) => ({ ...k })) } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+// A camera region item's fields as written.
+function cameraRegionFields(i: EdItem): Omit<CameraRegionData, "x" | "y" | "rot"> {
+  return {
+    shape: shapeDataOf(i),
+    ...(i.cam.offset.x !== 0 ? { offsetX: i.cam.offset.x } : {}),
+    ...(i.cam.offset.y !== 0 ? { offsetY: i.cam.offset.y } : {}),
+    ...(i.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE ? { viewportScale: i.cam.viewportScale } : {}),
+    ...(i.cam.lockX !== null ? { lockX: i.cam.lockX } : {}),
+    ...(i.cam.lockY !== null ? { lockY: i.cam.lockY } : {}),
+    ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
+    ...(i.shape.kind === "rect"
+      ? {
+          ...(i.cam.bufferLeft !== null ? { bufferLeft: i.cam.bufferLeft } : {}),
+          ...(i.cam.bufferRight !== null ? { bufferRight: i.cam.bufferRight } : {}),
+          ...(i.cam.bufferTop !== null ? { bufferTop: i.cam.bufferTop } : {}),
+          ...(i.cam.bufferBottom !== null ? { bufferBottom: i.cam.bufferBottom } : {}),
+        }
+      : {}),
+    ...(i.cam.falloff !== null ? { falloff: i.cam.falloff } : {}),
+    ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
+    ...(!i.cam.keepInFrame ? { keepInFrame: false } : {}),
+  };
+}
+
+// Is this body moved by script (a pendulum, a rotor or a route)? Then it is an
+// `AnimatableBody2D` on disk.
+export function bodyIsMover(b: EdBody): boolean {
+  return b.kind === "static" && ((b.swingAmp !== 0 && b.swingPeriod > 0) || b.spinPeriod !== 0 || (b.route.length > 1 && b.moveSpeed > 0));
+}
+
+// The class a body node is written as.
+export function bodyNodeType(b: EdBody): NodeType {
+  if (b.kind === "rigid") return "RigidBody2D";
+  if (b.kind === "static") return bodyIsMover(b) ? "AnimatableBody2D" : "StaticBody2D";
+  return "Area2D";
+}
+
+// A body's properties as written: only what its class gives meaning to, and a
+// field at its default not at all.
+export function bodyFields(b: EdBody): Record<string, unknown> {
+  const swingsHere = b.kind === "static" && b.swingAmp !== 0 && b.swingPeriod > 0;
+  const spinsHere = b.kind === "static" && b.spinPeriod !== 0;
+  const movesHere = b.kind === "static" && b.route.length > 1 && b.moveSpeed > 0;
+  return {
+    order: b.order,
+    ...(isAreaKind(b.kind) ? { area: b.kind } : {}),
+    color: b.color,
+    opacity: b.opacity,
+    friction: b.friction,
+    ...(b.bounce ? { bounce: b.bounce } : {}),
+    ...(b.launch ? { launch: b.launch } : {}),
+    ...(b.breakForce > 0 ? { breakForce: b.breakForce, durability: b.durability } : {}),
+    ...(b.kind === "force" ? { force: b.force } : {}),
+    ...(b.kind === "water" ? { flow: b.flow, drag: b.drag } : {}),
+    ...(b.kind === "water" && b.spill > 0 ? { spill: b.spill } : {}),
+    ...(b.kind === "water" && b.waterZ !== 0 ? { waterZ: b.waterZ } : {}),
+    ...(b.kind === "water" && b.waterDepth !== null ? { waterDepth: b.waterDepth } : {}),
+    ...(b.passable ? { passable: true } : {}),
+    ...(b.kind === "rigid" && b.pivot
+      ? { pivot: true, ...(b.pivotFreq > 0 ? { pivotFreq: b.pivotFreq, pivotDamping: b.pivotDamping } : {}) }
+      : {}),
+    ...(swingsHere ? { swingAmp: b.swingAmp, swingPeriod: b.swingPeriod, ...(b.swingPhase ? { swingPhase: b.swingPhase } : {}) } : {}),
+    ...(spinsHere ? { spinPeriod: b.spinPeriod, ...(b.spinPhase ? { spinPhase: b.spinPhase } : {}) } : {}),
+    ...(movesHere
+      ? {
+          moveNodes: b.route.map((n) => ({
+            x: n.p.x,
+            y: n.p.y,
+            ...(n.in.x !== 0 ? { inX: n.in.x } : {}),
+            ...(n.in.y !== 0 ? { inY: n.in.y } : {}),
+            ...(n.out.x !== 0 ? { outX: n.out.x } : {}),
+            ...(n.out.y !== 0 ? { outY: n.out.y } : {}),
+            ...(n.rot !== null ? { rot: n.rot } : {}),
+            ...(n.speed !== null ? { speed: n.speed } : {}),
+          })),
+          moveSpeed: b.moveSpeed,
+          ...(b.moveMode !== "backAndForth" ? { moveMode: b.moveMode } : {}),
+          ...(b.movePhase ? { movePhase: b.movePhase } : {}),
+          ...(b.moveEase !== "linear" ? { moveEase: b.moveEase } : {}),
+          ...(b.moveAlign ? { moveAlign: true } : {}),
+        }
+      : {}),
+    ...((b.kind === "rigid" && b.pivot) || swingsHere || spinsHere ? (b.pivotAt ? { pivotX: b.pivotAt.x, pivotY: b.pivotAt.y } : {}) : {}),
+    ...(b.kind === "rigid" && !b.pivot && (b.springFreqX > 0 || b.springFreqY > 0)
+      ? {
+          ...(b.springFreqX > 0 ? { springFreqX: b.springFreqX } : {}),
+          ...(b.springFreqY > 0 ? { springFreqY: b.springFreqY } : {}),
+          springDamping: b.springDamping,
+        }
+      : {}),
+  };
+}
+
+// Where a node stands in the world: an item's own placement, the spawn's, or
+// the node's.
+export function worldOfNode(model: EdModel, id: string): World3 {
+  const n = model.tree.nodes.get(id);
+  if (!n) return WORLD_ORIGIN;
+  if (n.item !== null) {
+    const i = model.items.find((it) => it.id === n.item);
+    if (i) return { pos: i.pos, rot: i.rot, z: i.z, tilt: i.tilt };
+  }
+  if (n.extra["spawn"] === true) return { pos: model.player.pos, rot: 0, z: 0, tilt: [0, 0] };
+  return { pos: n.pos, rot: n.rot, z: n.z, tilt: n.tilt };
+}
+
+// The frame a node's children are placed in: its own world placement, or the
+// world itself under a plain `Node`.
+function frameForChildren(model: EdModel, n: EdNode): World3 {
+  return n.type === "Node" ? WORLD_ORIGIN : worldOfNode(model, n.id);
+}
+
+// THE MODEL AS ITS NODE TREE, in metres. Each node's placement is written in
+// its parent's frame; a node that stands where it was loaded, under a parent
+// that does too, is written with exactly the numbers it was loaded with.
+//
+// `keep`, when given, writes only the nodes it keeps and the structure above
+// them (a body or a group with none of its own kept is left out), and only
+// the chains and vines whose every anchor is kept: a FRAGMENT of the level, for
+// the clipboard and for a duplicate (`subModel`).
+export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTree {
+  const itemById = new Map(model.items.map((i) => [i.id, i]));
+  const kept = keep ? keptNodes(model, keep) : null;
+  const chainById = new Map(model.chains.map((c) => [c.id, c]));
+  const vineById = new Map(model.vines.map((v) => [v.id, v]));
+  const nodeOfItem = (id: number): string | null => itemById.get(id)?.node ?? null;
+  const pathNode = new Map<number, string>();
+  for (const i of model.items) if (i.layer === "fireflies") pathNode.set(i.pathId, i.node);
+
+  const write = (id: string, parentFrame: World3): LevelNode | null => {
+    const n = model.tree.nodes.get(id);
+    if (!n) return null;
+    if (kept && !kept.has(id)) return null;
+    const item = n.item !== null ? itemById.get(n.item) : undefined;
+    // A node whose item is gone from the model (taken out of `items` without
+    // the tree being reconciled yet) is gone too: what it would write is a
+    // node with nothing in it - a region with no shape - that the compile
+    // cannot read.
+    if (n.item !== null && !item) return null;
+    const world = worldOfNode(model, id);
+    const out: Record<string, unknown> = { type: n.type, id: n.id, name: n.name };
+    if (n.grouped) out["grouped"] = true;
+    if (n.layers.length) out["layers"] = [...n.layers];
+    if (n.disabled) out["disabled"] = true;
+
+    // The placement, in the parent's frame.
+    const pose3 = POSE_3D.has(n.type);
+    const placed = n.type !== "Node" && n.type !== "Decoration3D" && n.type !== "Chain" && n.type !== "Vine";
+    if (placed) {
+      const own: Pose3D = n.local ?? {};
+      const loaded = n.local !== null && sameWorld(composeWorld(parentFrame, pose3 ? own : { x: own.x, y: own.y, rot: own.rot }), world);
+      const local: Pose3D = loaded ? own : relativeLocal(parentFrame, world);
+      const required = n.type === "Spawn2D" || n.type === "Checkpoint2D" || n.type.endsWith("Region2D") || n.type === "CameraPath2D" || n.type === "FireflyPath2D" || n.type === "Shelter2D" || n.type === "Note2D";
+      const put = (k: "x" | "y" | "rot" | "z", v: number | undefined): void => {
+        if (v === undefined) return;
+        if (loaded ? true : v !== 0) out[k] = v;
       };
+      if (required) {
+        out["x"] = local.x ?? 0;
+        out["y"] = local.y ?? 0;
+        if (n.type !== "Spawn2D" && n.type !== "Checkpoint2D") out["rot"] = local.rot ?? 0;
+      } else {
+        put("x", local.x);
+        put("y", local.y);
+        put("rot", local.rot);
+        if (pose3) {
+          put("z", local.z);
+          if (local.tilt && (loaded || local.tilt[0] !== 0 || local.tilt[1] !== 0)) out["tilt"] = [local.tilt[0], local.tilt[1]];
+        }
+      }
     }
-    if (i.shape.kind === "belt") {
-      return beltShapeData(i.shape);
+
+    // What the node carries.
+    if (n.body && !n.instance) {
+      out["type"] = bodyNodeType(n.body);
+      Object.assign(out, bodyFields(n.body));
+    } else if (n.extra["spawn"] === true) {
+      out["radius"] = model.player.radius;
+      if (model.player.hang) out["hang"] = true;
+      if (model.player.roll) out["roll"] = model.player.roll;
+      if (model.player.arrival) out["arrival"] = model.player.arrival;
+    } else if (n.chain !== null) {
+      const c = chainById.get(n.chain);
+      if (!c) return null;
+      const a = nodeOfItem(c.a);
+      const b = nodeOfItem(c.b);
+      if (!a || !b) return null;
+      if (kept && ![a, b, ...c.via.flatMap((v) => nodeOfItem(v) ?? []), ...c.through.flatMap((v) => nodeOfItem(v) ?? [])].every((x) => kept.has(x))) return null;
+      const tied = c.through.length > 0;
+      const lengths = c.lengths.map((l) => l ?? 0);
+      while (lengths.length > 0 && lengths[lengths.length - 1] === 0) lengths.pop();
+      const via = c.via.flatMap((v) => nodeOfItem(v) ?? []);
+      const through = c.through.flatMap((v) => nodeOfItem(v) ?? []);
+      Object.assign(out, {
+        order: typeof n.extra["order"] === "number" ? n.extra["order"] : 0,
+        a,
+        b,
+        ...(c.length !== null && !tied ? { length: c.length } : {}),
+        ...(c.color !== null ? { color: c.color } : {}),
+        ...(via.length > 0 && !tied ? { via } : {}),
+        ...(tied ? { through } : {}),
+        ...(tied && lengths.length > 0 ? { lengths } : {}),
+        ...(tied && c.slack !== null ? { slack: c.slack } : {}),
+        ...(tied && c.substeps !== null ? { substeps: c.substeps } : {}),
+      });
+    } else if (n.vine !== null) {
+      const v = vineById.get(n.vine);
+      const anchor = v ? nodeOfItem(v.anchor) : null;
+      if (!v || !anchor || !(v.length > 0)) return null;
+      const anchor2 = v.anchor2 !== null ? nodeOfItem(v.anchor2) : null;
+      if (kept && (!kept.has(anchor) || (anchor2 !== null && !kept.has(anchor2)))) return null;
+      Object.assign(out, {
+        order: typeof n.extra["order"] === "number" ? n.extra["order"] : 0,
+        anchor,
+        ...(anchor2 ? { anchor2 } : {}),
+        length: v.length,
+        ...(v.spacing !== null ? { spacing: v.spacing } : {}),
+        ...(v.density !== null ? { density: v.density } : {}),
+        ...(v.stiffness !== null ? { stiffness: v.stiffness } : {}),
+        ...(v.viscosity !== null ? { viscosity: v.viscosity } : {}),
+        ...(v.color !== null ? { color: v.color } : {}),
+        ...(v.braidSeed !== null ? { braidSeed: v.braidSeed } : {}),
+        ...(v.braidSeed !== null && v.rope ? { rope: true } : {}),
+        ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
+      });
+    } else if (n.instance) {
+      // A PLACED PREFAB: its prefab, its key, its scale, and what has been
+      // changed inside it, as overrides by prefab node id; the nodes the
+      // prefab brought are not written, only the ones added under it.
+      const frame = frameForChildren(model, n);
+      const overrides = instanceOverrides(model, n, (c) => write(c, frame));
+      Object.assign(out, {
+        type: "Instance",
+        prefab: n.instance.prefab,
+        order: typeof n.extra["order"] === "number" ? n.extra["order"] : 0,
+        ...(n.instance.scale !== 1 ? { scale: n.instance.scale } : {}),
+        ...(Object.keys(overrides).length ? { overrides } : {}),
+      });
+      const own = n.children.filter((c) => model.tree.nodes.get(c)?.extra["inInstance"] === undefined).flatMap((c) => write(c, frame) ?? []);
+      if (own.length) out["children"] = own;
+      return out as unknown as LevelNode;
+    } else if (item) {
+      Object.assign(out, itemFields(model, item, n, nodeOfItem, pathNode));
     }
-    return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
+
+    const kids = n.children.flatMap((c) => write(c, frameForChildren(model, n)) ?? []);
+    if (kids.length) out["children"] = kids;
+    return out as unknown as LevelNode;
   };
 
-  const cameraPaths: CameraPathData[] = model.items
-    .filter((i) => i.layer === "camera" && i.shape.kind === "path")
-    .map(pathDataOf);
+  return {
+    format: TREE_FORMAT,
+    ...(Object.keys(metaOf(model)).length ? { meta: metaOf(model) } : {}),
+    ...(model.environment ? { environment: { ...model.environment } } : {}),
+    ...(model.camera ? { camera: { ...model.camera } } : {}),
+    ...(model.fogRegionsEnabled ? { fogMasked: true } : {}),
+    ...(model.dataLayers.length && !keep ? { layers: [...model.dataLayers] } : {}),
+    // The editor works in metres; its instances expand at that scale.
+    lengthScale: PX,
+    nodes: model.tree.roots.flatMap((r) => write(r, WORLD_ORIGIN) ?? []),
+  };
+}
 
-  // A firefly path is the camera path's curve with its id and nothing else: an
-  // item on the fireflies layer never carries keys, and none are written.
-  const fireflyPaths: FireflyPathData[] = model.items
-    .filter((i) => i.layer === "fireflies" && i.shape.kind === "path")
-    .map((i) => {
-      const { x, y, rot, verts } = pathDataOf(i);
+// The nodes a fragment keeps: those `keep` keeps, everything above them, and
+// every chain and vine (they are judged by their anchors as they are written).
+function keptNodes(model: EdModel, keep: (id: string) => boolean): Set<string> {
+  const out = new Set<string>();
+  for (const n of model.tree.nodes.values()) {
+    if (n.chain !== null || n.vine !== null) {
+      out.add(n.id);
+      continue;
+    }
+    if (!keep(n.id)) continue;
+    out.add(n.id);
+    for (const a of ancestors(model.tree, n.id)) out.add(a.id);
+  }
+  return out;
+}
+
+// WHAT HAS CHANGED INSIDE A PLACED PREFAB, as overrides keyed by prefab node
+// id (plans/node-tree.md "Prefabs"). The prefab as this instance places it -
+// expanded at its scale, with no overrides - and the insides as they stand
+// now are both written by the same writer (`toTree`), so a default spelt one
+// way and a placement rounded through a frame never read as an edit; then
+// every field that differs is an override (in the prefab's own units, a
+// scaled instance's lengths taken back to the prefab's), and a node the
+// prefab has that is gone here is overridden `disabled`. An override naming
+// a node the prefab no longer has is kept, shown as orphaned, never dropped.
+function instanceOverrides(model: EdModel, n: EdNode, writeChild: (id: string) => LevelNode | null): Record<string, Record<string, unknown>> {
+  const inst = n.instance!;
+  const prefab = prefabLibrary()[inst.prefab];
+  if (!prefab) return structuredClone(inst.overrides);
+  const prefix = `${n.id}/`;
+  const strip = (id: string): string => (id.startsWith(prefix) ? id.slice(prefix.length) : id);
+  // The prefab's own placing of itself: what this instance would be with no
+  // overrides, written canonically.
+  const placed = expandInstances([{ type: "Instance", id: n.id, name: n.name, prefab: inst.prefab, order: 0, ...(inst.scale !== 1 ? { scale: inst.scale } : {}) } as LevelNode], prefabsAt(PX))[0]!;
+  const base = toTree(modelFromTree({ format: TREE_FORMAT, lengthScale: PX, nodes: [placed] })).nodes[0]!;
+  const baseById = new Map<string, Record<string, unknown>>();
+  walkNodes([base], (b) => void baseById.set(b.id === n.id ? prefab.root.id : strip(b.id), b as unknown as Record<string, unknown>));
+  // The insides now: the root's own payload, and each node the prefab brought.
+  const nowById = new Map<string, Record<string, unknown>>();
+  const rootType = (n.extra["rootType"] ?? n.type) as NodeType;
+  const rootItem = n.item !== null ? model.items.find((i) => i.id === n.item) : undefined;
+  const rootNow: Record<string, unknown> = n.body ? { type: rootType, ...bodyFields(n.body) } : rootItem ? itemFields(model, rootItem, { ...n, type: rootType }, (id) => model.items.find((i) => i.id === id)?.node ?? null, new Map()) : {};
+  nowById.set(prefab.root.id, rootNow);
+  for (const c of n.children) {
+    if (model.tree.nodes.get(c)?.extra["inInstance"] === undefined) continue;
+    const w = writeChild(c);
+    if (w) walkNodes([w], (x) => void nowById.set(strip(x.id), x as unknown as Record<string, unknown>));
+  }
+  const out: Record<string, Record<string, unknown>> = {};
+  // Kept as they were: overrides naming nodes the prefab no longer has.
+  for (const [id, props] of Object.entries(inst.overrides)) if (!baseById.has(id)) out[id] = structuredClone(props);
+  const skip = new Set(["id", "type", "children"]);
+  const rootSkip = new Set([...skip, "name", "x", "y", "rot", "z", "tilt", "grouped", "layers", "order"]);
+  for (const [id, b] of baseById) {
+    const now = nowById.get(id);
+    if (!now) {
+      out[id] = { disabled: true };
+      continue;
+    }
+    const ignore = id === prefab.root.id ? rootSkip : skip;
+    // A prefab's rock is never re-made by an instance (`PREFAB_ROCK_RECIPE`).
+    const recipe = b["type"] === "Formation3D";
+    const keys = new Set([...Object.keys(b), ...Object.keys(now)].filter((k) => !ignore.has(k) && !(recipe && PREFAB_ROCK_RECIPE.has(k))));
+    let unscaled: Record<string, unknown> | null = null;
+    for (const k of keys) {
+      if (near(b[k], now[k])) continue;
+      if (inst.scale !== 1 && !unscaled) {
+        unscaled = structuredClone(now);
+        scaleGeometry(unscaled as unknown as LevelNode, 1 / inst.scale, id === prefab.root.id);
+      }
+      const v = (unscaled ?? now)[k];
+      (out[id] ??= {})[k] = v === undefined ? null : structuredClone(v);
+    }
+  }
+  return out;
+}
+
+// Equal to a part in 1e9, structurally: what an override is judged by.
+function near(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => near(v, b[i]));
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const ka = Object.keys(a).filter((k) => (a as Record<string, unknown>)[k] !== undefined);
+    const kb = Object.keys(b).filter((k) => (b as Record<string, unknown>)[k] !== undefined);
+    return ka.length === kb.length && ka.every((k) => near((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+  }
+  return false;
+}
+
+// THE PART OF A MODEL a set of items is: their nodes, the bodies and groups
+// above them with the frames they stand in, and the chains and vines strung
+// wholly between them, as a model of its own. A whole body's items take the
+// body; some of a body's take a body of just those, in the body's frame.
+export function subModel(model: EdModel, items: readonly EdItem[]): EdModel {
+  const nodes = new Set(items.map((i) => i.node));
+  return modelFromTree(toTree(model, (id) => nodes.has(id)));
+}
+
+// PUT ONE MODEL INTO ANOTHER: every node, item, chain and vine of `source`
+// added to `target` under fresh ids, moved by `offset`, its top-level nodes
+// under `parent` (the level's root when null) with names free there, and its
+// bodies' build order keys after every key `target` has, in their own order.
+// What paste, duplicate and the placing tools (`+ Glow`, `+ Fireflies`) do.
+// Returns the items and the top-level nodes it added.
+export function graftModel(
+  target: EdModel,
+  source: EdModel,
+  offset: Vec2 = Vec2.ZERO,
+  parent: string | null = null,
+): { items: EdItem[]; roots: string[] } {
+  const taken = new Set(target.tree.nodes.keys());
+  const ids = new Map<string, string>();
+  for (const id of source.tree.nodes.keys()) {
+    const fresh = newNodeId(taken);
+    taken.add(fresh);
+    ids.set(id, fresh);
+  }
+  const itemIds = new Map<number, number>();
+  const items: EdItem[] = [];
+  for (const i of source.items) {
+    const node = ids.get(i.node);
+    if (!node) continue;
+    const id = newBodyId();
+    itemIds.set(i.id, id);
+    const copy: EdItem = {
+      ...i,
+      id,
+      node,
+      pos: i.pos.add(offset),
+      shape: cloneShape(i.shape),
+      ...(i.formation ? { formation: { ...structuredClone(i.formation), id: node } } : {}),
+      // A decoration names the rock it grows on, which is its parent.
+      ...(i.decoration
+        ? { decoration: { ...structuredClone(i.decoration), id: node, formation: ids.get(source.tree.nodes.get(i.node)?.parent ?? "") ?? i.decoration.formation } }
+        : {}),
+      ...(i.root ? { root: { ...i.root } } : {}),
+    };
+    items.push(copy);
+  }
+  for (const i of items) {
+    if (i.root?.parent != null) i.root = { ...i.root, parent: itemIds.get(i.root.parent) ?? null };
+  }
+  // Anchor and firefly path numbers are content (a chain, a swarm names them),
+  // so the arrivals take numbers the target does not use yet.
+  let nextAnchor = Math.max(0, ...target.items.filter((i) => i.object === "anchor").map((i) => i.anchorId)) + 1;
+  let nextPath = Math.max(0, ...target.items.filter((i) => i.layer === "fireflies").map((i) => i.pathId)) + 1;
+  const pathIds = new Map<number, number>();
+  for (const i of items) {
+    if (i.object === "anchor") i.anchorId = nextAnchor++;
+    if (i.layer === "fireflies") {
+      pathIds.set(i.pathId, nextPath);
+      i.pathId = nextPath++;
+    }
+  }
+  for (const i of items) {
+    if (i.object === "light" && i.light.path !== null && pathIds.has(i.light.path)) i.light = { ...i.light, path: pathIds.get(i.light.path)! };
+  }
+  const chainIds = new Map<number, number>();
+  for (const c of source.chains) {
+    const id = newBodyId();
+    chainIds.set(c.id, id);
+    target.chains.push({
+      ...c,
+      id,
+      a: itemIds.get(c.a) ?? c.a,
+      b: itemIds.get(c.b) ?? c.b,
+      via: c.via.map((v) => itemIds.get(v) ?? v),
+      through: c.through.map((v) => itemIds.get(v) ?? v),
+      lengths: [...c.lengths],
+    });
+  }
+  const vineIds = new Map<number, number>();
+  for (const v of source.vines) {
+    const id = newBodyId();
+    vineIds.set(v.id, id);
+    target.vines.push({ ...structuredClone(v), id, anchor: itemIds.get(v.anchor) ?? v.anchor, anchor2: v.anchor2 !== null ? (itemIds.get(v.anchor2) ?? v.anchor2) : null });
+  }
+  const base = nextOrder(target.tree);
+  const sourceMin = Math.min(...[...source.tree.nodes.values()].flatMap((n) => (n.body ? [n.body.order] : typeof n.extra["order"] === "number" ? [n.extra["order"] as number] : [])), 0);
+  for (const n of source.tree.nodes.values()) {
+    const id = ids.get(n.id)!;
+    const copy: EdNode = {
+      ...n,
+      id,
+      parent: n.parent === null ? parent : ids.get(n.parent)!,
+      children: n.children.map((c) => ids.get(c)!),
+      layers: [...n.layers],
+      pos: n.pos.add(offset),
+      tilt: [n.tilt[0], n.tilt[1]],
+      local: null,
+      item: n.item !== null ? (itemIds.get(n.item) ?? null) : null,
+      chain: n.chain !== null ? (chainIds.get(n.chain) ?? null) : null,
+      vine: n.vine !== null ? (vineIds.get(n.vine) ?? null) : null,
+      body: n.body ? { ...n.body, order: base + n.body.order - sourceMin, route: n.body.route.map(cloneRouteNode) } : null,
+      instance: n.instance ? structuredClone(n.instance) : null,
+      extra: { ...n.extra, ...(typeof n.extra["order"] === "number" ? { order: base + (n.extra["order"] as number) - sourceMin } : {}) },
+    };
+    // The spawn is the level's own: a fragment never brings one.
+    if (copy.extra["spawn"] === true) continue;
+    target.tree.nodes.set(id, copy);
+  }
+  const roots = source.tree.roots.flatMap((r) => {
+    const id = ids.get(r)!;
+    return target.tree.nodes.has(id) ? [id] : [];
+  });
+  for (const r of roots) {
+    const n = target.tree.nodes.get(r)!;
+    n.name = freeName(target.tree, parent, n.name);
+    childrenOf(target.tree, parent).push(r);
+  }
+  // A child pointing at the dropped spawn is dropped with it.
+  for (const n of target.tree.nodes.values()) n.children = n.children.filter((c) => target.tree.nodes.has(c));
+  target.items.push(...items);
+  relink(target);
+  return { items, roots };
+}
+
+// --- editing the tree ------------------------------------------------------------
+
+// The class of the node an item is.
+export function nodeTypeOfItem(i: EdItem): NodeType {
+  switch (i.layer) {
+    case "scene":
+      return i.object === "collision"
+        ? "CollisionShape2D"
+        : i.object === "anchor"
+          ? "Anchor2D"
+          : i.object === "light"
+            ? "Light3D"
+            : i.object === "model"
+              ? "Model3D"
+              : i.object === "formation"
+                ? "Formation3D"
+                : "Decoration3D";
+    case "camera":
+      return i.shape.kind === "path" ? "CameraPath2D" : "CameraRegion2D";
+    case "fireflies":
+      return "FireflyPath2D";
+    case "shelter":
+      return "Shelter2D";
+    case "fog":
+      return "FogRegion2D";
+    case "notes":
+      return i.note.kind === "checkpoint" ? "Checkpoint2D" : "Note2D";
+  }
+}
+
+// What a new node is called before anyone names it.
+export function defaultNameOf(i: EdItem): string {
+  if (i.object === "model" && i.layer === "scene") return i.modelRef.name ? i.modelRef.name[0]!.toUpperCase() + i.modelRef.name.slice(1) : "Model";
+  if (i.object === "decoration" && i.decoration) return i.decoration.kind[0]!.toUpperCase() + i.decoration.kind.slice(1);
+  if (i.object === "collision" && i.layer === "scene") return i.root ? "Root" : i.shape.kind === "path" ? "Curve" : i.shape.kind[0]!.toUpperCase() + i.shape.kind.slice(1);
+  if (i.object === "formation") return "Formation";
+  if (i.object === "light") return "Light";
+  if (i.object === "anchor") return "Anchor";
+  const type = nodeTypeOfItem(i);
+  return type.replace(/2D$|3D$/, "");
+}
+
+function blankNode(id: string, type: NodeType, name: string, parent: string | null): EdNode {
+  return {
+    id,
+    type,
+    name,
+    parent,
+    children: [],
+    grouped: false,
+    layers: [],
+    disabled: false,
+    pos: Vec2.ZERO,
+    rot: 0,
+    z: 0,
+    tilt: [0, 0],
+    local: null,
+    item: null,
+    chain: null,
+    vine: null,
+    body: null,
+    instance: null,
+    extra: {},
+  };
+}
+
+// ADD AN ITEM to the level as a new node under `parent` (the level's root
+// when null), at `index` among its siblings (the end when absent), named
+// freely there. Its id is fresh, and so is the node's, whatever the item
+// carried; a rock's and a decoration's id is their node's.
+//
+// `keepId` asks for a particular node id - a decoration's, which its paint is
+// filed under - and is honoured when no node has it.
+export function addItem(model: EdModel, item: EdItem, parent: string | null, index?: number, name?: string, keepId?: string): EdItem {
+  const id = keepId && !model.tree.nodes.has(keepId) ? keepId : newNodeId(new Set(model.tree.nodes.keys()));
+  item.node = id;
+  if (item.formation) item.formation = { ...item.formation, id };
+  if (item.decoration) {
+    const rock = parent !== null ? model.tree.nodes.get(parent) : undefined;
+    item.decoration = { ...item.decoration, id, formation: rock?.type === "Formation3D" ? rock.id : item.decoration.formation };
+  }
+  const n = blankNode(id, nodeTypeOfItem(item), freeName(model.tree, parent, name ?? defaultNameOf(item)), parent);
+  n.item = item.id;
+  n.pos = item.pos;
+  n.rot = item.rot;
+  n.z = item.z;
+  n.tilt = [item.tilt[0], item.tilt[1]];
+  model.tree.nodes.set(id, n);
+  const list = childrenOf(model.tree, parent);
+  list.splice(index === undefined ? list.length : Math.max(0, Math.min(index, list.length)), 0, id);
+  if (!model.items.includes(item)) model.items.push(item);
+  const body = bodyAbove(model.tree, id);
+  item.bodyOf = body?.id ?? null;
+  item.body = body?.body ?? null;
+  item.unit = body?.id ?? id;
+  return item;
+}
+
+// ADD A FRAME: a body (with `body`), a group (`Node2D`), a 3D frame
+// (`Node3D`) or a plain `Node`, standing at `pos`/`rot` in the world.
+export function addFrameNode(
+  model: EdModel,
+  type: NodeType,
+  parent: string | null,
+  opts: { pos?: Vec2; rot?: number; name?: string; body?: EdBody; grouped?: boolean; index?: number; z?: number; tilt?: [number, number] } = {},
+): EdNode {
+  const id = newNodeId(new Set(model.tree.nodes.keys()));
+  const n = blankNode(id, type, freeName(model.tree, parent, opts.name ?? type), parent);
+  n.pos = opts.pos ?? Vec2.ZERO;
+  n.rot = opts.rot ?? 0;
+  n.z = opts.z ?? 0;
+  n.tilt = opts.tilt ?? [0, 0];
+  n.body = opts.body ?? null;
+  n.grouped = opts.grouped ?? false;
+  model.tree.nodes.set(id, n);
+  const list = childrenOf(model.tree, parent);
+  list.splice(opts.index === undefined ? list.length : Math.max(0, Math.min(opts.index, list.length)), 0, id);
+  return n;
+}
+
+// A new chain or vine is a node too, top level, its build order after every
+// other's.
+export function addLinkNode(model: EdModel, kind: "Chain" | "Vine", payload: number): EdNode {
+  const n = addFrameNode(model, kind, null, { name: kind });
+  if (kind === "Chain") n.chain = payload;
+  else n.vine = payload;
+  n.extra = { order: nextOrder(model.tree) };
+  return n;
+}
+
+// REMOVE ITEMS and their nodes, with everything under those nodes (a rock's
+// decorations go with it) and every chain or vine that loses an anchor. A
+// body or group left with nothing in it stays: it is a node of its own.
+export function removeItems(model: EdModel, items: readonly EdItem[]): void {
+  const gone = new Set<number>();
+  for (const i of items) {
+    for (const n of removeSubtree(model.tree, i.node)) if (n.item !== null) gone.add(n.item);
+    gone.add(i.id);
+  }
+  model.items = model.items.filter((i) => !gone.has(i.id));
+  const lost = (id: number): boolean => gone.has(id);
+  const chains = model.chains.filter((c) => lost(c.a) || lost(c.b) || c.via.some(lost) || c.through.some(lost));
+  const vines = model.vines.filter((v) => lost(v.anchor));
+  for (const c of chains) removeLinkNode(model, "chain", c.id);
+  for (const v of vines) removeLinkNode(model, "vine", v.id);
+  model.chains = model.chains.filter((c) => !chains.includes(c));
+  model.vines = model.vines.filter((v) => !vines.includes(v));
+  for (const v of model.vines) if (v.anchor2 !== null && lost(v.anchor2)) v.anchor2 = null;
+}
+
+export function removeLinkNode(model: EdModel, kind: "chain" | "vine", id: number): void {
+  for (const n of model.tree.nodes.values()) {
+    if ((kind === "chain" ? n.chain : n.vine) === id) {
+      removeSubtree(model.tree, n.id);
+      return;
+    }
+  }
+}
+
+// MOVE A NODE TO A NEW WORLD PLACEMENT, carrying everything under it: each
+// descendant keeps its placement in its parent's frame, so a turned or tilted
+// frame turns and tilts what it holds. What a gizmo on a group, a body or a 3D
+// frame writes.
+export function setNodeWorld(model: EdModel, id: string, world: World3): void {
+  const itemById = new Map(model.items.map((i) => [i.id, i]));
+  const read = (nid: string): World3 => worldOfNode(model, nid);
+  const write = (nid: string, w: World3): void => {
+    const n = model.tree.nodes.get(nid);
+    if (!n) return;
+    const item = n.item !== null ? itemById.get(n.item) : undefined;
+    if (item) {
+      item.pos = w.pos;
+      item.rot = w.rot;
+      item.z = w.z;
+      item.tilt = [w.tilt[0], w.tilt[1]];
+    }
+    if (n.extra["spawn"] === true) model.player.pos = w.pos;
+    n.pos = w.pos;
+    n.rot = w.rot;
+    n.z = w.z;
+    n.tilt = [w.tilt[0], w.tilt[1]];
+  };
+  // Every descendant's placement in its parent's frame, read before anything
+  // moves, then laid back out from the new placement down.
+  const locals: { id: string; parent: string; local: Pose3D }[] = [];
+  const gather = (nid: string): void => {
+    const n = model.tree.nodes.get(nid);
+    if (!n) return;
+    const frame = n.type === "Node" ? WORLD_ORIGIN : read(nid);
+    for (const c of n.children) {
+      locals.push({ id: c, parent: nid, local: relativeLocal(frame, read(c)) });
+      gather(c);
+    }
+  };
+  gather(id);
+  write(id, world);
+  for (const l of locals) {
+    const p = model.tree.nodes.get(l.parent);
+    const frame = p?.type === "Node" ? WORLD_ORIGIN : read(l.parent);
+    write(l.id, composeWorld(frame, l.local));
+  }
+}
+
+// Every item under a node (and the node's own, if it is one): what selecting
+// the node selects to move, delete or duplicate.
+export function membersOf(model: EdModel, id: string): EdItem[] {
+  const ids = new Set<string>([id, ...descendants(model.tree, id).map((n) => n.id)]);
+  return model.items.filter((i) => ids.has(i.node));
+}
+
+// MOVE A NODE IN THE TREE (the scene tree's drag): under `parent` at `index`.
+// Keep world (the default, Unreal's rule) leaves it where it stands; keep
+// relative keeps the numbers it was recorded with against its old parent, so
+// it lands at the same offset on the new one. Refused with the reason when
+// the tree would not accept it (`canParent`).
+export function moveNode(model: EdModel, id: string, parent: string | null, index: number | undefined, keepRelative = false): string | null {
+  const why = canParent(model.tree, id, parent);
+  if (why) return why;
+  const n = model.tree.nodes.get(id);
+  if (!n) return "no such node";
+  const frameOf = (p: string | null): World3 => {
+    if (p === null) return WORLD_ORIGIN;
+    const pn = model.tree.nodes.get(p);
+    return !pn || pn.type === "Node" ? WORLD_ORIGIN : worldOfNode(model, p);
+  };
+  const local = keepRelative ? relativeLocal(frameOf(n.parent), worldOfNode(model, id)) : null;
+  // A sibling moved further down its own list lands one place up once it is
+  // taken out of it.
+  const list = childrenOf(model.tree, parent);
+  const from = list.indexOf(id);
+  const at = index !== undefined && from >= 0 && n.parent === parent && from < index ? index - 1 : index;
+  reparent(model.tree, id, parent, at);
+  if (local) setNodeWorld(model, id, composeWorld(frameOf(parent), local));
+  relink(model);
+  return null;
+}
+
+// KEEP THE TREE AND THE LISTS IN AGREEMENT, after an edit that changed the
+// lists alone (an item filtered out, an anchor pushed in, a chain dropped):
+// a node whose item, chain or vine is gone goes (with what is under it); an
+// item with no node gets one, under the body its `unit` names when that is a
+// body, else at the top; a chain or vine with no node gets one. Run by the
+// editor after every edit, so a path written against the lists cannot leave
+// the tree describing a level that is not there.
+export function reconcileTree(model: EdModel): void {
+  const items = new Set(model.items.map((i) => i.id));
+  const chains = new Set(model.chains.map((c) => c.id));
+  const vines = new Set(model.vines.map((v) => v.id));
+  for (const n of [...model.tree.nodes.values()]) {
+    if (!model.tree.nodes.has(n.id)) continue;
+    const gone = (n.item !== null && !items.has(n.item)) || (n.chain !== null && !chains.has(n.chain)) || (n.vine !== null && !vines.has(n.vine));
+    if (!gone) continue;
+    const removed = removeSubtree(model.tree, n.id);
+    // An item under a removed node (a rock's decorations) goes with it.
+    const lost = new Set(removed.filter((r) => r.id !== n.id).flatMap((r) => (r.item !== null ? [r.item] : [])));
+    if (lost.size) model.items = model.items.filter((i) => !lost.has(i.id));
+  }
+  const placed = new Set<number>();
+  for (const n of model.tree.nodes.values()) if (n.item !== null) placed.add(n.item);
+  for (const i of [...model.items]) {
+    if (placed.has(i.id) && model.tree.nodes.get(i.node)?.item === i.id) continue;
+    const host = model.tree.nodes.get(i.unit);
+    const parent = host?.body ? host.id : null;
+    const keep = model.tree.nodes.has(i.node) ? undefined : i.node || undefined;
+    addItem(model, i, parent, undefined, undefined, keep);
+  }
+  const linked = new Set<string>();
+  for (const n of model.tree.nodes.values()) {
+    if (n.chain !== null) linked.add(`c${n.chain}`);
+    if (n.vine !== null) linked.add(`v${n.vine}`);
+  }
+  for (const c of model.chains) if (!linked.has(`c${c.id}`)) addLinkNode(model, "Chain", c.id);
+  for (const v of model.vines) if (!linked.has(`v${v.id}`)) addLinkNode(model, "Vine", v.id);
+  relink(model);
+}
+
+// The node an item is.
+export function nodeOfItem(model: EdModel, i: EdItem): EdNode | null {
+  return model.tree.nodes.get(i.node) ?? null;
+}
+
+function metaOf(model: EdModel): LevelMetaData {
+  return {
+    ...(model.meta.title ? { title: model.meta.title } : {}),
+    ...(model.meta.intro ? { intro: true } : {}),
+    ...(model.meta.unlisted ? { unlisted: true } : {}),
+  };
+}
+
+// The fields of the node an item is, past its placement.
+function itemFields(
+  model: EdModel,
+  i: EdItem,
+  n: EdNode,
+  nodeOfItem: (id: number) => string | null,
+  pathNode: ReadonlyMap<number, string>,
+): Record<string, unknown> {
+  switch (n.type) {
+    case "CollisionShape2D":
+      return collisionFields(i, nodeOfItem);
+    case "Anchor2D":
+      return {};
+    case "Model3D": {
+      const m = i.modelRef;
       return {
-        id: i.pathId,
-        x,
-        y,
-        rot,
+        model: m.name,
+        ...(m.mushroom ? { mushroom: { ...m.mushroom } } : {}),
+        ...(m.z !== 0 ? { z: m.z } : {}),
+        ...(m.rotX !== 0 ? { rotX: m.rotX } : {}),
+        ...(m.rotY !== 0 ? { rotY: m.rotY } : {}),
+        ...(m.scale !== 1 ? { scale: m.scale } : {}),
+      };
+    }
+    case "Light3D": {
+      const { pathId, ...rest } = lightFields(i);
+      const path = pathId !== undefined ? pathNode.get(pathId) : undefined;
+      return { ...rest, ...(path ? { path } : {}) };
+    }
+    case "Formation3D": {
+      if (!i.formation) return {};
+      const { id: _id, guide, ...f } = i.formation;
+      return { ...f, guide: nodeGuide(model, guide, n) };
+    }
+    case "Decoration3D": {
+      if (!i.decoration) return {};
+      const { strokes: _s, id: _id, formation: _f, ...d } = i.decoration;
+      return d;
+    }
+    case "CameraRegion2D":
+      return cameraRegionFields(i);
+    case "CameraPath2D": {
+      const { x: _x, y: _y, rot: _r, ...p } = pathDataOf(i);
+      return p;
+    }
+    case "FireflyPath2D": {
+      const { x: _x, y: _y, rot: _r, verts } = pathDataOf(i);
+      return {
         verts: verts.map((v) => ({
           x: v.x,
           y: v.y,
@@ -2321,589 +2824,105 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneTag, number>): Lev
           ...(v.outY !== undefined ? { outY: v.outY } : {}),
         })),
       };
-    });
-
-  const shelters = model.items.flatMap((i) => shelterDataOf(i) ?? []);
-  const fogRegions = model.items.flatMap((i) => fogRegionDataOf(i) ?? []);
-  const cameraRegions: CameraRegionData[] = model.items
-    .filter((i) => i.layer === "camera" && i.shape.kind !== "path")
-    .map((i) => ({
-      x: i.pos.x,
-      y: i.pos.y,
-      rot: i.rot,
-      shape: shapeOf(i),
-      // Omit anything left at its neutral value, so a saved region carries only
-      // what was actually authored.
-      ...(i.cam.offset.x !== 0 ? { offsetX: i.cam.offset.x } : {}),
-      ...(i.cam.offset.y !== 0 ? { offsetY: i.cam.offset.y } : {}),
-      ...(i.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE
-        ? { viewportScale: i.cam.viewportScale }
-        : {}),
-      ...(i.cam.lockX !== null ? { lockX: i.cam.lockX } : {}),
-      ...(i.cam.lockY !== null ? { lockY: i.cam.lockY } : {}),
-        ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
-      // Per-side buffers mean nothing off a rect, so they are not written for
-      // one: a field on disk the loader ignores is a field that lies about what
-      // it does.
-      ...(i.shape.kind === "rect"
-        ? {
-            ...(i.cam.bufferLeft !== null ? { bufferLeft: i.cam.bufferLeft } : {}),
-            ...(i.cam.bufferRight !== null ? { bufferRight: i.cam.bufferRight } : {}),
-            ...(i.cam.bufferTop !== null ? { bufferTop: i.cam.bufferTop } : {}),
-            ...(i.cam.bufferBottom !== null ? { bufferBottom: i.cam.bufferBottom } : {}),
-          }
-        : {}),
-      ...(i.cam.falloff !== null ? { falloff: i.cam.falloff } : {}),
-      ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
-      ...(!i.cam.keepInFrame ? { keepInFrame: false } : {}),
-    }));
-
-  // The notes layer writes to TWO lists: the annotations the game never reads,
-  // and the checkpoints it reads to place the spawn (see `EdNote`). A checkpoint
-  // is the one item on this layer that is content rather than commentary, so it
-  // is written where the game looks for it rather than smuggled into `notes`.
-  const noteItems = model.items.filter((i) => i.layer === "notes");
-  const notes: NoteData[] = noteItems
-    .filter((i) => i.note.kind !== "checkpoint")
-    .map((i) => {
+    }
+    case "Shelter2D": {
+      const s = shelterDataOf(i);
+      if (!s) return {};
+      const { x: _x, y: _y, rot: _r, ...rest } = s;
+      return rest;
+    }
+    case "FogRegion2D": {
+      const f = fogRegionDataOf(i);
+      if (!f) return {};
+      const { x: _x, y: _y, rot: _r, ...rest } = f;
+      return rest;
+    }
+    case "Note2D": {
       const h = halfExtents(i);
       return {
-        kind: i.note.kind === "arrow" ? ("arrow" as const) : ("text" as const),
-        x: i.pos.x,
-        y: i.pos.y,
-        rot: i.rot,
+        kind: i.note.kind === "arrow" ? "arrow" : "text",
         w: h.x * 2,
         h: h.y * 2,
-        // An arrow carries no text and no glyph height; a text note writes both
-        // so a reopened level shows exactly what was authored.
         ...(i.note.kind === "text" ? { text: i.note.text, size: i.note.size } : {}),
       };
-    });
-  // A checkpoint is a name and a place and nothing else: its marker box is
-  // derived on load (`checkpointBox`) and it has no rotation to keep, so neither
-  // reaches disk. A nameless one is still written - it is an unfinished edit,
-  // not a corruption, and dropping it at a save would delete a marker the author
-  // has placed and not yet named. The load drops it instead, with a warning.
-  const checkpoints: CheckpointData[] = noteItems
-    .filter((i) => i.note.kind === "checkpoint")
-    .map((i) => ({ name: i.note.text, x: i.pos.x, y: i.pos.y }));
-
-  // ITEMS BACK INTO BODIES. Items sharing a group id are one body; an ungrouped
-  // item is a body of its own. The run is emitted where its FIRST member sits,
-  // so the body order is the item order and a chain's index is stable across a
-  // save.
-  //
-  // Collision first and then lights, so a body's collision objects come before
-  // the light in it - which is the order the renderers walk and the order the
-  // light budgets are spent in. A light grouped into a solid body joins that
-  // body rather than making one of its own, which is the whole of what welding a
-  // lamp's light to its fitting now takes.
-  const runs = bodyRuns(
-    model.items.filter((i) => i.layer === "scene"),
-  );
-  // A run's members are written in layer order within the run, so a light
-  // authored before the wall it hangs on still lands after it.
-  for (const run of runs) {
-    run.sort((a, b) => (a.object === b.object ? 0 : a.object === "collision" ? -1 : b.object === "collision" ? 1 : 0));
-  }
-
-  // The body's own frame (`EdModel.bodyFrames`), with its objects written local
-  // to it. That is what gives a body a real transform on disk - turning the body
-  // turns everything in it, aim included - while the editor goes on manipulating
-  // items in world metres, which is what every drag, handle and marquee is
-  // written in.
-  const bodies: LevelBodyData[] = runs.map((run) => {
-    const origin = bodyFrameOf(model, run[0]!.bodyId);
-    const lead = run.find((i) => i.object === "collision") ?? run[0]!;
-    // Whether this body is a pendulum, asked once because three fields below
-    // turn on it - the trio itself, and the bearing it shares with the pivot.
-    const swingsHere =
-      lead.kind === "static" && lead.swingAmp !== 0 && lead.swingPeriod > 0;
-    // ...and whether it spins, which is the same question for the rotor's pair
-    // and for the bearing they share (see `LevelBodyData.spinPeriod`). A SIGNED
-    // period, so the test is "not zero" rather than "positive".
-    const spinsHere = lead.kind === "static" && lead.spinPeriod !== 0;
-    // ...and whether it travels, the same question for the route's own fields.
-    const movesHere = lead.kind === "static" && lead.route.length > 1 && lead.moveSpeed > 0;
-    const cos = Math.cos(-origin.rot);
-    const sin = Math.sin(-origin.rot);
-    const localOf = (i: { pos: Vec2; rot: number }): { x?: number; y?: number; rot?: number } => {
-      const dx = i.pos.x - origin.pos.x;
-      const dy = i.pos.y - origin.pos.y;
-      const x = dx * cos - dy * sin;
-      const y = dx * sin + dy * cos;
-      const rot = i.rot - origin.rot;
-      return {
-        ...(x !== 0 ? { x } : {}),
-        ...(y !== 0 ? { y } : {}),
-        ...(rot !== 0 ? { rot } : {}),
-      };
-    };
-
-    const objects: SceneObjectData[] = [];
-    // Every object written goes through this, so one cannot reach the file
-    // without `itemOf` recording which item wrote it.
-    const emit = (item: EdItem, o: SceneObjectData): void => {
-      objects.push(o);
-      itemOf?.set(o, item.id);
-    };
-    // The body's formation, written beside its objects rather than among them
-    // (`LevelBodyData.formation`), and recorded in `itemOf` the same way: a 3D
-    // click on the rock answers with it.
-    let formation: FormationData | undefined;
-    for (const i of run) {
-      if (i.object === "formation" && i.formation) {
-        if (formation) continue; // one per body; `cli levels` says so of a file
-        formation = { ...i.formation, ...localOf(i) };
-        itemOf?.set(formation, i.id);
-        continue;
-      }
-      if (i.object === "decoration" && i.decoration) {
-        // Its anchor is in its formation's frame, so its own placement says
-        // nothing and is not written; its strokes go to the sidecar
-        // (`paintOf`), not here.
-        const { strokes: _strokes, ...data } = i.decoration;
-        emit(i, { type: "decoration", ...data });
-        continue;
-      }
-      if (i.object === "anchor") {
-        // A placement and the id chains name it by, and nothing else - which is
-        // all an anchor is.
-        emit(i, { type: "anchor", id: i.anchorId, ...localOf(i) });
-        continue;
-      }
-      if (i.object === "model") {
-        // The placement, the model and what of it was authored: a field left at
-        // its default is not written, the rule every list here is written under.
-        const m = i.modelRef;
-        emit(i, {
-          type: "model",
-          model: m.name,
-          ...(m.mushroom ? { mushroom: { ...m.mushroom } } : {}),
-          ...localOf(i),
-          ...(m.z !== 0 ? { z: m.z } : {}),
-          ...(m.rotX !== 0 ? { rotX: m.rotX } : {}),
-          ...(m.rotY !== 0 ? { rotY: m.rotY } : {}),
-          ...(m.scale !== 1 ? { scale: m.scale } : {}),
-        });
-        continue;
-      }
-      if (i.object === "light") {
-        const d = defaultLight();
-        const spot = i.light.kind === "spot";
-        // Against the defaults the renderer will fill in, which for a swarm
-        // are the firefly's rather than a lamp's.
-        const fill = lightDefaultsFor(!spot && i.light.fireflies > 0);
-        emit(i, {
-          type: "light",
-          ...localOf(i),
-          // Omit anything left at its default, so a saved light carries only
-          // what was authored - the rule every other list here is written under.
-          ...(spot ? { kind: "spot" as const } : {}),
-          ...(i.light.z !== d.z ? { z: i.light.z } : {}),
-          ...(i.color !== fill.color ? { color: i.color } : {}),
-          ...(i.light.intensity !== fill.intensity ? { intensity: i.light.intensity } : {}),
-          // The reach lives in the shape (see `EdLight`). A light whose item is
-          // not a circle cannot happen through any edit path, but the fallback
-          // keeps the write total rather than saving a light with no reach.
-          ...(i.shape.kind === "circle" && i.shape.r !== fill.range
-            ? { range: i.shape.r }
-            : {}),
-          // The cone and its aim mean nothing on a point light, and a field on
-          // disk the loader ignores is a field that lies about what it does.
-          ...(spot
-            ? {
-                ...(i.light.angle !== d.angle ? { angle: i.light.angle } : {}),
-                ...(i.light.penumbra !== d.penumbra ? { penumbra: i.light.penumbra } : {}),
-                ...(i.light.dir.x !== d.dir.x ? { dirX: i.light.dir.x } : {}),
-                ...(i.light.dir.y !== d.dir.y ? { dirY: i.light.dir.y } : {}),
-                ...(i.light.dirZ !== d.dirZ ? { dirZ: i.light.dirZ } : {}),
-              }
-            : {}),
-          ...(i.light.castShadow ? { castShadow: true } : {}),
-          // Read only while the light casts, so - like the cone on a point
-          // light - it is written only then: a field on disk the loader ignores
-          // is a field that lies about what it does.
-          ...(i.light.castShadow && i.light.shadowNear !== null
-            ? { shadowNear: i.light.shadowNear }
-            : {}),
-          ...(i.light.castShadow && i.light.shadowRadius !== null
-            ? { shadowRadius: i.light.shadowRadius }
-            : {}),
-          ...(i.light.flicker !== 0 ? { flicker: i.light.flicker } : {}),
-          // A beam is a spot's cone made visible, so - like the cone itself -
-          // it is written only for a spot, and only when it is there at all.
-          ...(spot && i.light.beam !== 0 ? { beam: i.light.beam } : {}),
-          ...(spot && i.light.dust !== 0 ? { dust: i.light.dust } : {}),
-          // A waking light is point-only (the pool is point lights), so - like
-          // the beam on a point light - none of it is written for a spot, and
-          // the times only with a trigger to time.
-          ...(!spot && i.light.wake > 0
-            ? {
-                wake: i.light.wake,
-                // A swarm never reads them (see `LightObjectData.fireflies`).
-                ...(i.light.fireflies > 0
-                  ? {}
-                  : {
-                      ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
-                      ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
-                      ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
-                    }),
-              }
-            : {}),
-          // A swarm is point-only, like the wake it notices the ball by.
-          ...(!spot && i.light.fireflies > 0 ? { fireflies: i.light.fireflies } : {}),
-          // ...and so is the path it guides the player along.
-          ...(!spot && i.light.fireflies > 0 && i.light.path !== null
-            ? { path: i.light.path }
-            : {}),
-        });
-        continue;
-      }
-      // Everything else is a collision object.
-      emit(i, {
-        type: "collision",
-        ...localOf(i),
-        shape: shapeOf(i),
-        // Absent means "an ordinary surface", so only a hook-proof one says so.
-        ...(i.impermeable ? { impermeable: true } : {}),
-        // Absent means a piece everything collides with, so only one that
-        // something passes through says so - and it says it in the fixed
-        // category order, so an edit that changes nothing writes nothing.
-        ...(passesFromMask(i.mask).length > 0 ? { passes: passesFromMask(i.mask) } : {}),
-        // Absent means a face the hook bites, so only a rail says so - and
-        // only a CURVE or a CIRCLE (a rod, a rail through the plane) can be
-        // one, so a flag left on a shape of any other kind (a level authored
-        // before rails were curves) is dropped rather than written for the
-        // loader to ignore.
-        ...(i.rail && (i.shape.kind === "path" || i.shape.kind === "circle") ? { rail: true } : {}),
-        // Absent means a face that holds the cuff still, so only mud says so.
-        ...(i.viscosity > 0 ? { viscosity: i.viscosity } : {}),
-        // ...and only mud with a floor says it has one.
-        ...(i.viscosity > 0 && i.slipFloor > 0 ? { slipFloor: i.slipFloor } : {}),
-        // Written only when the piece is something other than the default
-        // 20 cm of oak, so every level authored before materials stays
-        // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
-        // mass, centre of mass and inertia are sums over its pieces, and what
-        // a thing is made of is a fact about the shape rather than about the
-        // model drawn over it.
-        ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
-        // ...and the sound it makes, only where it is not what loading would
-        // derive from the rest of the piece (`soundMaterialOf`): a level saved
-        // untouched comes back byte-identical, and means the same either way.
-        ...((i.soundMaterial ?? "auto") !==
-        soundMaterialOf({
-          ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
-          viscosity: i.viscosity,
-          root: i.root ?? undefined,
-          shape: { kind: i.shape.kind },
-        })
-          ? { soundMaterial: i.soundMaterial ?? "auto" }
-          : {}),
-        // A typed density, and only then: a preset's is its material's.
-        ...(i.material === CUSTOM_MATERIAL ? { density: i.density } : {}),
-        ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
-        // Written only for a piece that is on or configured (`debugData`). A
-        // belt draws its own band and has no debug geometry to configure.
-        ...(i.shape.kind !== "belt" && debugData(i.debug) ? { debug: debugData(i.debug) } : {}),
-        // A root branch, its parent named by the index it is written at in
-        // this body: every member writes one object, in run order. A parent
-        // outside the body (`syncRoots` clears one, so only a model mid-edit
-        // could hold it) is written as a trunk.
-        ...(i.root && i.shape.kind === "path" ? { root: rootData(i.root, run) } : {}),
-      });
     }
-
-    // A 3D body's depth and tilt (`EdModel.bodies3d`), about the frame above.
-    const space3d = model.bodies3d.get(run[0]!.bodyId);
-    return {
-      kind: lead.object === "collision" ? lead.kind : "static",
-      x: origin.pos.x,
-      y: origin.pos.y,
-      rot: origin.rot,
-      ...(space3d
-        ? {
-            space: "3d" as const,
-            ...(space3d.z !== 0 ? { z: space3d.z } : {}),
-            ...(space3d.tilt[0] !== 0 || space3d.tilt[1] !== 0 ? { tilt: [space3d.tilt[0], space3d.tilt[1]] as [number, number] } : {}),
-          }
-        : {}),
-      // Only a SOLID lead has a body fill to give. A body that is nothing but
-      // a light has no fill at all, and writing the light's own faint editor
-      // colour as one would put a body colour on disk that nothing draws.
-      ...(lead.object === "collision" ? { color: lead.color, opacity: lead.opacity } : {}),
-      // The physics half is written only for a body that HAS some. A body of
-      // decoration with a friction on disk is a file stating properties nothing
-      // reads, which is how a field quietly starts lying about what it does.
-      ...(lead.object === "collision"
-        ? {
-            friction: lead.friction,
-            // The trampoline pair, and only when it is set: an absent field is
-            // the dead surface every level authored before them has, and
-            // writing `bounce: 0` onto every wall in every file would state a
-            // property nothing has chosen.
-            ...(lead.bounce ? { bounce: lead.bounce } : {}),
-            ...(lead.launch ? { launch: lead.launch } : {}),
-            // Breakable, and only when it is: the durability rides with the
-            // threshold rather than on its own, because a count with nothing to
-            // count is a field that means nothing (see `LevelBodyData.breakForce`).
-            ...(lead.breakForce > 0
-              ? { breakForce: lead.breakForce, durability: lead.durability }
-              : {}),
-            // Only force areas carry a magnitude; omitting it elsewhere keeps
-            // saved levels free of a field that would read as meaningful.
-            ...(lead.kind === "force" ? { force: lead.force } : {}),
-            // Water carries a current and a rate for the same reason, and only
-            // where it means something.
-            ...(lead.kind === "water" ? { flow: lead.flow, drag: lead.drag } : {}),
-            // A fall only where one is authored: a drop of 0 is the bank, and
-            // a lip speed is only meaningful beside a drop.
-            ...(lead.kind === "water" && lead.spill > 0
-              ? {
-                  spill: lead.spill,
-                }
-              : {}),
-            // The slab through z, only where it differs from the renderer's
-            // own placement: on the plane, at the default depth.
-            ...(lead.kind === "water" && lead.waterZ !== 0 ? { waterZ: lead.waterZ } : {}),
-            ...(lead.kind === "water" && lead.waterDepth !== null ? { waterDepth: lead.waterDepth } : {}),
-            // Hook-only geometry, and only when set: an absent field is the
-            // colliding body every level authored before the flag has. Written
-            // for every kind that builds a body - a static one is the retired
-            // `anchor` kind, a rigid one is the leaf it could not express.
-            ...(lead.passable ? { passable: true } : {}),
-            // The bearing MOUNTING, and only when set - an absent field is the
-            // free body every old level has. The torsion spring rides with a
-            // real frequency only, damping alongside it, exactly as the linear
-            // spring's fields do below; the bearing POINT is written below, for
-            // both of the mountings that have one.
-            ...(lead.kind === "rigid" && lead.pivot
-              ? {
-                  pivot: true,
-                  ...(lead.pivotFreq > 0
-                    ? { pivotFreq: lead.pivotFreq, pivotDamping: lead.pivotDamping }
-                    : {}),
-                }
-              : {}),
-            // The kinematic pendulum, on a static body and only where it
-            // actually swings (see `LevelBodyData.swingAmp`) - an absent trio is
-            // the plain static every level authored before the fields has. The
-            // phase rides only when it is not the zero every level means by
-            // saying nothing, which is what keeps such a body byte-stable.
-            ...(swingsHere
-              ? {
-                  swingAmp: lead.swingAmp,
-                  swingPeriod: lead.swingPeriod,
-                  ...(lead.swingPhase ? { swingPhase: lead.swingPhase } : {}),
-                }
-              : {}),
-            // The kinematic rotor, on the same terms as the pendulum above: one
-            // period, written only where the body actually turns, with the
-            // phase riding only when it is not the zero saying nothing means.
-            ...(spinsHere
-              ? {
-                  spinPeriod: lead.spinPeriod,
-                  ...(lead.spinPhase ? { spinPhase: lead.spinPhase } : {}),
-                }
-              : {}),
-            // The route, on a static body and only where it is actually
-            // travelled (see `LevelBodyData.moveNodes`). Its nodes are already in
-            // the frame this body is being written in, exactly as the bearing's
-            // point is, so they go out as they stand; a zero handle and an unset
-            // key are OMITTED, so a route drawn as a plain polyline of corners
-            // writes exactly the points it always did and nothing else. The
-            // mode, the phase, the ease and the alignment ride only when they
-            // are not the defaults every level means by saying nothing.
-            ...(movesHere
-              ? {
-                  moveNodes: lead.route.map((n) => ({
-                    x: n.p.x,
-                    y: n.p.y,
-                    ...(n.in.x !== 0 ? { inX: n.in.x } : {}),
-                    ...(n.in.y !== 0 ? { inY: n.in.y } : {}),
-                    ...(n.out.x !== 0 ? { outX: n.out.x } : {}),
-                    ...(n.out.y !== 0 ? { outY: n.out.y } : {}),
-                    ...(n.rot !== null ? { rot: n.rot } : {}),
-                    ...(n.speed !== null ? { speed: n.speed } : {}),
-                  })),
-                  moveSpeed: lead.moveSpeed,
-                  ...(lead.moveMode !== "backAndForth" ? { moveMode: lead.moveMode } : {}),
-                  ...(lead.movePhase ? { movePhase: lead.movePhase } : {}),
-                  ...(lead.moveEase !== "linear" ? { moveEase: lead.moveEase } : {}),
-                  ...(lead.moveAlign ? { moveAlign: true } : {}),
-                }
-              : {}),
-            // The BEARING, written for whichever mounting has one. Its authored
-            // point is already in the frame this body is being written in
-            // (`pivotAt` is frame-local, and `origin` above IS `bodyFrameOf`),
-            // so it goes out as it stands.
-            ...((lead.kind === "rigid" && lead.pivot) || swingsHere || spinsHere
-              ? lead.pivotAt
-                ? { pivotX: lead.pivotAt.x, pivotY: lead.pivotAt.y }
-                : {}
-              : {}),
-            // A spring means something only on a rigid body that is not on a
-            // bearing, and only when a frequency is actually set - a body with
-            // neither axis sprung is the ordinary free rigid body every old
-            // level has, and writing three zeroes for it would put a mechanic
-            // on disk that nothing applies. The damping rides along with them
-            // rather than being written on its own, for the same reason.
-            ...(lead.kind === "rigid" &&
-            !lead.pivot &&
-            (lead.springFreqX > 0 || lead.springFreqY > 0)
-              ? {
-                  ...(lead.springFreqX > 0 ? { springFreqX: lead.springFreqX } : {}),
-                  ...(lead.springFreqY > 0 ? { springFreqY: lead.springFreqY } : {}),
-                  springDamping: lead.springDamping,
-                }
-              : {}),
-          }
-        : {}),
-      // The name, outside the physics half because a body of any make-up may
-      // carry one, and only when set: an unnamed body writes nothing.
-      ...(lead.name ? { name: lead.name } : {}),
-      ...(formation ? { formation } : {}),
-      objects,
-    };
-  });
-
-  // Which body each item ended up in, so a chain can be refused when both of its
-  // anchors landed in one. Derived from the same runs the bodies were, in the
-  // same order.
-  const bodyOfItem = new Map<number, number>();
-  runs.forEach((run, i) => {
-    for (const item of run) bodyOfItem.set(item.id, i);
-  });
-
-  const chains: ChainData[] = [];
-  for (const c of model.chains) {
-    const a = model.items.find((i) => i.id === c.a);
-    const b = model.items.find((i) => i.id === c.b);
-    // A chain whose anchor has been deleted has nothing to hold and is simply
-    // not written. Nor has one whose two anchors have ended up in the SAME body
-    // - merging the two things a chain held together is a chain tied to itself,
-    // which the loader would drop anyway.
-    if (a?.object !== "anchor" || b?.object !== "anchor") continue;
-    if (bodyOfItem.get(a.id) === bodyOfItem.get(b.id)) continue;
-    // Wrap points whose anchor has gone are dropped from the route rather than
-    // dropping the chain; a chain with its two ends is still a chain.
-    const via: number[] = [];
-    for (const id of c.via) {
-      const v = model.items.find((i) => i.id === id);
-      if (v?.object === "anchor") via.push(v.anchorId);
-    }
-    const through: number[] = [];
-    for (const id of c.through) {
-      const t = model.items.find((i) => i.id === id);
-      if (t?.object === "anchor") through.push(t.anchorId);
-    }
-    // A tied chain writes its tie points and their lengths (0 in a slot = that
-    // segment takes the slack, which is how `ChainData.lengths` reads an
-    // absent one); its `length` is not written, since it means nothing there.
-    const tied = through.length > 0;
-    const lengths = c.lengths.map((l) => l ?? 0);
-    while (lengths.length > 0 && lengths[lengths.length - 1] === 0) lengths.pop();
-    chains.push({
-      a: a.anchorId,
-      b: b.anchorId,
-      // Omitted = taut between the anchors, which the loader re-derives.
-      ...(c.length !== null && !tied ? { length: c.length } : {}),
-      ...(c.color !== null ? { color: c.color } : {}),
-      ...(via.length > 0 && !tied ? { via } : {}),
-      ...(tied ? { through } : {}),
-      ...(tied && lengths.length > 0 ? { lengths } : {}),
-      ...(tied && c.slack !== null ? { slack: c.slack } : {}),
-      ...(tied && c.substeps !== null ? { substeps: c.substeps } : {}),
-    });
+    case "Checkpoint2D":
+      return { checkpoint: i.note.text };
+    default:
+      return {};
   }
-
-  const vines: VineData[] = [];
-  for (const v of model.vines) {
-    const a = model.items.find((i) => i.id === v.anchor);
-    // A vine whose anchor has been deleted has nothing to hang from, and one of
-    // no length has nothing to be - both are dropped rather than written for the
-    // loader to drop again.
-    if (a?.object !== "anchor" || !(v.length > 0)) continue;
-    // A span whose second anchor has been deleted is written back as the
-    // hanging vine it has already become on screen.
-    const a2 = v.anchor2 !== null ? model.items.find((i) => i.id === v.anchor2) : undefined;
-    vines.push({
-      anchor: a.anchorId,
-      ...(a2?.object === "anchor" ? { anchor2: a2.anchorId } : {}),
-      length: v.length,
-      ...(v.spacing !== null ? { spacing: v.spacing } : {}),
-      ...(v.density !== null ? { density: v.density } : {}),
-      ...(v.stiffness !== null ? { stiffness: v.stiffness } : {}),
-      ...(v.viscosity !== null ? { viscosity: v.viscosity } : {}),
-      ...(v.color !== null ? { color: v.color } : {}),
-      ...(v.braidSeed !== null ? { braidSeed: v.braidSeed } : {}),
-      ...(v.braidSeed !== null && v.rope ? { rope: true } : {}),
-      ...(v.starberry ? { starberry: structuredClone(v.starberry) } : {}),
-    });
-  }
-
-  // Only what was actually authored. A title left blank, a flag left off and a
-  // level that has never opened the panel all write no block at all, which is
-  // what keeps every level from before the field byte-stable through a save.
-  const meta: LevelMetaData = {
-    ...(model.meta.title ? { title: model.meta.title } : {}),
-    ...(model.meta.intro ? { intro: true } : {}),
-    ...(model.meta.unlisted ? { unlisted: true } : {}),
-  };
-
-  return {
-    ...(Object.keys(meta).length ? { meta } : {}),
-    player: {
-      x: model.player.pos.x,
-      y: model.player.pos.y,
-      radius: model.player.radius,
-      // Absent rather than false, so a level that does not start on its anchor
-      // is written exactly as it always was.
-      ...(model.player.hang ? { hang: true } : {}),
-      // And absent rather than 0, for the same reason: a level whose ball starts
-      // standing at its spawn is written exactly as it always was.
-      ...(model.player.roll ? { roll: model.player.roll } : {}),
-      // Carried straight back out, absent when there is none: the editor does
-      // not author an arrival (it is a recorded run - see `SpawnData.arrival`),
-      // and writing the level back without it would delete a level's opening
-      // 750 ms after it was opened in the editor.
-      ...(model.player.arrival ? { arrival: model.player.arrival } : {}),
-    },
-    bodies,
-    // An empty list is the same as no list, and the absent field keeps levels
-    // authored before camera regions (or notes) byte-identical.
-    ...(cameraRegions.length ? { cameraRegions } : {}),
-    ...(cameraPaths.length ? { cameraPaths } : {}),
-    ...(fireflyPaths.length ? { fireflyPaths } : {}),
-    ...(shelters.length ? { shelters } : {}),
-    ...(model.fogRegionsEnabled || fogRegions.length ? { fogRegions } : {}),
-    // Written back verbatim. It is not derived from anything in the item list,
-    // so there is nothing to rebuild - and leaving it out is not "the editor
-    // does not support it", it is the editor DELETING a level's lighting the
-    // first time the file is opened.
-    ...(model.environment ? { environment: { ...model.environment } } : {}),
-    ...(model.camera ? { camera: { ...model.camera } } : {}),
-    ...(model.scene ? { scene: model.scene } : {}),
-    ...(notes.length ? { notes } : {}),
-    ...(checkpoints.length ? { checkpoints } : {}),
-    ...(chains.length ? { chains } : {}),
-    ...(vines.length ? { vines } : {}),
-    // Every piece's debug switch is written as the model holds it, so this is
-    // a current-format level: without the stamp the loader would read a level
-    // with no scene as one saved before the switch existed and turn on every
-    // piece the author had turned off (see `LEVEL_FORMAT`).
-    format: LEVEL_FORMAT,
-  };
 }
 
-// On-disk pixel LevelData → editor model.
-export function modelFromDisk(pixelData: RawLevelData): EdModel {
-  return fromLevelData(scaleLevelData(pixelData, PX));
+// A collision guide's `subset` names the pieces it was taken from by node id
+// (`NodeCollisionGuide`); the editor holds the flat form's indices into the
+// body's enclosing pieces, in tree order.
+function nodeGuide(model: EdModel, guide: FormationGuide, n: EdNode): NodeFormationGuide {
+  if (guide.kind !== "collision" || !guide.subset) return guide as NodeFormationGuide;
+  const body = bodyAbove(model.tree, n.id);
+  const pieces = body ? enclosingPiecesOf(model, body.id) : [];
+  const { subset, ...rest } = guide;
+  return { ...rest, subset: subset.flatMap((k) => pieces[k]?.node ?? []) };
+}
+
+// A body's collision items that enclose an area (what a guide is taken
+// from), in the order the body compiles them.
+export function enclosingPiecesOf(model: EdModel, bodyNode: string): EdItem[] {
+  const out: EdItem[] = [];
+  const byId = new Map(model.items.map((i) => [i.id, i]));
+  const walk = (ids: readonly string[]): void => {
+    for (const id of ids) {
+      const c = model.tree.nodes.get(id);
+      if (!c || c.disabled || isBodyType(c.type)) continue;
+      const item = c.item !== null ? byId.get(c.item) : undefined;
+      if (item && item.object === "collision" && enclosesShape({ shape: shapeDataOf(item) })) out.push(item);
+      walk(c.children);
+    }
+  };
+  walk(model.tree.nodes.get(bodyNode)?.children ?? []);
+  return out;
+}
+
+export type SceneTag = SceneObjectData | FormationData;
+
+// THE FLAT LEVEL, in metres, compiled from the model's tree as the game compiles
+// a level file. `itemOf`, when given, is filled with which item each written
+// object or rock came from, so a 3D pick on one can be answered with its item.
+export function toLevelData(model: EdModel, itemOf?: Map<SceneTag, number>): LevelData {
+  const compiled = compileLevel(toTree(model));
+  if (itemOf) {
+    const itemOfNode = new Map(model.items.map((i) => [i.node, i.id]));
+    for (const [element, node] of compiled.nodeOf) {
+      const item = itemOfNode.get(node);
+      if (item !== undefined) itemOf.set(element as SceneTag, item);
+    }
+  }
+  return { ...compiled.data, tree: compiled.nodes, format: LEVEL_FORMAT };
+}
+
+export function modelFromDisk(pixelData: LevelSource): EdModel {
+  return modelFromTree(scaleLevelTree(loadLevelTree(pixelData), PX));
 }
 
 // Editor model → on-disk pixel LevelData.
-export function modelToDisk(model: EdModel): LevelData {
-  return scaleLevelData(toLevelData(model), PIXELS_PER_METER);
+// The model as its level file: the node tree in pixels.
+export function modelToDisk(model: EdModel): LevelTree {
+  return scaleLevelTree(toTree(model), PIXELS_PER_METER);
+}
+
+// ...and as the flat level that file compiles to, in pixels: for a test that
+// reads a body or an object back.
+export function modelToFlatDisk(model: EdModel): LevelData {
+  const { tree: _tree, ...flat } = scaleNormalized(toLevelData(model), PIXELS_PER_METER);
+  // The node references compilation adds are the editor's and the tools',
+  // not the level's.
+  return {
+    ...flat,
+    bodies: flat.bodies.map(({ node: _n, ...b }) => ({
+      ...b,
+      ...(b.formation ? { formation: (({ node: _f, ...f }) => f)(b.formation) } : {}),
+      objects: b.objects.map(({ node: _o, ...o }) => o as SceneObjectData),
+    })),
+  };
 }
 
 // --- geometry ---------------------------------------------------------------
@@ -3719,9 +3738,10 @@ export function pointInBody(item: EdItem, world: Vec2): boolean {
 
 // --- bodies -----------------------------------------------------------------
 
-// Every object in `bodyId`, in model order.
-export function bodyMembers(items: readonly EdItem[], bodyId: number): EdItem[] {
-  return items.filter((i) => i.bodyId === bodyId);
+// Every item of a unit (`EdItem.unit`: a body, or a node no body carries),
+// in model order.
+export function bodyMembers(items: readonly EdItem[], unit: string): EdItem[] {
+  return items.filter((i) => i.unit === unit);
 }
 
 // The selection an item click means: the whole body it is in. A body IS one
@@ -3729,7 +3749,7 @@ export function bodyMembers(items: readonly EdItem[], bodyId: number): EdItem[] 
 // picking it are the same act (Alt+click is what reaches past this to a single
 // object).
 export function pickBodyOf(items: readonly EdItem[], item: EdItem): EdItem[] {
-  return bodyMembers(items, item.bodyId);
+  return bodyMembers(items, item.unit);
 }
 
 // THE BODIES OF A MODEL, in the order their first object appears - which is the
@@ -3738,34 +3758,29 @@ export function pickBodyOf(items: readonly EdItem[], item: EdItem): EdItem[] {
 // about what a body is or how many there are.
 export function bodyRuns(items: readonly EdItem[]): EdItem[][] {
   const runs: EdItem[][] = [];
-  const byId = new Map<number, EdItem[]>();
+  const byId = new Map<string, EdItem[]>();
   for (const i of items) {
-    const existing = byId.get(i.bodyId);
+    const existing = byId.get(i.unit);
     if (existing) {
       existing.push(i);
       continue;
     }
     const run = [i];
-    byId.set(i.bodyId, run);
+    byId.set(i.unit, run);
     runs.push(run);
   }
   return runs;
 }
 
-// WHAT A BODY IS CALLED in the outliner: its kind, and what it is made of. A
-// body has no authored name - there is nothing in the format to hold one - so
-// the label is derived, and it is derived from the same things the format
-// distinguishes rather than from anything the editor keeps on the side.
+// WHAT KIND OF THING A UNIT IS: its body's kind, or what it is made of. Its
+// name is its node's (the scene tree shows both).
 export function bodyLabel(members: readonly EdItem[]): string {
-  // A named body is told apart by its name, which is what the name is for.
-  const name = members[0]?.name;
-  const kind = bodyKindLabel(members);
-  return name ? `${kind} ${name}` : kind;
+  return bodyKindLabel(members);
 }
 
 function bodyKindLabel(members: readonly EdItem[]): string {
   const lead = bodyLead(members);
-  if (lead) return lead.kind;
+  if (lead?.body) return lead.body.kind;
   const first = members[0];
   if (!first) return "empty";
   if (first.object === "light") return "light";
@@ -3985,7 +4000,9 @@ export function selectionCentre(items: readonly EdItem[]): Vec2 {
 export interface GroupPose {
   centre: Vec2;
   items: Map<number, { pos: Vec2; rot: number }>;
-  frames: Map<number, EdBodyFrame>;
+  // The frames that move with the group, by node id: a body's, a group's, a
+  // 3D frame's - every structural node whose items all move.
+  frames: Map<string, EdBodyFrame>;
 }
 
 export function captureGroupPose(
@@ -3993,18 +4010,8 @@ export function captureGroupPose(
   items: readonly EdItem[],
   centre: Vec2,
 ): GroupPose {
-  const held = new Map<number, number>();
-  for (const i of items) held.set(i.bodyId, (held.get(i.bodyId) ?? 0) + 1);
-  const frames = new Map<number, EdBodyFrame>();
-  for (const [bodyId, count] of held) {
-    if (count < bodyMembers(model.items, bodyId).length) continue;
-    // Only a STORED frame is carried, exactly as `carryBodyFrames` has it: a
-    // body with none derives it from its first object, which moves with the
-    // group anyway. Every compound body has one by now - `beginAction` pins
-    // them before any gesture starts.
-    const stored = model.bodyFrames.get(bodyId);
-    if (stored) frames.set(bodyId, stored);
-  }
+  const frames = new Map<string, EdBodyFrame>();
+  for (const n of framesCarriedBy(model, items)) frames.set(n.id, { pos: n.pos, rot: n.rot });
   return {
     centre,
     items: new Map(items.map((i) => [i.id, { pos: i.pos, rot: i.rot }])),
@@ -4028,8 +4035,11 @@ export function placeGroup(
   turn: number,
 ): void {
   const place = (p: Vec2): Vec2 => base.centre.add(p.sub(base.centre).rotated(turn)).add(move);
-  for (const [bodyId, f] of base.frames) {
-    model.bodyFrames.set(bodyId, { pos: place(f.pos), rot: f.rot + turn });
+  for (const [id, f] of base.frames) {
+    const n = model.tree.nodes.get(id);
+    if (!n) continue;
+    n.pos = place(f.pos);
+    n.rot = f.rot + turn;
   }
   for (const i of items) {
     const was = base.items.get(i.id);
@@ -4054,7 +4064,7 @@ export function placeGroup(
 // `BuiltBody` records and the pose the body spawned at - the ghost cannot
 // disagree with where the level stands, because it IS where the level stands.
 export interface SettleGhost {
-  bodyId: number;
+  unit: string;
   // The point the displacement turns about (a pivot's bearing; unused while
   // `drot` is 0), the turn, and the translation, all in world metres. An item
   // at authored pose `(p, r)` rests at `about + (p - about).rotated(drot) +
@@ -4081,100 +4091,87 @@ export function settledGhosts(model: EdModel): SettleGhost[] {
     const itemId = first !== undefined ? itemOf.get(first) : undefined;
     const item = itemId !== undefined ? model.items.find((i) => i.id === itemId) : undefined;
     if (!item) continue;
-    out.push({ bodyId: item.bodyId, about: b.origin, drot, dpos });
+    out.push({ unit: item.unit, about: b.origin, drot, dpos });
   }
   return out;
 }
 
-// --- body frames ------------------------------------------------------------
+// --- frames -------------------------------------------------------------------
 
-// The frame `bodyId`'s objects are placed in. Absent from the model it is the
-// body's first object, which is exact for a body of one - see `EdModel.bodyFrames`.
-export function bodyFrameOf(model: EdModel, bodyId: number): EdBodyFrame {
-  const stored = model.bodyFrames.get(bodyId);
-  if (stored) return stored;
-  const first = model.items.find((i) => i.bodyId === bodyId);
-  return first ? { pos: first.pos, rot: first.rot } : { pos: Vec2.ZERO, rot: 0 };
+// THE FRAMES THAT MOVE WITH A SET OF ITEMS: every structural node - a body, a
+// group, a 3D frame - all of whose items are in the set. A node's frame moves
+// when the node moves, and an edit to some of what is in it is not that: a
+// piece of a body dragged on its own leaves the body's frame where it is.
+export function framesCarriedBy(model: EdModel, items: readonly EdItem[]): EdNode[] {
+  const moving = new Set(items.map((i) => i.id));
+  const out: EdNode[] = [];
+  const count = (id: string): { total: number; held: number } => {
+    const n = model.tree.nodes.get(id);
+    let total = 0;
+    let held = 0;
+    if (!n) return { total, held };
+    if (n.item !== null) {
+      total++;
+      if (moving.has(n.item)) held++;
+    }
+    for (const c of n.children) {
+      const k = count(c);
+      total += k.total;
+      held += k.held;
+    }
+    if (n.item === null && k0(n) && total > 0 && held === total) out.push(n);
+    return { total, held };
+  };
+  const k0 = (n: EdNode): boolean => n.type !== "Node" && n.type !== "Chain" && n.type !== "Vine";
+  for (const r of model.tree.roots) count(r);
+  return out;
 }
 
-// Write down where a body's frame currently is, so that it stops following the
-// object it was being read off. Called wherever a body gains a second member:
-// past that point the body can be edited a piece at a time, and a frame derived
-// from one of those pieces is a frame that piece silently moves.
-export function pinBodyFrame(model: EdModel, bodyId: number): void {
-  if (!model.bodyFrames.has(bodyId)) model.bodyFrames.set(bodyId, bodyFrameOf(model, bodyId));
+// The frame a unit's objects are placed in (`EdItem.unit`): its body node's
+// placement, or the item's own for an item no body carries.
+export function bodyFrameOf(model: EdModel, unit: string): EdBodyFrame {
+  const n = model.tree.nodes.get(unit);
+  if (n && n.item === null) return { pos: n.pos, rot: n.rot };
+  const item = model.items.find((i) => i.node === unit);
+  if (item) return { pos: item.pos, rot: item.rot };
+  return { pos: n?.pos ?? Vec2.ZERO, rot: n?.rot ?? 0 };
 }
 
 // Move a body's ORIGIN onto its centre of mass, without moving the body.
 //
 // Nothing in the world shifts: every object keeps the world placement it had, so
 // what changes is the frame those placements are RECORDED against - each one's
-// offset moves by exactly as much as the origin did, in the other direction, and
-// the file comes out with the body at its centre of mass and its objects hung
-// off that (see `toLevelData`'s `localOf`).
+// offset moves by exactly as much as the origin did, in the other direction.
 //
 // It is worth having because the centre of mass is the one point the body is
 // really about: `buildLevelBodies` puts the engine origin there whatever the
-// file says (`mountPieces`), the editor turns a body about it (`bodyCentroid`),
-// and a body's route is a run of offsets from its origin. With the origin left
-// on whichever object happened to be written first, the panel's x and y are a
-// corner of some piece, turning the body walks them, and the drawn route hangs
-// off that corner rather than off the point the platform travels by.
+// file says, the editor turns a body about it (`bodyCentroid`), and a body's
+// route is a run of offsets from its origin.
 //
-// Two things are recorded IN the frame and so are carried with it:
+// THE BEARING (`pivotAt`), a point in the body's frame, is re-measured, so the
+// body goes on turning about the same place in the level. THE ROUTE is not: its
+// nodes are offsets from node zero - the origin itself - so leaving them alone
+// is what keeps the travel identical.
 //
-// - THE BEARING (`pivotAt`), which is a world point written as an offset from
-//   the origin. It is re-measured, so the body goes on turning about the same
-//   place in the level.
-// - THE ROUTE, which is NOT: its nodes are offsets from node zero - the origin
-//   itself - and `moverScript` adds the body's pose back, so leaving them alone
-//   is what keeps the travel identical. The drawn route does move, by the same
-//   step the origin did, because it is the path the origin takes and the origin
-//   has moved; what the body does is unchanged, to the bit.
-//
-// Returns whether anything moved, so a caller can leave the undo stack alone for
-// a body already origined on its mass (every rect and circle of one object is).
-export function originToCentroid(model: EdModel, bodyId: number): boolean {
-  const members = bodyMembers(model.items, bodyId);
+// Returns whether anything moved.
+export function originToCentroid(model: EdModel, unit: string): boolean {
+  const n = model.tree.nodes.get(unit);
+  if (!n || !n.body) return false;
+  const members = bodyMembers(model.items, unit);
   if (!members.length) return false;
-  const frame = bodyFrameOf(model, bodyId);
   const centre = bodyCentroid(members);
-  const d = centre.sub(frame.pos);
+  const d = centre.sub(n.pos);
   if (d.x === 0 && d.y === 0) return false;
-  model.bodyFrames.set(bodyId, { pos: centre, rot: frame.rot });
-  // The bearing back onto the same world point, in the new frame. Written on
-  // every member rather than on the lead alone, because `pivotAt` is a body
-  // property held on each of them and `syncBodyProps` reads them as one.
-  const step = d.rotated(-frame.rot);
-  for (const m of members) if (m.pivotAt) m.pivotAt = m.pivotAt.sub(step);
+  const step = d.rotated(-n.rot);
+  n.pos = centre;
+  if (n.body.pivotAt) n.body.pivotAt = n.body.pivotAt.sub(step);
   return true;
 }
 
-// Carry the frames of the bodies `items` touches, but only where the WHOLE body
-// is in the set: a body's frame moves when the body moves, and an edit to some
-// of its objects is not that. Returns nothing - it is called for its effect on
-// the model, before the items themselves are moved (the derived frame of a body
-// with none stored has to be read while it still means what it meant).
-function carryBodyFrames(
-  model: EdModel,
-  items: readonly EdItem[],
-  move: (f: EdBodyFrame) => EdBodyFrame,
-): void {
-  const moving = new Map<number, number>();
-  for (const i of items) moving.set(i.bodyId, (moving.get(i.bodyId) ?? 0) + 1);
-  for (const [bodyId, count] of moving) {
-    if (count < bodyMembers(model.items, bodyId).length) continue; // part of a body: its frame stays
-    const stored = model.bodyFrames.get(bodyId);
-    // With none stored the frame is the first object's and moves with it, which
-    // is what moving the whole body does to it anyway.
-    if (stored) model.bodyFrames.set(bodyId, move(stored));
-  }
-}
-
-// Translate a set of items, carrying the frame of any body moving in full.
+// Translate a set of items, carrying the frame of any node moving in full.
 export function translateItems(model: EdModel, items: readonly EdItem[], d: Vec2): void {
   if (d.x === 0 && d.y === 0) return;
-  carryBodyFrames(model, items, (f) => ({ pos: f.pos.add(d), rot: f.rot }));
+  for (const n of framesCarriedBy(model, items)) n.pos = n.pos.add(d);
   for (const i of items) i.pos = i.pos.add(d);
 }
 
@@ -4189,10 +4186,10 @@ export function rotateItemsAbout(
   delta: number,
 ): void {
   if (delta === 0) return;
-  carryBodyFrames(model, items, (f) => ({
-    pos: centre.add(f.pos.sub(centre).rotated(delta)),
-    rot: f.rot + delta,
-  }));
+  for (const n of framesCarriedBy(model, items)) {
+    n.pos = centre.add(n.pos.sub(centre).rotated(delta));
+    n.rot += delta;
+  }
   for (const i of items) {
     i.pos = centre.add(i.pos.sub(centre).rotated(delta));
     i.rot += delta;
@@ -4237,7 +4234,7 @@ export type FlipAxis = "x" | "y";
 
 export function flipAxisOf(i: EdItem): FlipAxis {
   if (isArrowNote(i)) return "y";
-  if (i.layer === "scene" && i.object === "collision" && (i.kind === "force" || i.kind === "water")) return "y";
+  if (i.layer === "scene" && i.object === "collision" && (i.body?.kind === "force" || i.body?.kind === "water")) return "y";
   return "x";
 }
 
@@ -4274,23 +4271,12 @@ export function flipItemsH(model: EdModel, items: readonly EdItem[], cx = flipCe
   const mirror = (p: Vec2): Vec2 => new Vec2(2 * cx - p.x, p.y);
   const ids = new Set(items.map((i) => i.id));
 
-  // The bodies wholly in the set, and the axis each one's FRAME turns over -
-  // read before anything moves. A stored frame is turned over "x"; a frame
-  // still read off the body's first object (`bodyFrameOf`) is wherever that
-  // object goes, so it turns over that object's axis.
-  const held = new Map<number, number>();
-  for (const i of items) held.set(i.bodyId, (held.get(i.bodyId) ?? 0) + 1);
-  const whole: { bodyId: number; axis: FlipAxis }[] = [];
-  for (const [bodyId, count] of held) {
-    const members = bodyMembers(model.items, bodyId);
-    if (count < members.length) continue;
-    const stored = model.bodyFrames.get(bodyId);
-    if (stored) {
-      model.bodyFrames.set(bodyId, { pos: mirror(stored.pos), rot: flipAngle(stored.rot, "x") });
-      whole.push({ bodyId, axis: "x" });
-    } else {
-      whole.push({ bodyId, axis: flipAxisOf(members[0]!) });
-    }
+  // The frames wholly in the set turn over "x" (a node's frame is its own,
+  // stored, so it is mirrored as a frame), read before anything moves.
+  const whole = framesCarriedBy(model, items);
+  for (const n of whole) {
+    n.pos = mirror(n.pos);
+    n.rot = flipAngle(n.rot, "x");
   }
 
   for (const i of items) {
@@ -4327,28 +4313,18 @@ export function flipItemsH(model: EdModel, items: readonly EdItem[], cx = flipCe
     }
   }
 
-  for (const { bodyId, axis } of whole) {
-    const members = bodyMembers(model.items, bodyId);
-    const lead = bodyLead(members) ?? members[0]!;
-    const f = (v: Vec2) => flipLocal(v, axis);
-    // Computed once and handed to every member: these are body properties held
-    // on each of them, and `syncBodyProps` reads them as one.
-    const pivotAt = lead.pivotAt ? f(lead.pivotAt) : null;
-    const route = lead.route.map((n) => ({
-      ...n,
-      p: f(n.p),
-      in: f(n.in),
-      out: f(n.out),
-      rot: n.rot === null ? null : -n.rot || 0,
-    }));
-    for (const m of members) {
-      m.pivotAt = pivotAt;
-      m.route = route;
-      if (m.swingAmp !== 0) m.swingPhase = fracCycle(m.swingPhase + 0.5);
-      if (m.spinPeriod !== 0) {
-        m.spinPeriod = -m.spinPeriod;
-        m.spinPhase = fracCycle(-m.spinPhase);
-      }
+  // What a body holds in its own frame turns over with it: its bearing and
+  // its route, and its motions run the other way.
+  for (const n of whole) {
+    const b = n.body;
+    if (!b) continue;
+    const f = (v: Vec2) => flipLocal(v, "x");
+    if (b.pivotAt) b.pivotAt = f(b.pivotAt);
+    b.route = b.route.map((r) => ({ ...r, p: f(r.p), in: f(r.in), out: f(r.out), rot: r.rot === null ? null : -r.rot || 0 }));
+    if (b.swingAmp !== 0) b.swingPhase = fracCycle(b.swingPhase + 0.5);
+    if (b.spinPeriod !== 0) {
+      b.spinPeriod = -b.spinPeriod;
+      b.spinPhase = fracCycle(-b.spinPhase);
     }
   }
 
@@ -4380,98 +4356,13 @@ export function bodyLead(members: readonly EdItem[]): EdItem | null {
   return members.find((m) => m.object === "collision") ?? null;
 }
 
-// Body-level properties a compound body has exactly one of. When several items
-// build into one body only the first member's are used, so the editor copies
-// the lead's onto the rest rather than letting a file disagree with what it
-// draws.
-//
-// `material` and `thickness` are deliberately NOT among them: they are per
-// shape, and a body whose pieces are made of different things is the case that
-// motivates them (a stone head on a wooden shaft). The build reads every
-// piece's own (`makePiece`), so copying the lead's would be the editor
-// overwriting what was authored.
-//
-// Non-colliding members (lights, anchors) are left alone entirely: they are
-// carried by the body rather than pieces of it, and kind, friction and force
-// mean nothing on them.
-export function syncBodyProps(members: readonly EdItem[]): void {
-  const lead = bodyLead(members);
-  if (!lead) return;
-  for (const m of members) {
-    if (m === lead || m.object !== "collision") continue;
-    copyBodyProps(m, lead);
-  }
+
+// A formation item (`EdFormation`) placed at `pos`/`rot`, not in the tree
+// yet (`addItem` puts it there, its id becoming its node's).
+export function formationItem(pos: Vec2, rot: number, data: EdFormation): EdItem {
+  return { ...blankItem("scene", "formation", data.id), pos, rot, formation: data };
 }
 
-// Give `m` the properties its body has one of, as `lead` holds them: what
-// `syncBodyProps` does to each piece, and what a piece made for a body (a
-// formation's fit) is born with.
-// A formation item (`EdFormation`) for the body whose shared fields `body`
-// holds (any member, or the load's per-body base), placed at `pos`/`rot`. Its
-// per-object fields say nothing: it is not a piece of anything.
-type ObjectFields = "id" | "object" | "pos" | "rot" | "shape" | "formation" | "impermeable" | "mask" | "rail" | "viscosity" | "slipFloor" | "material" | "soundMaterial" | "density" | "thickness" | "debug" | "root";
-export function formationItem(body: Omit<EdItem, ObjectFields>, pos: Vec2, rot: number, data: EdFormation): EdItem {
-  const { soundMaterial: _sm, ...shared } = body as EdItem;
-  return {
-    ...shared,
-    id: newBodyId(),
-    object: "formation",
-    pos,
-    rot,
-    shape: { kind: "rect", w: MODEL_MARK, h: MODEL_MARK },
-    impermeable: false,
-    mask: MASK_ALL,
-    rail: false,
-    viscosity: 0,
-    slipFloor: 0,
-    material: DEFAULT_MATERIAL,
-    density: DEFAULT_DENSITY,
-    thickness: DEFAULT_THICKNESS,
-    debug: NO_DEBUG(),
-    root: null,
-    formation: data,
-    decoration: null,
-  };
-}
-
-export function copyBodyProps(m: EdItem, lead: EdItem): void {
-  {
-    m.kind = lead.kind;
-    m.color = lead.color;
-    m.opacity = lead.opacity;
-    m.friction = lead.friction;
-    m.bounce = lead.bounce;
-    m.launch = lead.launch;
-    m.breakForce = lead.breakForce;
-    m.durability = lead.durability;
-    m.name = lead.name;
-    m.force = lead.force;
-    m.flow = lead.flow;
-    m.drag = lead.drag;
-    m.spill = lead.spill;
-    m.waterZ = lead.waterZ;
-    m.waterDepth = lead.waterDepth;
-    m.passable = lead.passable;
-    m.pivot = lead.pivot;
-    m.pivotAt = lead.pivotAt;
-    m.pivotFreq = lead.pivotFreq;
-    m.pivotDamping = lead.pivotDamping;
-    m.springFreqX = lead.springFreqX;
-    m.springFreqY = lead.springFreqY;
-    m.springDamping = lead.springDamping;
-    m.swingAmp = lead.swingAmp;
-    m.swingPeriod = lead.swingPeriod;
-    m.swingPhase = lead.swingPhase;
-    m.spinPeriod = lead.spinPeriod;
-    m.spinPhase = lead.spinPhase;
-    m.route = lead.route;
-    m.moveMode = lead.moveMode;
-    m.moveSpeed = lead.moveSpeed;
-    m.movePhase = lead.movePhase;
-    m.moveEase = lead.moveEase;
-    m.moveAlign = lead.moveAlign;
-  }
-}
 
 // --- scripted motion --------------------------------------------------------
 
@@ -4479,15 +4370,22 @@ export function copyBodyProps(m: EdItem, lead: EdItem): void {
 // the body's frame, built exactly the way `buildBodies.authoredRoute` builds
 // them at load - so the canvas, the panel's trip readout and the sim cannot each
 // measure a route their own way.
+// A body's properties as read through any item of it: a default static's for
+// an item no body carries, so every question about motion has an answer.
+const NO_BODY: EdBody = Object.freeze(edBodyOf({ kind: "static", x: 0, y: 0, rot: 0, objects: [] }, 0)) as EdBody;
+export function propsOf(item: EdItem): EdBody {
+  return item.body ?? NO_BODY;
+}
+
 export function routeOf(model: EdModel, item: EdItem): MoveRoute {
-  const frame = bodyFrameOf(model, item.bodyId);
+  const frame = bodyFrameOf(model, item.unit);
   return buildMoveRoute(
-    item.route,
-    item.moveMode,
+    propsOf(item).route,
+    propsOf(item).moveMode,
     frame.rot,
-    item.moveSpeed,
-    item.route.map((n) => n.rot ?? undefined),
-    item.route.map((n) => n.speed ?? undefined),
+    propsOf(item).moveSpeed,
+    propsOf(item).route.map((n) => n.rot ?? undefined),
+    propsOf(item).route.map((n) => n.speed ?? undefined),
   );
 }
 
@@ -4495,8 +4393,8 @@ export function routeOf(model: EdModel, item: EdItem): MoveRoute {
 // placed at and what a tangent grip is measured from. Node zero is the body's
 // frame origin, which is why moving the body moves the whole route with it.
 export function routeWorldPoints(model: EdModel, item: EdItem): Vec2[] {
-  const frame = bodyFrameOf(model, item.bodyId);
-  return item.route.map((n) => frame.pos.add(n.p.rotated(frame.rot)));
+  const frame = bodyFrameOf(model, item.unit);
+  return propsOf(item).route.map((n) => frame.pos.add(n.p.rotated(frame.rot)));
 }
 
 // ...and the CURVE it draws as: the flattened polyline in world points, closing
@@ -4504,10 +4402,10 @@ export function routeWorldPoints(model: EdModel, item: EdItem): Vec2[] {
 // against, and the same flattening the sim rides - so what an author drags and
 // what the platform travels cannot disagree about where the route is.
 export function routePolyline(model: EdModel, item: EdItem): Vec2[] {
-  const frame = bodyFrameOf(model, item.bodyId);
-  const nodes = item.route.map((n) => ({ p: n.p, in: n.in, out: n.out }));
+  const frame = bodyFrameOf(model, item.unit);
+  const nodes = propsOf(item).route.map((n) => ({ p: n.p, in: n.in, out: n.out }));
   const seq =
-    moveModeCloses(item.moveMode) && nodes.length > 1 ? [...nodes, nodes[0]!] : nodes;
+    moveModeCloses(propsOf(item).moveMode) && nodes.length > 1 ? [...nodes, nodes[0]!] : nodes;
   return flattenPath(seq).map((v) => frame.pos.add(v.rotated(frame.rot)));
 }
 
@@ -4532,25 +4430,25 @@ export function routeNodeArcLengths(model: EdModel, item: EdItem): number[] {
 // not fall on the same frame - and a bound is the right side to be wrong on here.
 export function peakSurfaceSpeed(model: EdModel, item: EdItem): number {
   let peak = 0;
-  if ((item.swingAmp !== 0 && item.swingPeriod > 0) || item.spinPeriod !== 0) {
+  if ((propsOf(item).swingAmp !== 0 && propsOf(item).swingPeriod > 0) || propsOf(item).spinPeriod !== 0) {
     // The bearing and the reach are the two motions' shared geometry - they turn
     // the same body about the same point - so they are measured once.
     const reach = sweptReach(model, item, bearingOf(model, item));
-    if (item.swingAmp !== 0 && item.swingPeriod > 0) {
-      peak += Math.abs(item.swingAmp) * ((2 * Math.PI) / item.swingPeriod) * reach;
+    if (propsOf(item).swingAmp !== 0 && propsOf(item).swingPeriod > 0) {
+      peak += Math.abs(propsOf(item).swingAmp) * ((2 * Math.PI) / propsOf(item).swingPeriod) * reach;
     }
-    if (item.spinPeriod !== 0) {
-      peak += ((2 * Math.PI) / Math.abs(item.spinPeriod)) * reach;
+    if (propsOf(item).spinPeriod !== 0) {
+      peak += ((2 * Math.PI) / Math.abs(propsOf(item).spinPeriod)) * reach;
     }
   }
-  if (item.route.length > 1 && item.moveSpeed > 0) {
+  if (propsOf(item).route.length > 1 && propsOf(item).moveSpeed > 0) {
     // The route's peak is its FASTEST stretch times what the ease peaks at,
     // rather than its authored speed: a node may key a speed of its own, and a
     // cart that runs away downhill crosses a frame at the speed it gets to
     // there. The unkeyed route answers `moveSpeed`, which is what it always did.
-    let fastest = item.moveSpeed;
-    for (const n of item.route) if (n.speed !== null) fastest = Math.max(fastest, n.speed);
-    peak += fastest * movePeakFactor(item.moveEase, item.moveMode);
+    let fastest = propsOf(item).moveSpeed;
+    for (const n of propsOf(item).route) if (n.speed !== null) fastest = Math.max(fastest, n.speed);
+    peak += fastest * movePeakFactor(propsOf(item).moveEase, propsOf(item).moveMode);
     // ...plus what TURNING the body drags its far corners round at. A route that
     // aligns the body to its own tangent, or keys a rotation along it, sweeps
     // the surface as well as carrying it - and on a tight bend that is the
@@ -4572,14 +4470,14 @@ export function peakSurfaceSpeed(model: EdModel, item: EdItem): number {
 // tangent, so a bend that only exists between two flattening samples is a bend
 // the mover does not take either.
 function peakRouteTurnRate(model: EdModel, item: EdItem): number {
-  if (!item.moveAlign && item.route.every((n) => n.rot === null)) return 0;
+  if (!propsOf(item).moveAlign && propsOf(item).route.every((n) => n.rot === null)) return 0;
   const route = routeOf(model, item);
   let worst = 0;
   const step = PATH_FLATTEN_STEP;
   for (let s = 0; s < route.total; s += step) {
     const b = Math.min(s + step, route.total);
     if (b <= s) break;
-    const d = moveAngleAt(route, item.moveAlign, b) - moveAngleAt(route, item.moveAlign, s);
+    const d = moveAngleAt(route, propsOf(item).moveAlign, b) - moveAngleAt(route, propsOf(item).moveAlign, s);
     worst = Math.max(worst, Math.abs(wrapAngle(d)) / (b - s));
   }
   return worst;
@@ -4588,7 +4486,7 @@ function peakRouteTurnRate(model: EdModel, item: EdItem): number {
 // How far the body's farthest corner sits from the point it turns about, which
 // for a travelling body is its own frame origin.
 function bodyReach(model: EdModel, item: EdItem): number {
-  return sweptReach(model, item, bodyFrameOf(model, item.bodyId).pos);
+  return sweptReach(model, item, bodyFrameOf(model, item.unit).pos);
 }
 
 // ...and the general form: the radius a body's surface sweeps about `about`, in
@@ -4604,7 +4502,7 @@ function bodyReach(model: EdModel, item: EdItem): number {
 // is zero and the mark is a circle of no radius at all.
 export function sweptReach(model: EdModel, item: EdItem, about: Vec2): number {
   let reach = 0;
-  for (const m of bodyMembers(model.items, item.bodyId)) {
+  for (const m of bodyMembers(model.items, item.unit)) {
     if (m.object !== "collision") continue;
     for (const c of shapeCorners(m)) reach = Math.max(reach, c.sub(about).length());
   }
@@ -4615,9 +4513,9 @@ export function sweptReach(model: EdModel, item: EdItem, about: Vec2): number {
 // centre of mass an absent one means (see `LevelBodyData.pivotX`). Asked in one
 // place so the panel, the canvas mark and the build cannot each decide.
 export function bearingOf(model: EdModel, item: EdItem): Vec2 {
-  if (!item.pivotAt) return bodyCentroid(bodyMembers(model.items, item.bodyId));
-  const frame = bodyFrameOf(model, item.bodyId);
-  return frame.pos.add(item.pivotAt.rotated(frame.rot));
+  if (!propsOf(item).pivotAt) return bodyCentroid(bodyMembers(model.items, item.unit));
+  const frame = bodyFrameOf(model, item.unit);
+  return frame.pos.add(propsOf(item).pivotAt!.rotated(frame.rot));
 }
 
 // Every point of a shape a rider can meet, in world metres: the corners of a
@@ -4766,7 +4664,7 @@ export function chainSegments(
   for (let i = 0; i + 1 < knots.length; i++) {
     const from = knots[i]!;
     const to = knots[i + 1]!;
-    if (from.bodyId === to.bodyId) continue;
+    if (from.unit === to.unit) continue;
     out.push({ from, to, gap: from.pos.distanceTo(to.pos) });
   }
   return out;
@@ -4887,89 +4785,24 @@ export function distanceToVine(model: EdModel, v: EdVine, world: Vec2): number {
 // A blank level: a single wide floor under a spawn point so it is immediately
 // testable.
 export function emptyModel(): EdModel {
-  return {
-    player: { pos: new Vec2(0, -1), radius: 0.08, hang: false, roll: 0, arrival: "" },
-    chains: [],
-    vines: [],
-    // Nothing stored: a fresh level's one body holds one object, whose placement
-    // IS the frame (see `EdModel.bodyFrames`).
-    bodyFrames: new Map(),
-    bodies3d: new Map(),
-    // A fresh level authors none, which is every level authored before the
-    // block and is what the renderer's own defaults are for.
-    environment: undefined,
-    camera: undefined,
-    // Unnamed and listed: a new level belongs on the menu, and the Level panel
-    // is where it is given a title.
-    meta: {},
-    // No look yet: seen by its pieces' debug geometry until a scene is named.
-    scene: "",
-    items: [
+  // A spawn over a wide floor, a body of one piece, through the loader a level
+  // comes in by. The floor's debug geometry is on, as every piece a new level
+  // is blocked out in is. Unnamed and listed: a new level belongs on the menu,
+  // and the Level panel is where it is given a title.
+  return modelFromTree({
+    format: TREE_FORMAT,
+    nodes: [
+      { type: "Spawn2D", id: newNodeId(), name: "Spawn", x: 0, y: -1, radius: 0.08 },
       {
-        id: newBodyId(),
-        layer: "scene",
-        object: "collision",
-        bodyId: newBodyId(),
-        kind: "static",
-        name: "",
-        pos: new Vec2(0, 0),
-        rot: 0,
-        shape: { kind: "rect", w: 8, h: 0.6 },
-        color: DEFAULT_BODY_COLOR,
-        opacity: DEFAULT_BODY_OPACITY,
-        friction: DEFAULT_SURFACE_FRICTION,
-        bounce: DEFAULT_BOUNCE,
-        launch: DEFAULT_LAUNCH,
-        breakForce: 0,
-        durability: 1,
-        impermeable: false,
-        mask: MASK_ALL,
-        rail: false,
-        viscosity: 0,
-        slipFloor: 0,
-        material: DEFAULT_MATERIAL,
-    density: DEFAULT_DENSITY,
-        thickness: DEFAULT_THICKNESS,
-        // A fresh level names no scene, so its ground is seen by its debug
-        // geometry, as every piece a new level is blocked out in is.
-        debug: { ...NO_DEBUG(), on: true },
-        root: null,
-        force: 0,
-        flow: 0,
-        drag: 0,
-        spill: 0,
-        waterZ: 0,
-        waterDepth: null,
-        passable: false,
-            pivot: false,
-        pivotAt: null,
-        pivotFreq: 0,
-        pivotDamping: DEFAULT_SPRING_DAMPING,
-            springFreqX: 0,
-        springFreqY: 0,
-        springDamping: DEFAULT_SPRING_DAMPING,
-        swingAmp: 0,
-        swingPeriod: 0,
-        swingPhase: 0,
-        spinPeriod: 0,
-        spinPhase: 0,
-        route: [],
-        moveMode: "backAndForth",
-        moveAlign: false,
-        moveSpeed: 0,
-        movePhase: 0,
-        moveEase: "linear",
-        cam: defaultCamera(),
-        light: defaultLight(),
-        note: defaultNote(),
-        modelRef: defaultModelRef(),
-        formation: null, decoration: null,
-        shelter: defaultShelter(),
-        anchorId: 0,
-        pathId: 0,
+        type: "StaticBody2D",
+        id: newNodeId(),
+        name: "Floor",
+        order: 0,
+        grouped: true,
+        children: [{ type: "CollisionShape2D", id: newNodeId(), name: "Rect", shape: { kind: "rect", w: 8, h: 0.6 }, debug: { on: true } }],
       },
     ],
-  };
+  });
 }
 
 /** A complete reusable bounce mushroom. Randomness is editor-only; the saved
@@ -4992,14 +4825,14 @@ export function mushroomBody(pos: Vec2, variant = 0, scale = 1): LevelBodyData {
 export function mushroomModel(pos: Vec2): EdModel {
   const variant = Math.floor(Math.random() * mushroomVariants.length);
   const scale = .75 + Math.random() * .6;
-  return fromLevelData({ player: { x: pos.x, y: pos.y, radius: .08 }, bodies: [mushroomBody(pos, variant, scale)] });
+  return modelFromTree(loadLevelTree({ player: { x: pos.x, y: pos.y, radius: .08 }, bodies: [mushroomBody(pos, variant, scale)] }));
 }
 
 export function resizeMushroom(model: EdModel, item: EdItem, key: keyof MushroomParameters, value: number): void {
   const params = mushroomParameters(item.modelRef.name, { ...mushroomParameters(item.modelRef.name, item.modelRef.mushroom)!, [key]: value });
   if (!params) return;
   item.modelRef.mushroom = params;
-  const caps = model.items.filter(b => b.bodyId === item.bodyId && b.object === "collision");
+  const caps = model.items.filter(b => b.unit === item.unit && b.object === "collision");
   if (caps.length !== 1) return;
   const cap = caps[0]!;
   const c = Math.cos(item.rot - cap.rot), s = Math.sin(item.rot - cap.rot);

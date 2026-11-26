@@ -45,7 +45,7 @@
 //     out rather than leasing chain without bound (`ride-tear`).
 //
 // `authored` holds the format's side of the round trip (px -> m -> px, the
-// build, the refusals). The EDITOR's side - `modelFromDisk` then `modelToDisk`
+// build, the refusals). The EDITOR's side - `modelFromDisk` then `modelToFlatDisk`
 // keeping every field of a belt and its matched twin - lives with the rest of
 // the belt's rendering cases in `sim/render3dCases.ts` (`belt:`, `cli
 // render3d`), because it goes through the same collided-and-drawn body those

@@ -1,9 +1,9 @@
 """Looking through the game camera.
 
-THE GAME CAMERA is `guide.camera`, which `just scene-guide <level>` bakes into
-the level's guide (linked into the scene): the level's lens, animated through
-the real camera controller along the level's camera paths or along a recorded
-run (src/sim/cameraTrack.ts). `look_through` makes it the scene camera and
+THE GAME CAMERA is `guide.camera`, which the retired `just scene-guide <level>`
+baked into a level's guide (linked into the scene; docs/blender-scenes.md):
+the level's lens, animated through the real camera controller along the
+level's camera paths or along a recorded run. `look_through` makes it the scene camera and
 gives the scene its frame rate, range and 16:9 frame, so the viewport's camera
 view and a render are the game's view at that frame of the route.
 """

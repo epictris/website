@@ -21,16 +21,15 @@
 //   gives back the same vertices and faces;
 // - the hand-over to the generator opens a pinch (two sheets touching at a
 //   point) so Blender's weld cannot close it;
-// - the migration meshes every retired leaf to the same volume, and a level
-//   holding one is refused on load with the command that fixes it.
+// - a level holding a retired orthographic leaf (`RETIRED_SOLID_PRIMS`) is
+//   refused on load, naming the leaf. (The one-off migration that meshed
+//   them, and its cases, went once no level held one: plans/node-tree.md,
+//   "Tools that read levels".)
 //
 // How a brush FEELS (its rates, falloff and spacing) has no cases until it
 // has been played (rope/CLAUDE.md, "Validate the behaviour before writing
 // the cases").
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { manifold } from "../src/formation/manifold";
 import { decodeMeshBin, encodeMeshBin, type SolidMesh } from "../src/formation/meshBin";
 import { manifoldOfMesh, meshOfManifold, solidMesh, solidWorkerRecipe, storedGuideMesh } from "../src/formation/solid";
@@ -39,8 +38,7 @@ import { cutRegion, polygonIsSimple, type CutView } from "../src/formation/sculp
 import { SculptMesh } from "../src/formation/sculptMesh";
 import { COLLAPSE_BELOW, dyntopo, SPLIT_ABOVE } from "../src/formation/dyntopo";
 import { drawDab, smoothDab } from "../src/formation/sculptBrush";
-import { scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
-import { migrateDoc, type RawDoc } from "./solidGuideMigration";
+import { RETIRED_SOLID_PRIMS, scaleLevelData, type RawLevelData } from "../src/level/levelFormat";
 
 let failed = 0;
 function check(name: string, pass: boolean, detail = ""): void {
@@ -276,43 +274,33 @@ const sphere = (r: number, segments = 48): SolidMesh => {
   check(`a pinch (${coincide} coincident vertex pair${coincide === 1 ? "" : "s"} from manifold-3d) reaches the generator opened past its 10 um weld`, coincide > 0 && pairs === 0, `${pairs} pairs still within 10 um`);
 }
 
-// 7. The migration, and the refusal of a retired leaf.
+// 7. The refusal of a retired leaf, in either form of level.
 {
-  const store = mkdtempSync(join(tmpdir(), "sculpt-migrate-"));
-  try {
-    const doc: RawDoc = {
-      bodies: [
-        { formation: { id: "e", guide: { kind: "solid", tree: { prim: "ellipsoid", size: [200, 160, 120], pos: [10, 20, -30], rot: [0.3, 0.2, 0.1] } } } },
-        { formation: { id: "h", guide: { kind: "solid", tree: { op: "difference", of: [{ prim: "hull", points: [[0, 0, 0], [100, 0, 0], [0, 100, 0], [0, 0, 100], [60, 60, 60]] }, { prim: "box", size: [50, 50, 50] }] } } } },
-        { formation: { id: "x", guide: { kind: "solid", tree: { prim: "extrude", outline: [{ x: 0, y: 0 }, { x: 120, y: 0 }, { x: 60, y: 90 }], length: 80, taper: 0.4, scale: [1, 2, 1] } } } },
-        { formation: { id: "k", guide: { kind: "solid", tree: { prim: "box", size: [100, 100, 100] } } } },
-      ],
-    };
-    const level = { player: { x: 0, y: 0, radius: 8 }, bodies: doc.bodies!.map((b) => ({ kind: "static", x: 0, y: 0, rot: 0, objects: [], formation: { generator: "solid", variant: "cliff", params: {}, ...b.formation } })) };
-    let refused = "";
+  const leaves: Record<string, unknown> = {
+    ellipsoid: { prim: "ellipsoid", size: [200, 160, 120], pos: [10, 20, -30], rot: [0.3, 0.2, 0.1] },
+    hull: { op: "difference", of: [{ prim: "hull", points: [[0, 0, 0], [100, 0, 0], [0, 100, 0], [0, 0, 100], [60, 60, 60]] }, { prim: "box", size: [50, 50, 50] }] },
+    extrude: { prim: "extrude", outline: [{ x: 0, y: 0 }, { x: 120, y: 0 }, { x: 60, y: 90 }], length: 80, taper: 0.4, scale: [1, 2, 1] },
+  };
+  const recipe = (tree: unknown) => ({ generator: "solid", variant: "cliff", params: {}, guide: { kind: "solid", tree } });
+  const flat = (tree: unknown) => ({ player: { x: 0, y: 0, radius: 8 }, bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects: [], formation: { id: "r", ...recipe(tree) } }] });
+  const nodeTree = (tree: unknown) => ({ format: 3, nodes: [{ type: "Spawn2D", id: "s", name: "Spawn", x: 0, y: 0, radius: 8 }, { type: "Formation3D", id: "r", name: "Rock", ...recipe(tree) }] });
+  const refusal = (level: unknown): string => {
     try {
-      scaleLevelData(level as unknown as RawLevelData, 0.01);
+      scaleLevelData(level as RawLevelData, 0.01);
+      return "";
     } catch (e) {
-      refused = (e as Error).message;
+      return (e as Error).message;
     }
-    check("a level holding a retired leaf is refused on load, naming the migration", refused.includes("guides:migrate"), refused || "it loaded");
-    const done = migrateDoc(doc, store);
-    check(
-      `every migrated guide encloses the volume it did (${done.map((g) => g.off.toExponential(1)).join(", ")} relative)`,
-      done.length === 3 && done.every((g) => g.ok && g.off <= 1e-6),
-    );
-    check("a guide with no retired leaf is left as it was", JSON.stringify(doc.bodies![3]!.formation!.guide.tree) === JSON.stringify({ prim: "box", size: [100, 100, 100] }));
-    const migrated = { ...level, bodies: level.bodies.map((b, i) => ({ ...b, formation: { ...b.formation, guide: doc.bodies![i]!.formation!.guide } })) };
-    let loads = true;
-    try {
-      scaleLevelData(migrated as unknown as RawLevelData, 0.01);
-    } catch {
-      loads = false;
-    }
-    check("the migrated level loads", loads);
-  } finally {
-    rmSync(store, { recursive: true, force: true });
-  }
+  };
+  const refusals = RETIRED_SOLID_PRIMS.flatMap((prim) => [refusal(flat(leaves[prim])), refusal(nodeTree(leaves[prim]))].map((m) => ({ prim, m })));
+  const missed = refusals.filter(({ prim, m }) => !m.includes(`retired "${prim}"`));
+  check(
+    `a level holding a retired leaf (${RETIRED_SOLID_PRIMS.join(", ")}) is refused on load, flat or a tree, naming the leaf`,
+    missed.length === 0,
+    missed.map(({ prim, m }) => `${prim}: ${m || "it loaded"}`).join("; "),
+  );
+  const kept = { op: "union", of: [{ prim: "box", size: [100, 100, 100] }, { prim: "cylinder", size: [50, 80, 50] }] };
+  check("a guide of the shapes that stay loads, flat or a tree", !refusal(flat(kept)) && !refusal(nodeTree(kept)), refusal(flat(kept)) || refusal(nodeTree(kept)));
 }
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");

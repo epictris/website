@@ -35,6 +35,7 @@ const steps: Step[] = [
   { name: "typecheck", cmd: ["bunx", "tsc", "--noEmit"] },
   { name: "dmath", cmd: ["bun", "run", CLI, "dmath"] },
   { name: "selftest", cmd: ["bun", "run", CLI, "selftest"] },
+  { name: "nodes", cmd: ["bun", "run", CLI, "nodes"] },
   { name: "contacts", cmd: ["bun", "run", CLI, "contacts"] },
   { name: "spring", cmd: ["bun", "run", CLI, "spring"] },
   { name: "movers", cmd: ["bun", "run", CLI, "movers"] },

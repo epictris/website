@@ -41,6 +41,7 @@ import {
   type LevelBodyData,
   type MoveMode,
   type RawLevelData,
+  type LevelSource,
 } from "../level/levelFormat";
 import { TANGENT_WINDOW } from "../lib/path";
 import { keyValueAt } from "../lib/keyframes";
@@ -52,7 +53,7 @@ import {
   pointAlong,
   type MoveRoute,
 } from "../level/movers";
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk } from "../editor/model";
 import { LEVELS } from "../level/registry";
 
 const DT = 1 / 60;
@@ -98,7 +99,7 @@ class Scene {
   readonly bodies: ReturnType<typeof buildLevelBodies>["bodies"];
   frame = 0;
 
-  constructor(raw: RawLevelData) {
+  constructor(raw: LevelSource) {
     const built = buildLevelBodies(this.world, scaleLevelData(raw, PX_FACTOR), () => {});
     this.movers = built.movers;
     this.bodies = built.bodies;
@@ -1081,7 +1082,7 @@ function caseAuthored(): MoverResult {
   // ...and the editor's own round trip, which goes through a different shape
   // entirely and is the one a save actually takes.
   const model = modelFromDisk(raw);
-  const saved = modelToDisk(model);
+  const saved = modelToFlatDisk(model);
   const savedSwing = saved.bodies.find((b) => b.swingAmp !== undefined);
   const savedMove = saved.bodies.find((b) => b.moveNodes !== undefined);
   const savedSpin = saved.bodies.find((b) => b.spinPeriod !== undefined);
@@ -1768,7 +1769,7 @@ function caseKeys(): MoverResult {
   check(`...so past the last keyed node it eases back to it (${atLast.toFixed(3)}, not 5)`,
     atLast > 2 && atLast < 5);
 
-  const saved = modelToDisk(modelFromDisk(raw)).bodies.find((b) => b.moveNodes !== undefined);
+  const saved = modelToFlatDisk(modelFromDisk(raw)).bodies.find((b) => b.moveNodes !== undefined);
   const sn = saved?.moveNodes ?? [];
   check(
     `the editor keeps the handles and the keys (${sn.length} nodes, rot ${sn[1]?.rot}, speed ${sn[1]?.speed})`,

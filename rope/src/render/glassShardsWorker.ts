@@ -30,9 +30,6 @@ scope.onmessage = (ev) => {
       case "level":
         sim.bind(m.level);
         break;
-      case "scenery":
-        sim.setScenery(m.scenery);
-        break;
       case "frame": {
         const output = sim.frame(m.input);
         scope.postMessage({ type: "frame", seq: m.seq, output }, [output.poses.buffer]);

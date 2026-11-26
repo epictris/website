@@ -1,9 +1,376 @@
 {
+  "format": 3,
   "meta": {
     "title": "sawmill"
   },
-  "cameraPaths": [
+  "environment": {
+    "hdri": "golden-gate-hills"
+  },
+  "camera": {
+    "focalLength": 70
+  },
+  "nodes": [
     {
+      "type": "Spawn2D",
+      "id": "g8cm3mew",
+      "name": "Spawn",
+      "x": -470,
+      "y": -395,
+      "radius": 8
+    },
+    {
+      "type": "AnimatableBody2D",
+      "id": "1pyv66u3",
+      "name": "AnimatableBody2D",
+      "x": 229.99999999999994,
+      "y": -249.99999999999991,
+      "order": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "spinPeriod": 8,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "x3yt70jx",
+          "name": "Circle",
+          "shape": {
+            "kind": "circle",
+            "r": 170.00000000000003
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "Area2D",
+      "id": "fhxatft4",
+      "name": "Area2D",
+      "x": -309.99999999999994,
+      "y": 260,
+      "order": 1,
+      "area": "water",
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "flow": -120,
+      "drag": 5,
+      "spill": 400,
+      "waterDepth": 50,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "oolbay1w",
+          "name": "Rect",
+          "x": 327.4999999999999,
+          "y": -340.00000000000006,
+          "shape": {
+            "kind": "rect",
+            "w": 1355,
+            "h": 90
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "o3ktnqr7",
+      "name": "StaticBody2D",
+      "x": -346.00529100529076,
+      "y": -403.9550264550275,
+      "order": 2,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "pl35exum",
+          "name": "Poly",
+          "shape": {
+            "kind": "poly",
+            "verts": [
+              {
+                "x": 216.00529100529099,
+                "y": 103.95502645502752
+              },
+              {
+                "x": -8.994708994709022,
+                "y": -86.04497354497252
+              },
+              {
+                "x": -213.99470899470904,
+                "y": 93.95502645502751
+              },
+              {
+                "x": -223.99470899470901,
+                "y": 88.95502645502748
+              },
+              {
+                "x": -8.994708994709022,
+                "y": -101.04497354497255
+              },
+              {
+                "x": 226.00529100529099,
+                "y": 98.9550264550275
+              }
+            ]
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "6n98peua",
+      "name": "StaticBody2D2",
+      "x": -1889.9999999999998,
+      "y": -75,
+      "order": 3,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "0sfjb5su",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 270.0000000000001,
+            "h": 690
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "xsz4v18n",
+      "name": "StaticBody2D3",
+      "x": -1902.5000000000002,
+      "y": -700.0000000000001,
+      "order": 4,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "t3wyfs7k",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 25,
+            "h": 560
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "ju3t1v57",
+      "name": "StaticBody2D4",
+      "x": -1900.0000000000005,
+      "y": -950,
+      "order": 5,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "lruzuqlo",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "debug": {
+            "on": true
+          }
+        },
+        {
+          "type": "CollisionShape2D",
+          "id": "27qd9e7p",
+          "name": "Rect2",
+          "x": -4.999999999999716,
+          "y": 44.99999999999993,
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "hgceq1d5",
+      "name": "StaticBody2D5",
+      "x": -662.5,
+      "y": -395,
+      "order": 6,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "uzd0twi2",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 25,
+            "h": 560
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "bcg9mjz3",
+      "name": "StaticBody2D6",
+      "x": -660.0000000000001,
+      "y": -645,
+      "order": 7,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "ubdbdhk0",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "debug": {
+            "on": true
+          }
+        },
+        {
+          "type": "CollisionShape2D",
+          "id": "rx7dd4bn",
+          "name": "Rect2",
+          "x": -4.999999999999716,
+          "y": 44.99999999999993,
+          "shape": {
+            "kind": "rect",
+            "w": 160.00000000000014,
+            "h": 19.99999999999993
+          },
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "7mj7385c",
+      "name": "StaticBody2D7",
+      "x": -1285.0000000000002,
+      "y": -797.5,
+      "order": 8,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 0.1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "x7soqsyj",
+          "name": "Curve",
+          "shape": {
+            "kind": "curve",
+            "width": 7.3,
+            "verts": [
+              {
+                "x": -544.9999999999999,
+                "y": -152.50000000000003
+              },
+              {
+                "x": 545.0000000000001,
+                "y": 152.49999999999994
+              }
+            ]
+          },
+          "rail": true,
+          "debug": {
+            "on": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "3vtqvgc9",
+      "name": "StaticBody2D8",
+      "x": 380,
+      "y": -500,
+      "order": 9,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "grouped": true,
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "727xfle7",
+          "name": "Belt",
+          "shape": {
+            "kind": "belt",
+            "wheels": [
+              {
+                "x": 0,
+                "y": 0,
+                "r": 10
+              },
+              {
+                "x": 385,
+                "y": -20.000000000000018,
+                "r": 20
+              }
+            ],
+            "thickness": 5,
+            "speed": -200,
+            "width": 40,
+            "texture": "rubber"
+          }
+        }
+      ]
+    },
+    {
+      "type": "CameraPath2D",
+      "id": "cmkfv6d8",
+      "name": "CameraPath",
       "x": -78.84830129633772,
       "y": -232.11286555804,
       "rot": 0,
@@ -69,284 +436,6 @@
       "viewportScale": 0.8,
       "softness": 30,
       "priority": 1
-    }
-  ],
-  "environment": {
-    "hdri": "golden-gate-hills"
-  },
-  "camera": {
-    "focalLength": 70
-  },
-  "player": {
-    "x": -470,
-    "y": -395,
-    "radius": 8
-  },
-  "bodies": [
-    {
-      "kind": "static",
-      "x": 229.99999999999994,
-      "y": -249.99999999999991,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "spinPeriod": 8,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "circle",
-            "r": 170.00000000000003
-          }
-        }
-      ]
-    },
-    {
-      "kind": "water",
-      "x": -309.99999999999994,
-      "y": 260,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "flow": -120,
-      "drag": 5,
-      "spill": 400,
-      "spillSpeed": 100,
-      "waterDepth": 50,
-      "objects": [
-        {
-          "type": "collision",
-          "x": 327.4999999999999,
-          "y": -340.00000000000006,
-          "shape": {
-            "kind": "rect",
-            "w": 1355,
-            "h": 90
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -346.00529100529076,
-      "y": -403.9550264550275,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "poly",
-            "verts": [
-              {
-                "x": 216.00529100529099,
-                "y": 103.95502645502752
-              },
-              {
-                "x": -8.994708994709022,
-                "y": -86.04497354497252
-              },
-              {
-                "x": -213.99470899470904,
-                "y": 93.95502645502751
-              },
-              {
-                "x": -223.99470899470901,
-                "y": 88.95502645502748
-              },
-              {
-                "x": -8.994708994709022,
-                "y": -101.04497354497255
-              },
-              {
-                "x": 226.00529100529099,
-                "y": 98.9550264550275
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -1889.9999999999998,
-      "y": -75,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 270.0000000000001,
-            "h": 690
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -1902.5000000000002,
-      "y": -700.0000000000001,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 25,
-            "h": 560
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -1900.0000000000005,
-      "y": -950,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          }
-        },
-        {
-          "type": "collision",
-          "x": -4.999999999999716,
-          "y": 44.99999999999993,
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -662.5,
-      "y": -395,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 25,
-            "h": 560
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -660.0000000000001,
-      "y": -645,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          }
-        },
-        {
-          "type": "collision",
-          "x": -4.999999999999716,
-          "y": 44.99999999999993,
-          "shape": {
-            "kind": "rect",
-            "w": 160.00000000000014,
-            "h": 19.99999999999993
-          }
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": -1285.0000000000002,
-      "y": -797.5,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 0.1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "curve",
-            "width": 7.3,
-            "verts": [
-              {
-                "x": -544.9999999999999,
-                "y": -152.50000000000003
-              },
-              {
-                "x": 545.0000000000001,
-                "y": 152.49999999999994
-              }
-            ]
-          },
-          "rail": true
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 380,
-      "y": -500,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "belt",
-            "wheels": [
-              {
-                "x": 0,
-                "y": 0,
-                "r": 10
-              },
-              {
-                "x": 385,
-                "y": -20.000000000000018,
-                "r": 20
-              }
-            ],
-            "thickness": 5,
-            "speed": -200,
-            "width": 40,
-            "texture": "rubber"
-          }
-        }
-      ]
     }
   ]
 }

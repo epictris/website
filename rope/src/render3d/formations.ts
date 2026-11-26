@@ -2,8 +2,8 @@
 // game loads, and loading it.
 //
 // A formation that has been baked draws the tier its `lod` asks for (or the
-// automatic one): a self-contained export of the scene exporter, loaded as a
-// model is (`loadExportFile`), so every per-material rule a scene's rocks get
+// automatic one): a self-contained export of the Blender exporter, loaded as a
+// model is (`loadExportFile`), so every per-material rule an export's rocks get
 // applies. One not baked yet draws its `geometry.glb` in the iteration look
 // (`formationSlate.ts`), which is what the editor shows the moment a Generate
 // lands.
@@ -18,7 +18,7 @@ import { formationServedFile } from "../formation/bundle";
 import { isPainted } from "../formation/decoration";
 import { gltfLoader, trackPending } from "./assets";
 import { prepareSlateGeometry } from "./formationSlate";
-import { loadExportFile, decodedFile, forgetFiles } from "./sceneDressing";
+import { loadExportFile, decodedFile, forgetFiles } from "./exportFiles";
 
 export { autoTier, chosenTierOf as chosenTier } from "../formation/tiers";
 

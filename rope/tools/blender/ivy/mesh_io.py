@@ -637,7 +637,7 @@ def clump_atlas():
 # baseColorTexture x COLOR_0 with the alpha cut by a threshold (alphaMode
 # MASK) and back faces culled. The underlay and the stems wear it too, on a
 # solid cell of the atlas. It casts no shadow in the game
-# (render3d/sceneDressing.ts turns casting off for a `.ivy` node); in Blender
+# (render3d/exportFiles.ts turns casting off for a `.ivy` node); in Blender
 # that is the object's `visible_shadow`, set by ops.create_ivy.
 
 MATERIAL_NAME = "Ivy"

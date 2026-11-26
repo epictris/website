@@ -19,6 +19,7 @@
 
 import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
+import { setPrefab, TREE_FORMAT, type LevelNode, type LevelTree } from "../level/nodes";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import { BALL_ZOOM, worldToScreen, type Camera } from "../render/camera";
 import { beginWorld, ProjectedContext, ViewProjector } from "../editor/projectedCanvas";
@@ -113,6 +114,7 @@ import {
   SHELTER_THICKNESS,
   LEVEL_FORMAT,
 } from "../level/levelFormat";
+import { TreeLook } from "../render3d/treeLook";
 import { BodyVisual, pickTagOf } from "../render3d/bodyVisuals";
 import {
   assignPool,
@@ -150,6 +152,8 @@ import { buildLevelBodies, localPlacement, worldPlacement } from "../level/build
 import {
   modelFromDisk,
   modelToDisk,
+  removeItems,
+  modelToFlatDisk,
   toLevelData,
   setPolyVerts,
   setBelt,
@@ -162,7 +166,6 @@ import {
   bodyMembers,
   bodyFrameOf,
   originToCentroid,
-  pinBodyFrame,
   selectionCentre,
   captureGroupPose,
   placeGroup,
@@ -201,15 +204,14 @@ import {
 } from "../render3d/avatarSurface";
 import { glassCoatShown, hollowGlassMaterial, pieceGlassMaterial, solidGlassMaterial } from "../render3d/glassMaterial";
 import { FrameCopy } from "../render3d/frameCopy";
-import { bodyTriangles, sceneryTriangles, solidMesh } from "../render3d/shardCollision";
+import { bodyTriangles, solidMesh } from "../render3d/shardCollision";
 import { buildFractureSet } from "../render/glassFracture";
 import { beamFarRadius, beamRadiusAt, BEAM_SOURCE_RADIUS, seedDust } from "../render3d/beam";
 import { IRON_SURFACE } from "../render3d/assets";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { levelStoredFiles } from "../render3d/levelAssets";
-import { nodeNameOf, SCENE_ASSETS, sceneFile, type SceneAsset } from "../render3d/scenes";
-import { castsShadow, dressScene, SCENERY_TAG, sceneryWater, seedDecodedFile, type DressTarget } from "../render3d/sceneDressing";
+import { noShadowBehindPlane, seedDecodedFile } from "../render3d/exportFiles";
 import { modelFile } from "../render3d/models";
 import { RE_DIRECT, skipUnreachedLights } from "../render3d/lightReach";
 import {
@@ -217,11 +219,9 @@ import {
   invariantPositionChunk,
   isDepthStandIn,
   joinDepthPrepass,
-  leaveDepthPrepass,
   PREPASS_ORDER,
   prepassRefusal,
 } from "../render3d/depthPrepass";
-import { orientTo, placeAt } from "../render3d/space";
 import { stopAtLoop } from "../render3d/chainVisual";
 import { CHAIN_LINK_LEN, walkChain } from "../render/chainMetrics";
 import { BallPlayer } from "../classes/ballPlayer";
@@ -324,9 +324,9 @@ function levelLens(): CaseResult[] {
   };
   const scaled = scaleLevelData(raw, 1 / PIXELS_PER_METER).camera;
   const scaledOk = scaled?.focalLength === 85 && Math.abs((scaled.zOffset ?? 0) - 1.5) < 1e-12;
-  const saved = modelToDisk(modelFromDisk(raw)).camera;
+  const saved = modelToFlatDisk(modelFromDisk(raw)).camera;
   const savedOk = saved?.focalLength === 85 && Math.abs((saved.zOffset ?? 0) - 150) < 1e-9;
-  const bare = modelToDisk(modelFromDisk({ player: raw.player, bodies: [] }));
+  const bare = modelToFlatDisk(modelFromDisk({ player: raw.player, bodies: [] }));
   const bareOk = !("camera" in bare);
 
   return [
@@ -1739,8 +1739,8 @@ function flattened(data: LevelData): string {
 
 // A level in the RETIRED flat form, `visual`s and `backgrounds` and all, is
 // folded by `normalizeLevelData` into the level it now is: its collision and
-// the lights its glowing visuals threw, and nothing of its look, which is a
-// Blender scene's to carry (plans/blender-owns-appearance.md). The fold has to
+// the lights its glowing visuals threw, and nothing of its look, which is its
+// formations' and models' to carry. The fold has to
 // be exact both ways - px -> m -> px byte-identical - and it has to leave no
 // look behind: a body of pure decoration is gone, and so is the panel list.
 function visualRoundTrip(): CaseResult[] {
@@ -1836,7 +1836,7 @@ function visualRoundTrip(): CaseResult[] {
 // The editor is the other round trip, and the one that actually runs: it
 // rewrites the whole file every 750 ms while a level is open, so a field it
 // drops is a field that is gone from disk before anyone notices it was read.
-// `modelFromDisk`/`modelToDisk` go through `EdItem`, which is a different shape
+// `modelFromDisk`/`modelToFlatDisk` go through `EdItem`, which is a different shape
 // from `LevelBodyData` entirely, so the format round trip above says nothing
 // about this one.
 function editorRoundTrip(): CaseResult[] {
@@ -1896,7 +1896,7 @@ function editorRoundTrip(): CaseResult[] {
       },
     ],
   };
-  const back = modelToDisk(modelFromDisk(authored));
+  const back = modelToFlatDisk(modelFromDisk(authored));
   // Both sides flattened, which fixes key order AND absorbs the body frame the
   // editor gives each body on the way out: what is being asserted is that every
   // value survives the trip and every object ends up where it started, not that
@@ -1935,7 +1935,7 @@ function editorRoundTrip(): CaseResult[] {
       },
     ],
   };
-  const reopened = modelToDisk(modelFromDisk(drawn));
+  const reopened = modelToFlatDisk(modelFromDisk(drawn));
   const stayedBare =
     JSON.stringify(reopened.bodies[0]!.objects) ===
     JSON.stringify([{ type: "collision", shape: { kind: "rect", w: 80, h: 80 } }]);
@@ -1998,14 +1998,9 @@ function groupTransform(): CaseResult[] {
     ],
   };
   const fresh = (): EdModel => {
-    const m = modelFromDisk(authored);
-    // What `beginAction` does before any gesture: a body of more than one object
-    // has its frame written down, so an edit to a piece of it cannot be read as
-    // an edit to the body.
-    for (const id of new Set(m.items.map((i) => i.bodyId))) {
-      if (bodyMembers(m.items, id).length > 1) pinBodyFrame(m, id);
-    }
-    return m;
+    // A body's frame is its node's own placement, so there is nothing to
+    // write down before an edit.
+    return modelFromDisk(authored);
   };
   const near = (a: number, b: number, tol = 1e-9): boolean => Math.abs(a - b) <= tol;
 
@@ -2052,8 +2047,8 @@ function groupTransform(): CaseResult[] {
   // holds in one direction only.
   // Ids are minted per model (`newBodyId` is a running counter), so the compound
   // body is found inside each model rather than carried between two of them.
-  const compoundOf = (m: EdModel): number =>
-    [...new Set(m.items.map((i) => i.bodyId))].find((id) => bodyMembers(m.items, id).length > 1)!;
+  const compoundOf = (m: EdModel): string =>
+    [...new Set(m.items.map((i) => i.unit))].find((id) => bodyMembers(m.items, id).length > 1)!;
 
   const whole = fresh();
   const members = bodyMembers(whole.items, compoundOf(whole));
@@ -2151,7 +2146,7 @@ function vertexEditMoves(): CaseResult[] {
     poly.shape.verts.map((v, i) => (i === 0 ? pulled : v)),
   );
 
-  const saved = modelToDisk(model).bodies[0]!;
+  const saved = modelToFlatDisk(model).bodies[0]!;
   const collision = saved.objects.find(isCollisionObject)!;
   const light = saved.objects.find(isLightObject)!;
   // An absent x/y IS zero on disk, which is what "it never moved" looks like
@@ -2172,9 +2167,9 @@ function vertexEditMoves(): CaseResult[] {
   // The centre of mass, now that the origin is not it: the loop runs from -7.5 m
   // to 0.6 m in each axis about an origin that stayed at the body's own.
   const world = new World();
-  const built = buildLevelBodies(world, scaleLevelData(modelToDisk(model), PX), () => {});
+  const built = buildLevelBodies(world, scaleLevelData(modelToFlatDisk(model), PX), () => {});
   const engine = built.bodies[0]!.body!;
-  const centroid = bodyCentroid(bodyMembers(model.items, poly.bodyId));
+  const centroid = bodyCentroid(bodyMembers(model.items, poly.unit));
   const agrees = centroid.distanceTo(engine.globalPosition) < 1e-9;
   const offOrigin = centroid.distanceTo(poly.pos) > 0.1;
 
@@ -2208,8 +2203,8 @@ function vertexEditMoves(): CaseResult[] {
 // raycasting it rather than by testing an outline on the gameplay plane, and the
 // whole chain from a mesh under the pointer back to a row in the outliner is:
 // the drawn piece carries the authored object it was built from (`BodyVisual`'s
-// pick tag - a collision object, whose debug geometry it is, or a body's first object
-// for its Blender dressing), and `toLevelData` is the only thing that knows
+// pick tag - a collision object, whose debug geometry it is, or the model or
+// decoration it draws), and `toLevelData` is the only thing that knows
 // which ITEM wrote that object.
 //
 // That second half is what is asserted here, because it is the half that can
@@ -2461,17 +2456,17 @@ function lightRoundTrip(): CaseResult[] {
     ...authored,
     environment: { sunIntensity: 0, envIntensity: 0.1, backgroundColor: "#080a0f" },
   };
-  const envBack = modelToDisk(modelFromDisk(withEnv));
+  const envBack = modelToFlatDisk(modelFromDisk(withEnv));
   const envKept = JSON.stringify(envBack.environment) === JSON.stringify(withEnv.environment);
 
-  const back = modelToDisk(modelFromDisk(authored));
+  const back = modelToFlatDisk(modelFromDisk(authored));
   const ea = flattened(scaleLevelData(authored, 1));
   const eb = flattened(scaleLevelData(back, 1));
   // A level with no lights must gain no `lights` key, or every level authored
   // before the field stops being byte-identical the first time it is opened.
   // A level with no lights must gain none, which now means no body carrying a
   // light object rather than an absent top-level key.
-  const none = modelToDisk(modelFromDisk({ ...authored, lights: undefined })).bodies.every(
+  const none = modelToFlatDisk(modelFromDisk({ ...authored, lights: undefined })).bodies.every(
     (b) => !b.objects.some(isLightObject),
   );
 
@@ -2680,7 +2675,7 @@ function skyBand(): CaseResult[] {
   // And it survives the editor, which rewrites the whole file every 750 ms while
   // a level is open - the same trap the environment block as a whole is checked
   // for above, one level down, since these fields are newer than that case.
-  const back = modelToDisk(modelFromDisk(authored));
+  const back = modelToFlatDisk(modelFromDisk(authored));
   const kept = JSON.stringify(back.environment) === JSON.stringify(authored.environment);
   // Every entry is a `.hdr` under `/hdri/` with a label to show. The format is
   // not a preference: `loadHdri` reads it with three's Radiance loader, so an
@@ -2827,6 +2822,10 @@ function modelOnBody(): CaseResult[] {
   const data = scaleLevelData(raw, PX);
   const built = buildLevelBodies(new World(), data, () => {}).bodies[0]!;
   const visual = new BodyVisual(built.body, built);
+  // The model is a node under the body (treeLook.ts), drawn under the body's
+  // authored frame, which the body's visual carries.
+  const bodyNode = data.bodies[0]!.node!.id;
+  const look = new TreeLook(data.tree ?? [], { bodyFrame: (id) => (id === bodyNode ? visual.frame : null), solid: () => true });
   visual.sync(1);
   const meshes: THREE.Mesh[] = [];
   visual.root.traverse((o) => {
@@ -2846,7 +2845,7 @@ function modelOnBody(): CaseResult[] {
   const got = meshes[0] ? centreOf(meshes[0]) : new THREE.Vector3(NaN, NaN, NaN);
   // To a micron: the box's vertices are float32.
   const placed = meshes.length === 1 && got.distanceTo(want) < 1e-6;
-  const tagged = meshes.length === 1 && pickTagOf(meshes[0]!) === built.data.objects[1];
+  const tagged = meshes.length === 1 && pickTagOf(meshes[0]!) === built.data.objects[1]!.node;
   const casts = meshes[0]?.castShadow === true;
 
   // Carried: the body moves, and so does the model, with nothing re-placed.
@@ -2854,22 +2853,26 @@ function modelOnBody(): CaseResult[] {
   visual.sync(1);
   const moved = meshes[0] ? centreOf(meshes[0]) : new THREE.Vector3(NaN, NaN, NaN);
   const carried = Math.abs(moved.x - got.x - 1) < 1e-6 && Math.abs(moved.y - got.y) < 1e-6;
+  look.dispose();
   visual.dispose();
 
   // Not loaded yet: nothing mounted, nothing thrown.
   const pending = scaleLevelData({ ...raw, bodies: [{ ...(raw.bodies[0] as LevelBodyData), objects: [{ type: "model", model: "__model-case-unloaded" }] }] }, PX);
   const pendingBuilt = buildLevelBodies(new World(), pending, () => {}).bodies[0]!;
   const pendingVisual = new BodyVisual(pendingBuilt.body, pendingBuilt);
+  const pendingBody = pending.bodies[0]!.node!.id;
+  const pendingLook = new TreeLook(pending.tree ?? [], { bodyFrame: (id) => (id === pendingBody ? pendingVisual.frame : null), solid: () => true });
   let pendingMeshes = 0;
   pendingVisual.root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) pendingMeshes++;
   });
+  pendingLook.dispose();
   pendingVisual.dispose();
 
   const scaled = scaleLevelData(raw, 0.5).bodies[0]!.objects[1] as ModelObjectData;
   const units = scaled.z === 10 && scaled.scale === 2 && scaled.rotX === 0.5 && scaled.rotY === -0.4 && scaled.x === 20;
 
-  const back = modelToDisk(modelFromDisk(raw)).bodies[0]!.objects.find((o) => o.type === "model");
+  const back = modelToFlatDisk(modelFromDisk(raw)).bodies[0]!.objects.find((o) => o.type === "model");
   const want0 = (raw.bodies[0] as LevelBodyData).objects[1]!;
   const near = (a: number | undefined, b: number | undefined): boolean => Math.abs((a ?? 0) - (b ?? 0)) < 1e-6;
   const roundTrip =
@@ -3052,9 +3055,9 @@ function lightShadowRadius(): CaseResult[] {
   });
   const lampOf = (data: RawLevelData) => (data.bodies[0] as LevelBodyData).objects.find(isLightObject)!;
   const inMetres = lampOf(scaleLevelData(disk(true), PX)).shadowRadius;
-  const saved = lampOf(modelToDisk(modelFromDisk(disk(true)))).shadowRadius;
+  const saved = lampOf(modelToFlatDisk(modelFromDisk(disk(true)))).shadowRadius;
   // Read only while the light casts, so written only then, like `shadowNear`.
-  const unlit = lampOf(modelToDisk(modelFromDisk(disk(false)))).shadowRadius;
+  const unlit = lampOf(modelToFlatDisk(modelFromDisk(disk(false)))).shadowRadius;
   const diskOk = inMetres === 2.5 && saved === 2.5 && unlit === undefined;
   return [
     {
@@ -3187,12 +3190,12 @@ function originToCom(): CaseResult[] {
       worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 }),
     ];
   };
-  const before = modelToDisk(modelFromDisk(drawn));
+  const before = modelToFlatDisk(modelFromDisk(drawn));
 
   const model = modelFromDisk(drawn);
-  const bodyId = model.items[0]!.bodyId;
+  const bodyId = model.items[0]!.unit;
   const moved = originToCentroid(model, bodyId);
-  const saved = modelToDisk(model);
+  const saved = modelToFlatDisk(model);
   // The frame the file now states, in pixels: 100 px along from where it was.
   const body = saved.bodies[0] as LevelBodyData;
   const onMass = Math.abs(body.x - 200) < 1e-9 && Math.abs(body.y - 200) < 1e-9;
@@ -3201,12 +3204,12 @@ function originToCom(): CaseResult[] {
   );
 
   // Reopened, the origin is still on the mass and the file is the same file.
-  const reopened = modelToDisk(modelFromDisk(saved));
+  const reopened = modelToFlatDisk(modelFromDisk(saved));
   const survives = JSON.stringify(reopened) === JSON.stringify(saved);
 
   // ...and pressing it again does nothing, which is what greys the button out.
   const twice = modelFromDisk(saved);
-  const againId = twice.items[0]!.bodyId;
+  const againId = twice.items[0]!.unit;
   const idempotent = !originToCentroid(twice, againId);
   const centred = bodyCentroid(bodyMembers(twice.items, againId))
     .sub(bodyFrameOf(twice, againId).pos)
@@ -3306,7 +3309,7 @@ function realLevelRoundTrip(): CaseResult[] {
     chains: d.chains?.length ?? 0,
   });
   const before = tally(normalizeLevelData(BALL_LEVEL as RawLevelData));
-  const after = tally(modelToDisk(modelFromDisk(BALL_LEVEL as RawLevelData)));
+  const after = tally(modelToFlatDisk(modelFromDisk(BALL_LEVEL as RawLevelData)));
   const same = JSON.stringify(before) === JSON.stringify(after);
   return [
     {
@@ -3332,6 +3335,74 @@ function realLevelRoundTrip(): CaseResult[] {
 // The geometry half is the waterline. A rect has four corners, and a four-corner
 // top edge cannot ripple however good the shader is: the vertices the waves live
 // on have to be built, and `aWave` has to say which of them are the surface.
+// A WATER AREA OF SEVERAL PIECES (plans/node-tree.md "Area2D with several
+// shapes"): every piece is drawn at its own place, the wall two touching pools
+// share is left out so the seam is not seen through the water, and a current
+// falls off the one piece furthest downstream only.
+function waterPieces(): CaseResult[] {
+  const level = (flow: number, spill: number): RawLevelData => ({
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "water",
+        x: 0,
+        y: 0,
+        rot: 0,
+        flow,
+        spill,
+        objects: [
+          { type: "collision", x: 0, shape: { kind: "rect", w: 400, h: 100 } },
+          { type: "collision", x: 400, shape: { kind: "rect", w: 400, h: 100 } },
+        ],
+      },
+    ],
+  });
+  const draw = (raw: RawLevelData): { visual: BodyVisual; meshes: THREE.Mesh[]; positions: number } => {
+    const built = buildLevelBodies(new World(), scaleLevelData(raw, PX), () => {}).bodies[0]!;
+    const visual = new BodyVisual(built.body, built);
+    const meshes: THREE.Mesh[] = [];
+    visual.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
+    });
+    const positions = meshes.reduce((n, m) => n + (m.geometry.getAttribute("position")?.count ?? 0), 0);
+    return { visual, meshes, positions };
+  };
+  const pool = draw(level(0, 0));
+  const lone = draw({ ...level(0, 0), bodies: [{ ...(level(0, 0).bodies[0] as LevelBodyData), objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 100 } }] }] });
+  // Two pools of the same size have twice the lone pool's vertices less the
+  // two walls where they meet.
+  const wallVerts = (lone.positions - 0) > 0 ? lone.positions : 0;
+  const centres = pool.meshes.map((m) => {
+    m.updateWorldMatrix(true, false);
+    m.geometry.computeBoundingBox();
+    return m.geometry.boundingBox!.getCenter(new THREE.Vector3()).applyMatrix4(m.matrixWorld).x;
+  });
+  const apart = pool.meshes.length === 2 && Math.abs(Math.abs(centres[1]! - centres[0]!) - 4) < 1e-6;
+  const seamless = pool.positions < 2 * wallVerts;
+  const river = draw(level(150, 200));
+  const plumes = river.meshes.filter((m) => m.renderOrder === 11).length;
+  pool.visual.dispose();
+  lone.visual.dispose();
+  river.visual.dispose();
+  return [
+    {
+      name: "water: every piece of a water area is drawn, each at its own place",
+      pass: apart,
+      detail: `${pool.meshes.length} surface(s), centres ${centres.map((c) => c.toFixed(3)).join(", ")} m`,
+    },
+    {
+      name: "water: two touching pools leave out the wall they share",
+      pass: seamless,
+      detail: `${pool.positions} vertices for the pair, ${wallVerts} for one pool alone`,
+    },
+    {
+      name: "water: a current of two pieces falls off the downstream one only",
+      pass: plumes === 1,
+      detail: `${plumes} fall(s)`,
+    },
+  ];
+}
+
 function waterFormat(): CaseResult[] {
   const authored: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
@@ -3369,7 +3440,7 @@ function waterFormat(): CaseResult[] {
     scaled.bodies[0]!.spill === 2 &&
     scaled.bodies[0]!.waterZ === 0.25 &&
     scaled.bodies[0]!.waterDepth === 1.5;
-  const saved = modelToDisk(modelFromDisk(authored));
+  const saved = modelToFlatDisk(modelFromDisk(authored));
   const kept =
     saved.bodies[0]!.flow === -150 &&
     saved.bodies[0]!.drag === 5 &&
@@ -3455,7 +3526,7 @@ function bounceFormat(): CaseResult[] {
   );
   const scaled = scaleLevelData(normalizeLevelData(authored), PX);
   const units = scaled.bodies[0]!.bounce === 0.6 && scaled.bodies[0]!.launch === 9;
-  const saved = modelToDisk(modelFromDisk(authored));
+  const saved = modelToFlatDisk(modelFromDisk(authored));
   const kept =
     saved.bodies[0]!.bounce === 0.6 &&
     saved.bodies[0]!.launch === 900 &&
@@ -3532,7 +3603,7 @@ function chainAnchors(): CaseResult[] {
   const stable = twice.bodies.flatMap((b) => b.objects.filter(isAnchorObject)).length === 2;
   // The same, through the EDITOR, which is where the anchors have to survive as
   // objects and the chain as a pair of ids.
-  const round = modelToDisk(modelFromDisk(raw));
+  const round = modelToFlatDisk(modelFromDisk(raw));
   const kept =
     round.chains?.length === 1 &&
     round.bodies.flatMap((b) => b.objects.filter(isAnchorObject)).length === 2;
@@ -3676,7 +3747,7 @@ function chainWrapPoints(): CaseResult[] {
     JSON.stringify(rim.passes) === '["chain"]' &&
     rim.wrappable === undefined;
 
-  const round = modelToDisk(modelFromDisk(raw));
+  const round = modelToFlatDisk(modelFromDisk(raw));
   const rc = round.chains?.[0];
   const viaKept =
     round.chains?.length === 1 &&
@@ -3744,7 +3815,7 @@ function checkpointFormat(): CaseResult[] {
   const scaled = scaleLevelData(normalizeLevelData(authored), PX);
   const units = scaled.checkpoints?.[0]?.x === 4 && scaled.checkpoints[0]?.name === "vines";
 
-  const saved = modelToDisk(modelFromDisk(authored));
+  const saved = modelToFlatDisk(modelFromDisk(authored));
   const kept =
     saved.checkpoints?.length === 2 &&
     saved.checkpoints[1]?.name === "the gap" &&
@@ -3851,7 +3922,7 @@ function levelMetaFormat(): CaseResult[] {
       },
       {
         // The finish line: a region across the way out. The gantry that marks
-        // it is the level's Blender scene's to draw.
+        // it is a model's to draw.
         kind: "finish",
         x: 100,
         y: -100,
@@ -3878,7 +3949,7 @@ function levelMetaFormat(): CaseResult[] {
     gateShape.shape.kind === "rect" &&
     gateShape.shape.w === 5.2;
 
-  const saved = modelToDisk(modelFromDisk(authored));
+  const saved = modelToFlatDisk(modelFromDisk(authored));
   const savedGate = saved.bodies[1]!;
   const kept =
     saved.meta?.title === "The Long Fall" &&
@@ -3888,7 +3959,7 @@ function levelMetaFormat(): CaseResult[] {
   // ...and a level that authors NO block writes none, which is what keeps every
   // level from before the field byte-identical through a save.
   const { meta: _dropped, ...bare } = authored;
-  const bareSaved = modelToDisk(modelFromDisk(bare as RawLevelData));
+  const bareSaved = modelToFlatDisk(modelFromDisk(bare as RawLevelData));
   const silent = bareSaved.meta === undefined;
 
   return [
@@ -3938,6 +4009,8 @@ function clipboardPayload(): CaseResult[] {
   // third body - one of everything a payload has to carry.
   const authored: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
+    // A level block, so its staying out of the copy is asked of something.
+    meta: { title: "Clipboard" },
     bodies: [
       {
         kind: "static",
@@ -3978,8 +4051,8 @@ function clipboardPayload(): CaseResult[] {
   const source = modelFromDisk(authored);
   const payload = writeClipboard(source, source.items);
   const parsed = readClipboard(payload);
-  const back = parsed ? modelToDisk(modelFromDisk(parsed)) : null;
-  const saved = modelToDisk(source);
+  const back = parsed ? modelToFlatDisk(parsed) : null;
+  const saved = modelToFlatDisk(source);
 
   // Everything is there, and the relations still name anchors that exist.
   const anchorIds = (d: LevelData): number[] =>
@@ -4016,12 +4089,24 @@ function clipboardPayload(): CaseResult[] {
 
   // The level-wide blocks are NOT in it: none of them is a thing in the level,
   // and a paste that brought a spawn would move the target level's.
-  const parsedRaw = parsed as (RawLevelData & { meta?: unknown; environment?: unknown }) | null;
+  // Asked of the payload itself (a tree fragment): no level-wide key, and no
+  // spawn node among what it carries.
+  const parsedRaw = JSON.parse(payload) as { meta?: unknown; environment?: unknown; camera?: unknown; player?: unknown; nodes?: LevelNode[] };
+  let spawns = 0;
+  const countSpawns = (list: readonly LevelNode[]): void => {
+    for (const n of list) {
+      if (n.type === "Spawn2D") spawns++;
+      if (n.children) countSpawns(n.children);
+    }
+  };
+  countSpawns(parsedRaw.nodes ?? []);
   const fragment =
-    parsedRaw !== null &&
+    parsed !== null &&
     parsedRaw.meta === undefined &&
     parsedRaw.environment === undefined &&
-    !payload.includes('"environment"');
+    parsedRaw.camera === undefined &&
+    parsedRaw.player === undefined &&
+    spawns === 0;
 
   // A paste of something that is not a payload does nothing rather than
   // throwing: the input is whatever happened to be on the system clipboard.
@@ -4046,7 +4131,7 @@ function clipboardPayload(): CaseResult[] {
     {
       name: "clipboard: the spawn, the level block and the environment stay out of it",
       pass: fragment,
-      detail: fragment ? "a fragment, not a level" : JSON.stringify({ meta: parsedRaw?.meta, env: parsedRaw?.environment }),
+      detail: fragment ? "a fragment, not a level" : JSON.stringify({ meta: parsedRaw.meta, env: parsedRaw.environment, camera: parsedRaw.camera, player: parsedRaw.player, spawns }),
     },
     {
       name: "clipboard: text that is not a payload is ignored rather than fatal",
@@ -4318,7 +4403,7 @@ function beltRendering(): CaseResult[] {
 
   // The editor keeps every field, the wheel list and the matched link
   // included: the file comes back from the model byte-identical.
-  const back2 = modelToDisk(modelFromDisk(raw));
+  const back2 = modelToFlatDisk(modelFromDisk(raw));
   const authoredObjects = (raw.bodies[0] as { objects: SceneObjectData[] }).objects;
   const kept = JSON.stringify(back2.bodies[0]!.objects) === JSON.stringify(authoredObjects);
   out.push({
@@ -4594,10 +4679,10 @@ function beamCases(): CaseResult[] {
   const unscaled = lit.beam === 0.6 && lit.dust === 0.5 && lit.range === 10;
   const a = JSON.stringify(scaleLevelData(authored, 1));
   const b = JSON.stringify(scaleLevelData(inMetres, PIXELS_PER_METER));
-  const saved = modelToDisk(modelFromDisk(authored)).bodies[0]!.objects.find(isLightObject);
+  const saved = modelToFlatDisk(modelFromDisk(authored)).bodies[0]!.objects.find(isLightObject);
   const kept = saved?.beam === 0.6 && saved?.dust === 0.5;
   // On a point light the fields mean nothing, so the editor does not write them.
-  const pointed = modelToDisk(
+  const pointed = modelToFlatDisk(
     modelFromDisk({
       ...authored,
       bodies: [{ ...authored.bodies[0]!, objects: [{ type: "light", beam: 0.6, dust: 0.5 }] }],
@@ -4878,11 +4963,11 @@ function glowCases(): CaseResult[] {
     });
   }
 
-  // A waking body's DRESSING glows with its light (`BodyVisual.adoptDressing`):
-  // the node's emissive materials become this body's own copies - one per
+  // A waking body's LOOK glows with its light (`BodyVisual.adoptLook`): the
+  // node's emissive materials become this body's own copies - one per
   // material, however many meshes wear it - and join the set its light drives,
   // while the file's shared materials are left exactly as they were (a second
-  // mount of the scene, or another body in the same stone, must not pulse with
+  // mount of the model, or another body in the same stone, must not pulse with
   // it). A body with no waking light takes nothing.
   {
     const raw: RawLevelData = {
@@ -4914,13 +4999,15 @@ function glowCases(): CaseResult[] {
       root.add(...meshes);
       return { root, meshes };
     };
-    const waking = new BodyVisual(built.bodies[0]!.body, built.bodies[0]!);
-    const steady = new BodyVisual(built.bodies[1]!.body, built.bodies[1]!);
+    // The look is the level tree's (treeLook.ts): each body is a carrier
+    // whose waking lights drive the glow of what it holds.
+    const metres = scaleLevelData(raw, PX);
+    const look = new TreeLook(metres.tree ?? [], { bodyFrame: () => null, solid: () => true });
     const a = node();
     const b = node();
-    waking.adoptDressing(a.root);
-    steady.adoptDressing(b.root);
-    const driven = (waking as unknown as { driven: { material: THREE.Material; authored: number }[] }).driven;
+    look.adoptLook(built.bodies[0]!.data.node!.id, a.root);
+    look.adoptLook(built.bodies[1]!.data.node!.id, b.root);
+    const driven = look.drivenOf(built.bodies[0]!.data.node!.id);
     const copy = a.meshes[0]!.material as THREE.MeshStandardMaterial;
     const ok =
       copy !== glow &&
@@ -4932,10 +5019,9 @@ function glowCases(): CaseResult[] {
       driven[0]!.authored === 2 &&
       glow.emissiveIntensity === 2 &&
       b.meshes.every((m, i) => m.material === (i < 2 ? glow : stone));
-    waking.dispose();
-    steady.dispose();
+    look.dispose();
     out.push({
-      name: "glow: a waking body's dressing glows on its own copy of each emissive material; the file's materials and a steady body's are untouched",
+      name: "glow: a waking body's look glows on its own copy of each emissive material; the file's materials and a steady body's are untouched",
       pass: ok,
       detail: `copy ${copy !== glow}, shared by both glowing meshes ${a.meshes[1]!.material === copy}, stone kept ${a.meshes[2]!.material === stone}, driven ${driven.length} (authored ${driven[0]?.authored}), steady body kept its materials ${b.meshes.every((m, i) => m.material === (i < 2 ? glow : stone))}`,
     });
@@ -4949,7 +5035,7 @@ function glowCases(): CaseResult[] {
       bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
     });
     const saved = (light: LightObjectData) =>
-      modelToDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
+      modelToFlatDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
     const full = saved({ type: "light", range: 400, wake: 300, wakeDelay: 0.25, wakeRise: 0.4, wakeFall: 2 });
     const bare = saved({ type: "light", range: 400, wake: 250 });
     const spot = saved({ type: "light", kind: "spot", range: 400, wake: 300, wakeDelay: 0.25 });
@@ -4975,7 +5061,7 @@ function glowCases(): CaseResult[] {
 
   // `+ Glow`: one body - the collision square, filled purple for the 2D view
   // and its debug geometry, and a waking point light at its centre with the editor's
-  // defaults. What it LOOKS like in a dressed level is the scene's to say.
+  // defaults. What it LOOKS like is what the body carries.
   {
     const body = glowBody(new Vec2(4, -2));
     const collision = body.objects.filter(isCollisionObject);
@@ -5184,7 +5270,7 @@ function glowCases(): CaseResult[] {
       ],
       fireflyPaths: [{ id: 3, x: 50, y: 60, rot: 0.5, verts: [{ x: 0, y: 0 }, { x: 400, y: 0, inX: -100, inY: 40 }] }],
     };
-    const disk = modelToDisk(modelFromDisk(raw));
+    const disk = modelToFlatDisk(modelFromDisk(raw));
     const [swarm, lamp] = disk.bodies[0]!.objects.filter(isLightObject);
     const p = disk.fireflyPaths?.[0];
     const ok =
@@ -5218,7 +5304,7 @@ function glowCases(): CaseResult[] {
       bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
     });
     const saved = (light: LightObjectData) =>
-      modelToDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
+      modelToFlatDisk(modelFromDisk(level(light))).bodies[0]!.objects.find(isLightObject)!;
     const swarm = saved({ type: "light", fireflies: 9, wake: 300, wakeRise: 0.4 });
     const spot = saved({ type: "light", kind: "spot", fireflies: 9 });
     const tinted = saved({ type: "light", fireflies: 9, color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY });
@@ -5248,234 +5334,55 @@ function glowCases(): CaseResult[] {
   return out;
 }
 
-// BLENDER SCENES (docs/blender-scenes.md): a body's `name` and the level's
-// `scene` cross the format and the editor untouched and are written only when
-// set, the preload list names the scene's file at its pinned weight, body
-// names match nodes as three spells them, and `dressScene` hangs a node named
-// like a body under that body's root at the pose that leaves it exactly where
-// Blender put it, leaves everything else as scenery, and takes the outermost
-// match only.
-function blenderScenes(): CaseResult[] {
+// BODY NAMES: a body's `name` crosses the format and the editor untouched.
+// (What an unnamed body is called is the node tree's to say,
+// plans/node-tree.md "Identity", so it is not asserted here.) And THE SHADOW RULE a body's look keeps
+// (`noShadowBehindPlane`, exportFiles.ts): a node behind the gameplay plane
+// casts nothing, one reaching the plane or in front of it casts as authored.
+function bodyNames(): CaseResult[] {
   const out: CaseResult[] = [];
   const near = (a: number, b: number, tol = 1e-6): boolean => Math.abs(a - b) < tol;
 
   const raw: RawLevelData = {
     player: { x: 0, y: 0, radius: 20 },
-    scene: "river",
     bodies: [
       { kind: "static", name: "Ledge.001", x: 500, y: -200, rot: 0.5, objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 20 } }] },
       { kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 20 } }] },
     ],
   };
   const metres = scaleLevelData(raw, PX);
-  const saved = modelToDisk(modelFromDisk(raw));
-  const bare = modelToDisk(modelFromDisk({ player: raw.player, bodies: [raw.bodies[1]!] }));
+  const saved = modelToFlatDisk(modelFromDisk(raw));
   out.push({
-    name: "scene: the level's scene and a body's name survive scaling and the editor's round trip, and are written only when set",
+    name: "names: a body's name survives scaling and the editor's round trip",
     pass:
-      metres.scene === "river" &&
       metres.bodies[0]!.name === "Ledge.001" &&
-      metres.bodies[1]!.name === undefined &&
       near(metres.bodies[0]!.x, 5) &&
-      saved.scene === "river" &&
-      saved.bodies[0]!.name === "Ledge.001" &&
-      !("name" in saved.bodies[1]!) &&
-      !("scene" in bare) &&
-      !("name" in bare.bodies[0]!),
-    detail: `metres ${JSON.stringify({ scene: metres.scene, names: metres.bodies.map((b) => b.name) })}; saved ${JSON.stringify({ scene: saved.scene, names: saved.bodies.map((b) => b.name) })}; bare keys ${Object.keys(bare).join(",")}`,
+      saved.bodies[0]!.name === "Ledge.001",
+    detail: `metres ${JSON.stringify(metres.bodies.map((b) => b.name))}; saved ${JSON.stringify(saved.bodies.map((b) => b.name))}`,
   });
 
-  out.push({
-    name: "scene: a body name is matched as three spells a glTF node's name",
-    pass:
-      nodeNameOf("Ledge.001") === "Ledge001" &&
-      nodeNameOf("big rock") === "big_rock" &&
-      nodeNameOf("a/b:c[0]") === "abc0" &&
-      nodeNameOf("Crate") === "Crate",
-    detail: `${nodeNameOf("Ledge.001")}, ${nodeNameOf("big rock")}, ${nodeNameOf("a/b:c[0]")}`,
-  });
-
-  // The preload list: the scene's file at the store's pinned weight, right
-  // after the sky and the avatar, once.
-  const pins = SCENE_ASSETS as Record<string, SceneAsset>;
-  pins["__scene-case"] = { sha256: "0".repeat(64), bytes: 4321 };
-  try {
-    const before = new Set(levelStoredFiles({ player: raw.player, bodies: [] }).map((f) => f.file));
-    const added = levelStoredFiles({ player: raw.player, bodies: [], scene: "__scene-case" }).filter((f) => !before.has(f.file));
-    out.push({
-      name: "scene: the preload list names the scene's file at its pinned size",
-      pass: added.length === 1 && added[0]!.file === sceneFile("__scene-case") && added[0]!.bytes === 4321,
-      detail: `added ${JSON.stringify(added)}`,
-    });
-  } finally {
-    delete pins["__scene-case"];
-  }
-
-  // A loaded file: a ledge turned and placed in the world with a crate nested
-  // inside it (both are body names; the nested one rides its parent), a
-  // backdrop behind the plane, a rock in front of it.
-  const loaded = new THREE.Group();
-  const ledge = new THREE.Group();
-  ledge.name = "Ledge001";
-  ledge.position.set(5, 2, 0.1);
-  ledge.rotation.set(0, 0, 0.3);
-  ledge.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 0.4)));
-  const crate = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3));
-  crate.name = "Crate";
-  crate.position.set(0.5, 0.25, 0);
-  ledge.add(crate);
-  const backdrop = new THREE.Mesh(new THREE.BoxGeometry(10, 5, 0.5));
-  backdrop.name = "Backdrop";
-  backdrop.position.set(0, 0, -3);
-  backdrop.castShadow = true;
-  const rock = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
-  rock.name = "Rock";
-  rock.position.set(-2, 0, 0.4);
-  rock.castShadow = true;
-  loaded.add(ledge, backdrop, rock);
-  loaded.updateMatrixWorld(true);
-  const ledgeWorld = ledge.matrixWorld.clone();
-  const crateWorld = crate.matrixWorld.clone();
-
-  // The ledge's body rests at sim (5, -2) turned -0.3 (clockwise-positive in
-  // the sim, so three's +0.3): its root is where Blender put the node in the
-  // plane, so the node should land under it with only its 10 cm of depth
-  // offset left. The crate's body is elsewhere and must NOT take the nested
-  // node.
-  const ledgeRoot = new THREE.Group();
-  const ledgeOrigin = new Vec2(5, -2);
-  placeAt(ledgeRoot, ledgeOrigin);
-  orientTo(ledgeRoot, -0.3);
-  const crateRoot = new THREE.Group();
-  const adopted: THREE.Object3D[] = [];
-  const targets: DressTarget[] = [
-    { name: "Ledge.001", root: ledgeRoot, origin: ledgeOrigin, rotation: -0.3, solid: true, tag: "ledge-tag", adopt: (n) => adopted.push(n) },
-    { name: "Crate", root: crateRoot, origin: new Vec2(9, 9), rotation: 0, solid: true },
-    { name: "Missing", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: true },
-  ];
-  const dressed = dressScene(loaded, targets);
-  const bound = dressed.bound.get("Ledge001");
-  ledgeRoot.updateMatrixWorld(true);
-  const boundCrate = bound?.getObjectByName("Crate");
-  const same = (a: THREE.Matrix4, b: THREE.Matrix4): boolean => a.elements.every((e, i) => near(e, b.elements[i]!, 1e-6));
-  out.push({
-    name: "scene: a node named like a body hangs under that body's root exactly where Blender put it, nested matches ride it, and a missing node is reported",
-    pass:
-      bound !== undefined &&
-      bound.parent === ledgeRoot &&
-      near(bound.position.x, 0) &&
-      near(bound.position.y, 0) &&
-      near(bound.position.z, 0.1) &&
-      near(bound.quaternion.angleTo(new THREE.Quaternion()), 0, 1e-6) &&
-      same(bound.matrixWorld, ledgeWorld) &&
-      boundCrate !== undefined &&
-      same(boundCrate.matrixWorld, crateWorld) &&
-      crateRoot.children.length === 0 &&
-      bound.userData["pickTag"] === "ledge-tag" &&
-      adopted.length === 1 &&
-      adopted[0] === bound &&
-      dressed.unbound.length === 2 &&
-      dressed.unbound.includes("Crate") &&
-      dressed.unbound.includes("Missing"),
-    detail: `bound ${[...dressed.bound.keys()].join(",")}; local pos ${bound?.position.toArray().map((v) => v.toFixed(6)).join(",")}; unbound ${dressed.unbound.join(",")}; crate root children ${crateRoot.children.length}`,
-  });
-
-  // The rest is scenery at its world pose; behind the plane it casts nothing.
-  const sceneryNames = dressed.scenery.children.map((c) => c.name).sort();
-  const sBackdrop = dressed.scenery.getObjectByName("Backdrop") as THREE.Mesh | undefined;
-  const sRock = dressed.scenery.getObjectByName("Rock") as THREE.Mesh | undefined;
-  dressed.scenery.updateMatrixWorld(true);
-  out.push({
-    name: "scene: every other node is scenery where Blender put it, casting a shadow only on or in front of the plane; the loaded file is untouched",
-    pass:
-      sceneryNames.join(",") === "Backdrop,Rock" &&
-      sBackdrop !== undefined &&
-      near(sBackdrop.position.z, -3) &&
-      sBackdrop.castShadow === false &&
-      sRock !== undefined &&
-      sRock.castShadow === true &&
-      castsShadow(sRock) &&
-      !castsShadow(sBackdrop) &&
-      loaded.children.length === 3 &&
-      ledge.children.length === 2,
-    detail: `scenery ${sceneryNames.join(",")}; backdrop casts ${sBackdrop?.castShadow}, rock casts ${sRock?.castShadow}; loaded children ${loaded.children.length}`,
-  });
-
-  // THE VERDICT IS KEPT PER FILE NODE (`sceneryCasts`): a second mount answers
-  // from it, and must answer what the first did - but not for scenery a bound
-  // node was taken out of, whose shape on that mount is not the file's. A
-  // shelf behind the plane with a hook in front of it casts whole (its box
-  // reaches the plane) and does not once the hook is bound to a body.
-  const shelfFile = new THREE.Group();
-  const shelf = new THREE.Group();
-  shelf.name = "Shelf";
-  const board = new THREE.Mesh(new THREE.BoxGeometry(1, 0.1, 0.5));
-  board.name = "Board";
-  board.position.z = -3;
-  board.castShadow = true;
-  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1));
-  hook.name = "Hook";
-  hook.position.z = 1;
-  hook.castShadow = true;
-  shelf.add(board, hook);
-  shelfFile.add(shelf);
-  const boardCasts = (d: ReturnType<typeof dressScene>): boolean | undefined =>
-    (d.scenery.getObjectByName("Board") as THREE.Mesh | undefined)?.castShadow;
-  const hookTarget: DressTarget[] = [
-    { name: "Hook", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: true },
-  ];
-  const whole = boardCasts(dressScene(shelfFile, []));
-  const wholeAgain = boardCasts(dressScene(shelfFile, []));
-  const cutShelf = boardCasts(dressScene(shelfFile, hookTarget));
-  const wholeAfter = boardCasts(dressScene(shelfFile, []));
-  out.push({
-    name: "scene: a scenery node's shadow verdict is kept for its file and answered again, but scenery a bound node was taken out of is asked afresh",
-    pass: whole === true && wholeAgain === true && cutShelf === false && wholeAfter === true,
-    detail: `board casts: whole ${whole}, again ${wholeAgain}, with the hook bound ${cutShelf}, whole after ${wholeAfter}`,
-  });
-
-  // A pick on scenery answers `SCENERY_TAG` - in no body, but a surface a
-  // light can be dropped on - and a bound node its body's tag.
-  const hitTag = (o: THREE.Object3D | undefined): unknown => (o ? pickTagOf(o) : undefined);
-  out.push({
-    name: "scene: a pick on scenery answers the scenery tag, a pick on a bound node its body's",
-    pass: hitTag(sRock) === SCENERY_TAG && hitTag(boundCrate) === "ledge-tag",
-    detail: `rock ${String(hitTag(sRock))}, crate ${String(hitTag(boundCrate))}`,
-  });
-
-  // WHAT COLLIDES, CASTS: a node bound to a colliding body casts wherever it
-  // was set back to, and one bound to a body that collides with nothing keeps
-  // the scenery's rule - behind the plane it is a painted distance.
-  const setBack = (name: string): THREE.Group => {
-    const g = new THREE.Group();
-    g.name = name;
-    const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.2));
+  // Each mesh is authored casting, and asked once.
+  const castsAfterRule = (z: number, depth: number): boolean => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, depth));
+    m.position.set(0, 0, z);
     m.castShadow = true;
-    g.add(m);
-    g.position.set(0, 0, -0.5);
-    return g;
+    m.updateMatrixWorld(true);
+    noShadowBehindPlane(m);
+    return m.castShadow;
   };
-  const file = new THREE.Group();
-  file.add(setBack("Cage"), setBack("Banner"));
-  file.updateMatrixWorld(true);
-  const shadowTargets: DressTarget[] = [
-    { name: "Cage", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: true },
-    { name: "Banner", root: new THREE.Group(), origin: Vec2.ZERO, rotation: 0, solid: false },
-  ];
-  const shadows = dressScene(file, shadowTargets);
-  const casts = (name: string): boolean | undefined =>
-    (shadows.bound.get(name)?.children[0] as THREE.Mesh | undefined)?.castShadow;
+  const behind = castsAfterRule(-3, 0.5);
+  const front = castsAfterRule(0.4, 1);
   out.push({
-    name: "scene: a node on a colliding body casts wherever it is set back to; on a body that collides with nothing, not behind the plane",
-    pass: casts("Cage") === true && casts("Banner") === false,
-    detail: `cage (collides) ${casts("Cage")}, banner (does not) ${casts("Banner")}`,
+    name: "look: a node wholly behind the plane casts no shadow; one reaching the plane casts as authored",
+    pass: !behind && front,
+    detail: `behind casts ${behind}, front casts ${front}`,
   });
   return out;
 }
 
 // DEBUG GEOMETRY (`CollisionObjectData.debug`): a piece is drawn in 3D when,
-// and only when, its own switch is on - in any level, scene or not, and for a
-// volume as for a wall. What is asserted is the rule, through the real build
+// and only when, its own switch is on - in any level, and for a volume as for
+// a wall. What is asserted is the rule, through the real build
 // and the real visual: a switched-on piece is its outline at its thickness in
 // the body's colour, picked as that piece; its settings override all three; a
 // see-through one casts no shadow; a switched-off piece draws nothing; hook-only
@@ -5567,10 +5474,9 @@ function debugGeometry(): CaseResult[] {
   for (const v of [wall, kill, leaf]) v.dispose();
 
   // THE RETIRED GREY BOX, folded at load (`withDebugFromGreybox`): a level
-  // saved before the switch (no `format`) that names no scene comes back with
-  // exactly the pieces the grey box drew switched on - every piece of a solid
-  // body, no volume, no belt - and the same file naming a scene, or stamped
-  // current, comes back untouched.
+  // saved before the switch (no `format`) comes back with exactly the pieces
+  // the grey box drew switched on - every piece of a solid body, no volume, no
+  // belt - and the same file stamped current comes back untouched.
   const legacy: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
     bodies: [
@@ -5591,10 +5497,9 @@ function debugGeometry(): CaseResult[] {
   const switches = (data: LevelData): string =>
     data.bodies.map((b) => b.objects.map((o) => (o.type === "collision" ? (o.debug?.on ? "on" : "-") : "")).join("")).join("|");
   const folded = switches(normalizeLevelData(legacy));
-  const dressed = switches(normalizeLevelData({ ...legacy, scene: "river" }));
   const current = switches(normalizeLevelData({ ...legacy, format: LEVEL_FORMAT }));
   const twice = switches(normalizeLevelData(normalizeLevelData(legacy)));
-  const fold = folded === "on-|-|on" && dressed === "--|-|-" && current === "--|-|-" && twice === folded;
+  const fold = folded === "on-|-|on" && current === "--|-|-" && twice === folded;
   return [
     {
       name: "debug geometry: a switched-on piece draws its outline at its thickness in the body's colour, exactly (unlit, unshadowed, unfogged, not tone mapped), picked as that piece; its own colour, opacity and depth override them, and a see-through one casts nothing; a switched-off or unconfigured piece draws nothing; a volume draws too; hook-only scenery sits behind the plane; the host hides all of it; the depth scales as a length",
@@ -5602,9 +5507,9 @@ function debugGeometry(): CaseResult[] {
       detail: `${pieces.length} pieces (want 2), depths ${pieces.map((m) => depthOf(m).toFixed(3)).join(", ")}, tagged ${tags.map((t, i) => t === collisions[i]).join(",")}, colours #${plain?.color.getHexString()} #${ghost?.color.getHexString()}, ghost opacity ${ghost?.opacity} transparent ${ghost?.transparent} casts ${pieces[1]?.castShadow}, unlit ${unlit}; killzone ${meshesOf(kill).length}; passable z ${leafZ}; hidden ${hidden} shown again ${shown}; scaled depth ${scaledDepth}`,
     },
     {
-      name: "debug geometry: a level saved before the switch with no scene comes back with the grey box's pieces switched on (solid bodies, not volumes, not belts); a dressed or current-format level is untouched; the fold is idempotent",
+      name: "debug geometry: a level saved before the switch comes back with the grey box's pieces switched on (solid bodies, not volumes, not belts); a current-format level is untouched; the fold is idempotent",
       pass: fold,
-      detail: `format 1 ${folded} (want on-|-|on), with a scene ${dressed}, format ${LEVEL_FORMAT} ${current}, folded twice ${twice}`,
+      detail: `format 1 ${folded} (want on-|-|on), format ${LEVEL_FORMAT} ${current}, folded twice ${twice}`,
     },
     ...debugRestyle(),
   ];
@@ -5696,7 +5601,7 @@ function debugRestyle(): CaseResult[] {
   // draws only the switched-on pieces again.
   const forcedAfter = posed(original);
   forcedAfter.setDebugForced(true);
-  const forcedAt = new BodyVisual(original.body, original, undefined, true);
+  const forcedAt = new BodyVisual(original.body, original, true);
   forcedAt.sync(1);
   const switchedOn = posed(build(level(100, true)));
   const forcedWant = boxes(switchedOn);
@@ -5946,28 +5851,21 @@ function glassSurface(): CaseResult[] {
       return false;
     });
   // What the pieces land on in 3D (render3d/shardCollision.ts): rock and a
-  // moss cushion, not a fern's cards, an ivy shadow, the pool or the depth
-  // prepass's copy of the rock; scenery in the world, a body's in its frame.
+  // moss cushion, not a fern's cards, an ivy shadow or the depth prepass's
+  // copy of the rock; each in its body's frame.
   const rockGeometry = new THREE.BoxGeometry(1, 1, 1);
   const rockMesh = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial({ name: "Painted slate.001" }));
-  rockMesh.position.set(2, 1, 0);
+  rockMesh.position.set(1, 0, 0);
   joinDepthPrepass(rockMesh);
   const moss = new THREE.MeshStandardMaterial({ name: "Terrace.moss", alphaTest: 0.5 });
   moss.userData.mossMound = true;
   const fern = new THREE.MeshStandardMaterial({ name: "Foliage", alphaTest: 0.5 });
   const shadow = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial());
   shadow.userData.name = "backdrop.left-shelf.ivy.shadow";
-  const pool = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial());
-  pool.userData.name = "backdrop pool";
-  const sceneryRoot = new THREE.Group();
-  sceneryRoot.add(rockMesh, new THREE.Mesh(rockGeometry, moss), new THREE.Mesh(rockGeometry, fern), shadow, pool);
-  const sceneryTris = sceneryTriangles(sceneryRoot);
   const bodyRoot = new THREE.Group();
   bodyRoot.position.set(5, 3, 0);
   bodyRoot.rotation.z = 0.5;
-  const bodyMesh = new THREE.Mesh(rockGeometry, new THREE.MeshStandardMaterial());
-  bodyMesh.position.set(1, 0, 0);
-  bodyRoot.add(bodyMesh);
+  bodyRoot.add(rockMesh, new THREE.Mesh(rockGeometry, moss), new THREE.Mesh(rockGeometry, fern), shadow);
   const bodyTris = bodyTriangles(bodyRoot);
   const firstX = (m: { positions: Float32Array }): number => {
     let sum = 0;
@@ -5975,10 +5873,8 @@ function glassSurface(): CaseResult[] {
     return sum / (m.positions.length / 3);
   };
   const landsOn =
-    sceneryTris.length === 2 &&
+    bodyTris.length === 2 &&
     !solidMesh(rockMesh.children[0]!) &&
-    Math.abs(firstX(sceneryTris[0]!) - 2) < 1e-6 &&
-    bodyTris.length === 1 &&
     Math.abs(firstX(bodyTris[0]!) - 1) < 1e-6 &&
     bodyTris[0]!.indices.length === rockGeometry.getIndex()!.count;
   rockGeometry.dispose();
@@ -6015,9 +5911,9 @@ function glassSurface(): CaseResult[] {
       detail: `transmit ${pieceFrags[0]!.ok}, light ${pieceFrags[1]!.ok}`,
     },
     {
-      name: "glass: the pieces land on the scene's rock and moss in the world and a body's own solids in its frame - never leaves, shadows, water or the depth prepass's copies",
+      name: "glass: the pieces land on a body's rock and moss in its frame - never leaves, shadows or the depth prepass's copies",
       pass: landsOn,
-      detail: `scenery meshes ${sceneryTris.length} (want 2), body meshes ${bodyTris.length}, stand-in solid ${solidMesh(rockMesh.children[0]!)}`,
+      detail: `body meshes ${bodyTris.length} (want 2), stand-in solid ${solidMesh(rockMesh.children[0]!)}`,
     },
     {
       name: "glass: every hollow ball pattern tiles its wall in curved shards, each with its inside and several convex parts to collide as",
@@ -6065,7 +5961,7 @@ function shelters(): CaseResult[] {
       Math.abs(p.x - 4) < 1e-12;
     // ...and the editor writes back what it read, untouched fields absent.
     const disk: RawLevelData = { ...authored, shelters: [authored.shelters![0]!, { x: 10, y: 20, rot: 0, shape: { kind: "circle", r: 300 } }] };
-    const back = modelToDisk(modelFromDisk(disk)).shelters ?? [];
+    const back = modelToFlatDisk(modelFromDisk(disk)).shelters ?? [];
     // Key order and the last bits of a px -> m -> px trip are not content.
     const same = (a: unknown, b: unknown): boolean =>
       typeof a === "number" && typeof b === "number"
@@ -6193,7 +6089,7 @@ function fillCost(): CaseResult[] {
 
   // The stand-in: a child sharing the geometry, depth only, front faces,
   // ahead of every opaque draw, casting nothing and never picked; one per
-  // mesh however often it is asked; carried by a clone; gone on leaving.
+  // mesh however often it is asked; carried by a clone.
   const geometry = new THREE.BoxGeometry(1, 1, 1);
   const rock = new THREE.Mesh(geometry, new THREE.MeshPhysicalMaterial({ side: THREE.DoubleSide }));
   rock.castShadow = true;
@@ -6217,8 +6113,6 @@ function fillCost(): CaseResult[] {
   const hits = ray.intersectObject(rock, true);
   const pickedOnce = hits.length === 2 && hits.every((h) => h.object === rock); // in and out of the box
   const carried = rock.clone(true).children.filter(isDepthStandIn).length === 1;
-  leaveDepthPrepass(rock);
-  const left = rock.children.filter(isDepthStandIn).length === 0;
 
   // Refused: everything a front-face depth write could disagree with.
   const refusals: Array<[string, THREE.Mesh]> = [
@@ -6238,15 +6132,6 @@ function fillCost(): CaseResult[] {
     .filter(([want, got, joinedAnyway]) => got !== want || joinedAnyway)
     .map(([want, got]) => `${want}: ${got ?? "accepted"}`);
 
-  // The scene's own water is found by its name, which its stand-in answers to
-  // as well (the name is an ancestor's): only the mesh is the water.
-  const scenery = new THREE.Group();
-  const pool = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial());
-  pool.name = "backdrop pool";
-  scenery.add(pool);
-  joinDepthPrepass(pool);
-  const water = sceneryWater(scenery);
-  const waterOnly = water.length === 1 && water[0] === pool;
   geometry.dispose();
 
   return [
@@ -6266,21 +6151,83 @@ function fillCost(): CaseResult[] {
       detail: `declared once ${declared}, idempotent ${hostIdempotent}, host missing from ${missing.join(", ") || "none"}`,
     },
     {
-      name: "fill: an opaque mesh takes one depth stand-in - shared geometry, depth only, front faces, first, no shadow, never picked, cloned with it, gone on leaving",
-      pass: joined && shaped && pickedOnce && carried && left,
-      detail: `joined ${joined}, stand-ins ${standIns.length}, shaped ${shaped}, hits ${hits.length} (${hits.map((h) => h.object === rock ? "mesh" : "other").join(",")}), cloned ${carried}, left ${left}`,
+      name: "fill: an opaque mesh takes one depth stand-in - shared geometry, depth only, front faces, first, no shadow, never picked, cloned with it",
+      pass: joined && shaped && pickedOnce && carried,
+      detail: `joined ${joined}, stand-ins ${standIns.length}, shaped ${shaped}, hits ${hits.length} (${hits.map((h) => h.object === rock ? "mesh" : "other").join(",")}), cloned ${carried}`,
     },
     {
       name: "fill: a mesh whose depth a front-face write could disagree with takes no stand-in, for the reason it names",
       pass: wrongRefusals.length === 0,
       detail: wrongRefusals.length === 0 ? `${refusals.length} refused as named` : wrongRefusals.join("; "),
     },
-    {
-      name: "fill: the scene's water is the water mesh alone, not its depth stand-in",
-      pass: waterOnly,
-      detail: `found ${water.length}: ${water.map((m) => (isDepthStandIn(m) ? "stand-in" : m.name)).join(", ")}`,
-    },
   ];
+}
+
+// A PLACED PREFAB IN THE EDITOR (plans/node-tree.md "Prefabs"): its insides
+// are nodes of the model, and what is changed among them is written back as
+// the instance's overrides, by prefab node id, in the prefab's own units.
+//
+// None of it can be seen: a wrong override is a level that LOOKS right in the
+// session it was made in and comes back different, or stops following its
+// prefab, after a reload.
+function prefabInstanceEdits(): CaseResult[] {
+  const NAME = "zz-case-lamp";
+  setPrefab(NAME, {
+    format: TREE_FORMAT,
+    root: {
+      type: "StaticBody2D", id: "body", name: "Lamp", order: 0, friction: 0.4,
+      children: [
+        { type: "CollisionShape2D", id: "shade", name: "Shade", y: -10, shape: { kind: "rect", w: 30, h: 20 } },
+        { type: "Anchor2D", id: "hook", name: "Hook", y: 20 },
+      ],
+    } as LevelNode,
+  });
+  try {
+    const level = (scale: number, overrides?: Record<string, Record<string, unknown>>): LevelTree => ({
+      format: TREE_FORMAT,
+      nodes: [
+        { type: "Spawn2D", id: "sp", name: "Spawn", radius: 8 } as LevelNode,
+        { type: "Instance", id: "i1", name: "Lamp", prefab: NAME, order: 0, x: 100, y: 50, rot: 0.3, grouped: true, ...(scale !== 1 ? { scale } : {}), ...(overrides ? { overrides } : {}) } as LevelNode,
+      ],
+    });
+    const instanceOf = (m: EdModel): Record<string, unknown> => modelToDisk(m).nodes[1] as unknown as Record<string, unknown>;
+    // Untouched, at either scale: written exactly as read.
+    // Key order is the writer's, not a difference.
+    const sorted = (o: object): string => JSON.stringify(Object.fromEntries(Object.entries(o).sort(([p], [q]) => (p < q ? -1 : 1))));
+    const untouched = [1, 2].map((sc) => sorted(instanceOf(modelFromDisk(level(sc)))) === sorted(level(sc).nodes[1]!));
+    // An inside moved, at scale 2: the override is in the prefab's units, and
+    // the level compiles it where it was put.
+    const m = modelFromDisk(level(2));
+    const shade = m.items.find((i) => i.node === "i1/shade")!;
+    shade.pos = shade.pos.add(new Vec2(0.1, 0));
+    const moved = { x: shade.pos.x, y: shade.pos.y };
+    m.tree.nodes.get("i1")!.body!.friction = 0.9;
+    const written = instanceOf(m) as { overrides?: Record<string, Record<string, unknown>> };
+    const reread = modelFromDisk({ ...level(1), nodes: [level(1).nodes[0]!, written as unknown as LevelNode] });
+    const back = reread.items.find((i) => i.node === "i1/shade")!;
+    const placed = Math.hypot(back.pos.x - moved.x, back.pos.y - moved.y) < 1e-9;
+    const keys = JSON.stringify(Object.keys(written.overrides ?? {}).sort());
+    const rootFriction = written.overrides?.["body"]?.["friction"] === 0.9;
+    // In the prefab's units: the move was 10 px of world at scale 2, 5 of the prefab's.
+    const local = written.overrides?.["shade"] as { x?: number; y?: number } | undefined;
+    const prefabUnits = local !== undefined && Math.abs(Math.hypot(local.x ?? 0, (local.y ?? 0) + 10) - 5) < 1e-6;
+    // An inside removed: overridden off, never silently restored.
+    const r = modelFromDisk(level(1));
+    removeItems(r, r.items.filter((i) => i.node === "i1/hook"));
+    const removed = (instanceOf(r) as { overrides?: Record<string, Record<string, unknown>> }).overrides?.["hook"]?.["disabled"] === true;
+    // An override naming a node the prefab no longer has is kept as written.
+    const orphan = { gone: { friction: 0.1 } };
+    const kept = JSON.stringify((instanceOf(modelFromDisk(level(1, orphan))) as { overrides?: unknown }).overrides) === JSON.stringify(orphan);
+    return [
+      { name: "editor: an untouched prefab instance is written as it was read", pass: untouched.every(Boolean), detail: `scale 1 ${untouched[0]}, scale 2 ${untouched[1]}` },
+      { name: "editor: an edit inside an instance is written as overrides and read back where it was", pass: placed && keys === '["body","shade"]' && rootFriction, detail: `overrides ${JSON.stringify(written.overrides)}; read back ${placed ? "in place" : `at ${back.pos.x},${back.pos.y} (want ${moved.x},${moved.y})`}` },
+      { name: "editor: a scaled instance's overrides are in the prefab's units", pass: prefabUnits, detail: `shade override ${JSON.stringify(local)} (a 10 px move at scale 2 is 5 of the prefab's)` },
+      { name: "editor: a node removed from an instance is overridden disabled", pass: removed, detail: JSON.stringify(instanceOf(r)) },
+      { name: "editor: an orphaned override is kept", pass: kept, detail: JSON.stringify(instanceOf(modelFromDisk(level(1, orphan)))) },
+    ];
+  } finally {
+    setPrefab(NAME, null);
+  }
 }
 
 export function runRender3dCases(): CaseResult[] {
@@ -6289,7 +6236,7 @@ export function runRender3dCases(): CaseResult[] {
     ...fillCost(),
     ...shelters(),
     ...glassSurface(),
-    ...blenderScenes(),
+    ...bodyNames(),
     ...debugGeometry(),
     ...retiredGeometry(),
     ...beltRendering(),
@@ -6308,6 +6255,7 @@ export function runRender3dCases(): CaseResult[] {
     ...surfaceResolution(),
     ...visualRoundTrip(),
     ...editorRoundTrip(),
+    ...prefabInstanceEdits(),
     ...groupTransform(),
     ...vertexEditMoves(),
     ...pickIndex(),
@@ -6326,6 +6274,7 @@ export function runRender3dCases(): CaseResult[] {
     ...propEmission(),
     ...realLevelRoundTrip(),
     ...waterFormat(),
+    ...waterPieces(),
     ...bounceFormat(),
     ...checkpointFormat(),
     ...levelMetaFormat(),

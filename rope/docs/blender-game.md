@@ -3,7 +3,11 @@
 Since 2026-10-08 everything in Blender that comes from the level editor is one add-on, **Game**, `tools/blender/game/`: the game camera and the game's look over it, depth moves about its eye, and guides copied from the level's collision outlines.
 Until then it was all part of the formations add-on, which now only makes guides and builds rocks from them ([blender-formations](blender-formations.md)); the split keeps Formations free of anything the level decides.
 Game needs Formations enabled: the guides it edits and the rocks it moves are Formations', and it works through Formations' own modules (`game/formations_addon.py` finds the enabled extension, so both share one copy and one set of hooks).
-Everything it reads from the level, `just scene-guide <level>` bakes into the level's guide, `<scene>-guide.blend`, linked into the scene ([blender-scenes](blender-scenes.md)).
+Everything it reads from the level, `just scene-guide <level>` baked into the level's guide, `<scene>-guide.blend`, linked into the scene ([blender-scenes](blender-scenes.md)).
+
+**The scene half is retired** (2026-11-26, with the Blender scenes, [plans/node-tree.md](../plans/node-tree.md#what-blender-drops)): `just scene-guide` and `scene_guide.py` are gone, so no new guide can be written.
+Everything from [Scene guides](#scene-guides) down (the game camera, the look over it, depth and guides from collision outlines) describes what the add-on does with a guide written before then, and is kept as it stood.
+[Preview a model with river lighting](#preview-a-model-with-river-lighting) is current: its light is built by `tools/blender/game_lighting.py`, split out of the scene guide.
 
 ## Install
 
@@ -41,6 +45,8 @@ scene uses the existing Cycles emission preview. Judge placement-specific
 shadows, fog and the exported material in the actual level.
 
 ## Scene guides
+
+Retired 2026-11-26 with the Blender scenes (see the top of this page); this section and everything below it are kept as they stood.
 
 The `game.light-preview*` helper walls and fog volumes are locked against
 selection on load. The shared foliage, moss and ivy placement ray also skips

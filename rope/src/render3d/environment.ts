@@ -143,9 +143,8 @@ export function fogDensity(amount: number): number {
 
 // The level's fog: its colour (a CSS hex, which three mixes in as the sRGB
 // bytes it names, after tone mapping) and `FogExp2` density. Absent, zero (and
-// a negative, which means nothing) are all "no fog". Exported so the Blender
-// guide's game look (scripts/scene-guide.ts) is this fog, not a copy of it.
-export function fogOf(env: EnvironmentData | undefined): { color: string; density: number } | null {
+// a negative, which means nothing) are all "no fog".
+function fogOf(env: EnvironmentData | undefined): { color: string; density: number } | null {
   const amount = env?.fogAmount ?? 0;
   if (!(amount > 0)) return null;
   return { color: env?.fogColor ?? env?.backgroundColor ?? DEFAULT_SKY, density: fogDensity(amount) };
@@ -156,8 +155,9 @@ export function fogOf(env: EnvironmentData | undefined): { color: string; densit
 export const TONE_MAPPING_EXPOSURE = 1.0;
 
 // The level's light as the game draws it with a renderer, every default
-// applied: what `Environment` builds, and what the Blender guide rebuilds
-// (scripts/scene-guide.ts), so the two cannot disagree. Colours are three's
+// applied: what `Environment` builds, and what Blender's model-lighting
+// preview rebuilds (scripts/lightingJob.ts, tools/blender/game_lighting.py),
+// so the two cannot disagree. Colours are three's
 // (linear); `hdri` names a captured sky that replaces the generated one.
 export interface Lighting {
   sun: { color: THREE.Color; intensity: number; dir: THREE.Vector3 } | null;

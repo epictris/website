@@ -29,6 +29,7 @@ import {
   type CameraRegionData,
   type RawLevelData,
   type SpawnData,
+  type LevelSource,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import type { MoverScript } from "./movers";
@@ -506,7 +507,7 @@ export class BallLevel {
   static readonly ENTRY_STUCK_FRAMES = 30;
   static readonly ENTRY_PROGRESS = 0.01;
 
-  constructor(rawData: RawLevelData, options: BallLevelOptions = {}) {
+  constructor(rawData: LevelSource, options: BallLevelOptions = {}) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
     this.cameraPaths = data.cameraPaths ?? [];

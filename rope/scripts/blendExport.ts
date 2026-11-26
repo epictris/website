@@ -1,7 +1,8 @@
 // One `.blend` through `tools/blender/scene_export.py` and the optimiser into
-// the one GLB the game loads: the half of `just scene` and `just model` that
-// does not know which of them it is (see scripts/scene-export.ts,
-// scripts/model-export.ts, docs/blender-scenes.md and docs/blender-models.md).
+// the one GLB the game loads: the half of `just model`, a formation's build and
+// a decoration's that does not know which of them it is (see
+// scripts/model-export.ts, scripts/formation-build.ts,
+// scripts/decoration-build.ts and docs/blender-models.md).
 //
 // Headless Blender exports every shippable object with its world transform
 // (and bakes what glTF cannot carry), the pinned prop pipeline optimises the
@@ -25,7 +26,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { DOF_MAX_BLUR, FOCUS_BAND } from "../src/render3d/depthOfField";
-import type { SceneCredit, SceneNodeMeta } from "../src/render3d/scenes";
+import type { ExportCredit, ExportNodeMeta } from "../src/render3d/exportFiles";
 import { validateBakedField } from "../src/render3d/bakedLighting";
 import { StepProgress } from "./stepProgress";
 import { constantColourMaps } from "./bakedMapValidation";
@@ -33,34 +34,33 @@ import { readGltf } from "./gltfFile";
 
 export const ROOT = resolve(import.meta.dirname, "..");
 
-// What `scene_export.py` writes into its meta: the half of a scene's or a
-// model's `meta.json` that is Blender's.
+// What `scene_export.py` writes into its meta: the half of a model's
+// `meta.json` that is Blender's.
 export interface BlenderMeta {
   blender: string;
-  nodes: SceneNodeMeta[];
+  nodes: ExportNodeMeta[];
   skipped: { name: string; reason: string }[];
   warnings: string[];
-  credits: SceneCredit[];
+  credits: ExportCredit[];
   baked_maps?: string[];
   lighting?: { lightmaps: number; probes: number };
 }
 
 export interface BlendExport {
-  dynamicNodes?: string[];
   // The `.blend` to export.
   blend: string;
   // Where the shipped GLB goes.
   shipped: string;
-  // What it is, for the log and the steps (`[scene]`, `[model]`), and the
-  // name its caches and Blender log are kept under.
+  // What it is, for the log and the steps (`[model]`), and the name its
+  // caches and Blender log are kept under.
   tag: string;
   // A formation's bake (scripts/formation-build.ts) is a model's, but its
   // logs are kept apart: they are named by the recipe's hash.
-  kind: "scene" | "model" | "formation" | "decoration";
+  kind: "model" | "formation" | "decoration";
   name: string;
   // Every face counts as seen by the game camera when the unwrap shares out
   // the texels (`scene_export.py --all-seen`): a model may be turned to show
-  // any side of itself, where a scene's rock stands facing the camera.
+  // any side of itself.
   allSeen: boolean;
   raw: boolean;
   noCache: boolean;
@@ -265,11 +265,9 @@ export async function exportBlend(opts: BlendExport): Promise<BlenderMeta> {
       // The finer detail passes add nothing the game's High depth of field
       // would blur away (formations/render.py `detail_blur`), with its numbers.
       { ...process.env, TMPDIR: exportTemp, SCENE_EXPORT_DOF: JSON.stringify({ maxBlur: DOF_MAX_BLUR.high, focusBand: FOCUS_BAND }),
-        SCENE_EXPORT_EMISSION: opts.kind === "scene" ? "1" : "0",
         // A decoration ships a texture-only moss as a shell of its own: its rock
         // is not in the export to be painted (docs/formations.md).
         SCENE_EXPORT_MOSS_SHELL: opts.kind === "decoration" ? "1" : "0",
-        SCENE_EXPORT_DYNAMIC: JSON.stringify(opts.dynamicNodes ?? []),
       },
     );
     // Everything Blender said, kept: the steps show only the export's own

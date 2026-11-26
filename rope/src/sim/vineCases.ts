@@ -58,7 +58,7 @@ import {
   type FrameInput,
 } from "../input/frameInput";
 import { scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk } from "../editor/model";
 import { PX } from "../engine/units";
 import { SolverStats } from "../engine/solverStats";
 import { DEFAULT_TIE_SUBSTEPS } from "../engine/ties";
@@ -592,7 +592,7 @@ function caseFormat(): VineResult {
   );
 
   // The editor's own trip, through `EdVine`, which is a different shape entirely.
-  const saved = modelToDisk(modelFromDisk(authored));
+  const saved = modelToFlatDisk(modelFromDisk(authored));
   const sv = saved.vines?.[0];
   const anchorObj = saved.bodies[0]?.objects.find((o) => o.type === "anchor");
   check(
@@ -612,7 +612,7 @@ function caseFormat(): VineResult {
   // An unauthored spacing and colour must come back ABSENT rather than as the
   // editor's idea of the default written out, or a level gains fields nobody
   // authored the first time it is opened.
-  const bare = modelToDisk(
+  const bare = modelToFlatDisk(
     modelFromDisk({ ...authored, vines: [{ anchor: 7, length: 250 }] }),
   ).vines?.[0];
   check(
@@ -690,8 +690,8 @@ function caseFormat(): VineResult {
     JSON.stringify(scaleLevelData(scaleLevelData(spanAuthored, PX), P).vines) ===
       JSON.stringify(spanAuthored.vines),
   );
-  const spanSaved = modelToDisk(modelFromDisk(spanAuthored)).vines?.[0];
-  const savedAnchor2 = modelToDisk(modelFromDisk(spanAuthored))
+  const spanSaved = modelToFlatDisk(modelFromDisk(spanAuthored)).vines?.[0];
+  const savedAnchor2 = modelToFlatDisk(modelFromDisk(spanAuthored))
     .bodies[1]?.objects.find((o) => o.type === "anchor");
   check(
     `editor: a span saves back naming its second anchor (${spanSaved?.anchor2})`,

@@ -87,13 +87,13 @@ Drawing back into the samples after they have been resolved relies on three not 
 
 ## Fill cost
 
-A frame of a dressed level is bound by how much its scenery costs to shade, not by its draw calls: on BALL at the spawn, the Blender scenery was 3.4 ms of a 4.3 ms main pass at 3701x2082, and the frame at half that resolution cost a quarter as much.
+A frame of a dressed level is bound by how much its scenery costs to shade, not by its draw calls: on BALL at the spawn (2026-10-16, when it was still dressed by its Blender scene), the scenery was 3.4 ms of a 4.3 ms main pass at 3701x2082, and the frame at half that resolution cost a quarter as much.
 Two patches, both 2026-10-16, take most of that away without changing a pixel.
 
 - **The scenery lays its depth first** (`render3d/depthPrepass.ts`).
   three sorts opaque draws by material before depth, so rocks that each wear their own baked material are drawn in material order, and every rock drawn before the one in front of it is shaded and then painted over.
   Each eligible scene mesh carries a depth-only stand-in, ordered ahead of every opaque draw, so the real materials shade only the nearest surface; `gl_Position` is declared `invariant` in every built-in vertex shader so the two depths agree to the bit.
-  What is eligible, what is not and why, and the one material swap that has to leave (the scene's own water) are in the module's header.
+  What is eligible, what is not and why are in the module's header.
   A **picture** (a blended image card from the scene, [blender-scenes](blender-scenes.md#what-blender-cannot-carry)) gets a stand-in too, for correctness rather than cost (since 2026-10-17): blended, it writes no depth, and the water, drawn after all transparent scenery, painted over the river's root-room cards wherever they stand in the pool.
   Its stand-in is cut by the picture's own map at half alpha and drawn after every picture and before the water (`PICTURE_DEPTH_ORDER`), never first, since a depth laid first rejects the scenery behind the picture's soft outline and leaves a dark rim.
 - **A light is shaded only where it reaches** (`render3d/lightReach.ts`).
@@ -131,13 +131,12 @@ That happens to be what the negation produces, which is a coincidence worth stat
 
 ## What the scene draws
 
-**A level's look is its Blender scene, and the level itself draws almost nothing** (see [blender-scenes](blender-scenes.md)).
-Since 2026-09-29 the level format has no geometry objects: a collision object is what a body is made of, and what it looks like is whatever object in the level's scene carries the body's `name`.
-`BodyVisual` (`render3d/bodyVisuals.ts`) is the ONE class for every body, and what it builds is only what a mesh cannot be:
+**A level's look is what its nodes carry**: formations and the decorations grown on them, models of the library and lights, drawn from the level's node tree by `TreeLook` ([below](#the-look-from-the-node-tree)).
+Since 2026-09-29 the level format has no geometry objects: a collision object is what a body is made of, and says nothing about how it looks.
+`BodyVisual` (`render3d/bodyVisuals.ts`) is the ONE class for every body, and what it builds is only what the body's shapes make, which a mesh cannot be:
 
 - **Water** (`render3d/water.ts` for a current and its fall, `stillWater.ts` for a pool, both after Tris's studies and sharing `waterLook.ts`; see [water](water.md)), whose surface the current runs across; its slab is the body's `waterZ`/`waterDepth` and its tint the body's `color`.
 - **A conveyor's band** (see [Conveyor belts](#conveyor-belts)), built from the belt collision object itself.
-- **The body's lights** (see [lighting-and-surfaces](lighting-and-surfaces.md)).
 - **Debug geometry**: every collision piece whose `debug.on` is set (`CollisionObjectData.debug`, the Debug section of a shape's panel in the editor), extruded through its `debug.depth` and filled with its `debug.color` at its `debug.opacity`.
   The colour is exact on screen (`debugMaterialOf`, 2026-10-17, Tris: "regardless of lighting"): an unlit `MeshBasicMaterial`, not fogged, not tone mapped and receiving no shadow, so `#555555` on the piece is `#555555` in the frame, and its faces are one flat colour with no shading between them; an opaque piece still casts its shadow.
   Until then it was the lit `color` surface, which the sun, the environment, the fog and ACES all moved off the picked colour.
@@ -145,11 +144,11 @@ Since 2026-09-29 the level format has no geometry objects: a collision object is
   It is per piece and opt-in, in every level, scene or not, and for a volume (a killzone, a force area) as for a wall; a belt has none, since it draws its own band.
   It is an instrument rather than a look: what a level with no scene is blocked out in (the test levels), and what a piece a dressed level has nothing over is seen by.
   A see-through piece (`opacity` below 1) writes no depth and casts no shadow.
-  **G** hides all of it at once, in the game and in the editor's ▶ Test (`Scene3D.setDebugShown`), to see the Blender scene alone; every test opens with it shown, and authoring always shows it.
+  **G** hides all of it at once, in the game and in the editor's ▶ Test (`Scene3D.setDebugShown`), to see the look alone; every test opens with it shown, and authoring always shows it.
   The editor's **all debug** forces it the other way (`Scene3D.setAllDebugShown` → `BodyVisual.setDebugForced`): every piece is drawn, switched on or not, with its own settings, render-side so the level data is untouched; the game never sets it.
 - A body the **sim spawned** (a sandbox rock, the hook) extrudes its own shapes, scene or not.
 
-A piece with debug geometry switched off draws nothing, scene or not: an invisible wall stays invisible, and `just scene` reports the body names with no object behind them.
+A piece with debug geometry switched off draws nothing: an invisible wall stays invisible.
 
 Until 2026-10-07 (level format 1) the switch did not exist: a level that named no scene drew every piece of every non-area body as a **grey box**, by a rule no piece could opt out of, and a dressed level drew none.
 `normalizeLevelData` folds a format-1 level into format 2 at load (`withDebugFromGreybox`) by switching on exactly the pieces the grey box drew, with every setting left to its fallback, so an old level - or a recorded bundle carrying one - looks as it always did.
@@ -158,7 +157,7 @@ The fold is keyed on `LevelData.format` rather than read off the data because a 
 A body is a `THREE.Group` carrying the interpolated pose, with one child per drawn piece at that piece's placement - rigid within the body, so written **once** at build.
 The per-frame sync is therefore two writes per body into vectors it already owns; chain links go through one `InstancedMesh` with `count` set per frame rather than per-link `Mesh` churn.
 A body that built no engine body (one with no collision object: a lone light) stands at its authored transform, and `sync` has nothing to do.
-Each piece carries the collision object it was built from as its pick tag (`pickTagOf`), and a scene's dressing node carries its body's first object, so a raycast in the editor answers with something the editor can act on.
+Each piece carries the collision object it was built from as its pick tag (`pickTagOf`), and everything the look draws carries its node's id, so a raycast in the editor answers with something the editor can act on.
 
 Two rules are inherited from elsewhere rather than invented here:
 
@@ -175,30 +174,30 @@ Three's bevel runs from the caps *outward*, so a 2 cm bevel put every drawn body
 `bevelOffset: -bevelSize` makes it a chamfer off the outline instead, and `cli render3d` asserts the bounding box against the authored size *with the bevel on*.
 
 Areas stay on the 2D overlay in both modes - a killzone's skulls and a force area's arrows are flat marks on a region of *space* (see [**Area glyphs**](areas-and-friction.md#area-glyphs), and "pass-through geometry must read as pass-through" in `docs/game-design.md`).
-Hook-only bodies do **not**: their debug geometry sits a quarter of a metre behind the plane, and in 3D that setback is the whole cue, so the grate lattice is drawn in 2D mode only (a scene puts their dressing wherever Blender does).
+Hook-only bodies do **not**: their debug geometry sits a quarter of a metre behind the plane, and in 3D that setback is the whole cue, so the grate lattice is drawn in 2D mode only.
 
 ## Bodies and scene objects
 
-A level is a list of **bodies**, and a body is a list of **scene objects**: a collision shape, a light, or a chain **anchor**.
+A level is authored as a node tree ([level-format](level-format.md#the-node-tree)), and what the sim and `BodyVisual` read is what it compiles to: a list of **bodies**, each a list of **scene objects** - a collision shape, a light, a model, a decoration, or a chain **anchor** - and at most one formation.
 Everything a body has exactly one of - what it collides as, its fill, its friction, a force area's magnitude, its `name` - lives on the body; everything it may have several of lives on its objects, placed in the body's own frame.
 
 That shape replaced three separate mechanisms at once, and each of them was working around the same missing thing:
 
-- A **compound body** was a `group` STRING TAG on several flat entries, matched by name at load. It is now one body with several collision objects, so nothing has to agree about a tag and the properties a body has one of cannot be authored several times and then quietly collapsed onto the first member's (`syncGroupProps` is gone with it, and the editor's own "grouping" with it: an item carries the body it is IN, always, so "ungrouped" stopped being a state).
-- **Decoration** was `collision: false` on a body-shaped entry, then a body with a geometry object and no collision object; now it is not in the level at all, since the look is the scene's.
+- A **compound body** was a `group` STRING TAG on several flat entries, matched by name at load. It is now one body with several collision objects, so nothing has to agree about a tag and the properties a body has one of cannot be authored several times and then quietly collapsed onto the first member's (`syncGroupProps` is gone with it). Grouping came back with the node tree as something else entirely: a flag that changes only what a click in the editor selects ([editor-model](editor-model.md#groups)).
+- **Decoration** was `collision: false` on a body-shaped entry, then a body with a geometry object and no collision object; it is a `Decoration3D` node under the rock it grows on now ([formations](formations.md#decorations)).
 - A **light** was its own top-level list with no parent, so it could not ride anything (see [**Light and air**](lighting-and-surfaces.md#light-and-air)).
 
 The body's **authored** frame and its **engine** frame are deliberately different points.
 The engine origin has to be the collision objects' combined centre of mass - every lever arm in the engine is measured from `globalPosition` - and it moves as pieces are added; the authored one has to stay put, or every offset in a body would shift whenever a piece was added to it.
-`buildLevelBodies` absorbs the difference once, at load (`BuiltBody.origin`), which is the same job `buildSceneChains` does for chain anchors and `dressScene` for a scene's bound nodes.
+`buildLevelBodies` absorbs the difference once, at load (`BuiltBody.origin`), which is the same job `buildSceneChains` does for chain anchors.
 
 `material` and `thickness` stay **per collision object**, which is the one property a body does not have just one of: its mass, centre of mass and inertia are sums over its pieces, so a stone head on a wooden shaft is exactly what those sums are for.
 
 Every length goes through `scaleObject` both ways.
-Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read), which is why `cli render3d` asserts both round trips: the format's px → m → px, and the editor's `modelFromDisk`/`modelToDisk`, which goes through a different shape entirely. Both are compared over **flattened** placements rather than bytes, because a body's transform and its objects' placements are two halves of one answer and the editor legitimately re-origins a body onto its first object when it saves; a byte comparison would read that as a lost field.
+Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read), which is why `cli render3d` asserts both round trips: the format's px → m → px, and the editor's `modelFromDisk`/`modelToDisk`, which goes through the editor's node tree. Both are compared over **flattened** placements rather than bytes, because a body's transform and its objects' placements are two halves of one answer. The node tree's own conversion (`scaleTree`) asks `scaleNormalized` which fields are lengths rather than keeping a second list, and `cli nodes` holds compile and scale to commute.
 
 **The retired forms are still an input**, and permanently: the Godot extractor writes the flat form, so `levelData.ts` arrives that way, and every bundle recorded before 2026-09-29 embeds a level with geometry objects in it.
-`normalizeLevelData` folds every retired form - the flat entries, the `impermeable` kind, the `backgrounds` list, the top-level `lights` list and the geometry objects (`withoutLook`) - into this one, inside `scaleLevelData`, which is the one gate a level cannot reach the sim or the editor without passing through.
+`normalizeLevelData` folds every retired form - the flat entries, the `impermeable` kind, the `backgrounds` list, the top-level `lights` list and the geometry objects (`withoutLook`) - into this one, inside `scaleLevelData`, which is the one gate a level cannot reach the sim or the editor without passing through; since the node tree the folded flat level is then migrated into a tree and compiled back (`cli nodes` proves the round trip exact).
 It is **bit-identical by construction**: a migrated body's own origin is (0, 0, 0) and its objects keep the world placements the flat entries carried, so the centre-of-mass arithmetic reads exactly the numbers it read before, and a group's body is emitted where its first member sat so `World.add` stamps the same build index.
 A body that held nothing but geometry objects is dropped, and since such a body never built an engine body, no build index moves.
 
@@ -209,7 +208,7 @@ The band's look is on the belt shape itself (`BeltLook`: `width`, `texture`, `co
 It is not an extruded outline: the extruder's side-wall UVs are anchored in the object's own x and y so a wall's texture meets the cap's, which on a loop runs u along the runs and turns it into the depth axis wherever the outline goes vertical, and a belt's running surface wants u by ARC LENGTH.
 The ring is an outer wall on the loop, an inner wall `thickness` inside it, and front and back caps (the band's edge) at `±width / 2`; each face has its own normals, so the edges are creases and no two faces share a plane.
 Its UVs are metres, as the extruder's are: `u` is arc length along the outer surface at the rate that makes the surface's repeat (`tileMetres`) the nearest length going round a whole number of times, so there is no seam where `s` wraps and nothing stretches round a wheel, and the caps and the inner wall carry the same `u` as the surface they stand on; `v` runs on round the cross-section, continuous over every rim but the back of the outer wall.
-Inside the band is the hollow: nothing is drawn at the wheels, which the level's scene dresses.
+Inside the band is the hollow: nothing is drawn at the wheels, which a model or rock on the body dresses.
 
 What says the belt runs is its surface.
 A textured band **scrolls**: every frame its `u` is `(s - speed · t) · rate` with `t` the SIM clock, `(frame - 1 + alpha) / 60` (`beltRenderTime`, the instant the bodies are interpolated to), so a replay shows the same belt at the same frame and a paused game shows it standing.
@@ -221,7 +220,7 @@ Cleat placement allocates nothing (`beltFrameAt` is `beltPointAt`/`beltTangentAt
 
 ## A level's scene: built, shown, retired
 
-Everything one level draws - its bodies' visuals, its Blender scene, its lights, its vines, its ball - is a `LevelScene` (`render3d/levelScene.ts`), one group under the scene; what the page keeps across levels (the environment, the chains, the shards, the passes, the editor's guides) stays on `Scene3D`.
+Everything one level draws - its bodies' visuals, its look (`TreeLook`), its lights, its vines, its ball - is a `LevelScene` (`render3d/levelScene.ts`), one group under the scene; what the page keeps across levels (the environment, the chains, the shards, the passes, the editor's guides) stays on `Scene3D`.
 `setLevel(level)` is `prepare` (build it, not drawn), `show` (put it up, and hand back the one that was up, still built) and `retire` (dispose that one later).
 The editor uses the three apart: a ▶ Test **parks** the editor's own scene for the length of the test and puts it back on Esc, and the test's own scene is prepared ahead of the press (see [**Testing a level**](editor.md#testing-a-level)).
 
@@ -230,19 +229,30 @@ Disposed first, every program it shared with its successor was linked a second t
 So a retired level waits for the end of the next frame drawn, when every pass of that frame has given each program it used a user in the new level; `disposeRetired` then compiles the whole scene against the frame target (cheap when every program is found, and it gives a user to what the frame did not draw) and only then disposes.
 The ball's glow light is built with every level, a ball in it or not, so the number of lights - which every lit program is keyed by - is the same in the editor's preview and in a test of the same level.
 
-## Blender scenes
+## The look, from the node tree
 
-A level naming a `scene` is dressed by one GLB exported from `assets-src/scenes/<scene>.blend` (see [blender-scenes](blender-scenes.md)).
-`Scene3D.prepare` hands `SceneDressing` (`render3d/sceneDressing.ts`) every authored body's name, visual root, rest pose and whether it collides; when the file lands, `dressScene` hangs each node named like a body under that body's root at Blender's pose minus the rest pose, so it is drawn where Blender put it and carried by the body, and adds the rest to the scene as scenery at the identity.
-A file already decoded is mounted inside the `SceneDressing` constructor rather than when its promise next calls back: the editor rebuilds inside a frame, and a mount a task later drew that frame with no scenery at all, a one-frame flash of the bare collision on every edit.
-Whether a scenery node casts (below) reads every vertex of it, ~35 ms over `river`, so the answer is kept per file node (`sceneryCasts`); a bound node, or scenery a bound node was taken out of, is asked every mount.
-Bound nodes carry the body's first object as their pick tag; scenery carries none.
-A bound node is handed to its body (`BodyVisual.adoptDressing`), which gives a body carrying a waking light its own copies of the node's emissive materials for the light to drive.
-A node on a body that collides always casts a shadow; any other node casts only if it is not wholly behind the plane.
-The file is served from `/scenes/<scene>/scene.glb`, cached per page like a prop's, weighted in the preload list by the store's pin or the local `meta.json` (`levelStoredFiles`).
+**Every spatial node is one `THREE.Object3D`, parented as the tree is parented** (`TreeLook`, `render3d/treeLook.ts`), so one rule carries everything: a node's children inherit its transform.
+`Scene3D` builds one per level from `LevelData.tree`, the expanded node tree the level was compiled from (prefab instances included), in tree order, which is also the order the light budgets are spent in, so a level's lamps go out in the same place every time it loads.
 
-A body may also carry **models** of the library ([blender-models](blender-models.md)): `BodyVisual.mountModels` puts a holder per `model` object on the body's group, placed against the built frame with the object's depth, tilts and scale, and clones the file into it when it lands (`loadModelFile`, the same loader and mesh preparation as a scene's; one already decoded is mounted on the spot).
-A model is tagged with its own object for a pick, casts by the same rule as a bound node, is adopted for a waking light's glow, and hides with the scene (`Scene3D.setSceneShown`); a late landing bumps the shards' collision version.
+- A **body** node's object is the body's authored frame, `BodyVisual.frame`, a child of the body's visual, which the engine body moves every frame; a rock, a model or a lamp under a swinging crate swings with it because it is under it.
+  The frame is where the authored origin sits relative to the engine origin (the centre of mass), set once at build.
+  A body that built nothing is drawn where it was authored.
+- A `Node2D` (or a shape or anchor with children) is a group in its pose in the plane, a `Node3D` a group with its depth and tilt, a `Node` a group at the world origin.
+- A **`Formation3D`** mounts its rock (`loadFormationFile`, the tier `formationServedFile` chooses), and draws its `Decoration3D` children on it, painted layers into the rock's own paint UV; a rock inside a scaled prefab instance is drawn at that scale (`placedScale`).
+- A **`Model3D`** clones its library file into a holder at its depth, tilts and scale (`loadModelFile` in `render3d/exportFiles.ts`, the loader and mesh preparation every export goes through).
+  One already decoded is mounted on the spot, since the editor rebuilds inside a frame and a mount a task later drew that frame without it.
+- A **`Light3D`** is mounted into the level's light rig in its parent's frame ([lighting-and-surfaces](lighting-and-surfaces.md)).
+- The plane's volumes, paths and marks are not drawn here: the 2D overlay, the camera, the fog and the sky read them.
+
+This replaced the per-body carrying code (`mountModels`, `mountFormation`, `mountDecorations` on `BodyVisual`), the 3D body as a frame for backdrop rock, and the formation-on-a-body lookup, with the scene graph.
+
+The nearest body above a node, or the top-level frame a bodiless node is under, is its **carrier**: what a waking light drives the glow of and what a mushroom bounces with.
+Everything drawn under a carrier holding a waking light gets its own copies of its emissive materials for the light to drive (`TreeLook.adoptLook`), so one lamp's glow lights up nothing else.
+What a body that collides carries always casts a shadow; what collides with nothing casts only if it is not wholly behind the plane (`noShadowBehindPlane`).
+Every drawn thing is tagged with its node's id for a pick.
+All of it hides as one (`Scene3D.setSceneShown` → `TreeLook.setShown`); a file landing late bumps the shards' collision version.
+
+A level's Blender scenes, one GLB dressing the whole level and bound to its bodies by name, were retired on 2026-11-26 ([blender-scenes](blender-scenes.md)); every Blender export the game draws now is a node's.
 
 Retired with the geometry objects on 2026-09-29, and recorded here so they are not rebuilt by accident: **per-object projection** (a geometry object drawn through an orthographic lens inside the perspective scene, by a vertex patch on a twin material), **image planes** (an unlit picture stretched over a shape, `imageAssets.json`), **generated meshes** (boulders and mushroom patches generated behind the dev server and keyed by a hash of their input, `generatedAssets.json`) and the 2D renderer's **decor** layer.
 A painted backdrop, a generated rock or a mushroom patch is now made in Blender (the formations add-on builds rocks with the same boulder generator, [blender-formations](blender-formations.md)).
@@ -250,6 +260,6 @@ A painted backdrop, a generated rock or a mushroom patch is now made in Blender 
 ## Traps
 
 - **`PX`-sized constants do not survive projection.** A fixed on-screen size written as `<px> * PX` assumes the 2D renderer's uniform transform. Everything like that stays on the overlay, and nothing in the 3D scene may depend on `PIXELS_PER_METER` except through `space.ts`.
-- **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene. There are two named exceptions. The first is the avatar's own entry (`SurfaceRequest.avatar`), whose fog `avatarSurface.ts` patches; it is shared with nothing but the avatar, and a page draws one (see [**The avatar's own surface**](lighting-and-surfaces.md#the-avatars-own-surface)). The second is outside the cache altogether: a waking body's own copy of each emissive material of its scene dressing (`BodyVisual.adoptDressing`), whose `emissiveIntensity` the light rig writes every frame so the dressing brightens with its light; the body owns and frees the copies, so nothing shared is ever written (see [**Waking lights**](lighting-and-surfaces.md#waking-lights)). A rig hands the authored intensity back when it lets the body go.
+- **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene. There are two named exceptions. The first is the avatar's own entry (`SurfaceRequest.avatar`), whose fog `avatarSurface.ts` patches; it is shared with nothing but the avatar, and a page draws one (see [**The avatar's own surface**](lighting-and-surfaces.md#the-avatars-own-surface)). The second is outside the cache altogether: a waking carrier's own copy of each emissive material of its look (`TreeLook.adoptLook`), whose `emissiveIntensity` the light rig writes every frame so the look brightens with its light; the body owns and frees the copies, so nothing shared is ever written (see [**Waking lights**](lighting-and-surfaces.md#waking-lights)). A rig hands the authored intensity back when it lets the body go.
 - **Transform sync must not allocate**, and must read `renderPosition/renderRotation(alpha)` only. The debug overlay is the one deliberate exception (it exists to show what the sim believes) and it stays 2D.
 - **Where the chain's links fall is shared code.** `render/chainMetrics.ts` holds the one continuous arc walk both renderers use, because that is the one part of chain drawing that has ever been wrong (`session-1467f`) and two copies of it would drift.

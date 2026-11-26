@@ -4,7 +4,9 @@
 //   GET    /generated/<hash>/<file>       the store, `no-store` (a bake adds
 //                                         tiers and rewrites meta.json under
 //                                         one hash)
-//   POST   /api/jobs                      {kind, formation, label?} -> {id}
+//   POST   /api/jobs                      {kind, formation, label?} -> {id};
+//                                         the formation a `Formation3D` node
+//                                         or a compiled `FormationData`
 //   GET    /api/jobs?client=<id>          server-sent events: a snapshot of
 //                                         every job, then each change
 //   DELETE /api/jobs/<id>                 cancel
@@ -40,20 +42,14 @@ import { sha256Hex } from "../formation/sha256";
 import { decodeMeshBin, type StoredMesh } from "../formation/meshBin";
 import { FORMATION_HASH, FORMATION_STORE, GEOMETRY_FILE, MESHES, MESHES_API, META_FILE, PAINT_API, ROCK_FILE, tierFileName, type FormationMeta } from "../formation/store";
 import type { FormationData, FormationTier } from "../level/levelFormat";
-import { MODEL_NAME } from "../render3d/models";
+import type { NodeFormationGuide } from "../level/nodes";
 
-// Where the Assets tab keeps its documents, relative to rope/, and the API.
-export const FORMATION_ASSETS_DIR = "formation-assets";
-export const FORMATION_ASSETS_API = "/api/formation-assets";
-
-// "asset" accepts an asset of the Assets tab into the model library
-// (scripts/formation-asset.ts): its key is the asset's name, not a hash.
 // "decoration" grows one decoration on a formation's rock
 // (scripts/decoration-build.ts): its key is the request's hash.
 // "material" bakes one library material onto one rock
 // (scripts/material-layer-build.ts), what the editor lays a material layer's
 // live mask over while it is painted: its key is `materialLayerHash`.
-export type JobKind = "geometry" | "bake" | "asset" | "decoration" | "material";
+export type JobKind = "geometry" | "bake" | "decoration" | "material";
 export type JobStateName = "queued" | "running" | "done" | "failed" | "cancelled";
 
 // What a finished job hands the editor: a level's `formation.built`.
@@ -65,8 +61,6 @@ export interface JobResult {
   tiers: FormationTier[];
   // What the build noticed (`FormationMeta.warnings`), for the panel.
   warnings: string[];
-  // An asset job's: the library model it exported.
-  model?: string;
   // A material layer's: its baked material (`built.maps`).
   maps?: string;
 }
@@ -111,39 +105,7 @@ export function formationService(): Plugin {
     configureServer(server) {
       const root = server.config.root;
       const store = join(root, "public", FORMATION_STORE.slice(1));
-      const assets = join(root, FORMATION_ASSETS_DIR);
       const runner = new JobRunner(root, store);
-
-      // The Assets tab's documents (docs/formations.md, "The Assets tab"): one
-      // level-format file per asset, `formation-assets/<name>.json`, the name
-      // the library model's.
-      server.middlewares.use(FORMATION_ASSETS_API, (req, res, next) => {
-        const name = decodeURIComponent((req.url ?? "/").split("?")[0]!.replace(/^\//, ""));
-        if (!name) {
-          if (req.method !== "GET") return next();
-          const names = existsSync(assets) ? readdirSync(assets).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort() : [];
-          return json(res, 200, { names });
-        }
-        if (!MODEL_NAME.test(name)) return json(res, 400, { error: `"${name}" is not a model name (lower-case letters, digits and dashes)` });
-        const path = join(assets, `${name}.json`);
-        if (req.method === "GET") {
-          if (!existsSync(path)) return json(res, 404, { error: `no asset "${name}"` });
-          res.setHeader("Content-Type", "application/json");
-          res.setHeader("Cache-Control", "no-store");
-          return res.end(readFileSync(path));
-        }
-        if (req.method === "PUT") {
-          return readJson(req).then(
-            (body) => {
-              mkdirSync(assets, { recursive: true });
-              writeFileSync(path, JSON.stringify(body, null, 2) + "\n");
-              json(res, 200, { ok: true, name });
-            },
-            (e: Error) => json(res, 400, { error: e.message }),
-          );
-        }
-        next();
-      });
 
       server.middlewares.use(FORMATION_STORE, (req, res, next) => {
         const [hash, file, ...rest] = (req.url ?? "").split("?")[0]!.replace(/^\//, "").split("/");
@@ -170,11 +132,14 @@ export function formationService(): Plugin {
       // A level's paint (docs/formations.md, "Decorations"): its painted
       // decorations' strokes by decoration id, beside the level and not in it,
       // in `levels/paint/<level>.json` (a folder of its own: a second `.json`
-      // beside each level would be offered as a level).
-      const paintDir = join(root, "levels", "paint");
+      // beside each level would be offered as a level). A prefab's is
+      // `prefabs/paint/<prefab>.json`, asked for as `prefabs/<prefab>`.
       server.middlewares.use(PAINT_API, (req, res, next) => {
-        const name = decodeURIComponent((req.url ?? "/").split("?")[0]!.replace(/^\//, ""));
+        const asked = decodeURIComponent((req.url ?? "/").split("?")[0]!.replace(/^\//, ""));
+        const prefab = asked.startsWith("prefabs/");
+        const name = prefab ? asked.slice("prefabs/".length) : asked;
         if (!/^[A-Za-z0-9_-]+$/.test(name)) return next();
+        const paintDir = prefab ? join(root, "prefabs", "paint") : join(root, "levels", "paint");
         const path = join(paintDir, `${name}.json`);
         if (req.method === "GET") {
           res.setHeader("Content-Type", "application/json");
@@ -264,7 +229,7 @@ export function formationService(): Plugin {
         if (req.method === "POST" && path === "") {
           return readJson(req).then(
             (body) => {
-              const b = body as { kind?: JobKind; formation?: FormationData; label?: string; asset?: string; request?: DecorationRequest; material?: MaterialLayerRequest };
+              const b = body as { kind?: JobKind; formation?: JobFormation; label?: string; request?: DecorationRequest; material?: MaterialLayerRequest };
               if (b.kind === "material") {
                 const m = b.material;
                 if (!m?.host || !FORMATION_HASH.test(m.host) || !MATERIAL_NAME.test(m.material ?? "") || !m.library) {
@@ -276,16 +241,10 @@ export function formationService(): Plugin {
                 if (!b.request?.host || !b.request.kind) return json(res, 400, { error: "a decoration job is {kind: decoration, request: {host, kind, ...}}" });
                 return json(res, 200, { id: runner.askDecoration(b.request, b.label ?? b.request.kind).id });
               }
-              if (b.kind === "asset") {
-                if (!b.asset || !MODEL_NAME.test(b.asset) || !existsSync(join(assets, `${b.asset}.json`))) {
-                  return json(res, 400, { error: `no asset "${b.asset}" in formation-assets/` });
-                }
-                return json(res, 200, { id: runner.ask("asset", null, b.label ?? b.asset, b.asset).id });
-              }
               if ((b.kind !== "geometry" && b.kind !== "bake") || !b.formation?.guide || !b.formation.generator) {
-                return json(res, 400, { error: "a job is {kind: geometry|bake, formation: {generator, params, guide}} or {kind: asset, asset}" });
+                return json(res, 400, { error: "a job is {kind: geometry|bake, formation: {generator, params, guide}}" });
               }
-              json(res, 200, { id: runner.ask(b.kind, b.formation, b.label ?? b.formation.id ?? "formation").id });
+              json(res, 200, { id: runner.ask(b.kind, recipeOf(b.formation), b.label ?? b.formation.id ?? "formation").id });
             },
             (e: Error) => json(res, 400, { error: e.message }),
           );
@@ -315,6 +274,22 @@ export function formationService(): Plugin {
       });
     },
   };
+}
+
+// A formation as a job is asked for it: a `Formation3D` node (its id the
+// formation's, its guide's `subset` naming `CollisionShape2D` nodes) or the
+// compiled `FormationData` (`subset` as indices). Either carries the recipe.
+type JobFormation = Pick<FormationData, "generator" | "variant" | "params"> & { id?: string; guide: FormationData["guide"] | NodeFormationGuide };
+
+type JobRecipe = Pick<FormationData, "generator" | "variant" | "params" | "guide"> & { id?: string };
+
+// What a job builds: the recipe alone. The guide's `subset` says where its
+// pieces came from, not what they are, and the hash leaves it out
+// (`formationRecipe`), so it is dropped here rather than carried into the
+// build's recipe file in whichever of its two forms it came.
+function recipeOf(f: JobFormation): JobRecipe {
+  const guide = f.guide.kind === "collision" ? (({ subset: _s, ...g }) => g)(f.guide) : f.guide;
+  return { ...(f.id !== undefined ? { id: f.id } : {}), generator: f.generator, ...(f.variant !== undefined ? { variant: f.variant } : {}), params: f.params ?? {}, guide };
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -351,9 +326,8 @@ function readJson(req: IncomingMessage): Promise<unknown> {
 
 interface Job {
   state: JobState;
-  // Null for an asset job, which reads its asset's document itself, and for a
-  // decoration's, which is its `request`.
-  formation: FormationData | null;
+  // Null for a decoration's job, which is its `request`, and a material's.
+  formation: JobRecipe | null;
   request?: DecorationRequest;
   // A material bake's.
   material?: MaterialLayerRequest;
@@ -388,8 +362,6 @@ function progressOf(kind: JobKind, line: string): { progress: number; step: stri
     // A decoration: its preparation, then the exporter's growth and export.
     if (kind === "decoration") return tag === "decoration" ? { progress: 0.05 * share, step: label! } : { progress: 0.05 + 0.95 * (share + inner), step: label! };
     if (kind === "geometry") return { progress: tag === "formation" ? share : 0, step: label! };
-    // An asset builds its geometry if it must, then is exported as a model.
-    if (kind === "asset") return tag === "formation" ? { progress: 0.15 * share, step: label! } : { progress: 0.15 + 0.85 * (share + inner), step: label! };
     // A bake whose geometry was missing builds it first: the first tenth.
     return tag === "formation" ? { progress: 0.1 * share, step: label! } : { progress: 0.1 + 0.85 * (share + inner), step: label! };
   }
@@ -491,9 +463,6 @@ class JobRunner {
   }
 
   private result(hash: string, kind: JobKind): JobResult | null {
-    // An asset is accepted afresh every time it is asked: nothing answers
-    // for it in advance.
-    if (kind === "asset") return null;
     const none = { hash, front: 0, generatorHash: "", recipeVersion: 0, tiers: [], warnings: [] };
     if (kind === "material") return MATERIAL_LAYER_FILES.every((f) => existsSync(join(this.store, hash, f))) ? { ...none, maps: hash } : null;
     if (kind === "decoration") {
@@ -529,9 +498,9 @@ class JobRunner {
     }
   }
 
-  ask(kind: JobKind, formation: FormationData | null, label: string, asset?: string): JobState {
+  ask(kind: "geometry" | "bake", formation: JobRecipe, label: string): JobState {
     this.refreshFingerprint();
-    const hash = kind === "asset" ? `asset:${asset}` : formationHash(formation!);
+    const hash = formationHash(formation);
     for (const j of this.jobs.values()) {
       if (j.state.hash === hash && j.state.kind === kind && (j.state.state === "queued" || j.state.state === "running")) return j.state;
     }
@@ -628,9 +597,8 @@ class JobRunner {
       const cpu = job.state.kind === "geometry" || job.state.kind === "decoration";
       if (cpu && this.running("geometry") + this.running("decoration") < GEOMETRY_SLOTS) this.start(job);
       else if (cpu) continue;
-      // A bake and an asset's accept (a model export, baked) both hold the
-      // GPU: one of them at a time.
-      else if (job.state.kind !== "geometry" && this.running("bake") + this.running("asset") === 0) {
+      // A bake holds the GPU: one at a time.
+      else if (job.state.kind !== "geometry" && this.running("bake") === 0) {
         if (this.holds.size) {
           if (job.state.step !== "held while ▶ Test runs") {
             job.state.step = "held while ▶ Test runs";
@@ -656,9 +624,7 @@ class JobRunner {
     const dir = join(this.root, ".cache", "formation-jobs");
     mkdirSync(dir, { recursive: true });
     let argv: string[];
-    if (s.kind === "asset") {
-      argv = [join(this.root, "scripts", "formation-asset.ts"), s.hash.slice("asset:".length)];
-    } else if (s.kind === "decoration") {
+    if (s.kind === "decoration") {
       const request = join(dir, `${s.id}.json`);
       writeFileSync(request, JSON.stringify(job.request));
       argv = [join(this.root, "scripts", "decoration-build.ts"), request];
@@ -708,10 +674,7 @@ class JobRunner {
     child.on("close", (status, signal) => {
       writeFileSync(join(this.root, s.log), job.output);
       if ((job as Job & { cancelled?: boolean }).cancelled) return this.finish(job, "cancelled");
-      const accepted = s.kind === "asset" && status === 0 && /^FORMATION_ASSET_DONE /m.test(job.output);
-      const result: JobResult | null = accepted
-        ? { hash: s.hash, front: 0, generatorHash: "", recipeVersion: 0, tiers: [], warnings: [], model: s.hash.slice("asset:".length) }
-        : this.result(s.hash, s.kind);
+      const result = this.result(s.hash, s.kind);
       if (status === 0 && result) {
         s.result = result;
         return this.finish(job, "done");

@@ -74,12 +74,12 @@
 // same 1k fixed it for ~0.7 MB more, so it is opt-in and recorded in the
 // prop's MESH_ASSETS entry, like the two above.
 //
-// `--baked-maps` gives the maps a Blender scene export baked ("<object> baked
+// `--baked-maps` gives the maps a Blender export baked ("<object> baked
 // colour" / "baked normal", tools/blender/scene_export.py) their own encoding,
 // up to 4k: both as AVIF with full-resolution chroma (the normal map was
 // lossless until 2026-10-04). Lossy WebP turned that dark, low-contrast painted stone into blocks
 // and colour blotches; the measurements are in `encode-textures.mjs`.
-// `scene-export.ts` always passes it.
+// `blendExport.ts` always passes it.
 //
 // `--keep-attributes` keeps every vertex attribute, read by a material or not
 // (`optimize --prune-attributes false`). A formation's bake carries the rock's
@@ -89,7 +89,7 @@
 //
 // `--texture-cache DIR` keeps each map's encode in DIR and takes it from there
 // next time its source, rule and encoder are unchanged (encode-textures.mjs).
-// It changes no byte of the output; `scene-export.ts` passes one per scene.
+// It changes no byte of the output; `blendExport.ts` passes one per export.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -225,14 +225,13 @@ const r = spawnSync(
     ...(keepNodes ? ["--join", "false"] : []),
     // ...and instancing is the other step that loses a name: five or more
     // nodes sharing one mesh are folded into one instanced node, and the four
-    // that vanished are exactly the ones a Blender scene binds bodies by
-    // (docs/blender-scenes.md). A pack's props are distinct meshes, so this
-    // changes nothing for one.
+    // that vanished take their names with them, which the game finds ivy,
+    // moss and decals by (render3d/exportFiles.ts). A pack's props are
+    // distinct meshes, so this changes nothing for one.
     ...(keepNodes ? ["--instance", "false"] : []),
-    // A Blender SCENE also needs its parenting: an object parented to one a
-    // body is dressed by rides that body (render3d/sceneDressing.ts takes the
-    // outermost named node and carries its children), and grown moss is
-    // parented to the rock it grows on. The flatten step hoists every node to
+    // A Blender export also needs its parenting: grown moss and ivy are
+    // parented to the rock they grow on, and the game reads a mesh's names
+    // through its ancestors (render3d/exportFiles.ts). The flatten step hoists every node to
     // the root at its world pose, which keeps the pose and loses the ride, so
     // it is off here - it only exists to feed the join, which is off already.
     ...(keepHierarchy ? ["--flatten", "false"] : []),

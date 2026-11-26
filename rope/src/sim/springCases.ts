@@ -35,7 +35,7 @@ import {
 import { scaleLevelData } from "../level/levelFormat";
 import { buildSceneChains } from "../level/chains";
 import { PX as PX_FACTOR } from "../engine/units";
-import { modelFromDisk, modelToDisk, settledGhosts } from "../editor/model";
+import { modelFromDisk, modelToFlatDisk, settledGhosts } from "../editor/model";
 import { BallLevel } from "../level/ballLevel";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import type { LevelBodyData, RawLevelData, SceneObjectData } from "../level/levelFormat";
@@ -1029,7 +1029,7 @@ function casePivotAuthored(): SpringResult {
   // carry is gone from disk before anyone notices it was read - the round trip
   // is asserted here because the camera suite's round-trip cases compare
   // camera fields alone.
-  const rt = modelToDisk(
+  const rt = modelToFlatDisk(
     modelFromDisk({
       player: { x: 0, y: 0, radius: 8 },
       bodies: [
@@ -1065,7 +1065,7 @@ function casePivotAuthored(): SpringResult {
 
   const passed = originOk && inertiaOk && clampOk && scaleOk && roundTripOk && exact;
   return ok("pivot-authored — the bearing fields reach the body, scaled and clamped", passed, [
-    `${roundTripOk ? "ok  " : "BAD "} the editor's modelFromDisk/modelToDisk carries all four fields (got pivotX=${rt.pivotX}, pivotY=${rt.pivotY}, freq=${rt.pivotFreq}, damping=${rt.pivotDamping})`,
+    `${roundTripOk ? "ok  " : "BAD "} the editor's modelFromDisk/modelToFlatDisk carries all four fields (got pivotX=${rt.pivotX}, pivotY=${rt.pivotY}, freq=${rt.pivotFreq}, damping=${rt.pivotDamping})`,
     `${originOk ? "ok  " : "BAD "} origin at the authored bearing (-0.6, -3), centre of mass kept at local (0.6, 0)`,
     `${inertiaOk ? "ok  " : "BAD "} inertia ${branch!.inertia.toFixed(6)} = I_com + m·d² (${(comI + branch!.mass * 0.36).toFixed(6)})`,
     `${clampOk ? "ok  " : "BAD "} 99 Hz clamps to ${MAX_SPRING_FREQ}, damping defaults to ${DEFAULT_SPRING_DAMPING}, rest angle is the built rotation`,

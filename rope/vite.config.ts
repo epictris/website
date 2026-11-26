@@ -16,10 +16,9 @@ import { join, relative, resolve } from "node:path";
 import { levelFileHash, treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
 import type { RawLevelData } from "./src/level/levelFormat";
-import { levelFormationFiles, levelModelNames, levelSceneName, levelStoredFiles } from "./src/render3d/levelAssets";
+import { levelFormationFiles, levelModelNames, levelStoredFiles } from "./src/render3d/levelAssets";
 import { MODEL_MESH_FILE, MODELS_DIR } from "./src/render3d/models";
-import { SCENE_MESH_FILE, SCENES_DIR } from "./src/render3d/scenes";
-import { sceneService } from "./src/server/scenes";
+import { modelService } from "./src/server/models";
 import { formationService } from "./src/server/formations";
 import { soundService } from "./src/server/sounds";
 import { soundLayerService } from "./src/server/soundLayers";
@@ -262,6 +261,81 @@ function levelApi(): Plugin {
   };
 }
 
+// Dev-only REST API backing the editor's PREFABS (plans/node-tree.md
+// "Prefabs"): shared assets that are editable node trees, one JSON file each
+// under rope/prefabs/ (`{ format: 3, root }`). The same four verbs the level
+// API speaks. The folder is kept off the watcher so a write cannot restart
+// the server, as a level's is - which also means vite's glob never hears of a
+// prefab added or removed: `level/nodes.ts` globs the folder
+// (`prefabLibrary`), so a write invalidates it as well as the file, or a page
+// loaded after a new prefab was saved compiles every instance of it against
+// a library without it.
+function prefabApi(): Plugin {
+  const dir = join(import.meta.dirname, "prefabs");
+  const valid = /^[A-Za-z0-9_-]+$/;
+  const fileFor = (name: string) => join(dir, `${name}.json`);
+  return {
+    name: "prefab-api",
+    configureServer(server) {
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const globber = normalizePath(join(import.meta.dirname, "src", "level", "nodes.ts"));
+      const invalidate = (file: string) => {
+        for (const id of [normalizePath(file), globber]) {
+          for (const env of Object.values(server.environments)) {
+            for (const mod of env.moduleGraph.getModulesByFile(id) ?? []) env.moduleGraph.invalidateModule(mod);
+          }
+        }
+      };
+      server.middlewares.use("/api/prefabs", (req, res) => {
+        const send = (status: number, body: unknown) => {
+          res.statusCode = status;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(body));
+        };
+        const name = decodeURIComponent((req.url ?? "/").split("?")[0]!.replace(/^\//, ""));
+        try {
+          if (req.method === "GET" && name === "") {
+            const names = readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
+            return send(200, { names });
+          }
+          if (!valid.test(name)) return send(400, { error: "invalid prefab name" });
+          if (req.method === "GET") {
+            if (!existsSync(fileFor(name))) return send(404, { error: "not found" });
+            return send(200, JSON.parse(readFileSync(fileFor(name), "utf8")));
+          }
+          if (req.method === "PUT") {
+            const chunks: Buffer[] = [];
+            req.on("data", (c) => chunks.push(c));
+            req.on("end", () => {
+              try {
+                const text = JSON.stringify(JSON.parse(Buffer.concat(chunks).toString("utf8")), null, 2) + "\n";
+                if (!existsSync(fileFor(name)) || readFileSync(fileFor(name), "utf8") !== text) {
+                  writeFileSync(fileFor(name), text);
+                  invalidate(fileFor(name));
+                }
+                send(200, { ok: true, name });
+              } catch {
+                send(400, { error: "invalid JSON body" });
+              }
+            });
+            return;
+          }
+          if (req.method === "DELETE") {
+            if (existsSync(fileFor(name))) {
+              rmSync(fileFor(name));
+              invalidate(fileFor(name));
+            }
+            return send(200, { ok: true });
+          }
+          return send(405, { error: "method not allowed" });
+        } catch (e) {
+          return send(500, { error: String(e) });
+        }
+      });
+    },
+  };
+}
+
 // Pulled production runs (`cli pull` -> playtests/prod/) for `?replay=prod/<id>`,
 // served gunzipped so the page reads them like any other bundle.
 function prodReplays(): Plugin {
@@ -466,11 +540,14 @@ function storeScript(): Plugin {
   };
 }
 
-// BLENDER SCENES AND MODELS SHIP ONLY WHERE A LEVEL NAMES THEM. Vite copies
-// all of `public/` into `dist` (before it writes the bundle; this runs after),
-// and `public/scenes/` and `public/models/` hold every export ever made on this
-// machine, each with a `meta.json` the game never reads. A named one keeps its
-// mesh alone; everything else goes.
+// MODELS SHIP ONLY WHERE A LEVEL NAMES THEM. Vite copies all of `public/` into
+// `dist` (before it writes the bundle; this runs after), and `public/models/`
+// holds every export ever made on this machine, each with a `meta.json` the
+// game never reads. A named one keeps its mesh alone; everything else goes.
+//
+// And `public/scenes/` ships not at all: it is where the retired Blender scenes
+// were exported (docs/blender-scenes.md), which no level names any more, and a
+// machine that exported one still has the files.
 function exportsInBuild(): Plugin {
   let outDir = "";
   return {
@@ -480,13 +557,9 @@ function exportsInBuild(): Plugin {
       outDir = resolve(config.root, config.build.outDir);
     },
     writeBundle() {
-      const scenes = new Set<string>();
       const models = new Set<string>();
       for (const spec of Object.values(LEVELS)) {
-        const data = levelData(spec);
-        const scene = levelSceneName(data);
-        if (scene) scenes.add(scene);
-        for (const model of levelModelNames(data)) models.add(model);
+        for (const model of levelModelNames(levelData(spec))) models.add(model);
       }
       const prune = (dir: string, named: Set<string>, mesh: string, what: string): void => {
         const root = join(outDir, dir.slice(1));
@@ -506,8 +579,8 @@ function exportsInBuild(): Plugin {
         if (!readdirSync(root).length) rmSync(root, { recursive: true, force: true });
         this.info(`${what}: ${kept} named by a level kept, ${dropped} dropped from ${outDir}`);
       };
-      prune(SCENES_DIR, scenes, SCENE_MESH_FILE, "scenes");
       prune(MODELS_DIR, models, MODEL_MESH_FILE, "models");
+      rmSync(join(outDir, "scenes"), { recursive: true, force: true });
       // The formation store ships only the file each registered level's
       // formations draw (docs/formations.md): not the sources, the meta, the
       // other tiers, nor anything the retired generator service left there.
@@ -562,13 +635,10 @@ export default defineConfig({
       // load (see `storeScript`). Reload by hand to pick up a level edit.
       ignored: [
         "**/levels/*.json",
-        // `just scene` writes here while the editor is open, and the manifest
+        // `just model` writes here while the editor is open, and the manifest
         // is a config dependency like a level file, so a write would restart
-        // the server (src/server/scenes.ts serves the files;
-        // `assets:publish-scenes` writes the manifest).
-        "**/public/scenes/**",
-        "**/src/render3d/sceneAssets.json",
-        // ...and `just model` here, and `assets:publish-models` the manifest.
+        // the server (src/server/models.ts serves the files;
+        // `assets:publish-models` writes the manifest).
         "**/public/models/**",
         "**/src/render3d/modelAssets.json",
         // The editor's Sounds menu writes these while it is open
@@ -583,7 +653,8 @@ export default defineConfig({
         "**/.cache/**",
         // A level's paint, written by the editor's save (src/server/formations.ts).
         "**/levels/paint/**",
-        "**/formation-assets/**",
+        // A prefab, written by the editor's save (`prefabApi`).
+        "**/prefabs/**",
         "**/src/audio/soundAssets.json",
         "**/src/audio/soundBank.json",
         "**/tools/audio/layer-projects.json",
@@ -628,9 +699,10 @@ export default defineConfig({
     levelHashesPlugin(),
     storeScript(),
     levelApi(),
+    prefabApi(),
     prodReplays(),
     editorRoute(),
-    sceneService(),
+    modelService(),
     formationService(),
     soundService(),
     soundLayerService(),

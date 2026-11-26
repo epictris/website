@@ -7,25 +7,23 @@
 // body per frame with no allocation at all (see "Allocation per frame" in
 // docs/3d-rendering-plan.md).
 //
-// WHAT A BODY LOOKS LIKE IS BLENDER'S TO SAY. A level's look is its Blender
-// scene (docs/blender-scenes.md): a scene object named like a body is that
-// body's dressing, mounted under this group's root when the file lands
-// (`sceneDressing.ts`), and a level names the scene once. A body may also carry
-// MODELS from the model library (docs/blender-models.md), each a Blender file
-// of its own that the level only PLACES (`ModelObjectData`, `mountModels`).
-// What is drawn here besides is only what the sim moves in a way a mesh cannot
-// follow, and the instrument a piece is made visible by:
+// WHAT A BODY LOOKS LIKE IS WHAT IS UNDER IT IN THE TREE: its rock, the
+// decorations grown on that, its models and its lights are nodes, drawn by the
+// level's `TreeLook` (treeLook.ts) under this visual's `frame` - the body's
+// authored frame, which this group carries - so the body carries them by the
+// scene graph alone. What is drawn HERE is only what the body's shapes make:
+// what the sim moves in a way a mesh cannot follow, and the instrument a piece
+// is made visible by:
 //
 // - WATER, whose surface the current runs across every frame (`water.ts`);
 // - a CONVEYOR's band, whose texture or cleats run round its loop at the belt's
 //   own speed (`beltTread.ts`);
-// - the body's LIGHTS;
 // - and every piece whose DEBUG GEOMETRY is switched on
 //   (`CollisionObjectData.debug`): its outline extruded through the depth it
 //   asks for, in a flat colour at an opacity - what a level is blocked out in
 //   before it has a look, and what a piece the look has not caught up with is
-//   seen by. Per piece and opt-in, in every level, scene or not; the host
-//   hides all of it at once (`setDebugShown`).
+//   seen by. Per piece and opt-in, in every level; the host hides all of it
+//   at once (`setDebugShown`).
 //
 // The one case that is not authored at all is a body the SIM spawned (a rock,
 // the hook), which has no authored objects and simply extrudes its own shapes,
@@ -37,48 +35,33 @@
 // detaches between steps, which is the same rule the 2D renderer already keeps.
 
 import * as THREE from "three";
-import { mushroomParameters } from "../level/mushroom";
-import { proceduralMushroom } from "./proceduralMushroom";
-import { MushroomBounce } from "./mushroomBounce";
 import type { ContactPulses } from "../engine/contactPulses";
-
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
 import { WaterArea } from "../engine/body";
 import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
-import { localPlacement, objectDepth, worldPlacement, type BuiltBody } from "../level/buildBodies";
+import { localPlacement, worldPlacement, type BuiltBody } from "../level/buildBodies";
+import { relative2D } from "../level/nodes";
 import {
   DEFAULT_ROOT_COLOR,
   debugColorOf,
   isCollisionObject,
-  isLightObject,
-  isModelObject,
-  isDecorationObject,
   type BeltLook,
   type CollisionObjectData,
-  type DecorationObjectData,
   type LevelBodyData,
 } from "../level/levelFormat";
 import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
 import { isAuthoredSurface, isSolidSurface, surfaceFor, surfaceName, tileMetres } from "./assets";
 import { buildWater } from "./water";
 import type { FoamSurface, StillSurface } from "./stillWater";
-import { DEFAULT_LIGHT_Z, LightRig, type DrivenEmission, type MountedLight } from "./lights";
-import { isWaking } from "./glow";
 import { BeltRing, BeltTread } from "./beltTread";
 import { rootBarkMaterial } from "./rootMesh";
 import { RootSkeleton, skinRootGeometry, skinToBone } from "./rootSkin";
 import { acquireRootMeshes, releaseRootMeshes, type RootMeshSet } from "./rootBake";
 import { rootMeshKey } from "./rootKey";
 import { beltLoopOf } from "../render/beltTread";
-import { orientTo, placeAt, placeBody3d, threeY } from "./space";
-import { decodedFile, loadExportFile, loadModelFile, mountExport, noShadowBehindPlane } from "./sceneDressing";
-import { modelFile } from "./models";
-import { decodedFormationFile, decorationDelta, formationFile, loadFormationFile } from "./formations";
-import { exposePaintUv, layered, paintLayerTexture, type PaintLayer } from "./paintLayers";
-import { decorationFile, decorationLayerFile, isMaterialLayer, isTextureLayer } from "../formation/decoration";
-import { materialPaintLayer } from "./materialLayers";
+import { orientTo, placeAt, threeY } from "./space";
 
 // The floor an authored colour's brightness is lifted to before it tints a
 // generated surface. A belt's `color` was authored for a flat 2D renderer, where
@@ -229,8 +212,7 @@ function debugSignatureOf(data: LevelBodyData, forced: boolean): string {
 
 // WHAT A PICK LANDS ON. A drawn piece's group carries the authored object it
 // was built from, so a raycast that hits any mesh under it answers with the one
-// thing an editor can act on - and a scene's dressing node carries its body's
-// first object the same way (`DressTarget.tag`).
+// thing an editor can act on.
 //
 // It is the authored object by IDENTITY rather than an id, because the format
 // has no id to carry and inventing one would put a field on disk that exists
@@ -261,7 +243,7 @@ export class BodyVisual {
   // (see assets.ts), so they are deliberately NOT in here.
   private readonly owned: THREE.BufferGeometry[] = [];
   // The exception: water's material is built per body (it carries the body's
-  // own flow and colour in its uniforms), and so is a dressing's copy of a
+  // own flow and colour in its uniforms), and so is a look's copy of a
   // material a waking light drives, so this visual frees them.
   private readonly ownedMaterials: THREE.Material[] = [];
   // A still water body's surface, for the scene's mirror. Null for everything
@@ -276,16 +258,6 @@ export class BodyVisual {
   private releaseWater: (() => void) | null = null;
   // What draws the water, for `setWaterShown`. Empty for everything else.
   private waterObjects: THREE.Object3D[] = [];
-  // Lights this body's light objects hang on it. Children of the root, so they
-  // ride the pose with no per-frame cost; handed back to the rig at dispose,
-  // which is what frees the budget slot as well as the objects.
-  private readonly lights: MountedLight[] = [];
-  // The glowing materials this body's WAKING lights drive (see `adoptDressing`).
-  // Handed to the rig by reference when the lights are mounted and filled when
-  // the scene lands, since a scene arrives after its bodies are built.
-  private readonly driven: DrivenEmission[] = [];
-  private readonly waking: boolean;
-  private readonly mushrooms: MushroomBounce[] = [];
   // The conveyor cleat rings this body draws, one per untextured belt, and the
   // textured bands whose surface it scrolls, one per textured one. A band's
   // geometry is in `owned` like any other.
@@ -317,16 +289,11 @@ export class BodyVisual {
   // this visual's own rather than the cache's (`rootSkin.ts`).
   private rootSkeleton: RootSkeleton | null = null;
   private readonly skinned: THREE.BufferGeometry[] = [];
-  // The holders of this body's MODELS (`mountModels`), one per model object,
-  // each filled with its model when the file lands. Hidden and shown as one
-  // with the level's Blender scene (`setModelsShown`): both are the look.
-  private readonly modelHolders: THREE.Group[] = [];
-  private modelsShown = true;
-  private disposed = false;
-  // Called when a model lands after this visual was built (one already
-  // decoded is mounted in the constructor): what the body draws has changed,
-  // which the glass shards' collision is built from (`Scene3D`).
-  modelLanded: (() => void) | null = null;
+  // THE BODY'S AUTHORED FRAME, as a child of `root` (which the engine body
+  // moves, its origin at the centre of mass). Everything under the body node in
+  // the level's tree is drawn under this (`TreeLook`), placed in the frame it
+  // was authored in, so it rides the body with no code of its own.
+  readonly frame = new THREE.Group();
 
   // `body` is what moves and is null for an authored body that built nothing;
   // `built` is the authored side and is null for a body the sim spawned at
@@ -337,12 +304,10 @@ export class BodyVisual {
   constructor(
     readonly body: CollisionObject2D | null,
     private readonly built: BuiltBody | null,
-    private readonly rig?: LightRig,
     private debugForced = false,
     private rootsShown = true,
   ) {
     const data = built?.data ?? null;
-    this.waking = data?.objects.some((o) => isLightObject(o) && isWaking(o)) ?? false;
     // Hook-only scenery sits BEHIND the level it decorates by default, because
     // the player passes straight through it - and in 3D that setback is what
     // says so, the flat grate lattice being 2D-mode only (see docs/game-design.md
@@ -369,7 +334,6 @@ export class BodyVisual {
       // A volume's pieces may still be made visible, as any piece may, and
       // it may carry models as any body may.
       this.mountDebug(data, solidZ);
-      this.mountModels(data);
     } else if (data) {
       this.buildAuthored(data, solidZ);
     } else if (body) {
@@ -387,11 +351,20 @@ export class BodyVisual {
     if (!body && built) {
       placeAt(this.root, built.origin);
       orientTo(this.root, built.rotation);
-      // A 3D body (`LevelBodyData.space`) is never built in the sim, so this
-      // is its one placement: off the plane by its depth, tilted before its
-      // turn in the plane.
-      if (built.data.space === "3d") placeBody3d(this.root, built.data);
     }
+    // The authored frame in the built one: where the body's origin was drawn
+    // relative to where the engine put it (its centre of mass), captured at
+    // build, before any rest pose moved it.
+    if (built) {
+      const f = relative2D(
+        { x: built.origin.x, y: built.origin.y, rot: built.rotation },
+        { x: built.data.x, y: built.data.y, rot: built.data.rot },
+      );
+      this.frame.position.set(f.x, threeY(f.y), 0);
+      orientTo(this.frame, f.rot);
+    }
+    this.frame.name = "frame";
+    this.root.add(this.frame);
   }
 
   private buildAuthored(data: LevelBodyData, solidZ: number): void {
@@ -403,38 +376,13 @@ export class BodyVisual {
     }
     this.mountRoots(data, solidZ);
     this.mountDebug(data, solidZ);
-    this.mountModels(data);
-    this.mountFormation(data);
-    this.mountDecorations(data);
-
-    // Lights last, so the budgets are spent in authored order and a light is
-    // never built for a body that failed above.
-    if (!this.rig) return;
-    for (const l of data.objects) {
-      if (!isLightObject(l)) continue;
-      const local = localPlacement(built, l);
-      const mounted = this.rig.add(
-        this.root,
-        l,
-        {
-          x: local.pos.x,
-          y: local.pos.y,
-          rot: local.rot,
-          z: objectDepth(l.z, DEFAULT_LIGHT_Z),
-        },
-        // Only a waking light reads it; an always-on light leaves the
-        // emission as authored.
-        this.driven,
-      );
-      if (mounted) this.lights.push(mounted);
-    }
   }
 
   // A CONVEYOR is its own geometry, not an extruded outline: the band as a ring
   // whose running surface carries its texture round the loop, and on a band
   // with no texture to move (the flat colour) a ring of cleats as well
-  // (`beltTread.ts`). Both run at the belt's own `speed`. Drawn in every level,
-  // scene or not: what the scene cannot draw is a surface that moves.
+  // (`beltTread.ts`). Both run at the belt's own `speed`. Drawn in every level:
+  // what a Blender export cannot draw is a surface that moves.
   private mountBelt(
     piece: THREE.Group,
     shape: Extract<CollisionObjectData["shape"], { kind: "belt" }> & BeltLook,
@@ -462,217 +410,6 @@ export class BodyVisual {
       surfaceOf({ texture: shape.texture, tileScale: shape.tileScale, color: shape.color ?? bodyColor }),
       z,
     );
-  }
-
-  // Take a dressing node from the level's scene, now a child of `root`
-  // (`dressScene`). Only one thing about it is this body's business: a body
-  // with a WAKING light drives the glow of what it is dressed in, as it drove
-  // the glow of the shapes it used to carry (see `LightRig`), so the node's
-  // emissive materials become this body's own copies - shared with nothing
-  // else in the level, which would otherwise light up with it - and join the
-  // set its lights drive.
-  adoptDressing(node: THREE.Object3D): void {
-    if (!this.waking) return;
-    const copies = new Map<THREE.Material, THREE.MeshStandardMaterial>();
-    node.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const own = (m: THREE.Material): THREE.Material => {
-        const std = m as THREE.MeshStandardMaterial;
-        if (!std.isMeshStandardMaterial || (std.emissive.getHex() === 0 && !std.emissiveMap)) return m;
-        let copy = copies.get(m);
-        if (!copy) {
-          copy = std.clone();
-          copy.onBeforeCompile = std.onBeforeCompile;
-          copy.customProgramCacheKey = std.customProgramCacheKey;
-          copies.set(m, copy);
-          this.ownedMaterials.push(copy);
-          this.driven.push({ material: copy, authored: copy.emissiveIntensity });
-        }
-        return copy;
-      };
-      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
-    });
-  }
-
-  // Every MODEL this body carries (`ModelObjectData`, render3d/models.ts): the
-  // library's file, cloned onto a holder at the object's placement in the
-  // body's frame, so the body carries it as it carries a dressing node.
-  //
-  // The holder is a piece like any other (placed against the BUILT frame, its
-  // in-plane turn on the piece) with the model's own depth, tilts and scale on
-  // a child of it, so the tilts are applied before the turn: a model tilted to
-  // show its side keeps showing it as its body swings (see `ModelObjectData`).
-  // Tagged with the authored object, so a click on the model picks the model.
-  //
-  // The file arrives late the first time it is asked for, as a scene does;
-  // one already decoded on this page is mounted here and now, so an editor
-  // rebuild never draws a frame without it.
-  private mountModels(data: LevelBodyData): void {
-    const built = this.built!;
-    data.objects.forEach((o, i) => {
-      if (!isModelObject(o)) return;
-      const local = localPlacement(built, o);
-      const piece = this.piece(local.pos.x, local.pos.y, local.rot, built.data.objects[i] ?? o);
-      const holder = new THREE.Group();
-      holder.name = `model:${o.model}`;
-      holder.position.z = objectDepth(o.z, 0);
-      // Ry * Rx: about the screen's horizontal axis first, then its vertical.
-      holder.rotation.set(o.rotX ?? 0, o.rotY ?? 0, 0, "YXZ");
-      holder.scale.setScalar(o.scale ?? 1);
-      holder.visible = this.modelsShown;
-      piece.add(holder);
-      this.modelHolders.push(holder);
-      // What collides casts, wherever its look has been set back to; a body
-      // that collides with nothing is decoration and keeps the scenery's rule
-      // (see `dressScene`).
-      const solid = data.objects.some(isCollisionObject);
-      const params = mushroomParameters(o.model, o.mushroom);
-      if (params) {
-        const node = proceduralMushroom(params);
-        holder.add(node);
-        node.traverse(child => {
-          if (child instanceof THREE.Mesh) {
-            this.owned.push(child.geometry);
-            this.ownedMaterials.push(child.material as THREE.Material);
-          }
-        });
-        this.mushrooms.push(new MushroomBounce(node, params.stemHeight));
-        node.updateWorldMatrix(true, true);
-        if (!solid) noShadowBehindPlane(node);
-        this.adoptDressing(node);
-        return;
-      }
-      const land = (loaded: THREE.Object3D | null, late: boolean): void => {
-        if (!loaded || this.disposed) return;
-        const node = mountExport(loaded);
-        holder.add(node);
-        node.updateWorldMatrix(true, true);
-        if (!solid) noShadowBehindPlane(node);
-        this.adoptDressing(node);
-        if (late) this.modelLanded?.();
-      };
-      const file = modelFile(o.model);
-      const ready = decodedFile(file);
-      if (ready !== undefined) land(ready, false);
-      else void loadModelFile(o.model).then((loaded) => land(loaded, true));
-    });
-  }
-
-  // The body's FORMATION (docs/formations.md, `render3d/formations.ts`): the
-  // rock generated in the body's own frame, so it is placed at the body's
-  // authored origin and turn and the body carries it as it carries a model.
-  // Tagged with the formation, so a click on the rock picks its body.
-  // Shown and hidden with the models: both are the look.
-  private mountFormation(data: LevelBodyData): void {
-    const f = data.formation;
-    const which = f ? formationFile(f) : null;
-    if (!f || !which) return;
-    const local = localPlacement(this.built!, f);
-    const holder = this.piece(local.pos.x, local.pos.y, local.rot, f);
-    holder.name = `formation:${f.id}`;
-    holder.visible = this.modelsShown;
-    this.modelHolders.push(holder);
-    const solid = data.objects.some(isCollisionObject);
-    // Its TEXTURE LAYERS (paintLayers.ts), worn by the rock's own materials:
-    // its material layers first (materialLayers.ts), then the grown
-    // texture-only mosses over them, each in the body's order. Dirt under
-    // moss however they were painted.
-    const mine = data.objects.filter((o): o is DecorationObjectData => isDecorationObject(o) && o.formation === f.id && isTextureLayer(o));
-    const layers: PaintLayer[] = [
-      ...mine.filter(isMaterialLayer).flatMap((o) => materialPaintLayer(o) ?? []),
-      ...mine.filter((o) => !isMaterialLayer(o) && !!o.built).map((o) => ({ texture: paintLayerTexture(decorationLayerFile(o.built!.hash)), tag: o })),
-    ];
-    const land = (loaded: THREE.Object3D | null, late: boolean): void => {
-      if (!loaded || this.disposed) return;
-      const node = mountExport(loaded);
-      if (layers.length) this.wearLayers(node, layers, which.baked);
-      holder.add(node);
-      node.updateWorldMatrix(true, true);
-      if (!solid) noShadowBehindPlane(node);
-      this.adoptDressing(node);
-      if (late) this.modelLanded?.();
-    };
-    const ready = decodedFormationFile(which);
-    if (ready !== undefined) land(ready, false);
-    else void loadFormationFile(which).then((loaded) => land(loaded, true));
-  }
-
-  // A rock's materials, each a copy with the layers over its colour, on every
-  // mesh that has the paint UV (a rock generated before it shows none).
-  private wearLayers(node: THREE.Object3D, layers: readonly PaintLayer[], baked: boolean): void {
-    const copies = new Map<THREE.Material, THREE.Material>();
-    node.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh || Array.isArray(mesh.material) || !exposePaintUv(mesh.geometry, baked)) return;
-      let copy = copies.get(mesh.material);
-      if (!copy) {
-        copy = layered(mesh.material, layers);
-        copies.set(mesh.material, copy);
-        this.ownedMaterials.push(copy);
-      }
-      mesh.material = copy;
-    });
-  }
-
-  // The body's DECORATIONS (`DecorationObjectData`, docs/formations.md): each
-  // grown on its formation's rock in the formation's frame, so mounted where
-  // the formation is. A placed one is drawn moved from where it was grown to
-  // where its anchor lands on the rock now (`decorationDelta`); a painted one
-  // was grown on the rock where it is. Tagged with the decoration, so a click
-  // on it picks it.
-  private readonly decorationHolders = new Map<string, THREE.Group>();
-  private mountDecorations(data: LevelBodyData): void {
-    const f = data.formation;
-    if (!f) return;
-    const local = localPlacement(this.built!, f);
-    const solid = data.objects.some(isCollisionObject);
-    for (const o of data.objects) {
-      // A texture layer grows no mesh: its rock wears it (`mountFormation`).
-      if (!isDecorationObject(o) || o.formation !== f.id || !o.built || isTextureLayer(o)) continue;
-      const holder = this.piece(local.pos.x, local.pos.y, local.rot, o);
-      holder.name = `decoration:${o.id}`;
-      holder.visible = this.modelsShown;
-      this.modelHolders.push(holder);
-      const inner = new THREE.Group();
-      inner.matrixAutoUpdate = false;
-      inner.matrix.copy(decorationDelta(o));
-      holder.add(inner);
-      this.decorationHolders.set(o.id, inner);
-      const file = decorationFile(o.built.hash);
-      const land = (loaded: THREE.Object3D | null, late: boolean): void => {
-        if (!loaded || this.disposed) return;
-        const node = mountExport(loaded);
-        inner.add(node);
-        node.updateWorldMatrix(true, true);
-        if (!solid) noShadowBehindPlane(node);
-        this.adoptDressing(node);
-        if (late) this.modelLanded?.();
-      };
-      const ready = decodedFile(file);
-      if (ready !== undefined) land(ready, false);
-      else void loadExportFile(file, 0, `decoration ${o.id}`).then((loaded) => land(loaded, true));
-    }
-  }
-
-  // Move the decorations already mounted to where `data` has them, without
-  // rebuilding anything: what a drag of one along its rock writes every frame.
-  moveDecorations(data: LevelBodyData): void {
-    for (const o of data.objects) {
-      if (!isDecorationObject(o)) continue;
-      const inner = this.decorationHolders.get(o.id);
-      if (inner) {
-        inner.matrix.copy(decorationDelta(o));
-        inner.matrixWorldNeedsUpdate = true;
-      }
-    }
-  }
-
-  // Show or hide this body's models (`Scene3D.setSceneShown`): they are the
-  // look, as the level's Blender scene is, and go with it.
-  setModelsShown(shown: boolean): void {
-    this.modelsShown = shown;
-    for (const h of this.modelHolders) h.visible = shown;
   }
 
   // One child group at a placement in the body's frame. Rigid, so written once.
@@ -792,14 +529,14 @@ export class BodyVisual {
   // Every ROOT branch of this body (`CollisionObjectData.root`) as its
   // generated mesh (`rootMesh.ts`), placed against the built frame exactly as
   // a debug piece is and tagged with its authored object, so a click on a
-  // branch in the 3D view picks that branch. Drawn in every level, scene or
-  // not: what the scene cannot draw is a root grown from the curves the level
+  // branch in the 3D view picks that branch. Drawn in every level: what a
+  // Blender export cannot draw is a root grown from the curves the level
   // states.
   //
   // The meshes are in world metres (`rootBuild.ts`), from the level's bake or
   // grown, and arrive late when neither is to hand yet (the bake still
   // loading, the simplifier still starting): the body draws no roots until
-  // then, as a scene-dressed body draws no dressing until its file lands.
+  // then, as a body draws no model until its file lands.
   //
   // Hidden (`setRootsShown`), nothing is acquired at all, so an edit to a root
   // grows nothing: the editor's "roots" toggle is for drawing and reshaping a
@@ -940,7 +677,6 @@ export class BodyVisual {
   // texture or its cleats carried to `time`, the sim instant the frame stands
   // for (`beltRenderTime`), which a belt at rest skips.
   sync(alpha: number, time = 0, pulses?: ContactPulses): void {
-    if (this.body && pulses) for (const mushroom of this.mushrooms) mushroom.sync(this.body, pulses, alpha);
     for (const t of this.treads) t.sync(time);
     for (const r of this.rings) r.sync(time);
     if (!this.body) return;
@@ -960,14 +696,8 @@ export class BodyVisual {
   }
 
   dispose(): void {
-    this.disposed = true;
-    this.modelHolders.length = 0;
-    this.mushrooms.length = 0;
     this.disposeDebug();
     this.disposeRoots();
-    for (const l of this.lights) this.rig?.drop(l);
-    this.lights.length = 0;
-    this.driven.length = 0;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
     for (const t of this.treads) t.mesh.dispose();

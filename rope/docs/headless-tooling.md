@@ -24,7 +24,8 @@ bun run src/tools/cli.ts camera               # camera-path geometry, the rule s
 bun run src/tools/cli.ts camera --ride b.json # one recorded run through the real controller: camera speed/accel/jerk and the progress behind them
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
-bun run src/tools/cli.ts levels               # the level-file lint: the menu's list, one intro, and each listed level's finish line (see Levels)
+bun run src/tools/cli.ts levels               # the level-file lint: the menu's list, one intro, and each listed level's finish line (see Levels); every level's node tree and every prefab held to the refused states
+bun run src/tools/cli.ts nodes [filter]       # the node tree's proof: compile(migrate(L)) = L over every level and bundle, the tree cases, instances, scale commutes (see level-format)
 bun run src/tools/cli.ts finish               # the finish-line mechanic: crossed once, missed, and the region moving nothing (see Levels)
 bun run src/tools/cli.ts glass                # the glass ball (Hard): breaks on landing not in water, hangs whole, iron until it breaks, respawns, replays (see glass-ball)
 bun run src/tools/cli.ts entry                # the rolling entry a level may open on: the roll in, the hands-off gate and the hand-over (see Ball rolling)
@@ -64,7 +65,7 @@ bun run src/tools/cli.ts rig     playtests/rigs/ceiling-hold.json [--series] [--
 bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the same metrics on this tree alone
 ```
 
-`bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
+`bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `nodes`, `contacts`,
 `spring`, `movers`, `vines`, `rails`, `roots`, `belts`, `viscous`, `breaks`, `finish`, `glass`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),

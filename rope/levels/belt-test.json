@@ -1,4 +1,5 @@
 {
+  "format": 3,
   "meta": {
     "unlisted": true
   },
@@ -6,92 +7,112 @@
     "envIntensity": 0.6,
     "hdri": "golden-gate-hills"
   },
-  "checkpoints": [
+  "nodes": [
     {
-      "name": "top-run",
-      "x": 200,
-      "y": -345
+      "type": "Spawn2D",
+      "id": "g8cm3mew",
+      "name": "Spawn",
+      "x": -520,
+      "y": 0,
+      "radius": 8
     },
     {
-      "name": "under-belt",
-      "x": 0,
-      "y": -180
-    }
-  ],
-  "player": {
-    "x": -520,
-    "y": 0,
-    "radius": 8
-  },
-  "bodies": [
-    {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "1pyv66u3",
+      "name": "StaticBody2D",
       "x": 300,
       "y": 100,
-      "rot": 0,
+      "order": 0,
       "color": "#3a3f4a",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "x3yt70jx",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 4000,
             "h": 40
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "fhxatft4",
+      "name": "StaticBody2D2",
       "x": -960,
       "y": -300,
-      "rot": 0,
+      "order": 1,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "oolbay1w",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 40,
             "h": 760
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "o3ktnqr7",
+      "name": "StaticBody2D3",
       "x": 1660,
       "y": -300,
-      "rot": 0,
+      "order": 2,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "pl35exum",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 40,
             "h": 760
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "6n98peua",
+      "name": "StaticBody2D4",
       "x": -620,
       "y": 40,
-      "rot": 0,
+      "order": 3,
       "color": "#2e3138",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "0sfjb5su",
+          "name": "Belt",
           "shape": {
             "kind": "belt",
             "wheels": [
@@ -115,36 +136,48 @@
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "xsz4v18n",
+      "name": "RigidBody2D",
       "x": -420,
-      "y": 0,
-      "rot": 0,
+      "order": 4,
       "color": "#8a6a45",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "t3wyfs7k",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 40,
             "h": 40
           },
-          "material": "wood"
+          "material": "wood",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "27qd9e7p",
+      "name": "StaticBody2D5",
       "x": -300,
       "y": -300,
-      "rot": 0,
+      "order": 5,
       "color": "#2e3138",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "lruzuqlo",
+          "name": "Belt",
           "shape": {
             "kind": "belt",
             "wheels": [
@@ -168,35 +201,48 @@
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "uzd0twi2",
+      "name": "StaticBody2D6",
       "x": 480,
       "y": -250,
-      "rot": 0,
+      "order": 6,
       "color": "#444a55",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "ju3t1v57",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 30,
             "h": 200
+          },
+          "debug": {
+            "on": true
           }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "ubdbdhk0",
+      "name": "StaticBody2D7",
       "x": 800,
       "y": 40,
-      "rot": 0,
+      "order": 7,
       "color": "#2e3138",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "hgceq1d5",
+          "name": "Belt",
           "shape": {
             "kind": "belt",
             "wheels": [
@@ -220,36 +266,50 @@
       ]
     },
     {
-      "kind": "rigid",
+      "type": "RigidBody2D",
+      "id": "bcg9mjz3",
+      "name": "RigidBody2D2",
       "x": 1144,
       "y": -94,
       "rot": -0.255,
+      "order": 8,
       "color": "#8a6a45",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "rx7dd4bn",
+          "name": "Rect",
           "shape": {
             "kind": "rect",
             "w": 40,
             "h": 40
           },
-          "material": "wood"
+          "material": "wood",
+          "debug": {
+            "on": true
+          }
         }
       ]
     },
     {
-      "kind": "static",
+      "type": "StaticBody2D",
+      "id": "7mj7385c",
+      "name": "StaticBody2D8",
       "x": 900,
       "y": -560,
-      "rot": 0,
+      "order": 9,
       "color": "#2e3138",
       "opacity": 0.5,
       "friction": 1,
-      "objects": [
+      "grouped": true,
+      "children": [
         {
-          "type": "collision",
+          "type": "CollisionShape2D",
+          "id": "x7soqsyj",
+          "name": "Belt",
           "shape": {
             "kind": "belt",
             "wheels": [
@@ -277,6 +337,22 @@
           }
         }
       ]
+    },
+    {
+      "type": "Checkpoint2D",
+      "id": "727xfle7",
+      "name": "top-run",
+      "checkpoint": "top-run",
+      "x": 200,
+      "y": -345
+    },
+    {
+      "type": "Checkpoint2D",
+      "id": "3vtqvgc9",
+      "name": "under-belt",
+      "checkpoint": "under-belt",
+      "x": 0,
+      "y": -180
     }
   ]
 }

@@ -69,6 +69,12 @@ Water is drawn in 3D after two of Tris's WebGL studies of 2026-10-05 that share 
 The river study's river and cascade were rewritten in the pool's own formulation, so the three read as the same water, and what they share lives in `render3d/waterLook.ts`: the clock (`waterTime`), the studies' palette, scale and depth stretch, the wave spectrum both read their ripples from (`waterSurfaceMap`, generated at load), and the impact field a fall draws on the water it lands in.
 The 2D overlay's flow-streak glyphs are what the 2D renderer shows, and what the 3D renderer shows for the shapes the water renderer does not draw (anything but a rect or a circle).
 
+**Every piece of a water area is drawn** (`buildWater`, since 2026-11-26): an `Area2D` may have any number of shapes ([areas-and-friction](areas-and-friction.md#areas-of-several-shapes)), and each rect or circle is built as a pool or a current of its own size at its own placement in the body (`buildWaterPiece`).
+Where two pieces touch, the side wall each would show the other is left out (a wall is shared when another piece covers the point just past it), so the seam is not seen through.
+The current runs along the area's own x, which every piece shares, so a fall is built only off the piece reaching furthest downstream; water that turns a corner is two areas.
+The pool's mirror and the splash foam each read one surface, so they are built for a water of one piece only.
+A single piece at the body's origin, which is every water authored before areas took several, is drawn exactly as it always was.
+
 **The palette** is the studies' three colours carried onto the authored one (`studyPalette`): the body's `color` stands for the studies' shallow `#178b96`, and the deep (`#13506b`) and the light (`#55bec7`) are moved from it in HSL by whatever separates them from the shallow in the study.
 Water with no authored colour is the study's own.
 `levels/ball.json`'s water is `#1e7382`, darker and less saturated than the study's shallow.
@@ -212,14 +218,11 @@ What had to change from the study, each measured on BALL:
 - **Unlit, not tone mapped.** The study's colours are display colours and the mirror is the frame as the player sees it, so neither goes through ACES again.
 - **The front sheet** is a cross-section the study never had: between the shallow and the deep colour at the waterline, darkening toward the bed, under a pale waterline. As bright as the surface, unlit and unfogged, it read as a block of teal glass.
 
-**The backdrop's water is the pool's too.** A pool is only as wide as its body's rect, which is also where the ball feels water, so the basin beyond its ends is the Blender scene's own flat plane (`backdrop pool`, laid by `tools/blender/backdrop.py` 2 cm under the water across the whole backdrop, from 6 m behind the gameplay plane to behind the far wall).
-`Scene3D.adoptSceneryWater` gives that plane the pool's material (`stillWaterMaterial` with `plane`: no slab attributes, opaque) in the pool's colour, slab ramp and mirror switch, matched to the pool whose surface it lies within `SCENERY_WATER_REACH` of.
-The ripples and the deep-to-shallow ramp are both in world x and z, so where the two meet nothing changes but which mesh draws.
-The plane is lifted to the pool's own height and not drawn under the pool's top face (`footprint`, set every frame, reaching 1 cm in under it so no crack opens), and the pool's top is opaque: left 2-5 cm under, with the slab at 0.97 alpha over it, the join showed close up as a step with a shade change across it, the mirror being sampled from two different heights (Tris's first report).
-Behind the plane's front edge the slab's end caps are not drawn (`openBehind`), since their pale waterline poked above the plane as a dashed seam.
+**The backdrop's water was the pool's too**, until the Blender scenes were retired (2026-11-26, [blender-scenes](blender-scenes.md)): a pool was only as wide as its body's rect, so the basin beyond its ends was the scene's own flat plane (`backdrop pool`, laid by `tools/blender/backdrop.py`), which the game drew in the pool's material, lifted to the pool's height and not under its top face, with the slab's end caps left out behind it.
+That adoption (`Scene3D.adoptSceneryWater`, `stillWaterMaterial`'s `plane`, `footprint` and `openBehind`) went with the scenes; water continuing a pool is now another piece of the same area, or a pool of its own.
+The pool's top is still opaque: at the slab's 0.97 alpha the bed showed through.
 
-The pool **writes depth**, though its front sheet is translucent. The depth of field draws anything see-through that writes no depth sharp over its blur, whole; a pool reaching the far wall then stayed crisp against the blurred rocks it meets, and disagreed with the plane, which blurs. With depth the blur reads the water's own: sharp at the gameplay plane, soft toward the far wall.
-The plane is left out of the mirror with the pool and counts toward whether the pool is in view.
+The pool **writes depth**, though its front sheet is translucent. The depth of field draws anything see-through that writes no depth sharp over its blur, whole; a pool reaching the far wall then stayed crisp against the blurred rocks it meets. With depth the blur reads the water's own: sharp at the gameplay plane, soft toward the far wall.
 To reach the far wall BALL's pool is authored `waterZ -1500`, `waterDepth 4200` (front edge 6 m in front of the plane, back 36 m behind); in front of the 6 m line beside the pool there is no scene water, only the rock banks.
 
 The study's **shoreline glints** (a field baked from the rocks' waterline outlines) are not ported: here they would need the waterline of every scene mesh standing in the pool, sliced out of the Blender scene at load.
