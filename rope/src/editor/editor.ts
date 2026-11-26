@@ -215,6 +215,7 @@ import {
   subModel,
   membersOf,
   moveNode,
+  prefabRootAtOrigin,
   addItem,
   addFrameNode,
   blankItem,
@@ -411,7 +412,7 @@ import type {
 // words in an editor that autosaves.
 import { selfReplayLine, verifySelfReplay } from "../sim/selfReplay";
 import { verifySelfReplayOffThread } from "../sim/selfReplayOffThread";
-import { showToast } from "../render/toast";
+import { hideToast, showToast } from "../render/toast";
 import {
   commit as treeCommit,
   dirty as treeDirty,
@@ -428,10 +429,12 @@ import {
   readDockWidth,
   readLastLevel,
   readLayerSettings,
+  readOpenPrefab,
   readRootWidths,
   readViewSettings,
   writeDockWidth,
   writeLastLevel,
+  writeOpenPrefab,
   writeLayerSettings,
   writeRootWidths,
   writeViewSetting,
@@ -1002,6 +1005,63 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     shapeMenu = menu;
     setTimeout(() => window.addEventListener("pointerdown", (ev) => { if (!menu.contains(ev.target as Node)) closeShapeMenu(); }, { once: true }), 0);
   }
+  // A SCENE TREE ROW'S MENU (a right click on the row): what can be done to
+  // that node from where it is listed - Make root in an open prefab (Godot's
+  // "Make Scene Root"), Rename, Delete. An action that cannot be taken is
+  // shown greyed with why.
+  let nodeMenu: HTMLElement | null = null;
+  function closeNodeMenu(): void {
+    nodeMenu?.remove();
+    nodeMenu = null;
+  }
+  function showNodeMenu(n: EdNode, label: HTMLElement, x: number, y: number): void {
+    closeNodeMenu();
+    closeShapeMenu();
+    const menu = el("div", "ed-shape-menu");
+    const title = el("div", "ed-shape-menu-title");
+    title.textContent = n.name;
+    menu.appendChild(title);
+    const item = (text: string, why: string | null, run: () => void): void => {
+      const b = button(text, () => {
+        closeNodeMenu();
+        run();
+      });
+      if (why) {
+        b.disabled = true;
+        b.title = why;
+      }
+      menu.appendChild(b);
+    };
+    if (prefabMode) item("Make root", makeRootRefusal(n.id), () => makePrefabRoot(n.id));
+    // The row as it stands when chosen: picking it on the right click may
+    // have rebuilt the tree under the label the menu was opened on.
+    item("Rename", null, () => {
+      const live = nodeRows.get(n.id)?.querySelector<HTMLElement>(".ed-out-label") ?? label;
+      const node = model.tree.nodes.get(n.id);
+      if (node) renameNodeInline(node, live);
+    });
+    const undeletable = n.extra["spawn"] === true ? "the level's spawn is not deleted" : prefabMode && n.id === prefabRootId ? "a prefab needs its root (Make root another node first)" : null;
+    item("Delete", undeletable, () => {
+      pickNodeRow(n, false);
+      deleteSelected();
+    });
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    root.appendChild(menu);
+    nodeMenu = menu;
+    const away = (ev: Event): void => {
+      if (ev instanceof KeyboardEvent && ev.code !== "Escape") return;
+      if (ev instanceof PointerEvent && menu.contains(ev.target as Node)) return;
+      closeNodeMenu();
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", away, true);
+    };
+    setTimeout(() => {
+      window.addEventListener("pointerdown", away, true);
+      window.addEventListener("keydown", away, true);
+    }, 0);
+  }
+
   // What **F** frames: the items' box in three's frame, each at the depth it
   // really occupies - a solid guide (a backdrop, metres behind the plane) by
   // the guide drawn, everything else by its outline on the plane at the depth
@@ -1014,7 +1074,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A decoration is what grew, where it grew: its mark on the plane is a
       // 15 cm glyph at the wrong depth, so F on a fern came in to a few
       // centimetres of its root (2026-11-25).
-      const drawn = !solid && it.object === "decoration" ? drawnBox(it.id) : null;
+      // A model the same: its mark is a small cube at its origin, so a 2.6 m
+      // length of track framed as a few centimetres at one end (2026-11-26).
+      const drawn = !solid && (it.object === "decoration" || it.object === "model") ? drawnBox(it.id) : null;
       if (solid) box.union(solid);
       else if (drawn) box.union(drawn);
       else flat.push(it);
@@ -1535,6 +1597,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // instance of the prefab shows the edit.
   let prefabMode = false;
   let prefabName: string | null = null;
+  // THE OPEN PREFAB'S ROOT, by id. A prefab is a scene with ONE root node, as
+  // a Godot scene is: what is saved is that node and everything under it,
+  // its id and class kept, and anything an edit leaves at the top beside it -
+  // a placed prefab, a body drawn into nothing, a paste - is moved under it
+  // (`adoptPrefabStrays`). Until 2026-11-26 a second top-level node was
+  // wrapped at save in a new group with a NEW id, which changed the root's
+  // id and class on every save: every instance's overrides of the root came
+  // loose, and a body-rooted prefab became a group the gizmo could not move.
+  let prefabRootId: string | null = null;
+  // What a save of the open prefab last refused, said once rather than on
+  // every edit while it stands.
+  let prefabRefusal: string | null = null;
   let prefabsShown = false;
   let prefabSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let prefabNames: string[] | null = null;
@@ -1559,17 +1633,122 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return m;
   };
 
-  // The open prefab as its file: its one root (several top-level nodes are
-  // put under a group), in pixels. A string says why it cannot be one.
+  // Is this node the level's furniture the open prefab is shown among - the
+  // spawn the editor's model always holds, the level's Sun and Environment it
+  // is lit by - rather than the prefab's own? Never saved into it, and not
+  // listed in its scene tree.
+  const isLevelFurniture = (n: EdNode): boolean => n.extra["spawn"] === true || n.type === "Sun" || n.type === "Environment";
+
+  // The open prefab as its file: its root and everything under it, in pixels.
+  // A string says why it cannot be saved as it stands.
   function prefabOfModel(): PrefabData | string {
     const tree = scaleLevelTree(toTree(model), PIXELS_PER_METER);
-    // Neither the spawn nor the level's light it is shown in is the prefab's.
     const nodes = tree.nodes.filter((n) => n.type !== "Spawn2D" && n.type !== "Sun" && n.type !== "Environment");
-    if (!nodes.length) return "the prefab is empty";
-    const root: LevelNode = nodes.length === 1 ? nodes[0]! : ({ type: "Node2D", id: newNodeId(), name: prefabName ?? "Prefab", children: nodes } as LevelNode);
+    const root = nodes.find((n) => n.id === prefabRootId);
+    if (!root) return "its root node is gone (undo brings it back)";
+    const strays = nodes.filter((n) => n !== root);
+    if (strays.length) {
+      const names = strays.map((n) => n.name).join(", ");
+      return `${names} cannot go under the root ${root.name}: move ${strays.length === 1 ? "it" : "them"} into a node that can hold ${strays.length === 1 ? "it" : "them"}, or delete ${strays.length === 1 ? "it" : "them"}`;
+    }
     const refused = validateTree([root], { prefab: true }).filter((p) => p.error);
     if (refused.length) return refused[0]!.message;
-    return { format: TREE_FORMAT, root };
+    // The root is the prefab's origin: moved or turned while open, what came
+    // with it is kept where it was put and the root written at the origin.
+    return { format: TREE_FORMAT, root: prefabRootAtOrigin(root, true) };
+  }
+
+  // ONE ROOT: whatever an edit left at the top beside the open prefab's root
+  // goes under it, where it stands. A node the root may not hold (a body
+  // under a rigid body) stays, and the prefab is not saved until it is moved
+  // or deleted (`prefabOfModel`), which the title and a notice say.
+  function adoptPrefabStrays(): void {
+    if (!prefabMode || prefabRootId === null || !model.tree.nodes.has(prefabRootId)) return;
+    for (const r of [...model.tree.roots]) {
+      const n = model.tree.nodes.get(r);
+      if (!n || r === prefabRootId || isLevelFurniture(n)) continue;
+      moveNode(model, r, prefabRootId, undefined);
+    }
+  }
+
+  const refusalNotice = (name: string, why: string): string => `The prefab ${name} is not saved: ${why}`;
+  // What a refusal said goes once it no longer holds.
+  function clearPrefabRefusal(): void {
+    if (prefabRefusal !== null && prefabName) hideToast(refusalNotice(prefabName, prefabRefusal));
+    prefabRefusal = null;
+  }
+
+  // The open prefab's root as the model has it: undo and redo replace the
+  // model, root and all, so after one the root is the one node standing at
+  // the top beside the level's furniture (a Make root undone gives the old
+  // root back).
+  function syncPrefabRoot(): void {
+    if (!prefabMode) return;
+    const tops = model.tree.roots.filter((r) => {
+      const n = model.tree.nodes.get(r);
+      return !!n && !isLevelFurniture(n);
+    });
+    if (tops.length === 1) prefabRootId = tops[0]!;
+  }
+
+  // Why `id` cannot be made the open prefab's root, or null.
+  function makeRootRefusal(id: string): string | null {
+    if (!prefabMode || prefabRootId === null) return "only a prefab has a root to change";
+    const n = model.tree.nodes.get(id);
+    if (!n) return "it is gone";
+    if (id === prefabRootId) return "it is the root";
+    if (isLevelFurniture(n)) return "it is the level's, not the prefab's";
+    if (n.extra["inInstance"] !== undefined) return "it is part of a placed prefab (Make local first)";
+    return canParent(model.tree, id, null);
+  }
+
+  // MAKE ROOT (Godot's "Make Scene Root"): `id` becomes the open prefab's
+  // root, where it stands. The old root comes under it - or, a plain group
+  // with nothing of its own (the `Node2D` a second top-level node was once
+  // wrapped in at save), is dissolved: what it held comes under the new root
+  // and the group goes, its name kept on a new root still called after its
+  // class. One undo step; anything the new root may not hold, or anything the
+  // prefab could then not be saved as, refuses the whole of it.
+  function makePrefabRoot(id: string): void {
+    const n = model.tree.nodes.get(id);
+    const refused = makeRootRefusal(id);
+    if (!n || refused) {
+      showToast(`Cannot make ${n?.name ?? "it"} the root: ${refused}`, "warn");
+      return;
+    }
+    const old = model.tree.nodes.get(prefabRootId!)!;
+    beginAction();
+    const fail = (why: string): void => {
+      replaceModel(history.pop()!);
+      afterHistoryChange();
+      showToast(`Cannot make ${n.name} the root: ${why}`, "warn");
+    };
+    let why = moveNode(model, id, null, 0);
+    if (why) return fail(why);
+    const plain = (old.type === "Node2D" || old.type === "Node") && !old.body && old.item === null && !old.instance;
+    if (plain) {
+      for (const c of [...old.children]) {
+        why = moveNode(model, c, id, undefined);
+        if (why) return fail(why);
+      }
+      removeSubtree(model.tree, old.id);
+      if (n.name === n.type || n.name === bodyNodeTypeOf(n)) renameNode(model.tree, id, old.name);
+    } else {
+      why = moveNode(model, old.id, id, undefined);
+      if (why) return fail(why);
+    }
+    prefabRootId = id;
+    const check = prefabOfModel();
+    if (typeof check === "string") return fail(check);
+    markDirty();
+    setBodySelection(id);
+    rebuildInspector();
+  }
+
+  // The class name a body node is written as (its `kind`), for "is it still
+  // called after its class".
+  function bodyNodeTypeOf(n: EdNode): string {
+    return n.body ? bodyNodeType(n.body) : n.type;
   }
 
   function savePrefabSoon(): void {
@@ -1582,26 +1761,87 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }, AUTOSAVE_DELAY_MS);
   }
 
+  // Write the open prefab, as a level's autosave writes the level: what was
+  // being written is snapshotted so an edit landing meanwhile stays unsaved,
+  // and a refusal or a failure stands in the title until the next write
+  // succeeds (`saveError`), said once in a notice rather than on every edit.
   async function writePrefab(name: string): Promise<boolean> {
     const data = prefabOfModel();
     if (typeof data === "string") {
-      showToast(`The prefab ${name} is not saved: ${data}`, "warn");
+      saveError = `prefab not saved: ${data}`;
+      if (prefabRefusal !== data) showToast(refusalNotice(name, data), "warn");
+      prefabRefusal = data;
+      updateTitle();
       return false;
     }
+    clearPrefabRefusal();
+    const rev = modelRev;
     try {
       await savePrefab(name, data);
       setPrefab(name, data);
       await savePaint(name);
-      dirty = false;
+      if (modelRev === rev) dirty = false;
+      saveError = null;
       updateTitle();
       return true;
     } catch (e) {
+      saveError = String(e);
       showToast(`The prefab ${name} could not be saved (${String(e)})`, "warn");
+      updateTitle();
       return false;
     }
   }
 
-  // Put the level aside and edit a prefab in its place.
+  // Write the open prefab now if it has anything unwritten. False when it
+  // could not be, and the author chose to stay with it.
+  async function flushPrefab(): Promise<boolean> {
+    if (!prefabMode || !prefabName) return true;
+    if (!prefabSaveTimer && !dirty) return true;
+    if (prefabSaveTimer) clearTimeout(prefabSaveTimer);
+    prefabSaveTimer = null;
+    if (await writePrefab(prefabName)) return true;
+    return confirm(`The prefab ${prefabName} is not saved (${saveError ?? "unknown"}). Leave it anyway and lose its unsaved edits?`);
+  }
+
+  // What "everything" is to the view (Home, and an opened prefab's first
+  // frame): an open prefab's own scene items, not the model's spawn at its
+  // origin; else the whole level.
+  function wholeBox(): ReturnType<typeof levelBox> {
+    if (prefabMode) {
+      const box = focusBox(model.items.filter((i) => i.layer === "scene"));
+      if (box) return box;
+    }
+    return levelBox(model);
+  }
+
+  // An opened prefab framed whole: at once by what is known, and again once
+  // every model in it is drawn (a model's file lands after the open; until
+  // then it is measured by its mark) - unless the view has been moved since,
+  // which is the author's. Given up after a few seconds.
+  let prefabFraming: { pose: unknown; until: number } | null = null;
+  function framePrefab(): void {
+    if (!visuals?.active) return;
+    visuals.frameBox(wholeBox());
+    // ...head on: framed, the view looks at the box's middle in depth too (a
+    // model has some), which is a turned view, and a turned view hides the
+    // overlay and offers only select and move.
+    resetView();
+  }
+  function settlePrefabFraming(now: number): void {
+    if (!prefabFraming) return;
+    if (!prefabMode || !visuals?.active || visuals.view !== prefabFraming.pose || now > prefabFraming.until) {
+      prefabFraming = null;
+      return;
+    }
+    const models = model.items.filter((i) => i.object === "model");
+    if (!models.every((i) => drawnBox(i.id) !== null)) return;
+    framePrefab();
+    prefabFraming = null;
+  }
+
+  // Edit a prefab as a scene of its own, in place of the level: the level is
+  // written, put aside with its undo steps (`levelSession`), and given back
+  // by `closePrefab`. Another prefab opened over it replaces this one.
   async function openPrefab(name: string): Promise<void> {
     if (mode !== "edit") return;
     let data: PrefabData;
@@ -1609,66 +1849,101 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       data = await loadPrefab(name);
     } catch {
       showToast(`No prefab ${name}`, "warn");
+      if (readOpenPrefab() === name) writeOpenPrefab(null);
       return;
     }
+    if (!(await flushPrefab())) return;
     // The level is written before it is put aside: its paint is read again
     // from disk on the way back.
     if (!levelSession && currentName && dirty) await doSave(false, true);
     cancelAutosave();
-    if (prefabMode && prefabName && prefabSaveTimer) await writePrefab(prefabName);
     if (!levelSession) {
       levelSession = { model: shelve(model), history: history.map(shelve), future: future.map(shelve), name: currentName, dirty, cam: camera.position, zoom: camera.zoom, pose: visuals?.view ?? null };
     }
     // Lit as the level is: its Sun and Environment stand beside the prefab
     // while it is open (no lengths in them, so the units do not matter), and
-    // are never written into it (`prefabOfModel`).
+    // are never written into it nor listed in its tree (`isLevelFurniture`).
     const light = toTree(model).nodes.filter((n) => n.type === "Sun" || n.type === "Environment");
+    clearPrefabRefusal();
     prefabMode = true;
     prefabName = name;
+    prefabRootId = data.root.id;
+    saveError = null;
+    writeOpenPrefab(name);
     // What is open is worked on in the scene tree; the banner over it is the
     // way back.
     prefabsShown = false;
     currentName = null;
-    replaceModel(modelFromTree(scaleLevelTree({ format: TREE_FORMAT, nodes: [...light, data.root] }, PX)));
+    // At its origin, as every instance places it: a pose the file's root
+    // carries is the instance's to give, never seen in a level.
+    replaceModel(modelFromTree(scaleLevelTree({ format: TREE_FORMAT, nodes: [...light, prefabRootAtOrigin(data.root, false)] }, PX)));
     await loadPaint(name);
     resetHistory();
     dirty = false;
     camera.position = Vec2.ZERO;
     poseFromCameraNow();
+    // Framed whole, as Home frames it: a prefab whose origin is at one end
+    // (a length of track) opened half out of view.
+    framePrefab();
+    prefabFraming = visuals?.active ? { pose: visuals.view, until: performance.now() + 4000 } : null;
     selectedIds.clear();
     selectedVerts.clear();
     selectedBodyIds.clear();
     solidSel = null;
-    setBodySelection(model.tree.roots.find((r) => { const t = model.tree.nodes.get(r)?.type; return t !== "Sun" && t !== "Environment"; }) ?? null);
+    setBodySelection(prefabRootId);
     refreshDocButtons();
     rebuildInspector();
     updateTitle();
   }
 
-  // Back to the level, read again through the prefab library so every
-  // instance of what was edited shows it.
-  async function closePrefab(): Promise<void> {
-    if (!prefabMode) return;
-    if (prefabName && (prefabSaveTimer || dirty)) {
-      if (prefabSaveTimer) clearTimeout(prefabSaveTimer);
-      prefabSaveTimer = null;
-      await writePrefab(prefabName);
-    }
-    const s = levelSession!;
+  // Leave the open prefab, written, without restoring anything: what the
+  // caller opens next takes the editor's place.
+  function endPrefab(): void {
+    if (prefabSaveTimer) clearTimeout(prefabSaveTimer);
+    prefabSaveTimer = null;
+    clearPrefabRefusal();
     levelSession = null;
     prefabMode = false;
     prefabName = null;
-    replaceModel(unshelve(s.model));
-    history.splice(0, history.length, ...s.history.map(unshelve));
-    future.splice(0, future.length, ...s.future.map(unshelve));
-    currentName = s.name;
-    // What is placed from the prefab paints as the prefab now does.
-    if (currentName) await loadPaint(currentName);
-    dirty = s.dirty;
-    camera.position = s.cam;
-    camera.zoom = s.zoom;
-    if (s.pose) visuals?.setView(s.pose);
-    else poseFromCameraNow();
+    prefabRootId = null;
+    saveError = null;
+    writeOpenPrefab(null);
+  }
+
+  // Back to the level, read again through the prefab library so every
+  // instance of what was edited shows it. With no level put aside (the
+  // prefab was reopened by a reload) the level this browser had open is
+  // loaded from disk. False when the author chose to stay with a prefab that
+  // could not be saved.
+  async function closePrefab(): Promise<boolean> {
+    if (!prefabMode) return true;
+    if (!(await flushPrefab())) return false;
+    const s = levelSession;
+    endPrefab();
+    if (s) {
+      replaceModel(unshelve(s.model));
+      history.splice(0, history.length, ...s.history.map(unshelve));
+      future.splice(0, future.length, ...s.future.map(unshelve));
+      currentName = s.name;
+      // What is placed from the prefab paints as the prefab now does.
+      if (currentName) await loadPaint(currentName);
+      dirty = s.dirty;
+      camera.position = s.cam;
+      camera.zoom = s.zoom;
+      if (s.pose) visuals?.setView(s.pose);
+      else poseFromCameraNow();
+    } else {
+      const back = readLastLevel();
+      if (back) await doLoad(back);
+      else {
+        replaceModel(emptyModel());
+        resetHistory();
+        currentName = null;
+        dirty = false;
+        camera.position = Vec2.ZERO;
+        poseFromCameraNow();
+      }
+    }
     selectedIds.clear();
     selectedVerts.clear();
     selectedBodyIds.clear();
@@ -1676,6 +1951,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     refreshDocButtons();
     rebuildInspector();
     updateTitle();
+    return true;
   }
 
   // A new, empty prefab: a group at its origin, saved under `name`.
@@ -1707,10 +1983,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // level AS WRITTEN and read back, so its insides come in expanded: an
   // instance in the model is never without them, which is what lets every
   // write of it read what is missing inside as removed.
-  function placePrefab(name: string): void {
+  async function placePrefab(name: string): Promise<void> {
     if (prefabMode && name === prefabName) {
       showToast("A prefab cannot be placed in itself", "warn");
       return;
+    }
+    // A prefab this page has not read yet (made since it loaded - by another
+    // tab, a script, a hand): read now, or the placing would expand against
+    // a library without it into an empty holder (2026-11-26).
+    if (!prefabLibrary()[name]) {
+      try {
+        setPrefab(name, await loadPrefab(name));
+      } catch {
+        showToast(`No prefab ${name}`, "warn");
+        return;
+      }
     }
     beginAction();
     const tree = toTree(model);
@@ -1885,7 +2172,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const row = el("div", "ed-row");
         const label = el("span", "ed-layer-name");
         label.textContent = name;
-        const place = button("Place", () => placePrefab(name));
+        const place = button("Place", () => void placePrefab(name));
         place.title = `Place ${name} at the view's centre`;
         const open = button("Open", () => void openPrefab(name));
         open.title = `Edit ${name}: every instance follows`;
@@ -2013,6 +2300,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     drag = null;
     nudging = false;
     closeParentPick();
+    syncPrefabRoot();
     // An undone edit may have been the one that placed a corner, so an index
     // carried across it names a different vertex or none at all. A route node's
     // index is the same kind of thing over the same kind of list - undoing the
@@ -2850,7 +3138,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // full gizmo, as any 3D editor gives an object: move along x, y and z, turn
   // about all three, at the node's own origin and in its own orientation.
   // Everything under it is carried (`setNodeWorld`).
-  function body3dHandlers(id: string): GizmoHandlers {
+  // A frame of the PLANE (`plane`: a `Node2D`, `isFramePlane`) is moved the
+  // same way and held to the plane, as a body is: a move along x and y and a
+  // turn about z, its depth and tilt kept as they were.
+  function body3dHandlers(id: string, plane = false): GizmoHandlers {
     const quatOf = (w: World3): THREE.Quaternion =>
       new THREE.Quaternion().setFromEuler(new THREE.Euler(w.tilt[0], w.tilt[1], threeRotation(w.rot), "ZYX"));
     let base: World3 | null = null;
@@ -2861,6 +3152,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
       axes(mode): GizmoAxes {
         if (!model.tree.nodes.has(id) || mode === "scale") return null; // a frame has no size
+        if (plane) return mode === "translate" ? { x: true, y: true, z: false } : { x: false, y: false, z: true };
         return { x: true, y: true, z: true };
       },
       begin() {
@@ -2873,11 +3165,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           setNodeWorld(model, id, {
             ...base,
             pos: snapVec(new Vec2(pos.x, threeY(pos.y))),
-            z: snapOn ? Math.round(pos.z / gridStep) * gridStep : pos.z,
+            z: plane ? base.z : snapOn ? Math.round(pos.z / gridStep) * gridStep : pos.z,
           });
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZYX");
-          setNodeWorld(model, id, { pos: new Vec2(pos.x, threeY(pos.y)), rot: threeRotation(e.z), z: pos.z, tilt: [e.x, e.y] });
+          setNodeWorld(model, id, plane
+            ? { ...base, rot: threeRotation(e.z) }
+            : { pos: new Vec2(pos.x, threeY(pos.y)), rot: threeRotation(e.z), z: pos.z, tilt: [e.x, e.y] });
         }
         gizmoTouched();
       },
@@ -3134,14 +3428,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           ? `berry:${t.vineId}:${t.index}`
           : t.kind === "solid"
             ? `solid:${t.key}`
-            : // A body made 3D (or 2D) is a different set of handles.
-              `${t.kind}:${t.id}${t.kind === "body" && isFrame3D(t.id) ? ":3d" : ""}`;
+            : // A body made 3D (or 2D), or a frame, is a different set of handles.
+              `${t.kind}:${t.id}${t.kind === "body" ? (isFrame3D(t.id) ? ":3d" : isFramePlane(t.id) ? ":frame" : "") : ""}`;
+
+  // The class a node is to these rules: a placed prefab takes its root's
+  // (`rootType`), as everywhere else (level/nodes.ts `classOf`).
+  function nodeClass(id: string): string | null {
+    const n = model.tree.nodes.get(id);
+    if (!n) return null;
+    return n.type === "Instance" ? String(n.extra["rootType"] ?? n.type) : n.type;
+  }
 
   // Is this unit a frame standing in the scene rather than the plane - a rock
   // with no body, a `Node3D` - and so moved with the full 3D handles?
   function isFrame3D(id: string): boolean {
-    const n = model.tree.nodes.get(id);
-    return !!n && (n.type === "Node3D" || (n.type === "Formation3D" && bodyAbove(model.tree, id) === null));
+    const type = nodeClass(id);
+    return type === "Node3D" || (type === "Formation3D" && bodyAbove(model.tree, id) === null);
+  }
+
+  // Is this unit a frame of the plane - a `Node2D`, or a prefab placed with
+  // one at its root - and so moved as a node, everything under it riding
+  // (`setNodeWorld`)? It has no items of its own: as a body it was given the
+  // body handles, which move the body's items and found none, so the gizmo
+  // drew nothing (2026-11-26, Tris's `mine-track` once its root became a
+  // `Node2D` holding two bodies).
+  function isFramePlane(id: string): boolean {
+    return nodeClass(id) === "Node2D" && !model.tree.nodes.get(id)?.body;
   }
 
   // What moves a target, for the gizmo's handles and for **G** alike, so the
@@ -3158,7 +3470,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             : spec.kind === "body"
             ? isFrame3D(spec.id)
               ? pivoted(body3dHandlers(spec.id), () => solidCentre(bodyMembers(model.items, spec.id)))
-              : bodyHandlers(spec.id)
+              : isFramePlane(spec.id)
+                ? body3dHandlers(spec.id, true)
+                : bodyHandlers(spec.id)
             : objectHandlers(spec.id);
   }
 
@@ -3612,6 +3926,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function markDirty(): void {
     // The tree and the lists agree after every edit (`reconcileTree`).
     reconcileTree(model);
+    // An open prefab keeps its one root: what the edit left beside it goes in.
+    adoptPrefabStrays();
     // Every edit leaves a root a tree (rootEditing.ts): a branch whose parent
     // went away is a trunk, and every branch starts on its parent again.
     syncRoots(model);
@@ -3858,7 +4174,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // is the grapple avatar's), so what stands in the scene is the size that
       // has to fit. It is a body nothing steps: `BallVisual` reads its pose, and
       // with no chain thrown there is nothing else of the assembly to draw.
-      ball: spawnBall(),
+      // None over an open prefab: it has no spawn, and the model's stands at
+      // the prefab's origin, a 12 cm ball drawn over whatever is there.
+      ...(prefabMode ? {} : { ball: spawnBall() }),
     };
     scene3d.setLevel(sceneLevel);
     sceneKey = key;
@@ -4353,6 +4671,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const fileRow = el("div", "ed-row ed-file-row ed-commandbar");
   root.appendChild(fileRow);
   const newLevel = (): void => {
+    // Over an open prefab: the prefab is written and left first.
+    if (prefabMode) {
+      void closePrefab().then((ok) => {
+        if (ok) newLevel();
+      });
+      return;
+    }
     if (dirty && !confirm("Discard unsaved changes?")) return;
     cancelAutosave();
     replaceModel(emptyModel());
@@ -4372,7 +4697,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   let levelNames: string[] = [];
   const openLevel = async (name: string): Promise<void> => {
     if (name === currentName && !dirty) return;
-    if (dirty && !confirm("Discard unsaved changes?")) return;
+    // An open prefab is written by the load (`doLoad`), not discarded.
+    if (!prefabMode && dirty && !confirm("Discard unsaved changes?")) return;
     await doLoad(name);
   };
   const deleteFile = async (): Promise<void> => {
@@ -6003,6 +6329,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Is a node shown in the scene tree in this workspace: its own item is in
   // the workspace, or something under it is.
   function inTreeWorkspace(n: EdNode): boolean {
+    // An open prefab's tree is the prefab: its one root, not the level's
+    // spawn and light it is shown among.
+    if (prefabMode && isLevelFurniture(n)) return false;
     if (workspace === "2d") return true;
     // The level's light is what every workspace's rock is judged under.
     if (n.type === "Sun" || n.type === "Environment") return true;
@@ -6145,6 +6474,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           return;
         }
         pickNodeRow(n, e.shiftKey || e.ctrlKey || e.metaKey);
+      });
+      row.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        pickNodeRow(n, false);
+        showNodeMenu(n, label, e.clientX, e.clientY);
       });
       row.addEventListener("dragstart", (e) => {
         if (n.extra["spawn"] === true) {
@@ -6407,7 +6742,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A named level autosaves, so `*` is a brief in-flight marker rather than a
     // standing warning; an unnamed one keeps it until the first Save names it.
     const state =
-      (saveError ? " · SAVE FAILED" : dirty ? " *" : "") +
+      // A prefab the editor will not write as it stands says why; anything
+      // else that stops a write is a failure of the write.
+      (prefabMode && prefabRefusal ? ` · NOT SAVED: ${prefabRefusal}` : saveError ? " · SAVE FAILED" : dirty ? " *" : "") +
       (buildError ? ` · DOES NOT BUILD: ${buildError}` : "");
     const count = (l: EdLayer) => model.items.filter((i) => i.layer === l).length;
     // Only the layers that have anything on them are named, so the title stays
@@ -11863,8 +12200,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // class is the author's to say once the shape is down: the new body is
   // returned for `offerParentPick`. A belt's is not: a belt builds only on a
   // static body, so it gets one and nothing is asked.
+  // In an open prefab with nothing selected, the root is what is selected: a
+  // piece drawn into nothing joins a body root, and anything else drawn is
+  // put under the root (`adoptPrefabStrays`).
   function insertDrawn(item: EdItem): string | null {
-    const host = canShareBody(item) ? soleBodyId() : null;
+    const sole = soleBodyId();
+    const rootHost = prefabMode && sole === null && !selectedIds.size && prefabRootId !== null && model.tree.nodes.get(prefabRootId)?.body ? prefabRootId : null;
+    const host = canShareBody(item) ? (sole ?? rootHost) : null;
     const hostNode = host !== null ? model.tree.nodes.get(host) : undefined;
     if (hostNode?.body && bodyMembers(model.items, host!).every(canShareBody)) {
       addItem(model, item, host);
@@ -12551,7 +12893,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     let delta = pointerWorld().sub(box.min.add(box.max).mul(0.5));
     // Land the group's top-left corner on the grid, as a move does.
     if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
-    const host = pasteHostBody(arrived.items);
+    // A placed prefab arrives whole: joining would move its insides out of it
+    // into the selected body, where they are neither its (it wrote them
+    // `disabled`) nor the body's (they were still marked as its), and both
+    // lost them on save (2026-11-26, a pasted `mine-sleeper` with another
+    // selected lost its model).
+    const host = [...arrived.tree.nodes.values()].some((n) => n.instance) ? null : pasteHostBody(arrived.items);
     beginAction();
     // Anchor numbers are re-minted by the graft, so a paste
     // into a level that already holds anchor 1 does not end up with two.
@@ -12681,6 +13028,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   async function doLoad(name: string): Promise<void> {
+    // A level opened over an open prefab takes its place, the prefab written.
+    if (prefabMode) {
+      if (!(await flushPrefab())) return;
+      endPrefab();
+      refreshDocButtons();
+    }
     cancelAutosave(); // don't write the outgoing model to the incoming name
     try {
       const data = await loadLevel(name);
@@ -12728,6 +13081,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   async function doSave(saveAs: boolean, auto = false): Promise<void> {
+    // An open prefab is saved as itself, never as a level.
+    if (prefabMode) {
+      if (!auto && prefabName) {
+        if (prefabSaveTimer) clearTimeout(prefabSaveTimer);
+        prefabSaveTimer = null;
+        await writePrefab(prefabName);
+      }
+      return;
+    }
     // A queued autosave can fire after New/Delete cleared the name, or after a
     // manual Save already wrote the model. Either way it must be a no-op - and
     // in particular must never reach the "Save as" prompt below.
@@ -12774,6 +13136,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A pending autosave would otherwise be lost on navigation/close; `keepalive`
   // lets the request outlive the page.
   window.addEventListener("pagehide", () => {
+    // ...and an open prefab's, which is written the same way.
+    if (prefabMode && prefabName && prefabSaveTimer !== null) {
+      const data = prefabOfModel();
+      if (typeof data !== "string") void savePrefab(prefabName, data, { keepalive: true }).catch(() => {});
+      return;
+    }
     if (autosaveTimer === null || !dirty || !currentName) return;
     cancelAutosave();
     void saveLevel(currentName, modelToDisk(model), { keepalive: true }).catch(() => {});
@@ -13559,8 +13927,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // at any angle: the marker is drawn with the rest of the overlay, and the
     // pointer is resolved on the plane it stands on.
     // The spawn is gameplay: the 2D workspace's.
+    // Not over an open prefab: its origin is where the model's spawn stands,
+    // and a press there is a press on the prefab.
     const spawnHit =
       workspace === "2d" &&
+      !prefabMode &&
       world.distanceTo(model.player.pos) <= Math.max(model.player.radius, SMALL_MARK_PICK_PX * worldLine());
     if (spawnHit) {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
@@ -15135,7 +15506,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // F (Unity) or Numpad . (Blender): the selection framed and orbited
         // about; Home (Blender's View All): everything.
         const all = e.code === "Home";
-        visuals.frameBox((all ? null : focusBox(operandItems())) ?? levelBox(model));
+        visuals.frameBox((all ? null : focusBox(operandItems())) ?? wholeBox());
         cameraFromPose();
         refreshOrbitBtn();
       }
@@ -15405,6 +15776,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       );
     } else {
       flyNdof(now);
+      settlePrefabFraming(now);
       syncViewUrl(now);
       // The next ▶ Test's level, while nothing is moving.
       prebuildTest(now);
@@ -15565,6 +15937,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           : null,
         workspace === "formations" ? formationGuideView : null,
         cutDraftView(),
+        // An open prefab has no spawn: the one the model holds stands at its
+        // origin, over the prefab, and is no part of it.
+        !prefabMode,
       );
     }
     requestAnimationFrame(frame);
@@ -15586,9 +15961,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // frame after a gesture's last half second writes where it ended.
   const VIEW_URL_INTERVAL_MS = 500;
 
+  // The level the address names: the one open, or the one put aside under an
+  // open prefab, which a reload loads before opening the prefab over it.
+  const viewLevel = (): string | null => (prefabMode ? (levelSession?.name ?? readLastLevel()) : currentName);
+
   function viewMatches(w: EditorView): boolean {
     return (
-      w.level === currentName &&
+      w.level === viewLevel() &&
+      w.prefab === (prefabMode ? prefabName : null) &&
       w.cam !== null &&
       w.cam.x === camera.position.x &&
       w.cam.y === camera.position.y &&
@@ -15608,7 +15988,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!viewUrlLive || mode !== "edit" || now - viewWrittenAt < VIEW_URL_INTERVAL_MS) return;
     if (viewWritten && viewMatches(viewWritten)) return;
     const view: EditorView = {
-      level: currentName,
+      level: viewLevel(),
+      prefab: prefabMode ? prefabName : null,
       cam: { x: camera.position.x, y: camera.position.y, zoom: camera.zoom, yaw: orbit.yaw, pitch: orbit.pitch },
       vis: visuals?.view ?? null,
       workspace,
@@ -15673,7 +16054,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (levelNames.includes(name)) await doLoad(name);
         else if (urlView.level === null) writeLastLevel(null);
       }
-      if (fresh && currentName === urlView.level) takeUpUrlView();
+      // ...and the prefab that was open over it, as a reload in the middle of
+      // editing one comes back to it (a prefab is a scene of its own).
+      const prefab = urlView.prefab ?? readOpenPrefab();
+      if (fresh && prefab !== null) {
+        await openPrefab(prefab);
+        if (prefabMode && urlView.prefab === prefab) takeUpUrlView();
+      } else if (fresh && currentName === urlView.level) takeUpUrlView();
     })
     .finally(() => {
       viewUrlLive = true;

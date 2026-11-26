@@ -37,6 +37,18 @@ import { getTextureColorSpace, listTextureSlots, textureCompress } from "@gltf-t
 import { MeshoptDecoder, MeshoptEncoder } from "meshoptimizer";
 import sharp from "sharp";
 
+// How many threads libvips gives one image's encode. sharp's own default is 1
+// on glibc Linux without jemalloc (to curb heap fragmentation), so every map
+// was encoded on one core, at most four at once (libuv's pool): the minecart's
+// 4096 AVIF colour map took 22.8 s alone, its export's encode 26.8 s of 47.8
+// on 32 cores (2026-11-26). Fixed, never the machine's core count, because
+// aom tiles an AVIF by its threads, so the bytes are a function of it: at 1, 4,
+// 8 and 16 threads that map came out 313.8, 314.9, 315.6 and 316.5 KB, each
+// count byte-identical run to run, all 0.71 levels rms off the source and 10
+// at worst. It is part of the encode cache's key (`ENCODER`) for that reason.
+const ENCODE_THREADS = 8;
+sharp.concurrency(ENCODE_THREADS);
+
 const argv = process.argv.slice(2);
 const cacheAt = argv.indexOf("--cache");
 const cacheDir = cacheAt === -1 ? null : argv[cacheAt + 1];
@@ -141,7 +153,7 @@ const claims = (rule, texture) => {
 // What an encode's bytes depend on besides its source and rule. Bumped by hand
 // only when this file changes how it encodes.
 const CACHE_VERSION = 1;
-const ENCODER = JSON.stringify([CACHE_VERSION, VERSION, sharp.versions]);
+const ENCODER = JSON.stringify([CACHE_VERSION, VERSION, sharp.versions, ENCODE_THREADS]);
 const keyOf = (texture, rule) => {
   const { name, pattern, slots, ...encoding } = rule;
   return createHash("sha256")

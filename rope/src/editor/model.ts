@@ -1294,6 +1294,37 @@ export function composeWorld(parent: World3, local: Pose3D): World3 {
 }
 
 // ...and back: where a world placement is in a parent's frame.
+// A PREFAB'S ROOT STANDS AT ITS ORIGIN. Expanded, the root takes the
+// instance's pose (level/nodes.ts `expandInstances`), so a pose of its own in
+// the file is never seen in any level - but it was in the editor, which drew
+// the prefab in it: a root turned 11.7 degrees by a gizmo ring showed every
+// instance's track straight in the level and tilted in its prefab, and what
+// was built in the tilted frame landed elsewhere (2026-11-26). `root` with its
+// pose taken off; with `keep` the pose is carried into its children first, so
+// what was moved with the root (a save after an edit) stays where it was put,
+// and without it (an open) the prefab is drawn as its instances draw it.
+export function prefabRootAtOrigin(root: LevelNode, keep: boolean): LevelNode {
+  const r = root as LevelNode & Pose3D;
+  const posed = (r.x ?? 0) !== 0 || (r.y ?? 0) !== 0 || (r.rot ?? 0) !== 0 || (r.z ?? 0) !== 0 || (r.tilt !== undefined && (r.tilt[0] !== 0 || r.tilt[1] !== 0));
+  const { x: _x, y: _y, rot: _r, z: _z, tilt: _t, ...bare } = r;
+  if (!posed) return bare as LevelNode;
+  if (!keep || !root.children?.length) return bare as LevelNode;
+  const frame = composeWorld(WORLD_ORIGIN, r);
+  const children = root.children.map((c) => {
+    const k = c as LevelNode & Pose3D;
+    const w = composeWorld(frame, k);
+    // A placement at its default is left out, as everywhere in the format.
+    const { x: _cx, y: _cy, rot: _cr, ...rest } = k;
+    const out: Record<string, unknown> = { ...rest, ...(w.pos.x !== 0 ? { x: w.pos.x } : {}), ...(w.pos.y !== 0 ? { y: w.pos.y } : {}), ...(w.rot !== 0 ? { rot: w.rot } : {}) };
+    // Depth and tilt where the child has them to carry: a 3D frame's pose, or
+    // a lamp's or a model's own depth.
+    if (POSE_3D.has(c.type) || k.z !== undefined) out["z"] = w.z;
+    if (POSE_3D.has(c.type) && (w.tilt[0] !== 0 || w.tilt[1] !== 0)) out["tilt"] = [w.tilt[0], w.tilt[1]];
+    return out as unknown as LevelNode;
+  });
+  return { ...(bare as LevelNode), children };
+}
+
 export function relativeLocal(parent: World3, world: World3): Pose3D {
   if (!tilted(parent)) {
     const f = relative2D({ x: parent.pos.x, y: parent.pos.y, rot: parent.rot }, { x: world.pos.x, y: world.pos.y, rot: world.rot });
@@ -1536,7 +1567,13 @@ export function modelFromTree(source: LevelTree): EdModel {
     if (n.type !== "Instance") return;
     const e = edTree.nodes.get(n.id);
     if (!e) return "skip";
-    e.extra = { rootType: e.type, order: n.order };
+    // A prefab missing from the library expanded to an empty holder: there is
+    // nothing of it here to compare with the prefab, so its overrides are kept
+    // as they are (`instanceOverrides`) until it is read again with the
+    // prefab. Diffed, a holder written after the library gained its prefab
+    // overrode every node of it `disabled` (2026-11-26: a Place made while the
+    // page's library was stale, then the prefab saved in the same page).
+    e.extra = { rootType: e.type, order: n.order, ...(prefabLibrary()[n.prefab] ? {} : { holder: true }) };
     e.type = "Instance";
     e.instance = { prefab: n.prefab, scale: n.scale ?? 1, overrides: structuredClone(n.overrides ?? {}), editable: false };
     const prefix = `${n.id}/`;
@@ -1734,6 +1771,24 @@ export function modelFromTree(source: LevelTree): EdModel {
     // The level's light: what the node authors, every field it sets.
     if (n.type === "Sun" || n.type === "Environment") e.extra = { ...e.extra, ...skyFields(n) };
   });
+  // A DISABLED node, and everything under one, is out of the compile, so
+  // nothing above built an item, a body or a chain of it: its own fields are
+  // held as they were loaded and written back as they are (`toTree`). Without
+  // them a disabled shape was saved with no shape, a lamp with no light, and
+  // a prefab instance at a scale other than 1 that disabled a shape could not
+  // be written at all (2026-11-26).
+  const holdDisabled = (list: readonly LevelNode[], off: boolean): void => {
+    for (const n of list) {
+      const out = off || n.disabled === true;
+      const e = edTree.nodes.get(n.id);
+      if (out && e) {
+        const { type: _t, id: _i, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, z: _z, tilt: _tl, ...held } = n as LevelNode & Pose3D;
+        if (Object.keys(held).length) e.extra = { ...e.extra, held: structuredClone(held) };
+      }
+      holdDisabled(n.children ?? [], out);
+    }
+  };
+  holdDisabled(compiled.nodes, false);
 
   const model: EdModel = {
     player: {
@@ -2253,6 +2308,10 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
       return out as unknown as LevelNode;
     } else if (item) {
       Object.assign(out, itemFields(model, item, n, nodeOfItem));
+    } else if (n.extra["held"] && n.chain === null && n.vine === null) {
+      // Out of the level (disabled, or under a disabled node): what it was
+      // loaded with, as it was (`holdDisabled` in `modelFromTree`).
+      for (const [k, v] of Object.entries(n.extra["held"] as Record<string, unknown>)) if (!(k in out)) out[k] = structuredClone(v);
     }
 
     const kids = n.children.flatMap((c) => write(c, frameForChildren(model, n)) ?? []);
@@ -2300,7 +2359,7 @@ function keptNodes(model: EdModel, keep: (id: string) => boolean): Set<string> {
 function instanceOverrides(model: EdModel, n: EdNode, writeChild: (id: string) => LevelNode | null): Record<string, Record<string, unknown>> {
   const inst = n.instance!;
   const prefab = prefabLibrary()[inst.prefab];
-  if (!prefab) return structuredClone(inst.overrides);
+  if (!prefab || n.extra["holder"] === true) return structuredClone(inst.overrides);
   const prefix = `${n.id}/`;
   const strip = (id: string): string => (id.startsWith(prefix) ? id.slice(prefix.length) : id);
   // The prefab's own placing of itself: what this instance would be with no
@@ -2325,10 +2384,24 @@ function instanceOverrides(model: EdModel, n: EdNode, writeChild: (id: string) =
   for (const [id, props] of Object.entries(inst.overrides)) if (!baseById.has(id)) out[id] = structuredClone(props);
   const skip = new Set(["id", "type", "children"]);
   const rootSkip = new Set([...skip, "name", "x", "y", "rot", "z", "tilt", "grouped", "locked", "layers", "order"]);
+  // Each prefab node's parent, by the same keys: a node gone with its parent
+  // is not overridden itself, since `disabled` takes a node and everything
+  // under it out. Written for each, a deleted body left its shapes `disabled`
+  // after the body's override was reverted, and came back empty (2026-11-26).
+  const keyOf = (bid: string): string => (bid === n.id ? prefab.root.id : strip(bid));
+  const parentOf = new Map<string, string>();
+  const mapParents = (x: LevelNode): void => {
+    for (const c of x.children ?? []) {
+      parentOf.set(keyOf(c.id), keyOf(x.id));
+      mapParents(c);
+    }
+  };
+  mapParents(base);
   for (const [id, b] of baseById) {
     const now = nowById.get(id);
     if (!now) {
-      out[id] = { disabled: true };
+      const up = parentOf.get(id);
+      if (up === undefined || nowById.has(up)) out[id] = { disabled: true };
       continue;
     }
     const ignore = id === prefab.root.id ? rootSkip : skip;
@@ -2338,6 +2411,11 @@ function instanceOverrides(model: EdModel, n: EdNode, writeChild: (id: string) =
     let unscaled: Record<string, unknown> | null = null;
     for (const k of keys) {
       if (near(b[k], now[k])) continue;
+      // A placement left out IS zero (the format writes no default), and the
+      // writer spells a zero only for a node whose loaded placement still
+      // holds exactly: a pasted copy of a copy, offset twice, lands a float's
+      // last bit off it and wrote `x: null` against the prefab's `x: 0`.
+      if (POSE_KEYS.has(k) && near(b[k] ?? POSE_ZERO[k], now[k] ?? POSE_ZERO[k])) continue;
       if (inst.scale !== 1 && !unscaled) {
         unscaled = structuredClone(now);
         scaleGeometry(unscaled as unknown as LevelNode, 1 / inst.scale, id === prefab.root.id);
@@ -2350,6 +2428,10 @@ function instanceOverrides(model: EdModel, n: EdNode, writeChild: (id: string) =
 }
 
 // Equal to a part in 1e9, structurally: what an override is judged by.
+// A node's placement fields and the value each has when it is left out.
+const POSE_ZERO: Record<string, unknown> = { x: 0, y: 0, rot: 0, z: 0, tilt: [0, 0] };
+const POSE_KEYS = new Set(Object.keys(POSE_ZERO));
+
 function near(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
@@ -2389,6 +2471,21 @@ export function graftModel(
     const fresh = newNodeId(taken);
     taken.add(fresh);
     ids.set(id, fresh);
+  }
+  // A placed prefab's insides are named after it (`inst/node`, the prefab
+  // node's id after the slash) and marked as its (`inInstance`), which is how
+  // a write tells them from what was added under it and diffs them against
+  // the prefab (`instanceOverrides`). So they follow their instance's fresh
+  // id, keeping the prefab's part: under ids of their own, a copied instance
+  // was written with every node of its prefab `disabled` and its insides
+  // dropped (2026-11-26, a pasted and a duplicated `mine-track`).
+  const instanceOf = (n: EdNode): string | null => {
+    const inst = n.extra["inInstance"];
+    return typeof inst === "string" && ids.has(inst) && n.id.startsWith(`${inst}/`) ? inst : null;
+  };
+  for (const n of source.tree.nodes.values()) {
+    const inst = instanceOf(n);
+    if (inst) ids.set(n.id, ids.get(inst)! + n.id.slice(inst.length));
   }
   const itemIds = new Map<number, number>();
   const items: EdItem[] = [];
@@ -2440,9 +2537,16 @@ export function graftModel(
     target.vines.push({ ...structuredClone(v), id, anchor: itemIds.get(v.anchor) ?? v.anchor, anchor2: v.anchor2 !== null ? (itemIds.get(v.anchor2) ?? v.anchor2) : null });
   }
   const base = nextOrder(target.tree);
-  const sourceMin = Math.min(...[...source.tree.nodes.values()].flatMap((n) => (n.body ? [n.body.order] : typeof n.extra["order"] === "number" ? [n.extra["order"] as number] : [])), 0);
+  // A copied instance's own insides keep their prefab's build order keys (an
+  // instance's bodies build in its key, then their own, `level/nodes.ts`) and
+  // the placement they were loaded with (they move with it), so the copy
+  // writes them exactly as the prefab does and no key or `x: 0` reads as an
+  // override of it.
+  const keys = [...source.tree.nodes.values()].filter((n) => !instanceOf(n));
+  const sourceMin = Math.min(...keys.flatMap((n) => (n.body ? [n.body.order] : typeof n.extra["order"] === "number" ? [n.extra["order"] as number] : [])), 0);
   for (const n of source.tree.nodes.values()) {
     const id = ids.get(n.id)!;
+    const inside = instanceOf(n) !== null;
     const copy: EdNode = {
       ...n,
       id,
@@ -2451,14 +2555,21 @@ export function graftModel(
       layers: [...n.layers],
       pos: n.pos.add(offset),
       tilt: [n.tilt[0], n.tilt[1]],
-      local: null,
+      local: inside && n.local ? structuredClone(n.local) : null,
       item: n.item !== null ? (itemIds.get(n.item) ?? null) : null,
       chain: n.chain !== null ? (chainIds.get(n.chain) ?? null) : null,
       vine: n.vine !== null ? (vineIds.get(n.vine) ?? null) : null,
-      body: n.body ? { ...n.body, order: base + n.body.order - sourceMin, route: n.body.route.map(cloneRouteNode) } : null,
+      body: n.body ? { ...n.body, order: inside ? n.body.order : base + n.body.order - sourceMin, route: n.body.route.map(cloneRouteNode) } : null,
       instance: n.instance ? structuredClone(n.instance) : null,
-      extra: { ...n.extra, ...(typeof n.extra["order"] === "number" ? { order: base + (n.extra["order"] as number) - sourceMin } : {}) },
+      extra: { ...n.extra, ...(typeof n.extra["order"] === "number" && !inside ? { order: base + (n.extra["order"] as number) - sourceMin } : {}) },
     };
+    // Inside a copied instance: the copy's. A piece copied out of one without
+    // it is the level's own from here on.
+    if (n.extra["inInstance"] !== undefined) {
+      const inst = instanceOf(n);
+      if (inst) copy.extra = { ...copy.extra, inInstance: ids.get(inst)! };
+      else delete copy.extra["inInstance"];
+    }
     // The spawn is the level's own: a fragment never brings one. Nor does it
     // bring the light: a fragment read through the loader (a placed mushroom,
     // an old flat copy) is given a default Sun and Environment by the upgrade

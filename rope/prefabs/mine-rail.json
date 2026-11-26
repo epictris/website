@@ -1,0 +1,35 @@
+{
+  "format": 4,
+  "root": {
+    "type": "StaticBody2D",
+    "id": "xbi1vmu1",
+    "name": "mine-rail",
+    "order": 0,
+    "color": "#6b7280",
+    "opacity": 0.5,
+    "friction": 1,
+    "grouped": true,
+    "children": [
+      {
+        "type": "Model3D",
+        "id": "i1r6lyxu",
+        "name": "mine-rail-segment-bare",
+        "model": "mine-rail-segment-bare",
+        "scale": 0.6
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "q6hwqq5w",
+        "name": "Rails",
+        "x": 78,
+        "y": -12,
+        "shape": {
+          "kind": "rect",
+          "w": 156,
+          "h": 5.04
+        },
+        "material": "steel"
+      }
+    ]
+  }
+}

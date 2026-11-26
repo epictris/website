@@ -49,6 +49,7 @@ def bake_object(ob,size=1024):
     bpy.ops.object.select_all(action='DESELECT');ob.select_set(True);bpy.context.view_layer.objects.active=ob
     bpy.ops.object.mode_set(mode='EDIT');bpy.ops.mesh.select_all(action='SELECT');bpy.ops.uv.smart_project(angle_limit=1.15,island_margin=.025);bpy.ops.object.mode_set(mode='OBJECT')
     image=bpy.data.images.new(ob.name+' • baked edge paint',width=size,height=size,alpha=False)
+    image['generated_by']='tools/blender/mineshaft/edge_weathering.py'
     sources=list(ob.data.materials);temp=[]
     for mat in sources:
         n=mat.node_tree.nodes;l=mat.node_tree.links;p=n.get('Principled BSDF');out=n.get('Material Output')

@@ -1084,6 +1084,28 @@ def bake_material_slots(ob, depsgraph):
     return [m if m is not None else fallback for m in materials]
 
 
+# In a worker: each object's slots some face of its evaluated mesh draws, by
+# name, taken at its first task, on the mesh the file gives it (its later
+# tasks see the prepared mesh, its slots copied per map, as `PRISTINE` keeps
+# the slots' materials for).
+DRAWN = {}
+
+
+def drawn_slots(ob, depsgraph):
+    """The indices of `ob`'s material slots some face draws. A slot no face
+    draws neither makes an object a bake target nor gives it a map to ship:
+    the mineshaft kit's edge-weathered meshes (mineshaft/edge_weathering.py)
+    keep their procedural authoring materials in unused slots beside the image
+    ones the faces draw, and counting those baked two maps per object that
+    were wired to nothing, then failed the export on the "ships" count
+    (mine-rail-straight, 2026-11-26)."""
+    if WORKER_OUT is None:
+        return {p.material_index for p in ob.evaluated_get(depsgraph).data.polygons}
+    if ob.name not in DRAWN:
+        DRAWN[ob.name] = {p.material_index for p in ob.evaluated_get(depsgraph).data.polygons}
+    return DRAWN[ob.name]
+
+
 def export_materials(ob, materials):
     """The export's own copy of each of `ob`'s `materials` (a slot's, or
     None), so each object's point at its own images; a painted slate on a
@@ -1490,17 +1512,19 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
             by_host.setdefault(host, []).append(entry)
         elif warnings is not None:
             warnings.append(f"{mo.name}: its rock {host.name} is not exported; the moss painted on it is not either")
+    depsgraph = bpy.context.evaluated_depsgraph_get()
     # A worker asks of a rock it has worked on before what the file gave it
     # (`PRISTINE`): its own copies are wired to their baked maps by then.
+    # Only a slot some face draws counts (`drawn_slots`).
     targets = [ob for ob in kept if ob.type == "MESH"
                and (ob in by_host or any(m is not None and (procedural_base_colors(m) or procedural_normals(m))
-                                         for m in PRISTINE.get(ob.name, ob.data.materials)))]
+                                         for i, m in enumerate(PRISTINE.get(ob.name, ob.data.materials))
+                                         if i in drawn_slots(ob, depsgraph)))]
     if not targets:
         step("bake", "nothing procedural")
         return 0
     t0 = time.time()
     scene = bpy.context.scene
-    depsgraph = bpy.context.evaluated_depsgraph_get()
     # Set before the cache keys, which take them in.
     scene.render.engine = "CYCLES"
     device = bake_device()
@@ -1510,8 +1534,10 @@ def bake_procedural_textures(kept, cache_dir=None, paints=(), warnings=None, sta
     # images; a far-back rock's slate repainted to its depth.
     materials = {ob: export_materials(ob, bake_material_slots(ob, depsgraph))
                  for ob in targets}
-    colored = [ob for ob in targets if ob in by_host or any(procedural_base_colors(m) for m in materials[ob])]
-    bumped = [ob for ob in targets if any(procedural_normals(m) for m in materials[ob])]
+    colored = [ob for ob in targets if ob in by_host or any(procedural_base_colors(m) for i, m in enumerate(materials[ob])
+                                                            if i in drawn_slots(ob, depsgraph))]
+    bumped = [ob for ob in targets if any(procedural_normals(m) for i, m in enumerate(materials[ob])
+                                          if i in drawn_slots(ob, depsgraph))]
     # The maps each object ships, as (kind, colour space).
     ships = {ob: [k for k, among in (("baked colour", colored), ("baked normal", bumped)) if ob in among]
              for ob in targets}
@@ -2036,8 +2062,11 @@ def material_warnings(ob):
     out = []
     data = getattr(ob, "data", None)
     slots = getattr(data, "materials", None) or []
-    for mat in slots:
-        if mat is None:
+    # A slot no face draws is not exported, so it loses nothing (`drawn_slots`).
+    drawn = ({p.material_index for p in ob.evaluated_get(bpy.context.evaluated_depsgraph_get()).data.polygons}
+             if ob.type == "MESH" else range(len(slots)))
+    for i, mat in enumerate(slots):
+        if mat is None or i not in drawn:
             continue
         # Blender 5 materials always have a node tree (`use_nodes` is
         # deprecated); one without is a legacy flat colour glTF carries as is.
@@ -2092,9 +2121,14 @@ def image_credits(obs, warnings):
     with open(CREDITS_FILE, encoding="utf-8") as f:
         table = json.load(f)
     images = set()
+    depsgraph = bpy.context.evaluated_depsgraph_get()
     for ob in obs:
-        for mat in getattr(getattr(ob, "data", None), "materials", None) or []:
-            if mat is None or mat.node_tree is None:
+        slots = getattr(getattr(ob, "data", None), "materials", None) or []
+        # A slot no face draws is not exported, nor its images (`drawn_slots`).
+        drawn = ({p.material_index for p in ob.evaluated_get(depsgraph).data.polygons}
+                 if ob.type == "MESH" else range(len(slots)))
+        for i, mat in enumerate(slots):
+            if mat is None or mat.node_tree is None or i not in drawn:
                 continue
             for n in mat.node_tree.nodes:
                 if n.type == "TEX_IMAGE" and n.image is not None:

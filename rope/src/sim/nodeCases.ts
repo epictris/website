@@ -465,7 +465,15 @@ export function runNodeTreeCases(): NodeCaseResult[] {
     const metres = scaleLevelTree(t, 1 / 100);
     const viaTree = compileLevel(metres).data;
     const viaFlat = scaleNormalized(compileLevel(t).data, 1 / 100);
-    const commute = firstDifference(simView(viaFlat), simView(viaTree));
+    // To a part in 1e12, as the instance case and the round trip below are,
+    // not bit for bit: the compile carries lengths through a frame's turn,
+    // and (a + b) * s is not a * s + b * s in floating point once the turn is
+    // not exact. A body at -pi (cos -1, sin -1.2e-16) in BALL, 2026-11-26,
+    // put the two a last bit apart. Nothing the sim runs takes the metre
+    // route: the game, ▶ Test and every replay compile the pixel tree and
+    // scale after (`scaleLevelData`; ▶ Test plays `modelToDisk`), and the
+    // metre compile only draws the editor's view and its camera rules.
+    const commute = firstDifference(simView(viaFlat), simView(viaTree), "", 1e-12);
     check(`scale-commutes ${id}`, commute === null, commute ?? "compile(scale(tree)) = scale(compile(tree))");
     const back = scaleLevelTree(metres, 100);
     // Through metres and back rounds, as the editor's save always has: equal

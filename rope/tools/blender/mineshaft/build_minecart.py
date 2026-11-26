@@ -1,15 +1,25 @@
-"""Original stylized minecart. Run from repo root with blender -b --python this_file.
+"""Original stylized minecart. Run from repo root with blender -b --python this_file [-- VARIANT].
 Metres, Z up, X travel; ground pivot; 1.14 m wheel tread gauge.
+Variants: none builds `minecart`; `no-left-wheels` builds `minecart-no-left-wheels`,
+the same cart with both wheels on its left (-X, seen from the side) gone, bare axle stubs left.
 """
-import bpy, math
+import bpy, bmesh, math, sys
 from pathlib import Path
 from mathutils import Vector
 ROOT=Path(__file__).resolve().parents[3]
+# The hopper floor ends at X=+-1.08; each axle bearing (0.24 m long) sits
+# flush with that edge, so the axles are as far out as the base allows.
+AXLE_X=1.08-.12
+VARIANTS={'':(),'no-left-wheels':(-AXLE_X,)}
+VARIANT=sys.argv[sys.argv.index('--')+1] if '--' in sys.argv[:-1] else ''
+if VARIANT not in VARIANTS:raise SystemExit(f'unknown variant {VARIANT!r}; one of {sorted(v for v in VARIANTS if v)}')
+MISSING_WHEEL_X=VARIANTS[VARIANT]
+NAME='minecart'+('-'+VARIANT if VARIANT else '')
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.context.preferences.filepaths.save_version=0
 scene=bpy.context.scene
-kit=bpy.data.collections.new('minecart');scene.collection.children.link(kit)
-kit.asset_mark();kit.asset_data.description='Painterly iron minecart with two push handles; 1.14 m gauge, ground pivot, X travel.'
+kit=bpy.data.collections.new(NAME);scene.collection.children.link(kit)
+kit.asset_mark();kit.asset_data.description='Painterly iron minecart with two push handles; 1.14 m gauge, ground pivot, X travel.'+(' Left wheels missing.' if MISSING_WHEEL_X else '')
 
 def mat(name,dark,light,metal=.45,rough=.72,scale=(3,3,3)):
     m=bpy.data.materials.new(name);m.use_nodes=True;m.diffuse_color=(*light,1)
@@ -90,6 +100,17 @@ def ring(name,x,y,z,outer,inner,width,m):
     # Outward winding on the tread, bore and both annular faces.
     return bevel(mesh(name,verts,[tuple(reversed(f)) for f in faces],m),.009)
 
+# Axle bearing block: full width from the hopper floor (Z=.67, sunk 1 cm into
+# it) down to a half-round about the axle (centre Z=.405), 0.24 m along X and
+# 0.18 m across. One closed mesh so the round end meets the flat sides without a seam.
+def axle_box(name,x,y,m,half=.12,top=.68-.405,depth=.18,N=16):
+    prof=[(-half,top),(half,top)]+[(half*math.cos(-i*math.pi/N),half*math.sin(-i*math.pi/N)) for i in range(N+1)]
+    n=len(prof);verts=[(x+px,y+yy,.405+pz) for yy in (-depth/2,depth/2) for px,pz in prof]
+    faces=[tuple(range(n)),tuple(range(2*n-1,n-1,-1))]+[(i,(i+1)%n,n+(i+1)%n,n+i) for i in range(n)]
+    o=mesh(name,verts,faces,m)
+    bm=bmesh.new();bm.from_mesh(o.data);bmesh.ops.recalc_face_normals(bm,faces=bm.faces);bm.to_mesh(o.data);bm.free()
+    return bevel(o)
+
 def join_since(before,name):
     obs=[o for o in kit.objects if o not in before];bpy.ops.object.select_all(action='DESELECT')
     for o in obs:o.select_set(True)
@@ -122,14 +143,16 @@ for x in [-1,1]:
     box('End lip',(x*1.43,0,1.78),(.10,1.38,.105),iron)
     for y in [-.39,.39]:
         beam('End brace',(x*1.105,y,.72),(x*1.45,y,1.73),.065,.075,iron)
-box('Underframe',(0,0,.52),(2.35,.75,.20),iron,.035)
-for y in [-.39,.39]:box('Chassis side beam',(0,y,.51),(2.42,.11,.21),iron)
-for x in [-.88,.88]:
+# Open underneath: no chassis, so the axles show from the side. Each axle
+# bearing hangs straight from the hopper floor on a web and a bolted plate.
+for x in [-AXLE_X,AXLE_X]:
     cylinder('Axle',(x,0,.405),.068,1.38,iron)
-    for y in [-.40,.40]:box('Axle bearing',(x,y,.43),(.24,.18,.27),iron)
+    for y in [-.40,.40]:
+        axle_box('Axle bearing',x,y,iron)
 join_since(before,'Hopper and chassis')
 # Four five-spoke railway wheels, with inside flanges. Treads rest at Z=0.
-for x in [-.88,.88]:
+for x in [-AXLE_X,AXLE_X]:
+    if x in MISSING_WHEEL_X:continue
     for y in [-.57,.57]:
         before=set(kit.objects);sgn=1 if y>0 else -1
         ring('Wheel tread',x,y,.405,.405,.305,.23,iron)
@@ -202,7 +225,7 @@ scene.view_settings.view_transform='AgX'
 scene.render.bake.margin=12;scene.cycles.samples=1
 for ob in list(kit.objects):bake_surface_response(ob)
 scene.cycles.samples=32
-source=ROOT/'assets-src/models/minecart.blend'
+source=ROOT/f'assets-src/models/{NAME}.blend'
 bpy.ops.wm.save_as_mainfile(filepath=str(source))
 # Presentation only; deliberately added after saving the reusable asset.
 guide=bpy.data.collections.new('guide.presentation');scene.collection.children.link(guide)
@@ -216,7 +239,7 @@ for name,loc,power,size in [('Key',(-3,-4,7),950,5),('Fill',(4,-1,4),650,4),('Ri
 d=bpy.data.cameras.new('Camera');cam=bpy.data.objects.new('Camera',d);guide.objects.link(cam);scene.camera=cam;d.type='ORTHO';d.ortho_scale=4.6
 out=ROOT/'assets-src/studies/mineshaft';out.mkdir(parents=True,exist_ok=True)
 scene.render.resolution_x=1400;scene.render.resolution_y=1000;scene.render.resolution_percentage=100
-for name,loc in [('minecart',(4,-6,3.8)),('minecart-side',(0,-7,2.5))]:
+for name,loc in [(NAME,(4,-6,3.8)),(NAME+'-side',(0,-7,2.5))]:
     cam.location=loc;cam.rotation_euler=(Vector((0,0,.98))-cam.location).to_track_quat('-Z','Y').to_euler();scene.render.filepath=str(out/(name+'.png'));bpy.ops.render.render(write_still=True)
 # Inspect the actual rail fit. Shift rails down so their heads meet the cart pivot.
 rail_source=ROOT/'assets-src/models/mine-rail-straight.blend'
@@ -227,5 +250,5 @@ for ob in rails.objects:
     if ob.parent is None:ob.location+=Vector((-2,0,-.242))
 floor.location.z=-.25
 cam.location=(4,-6,3.8);cam.rotation_euler=(Vector((0,0,.9))-cam.location).to_track_quat('-Z','Y').to_euler();cam.data.ortho_scale=5.1
-scene.render.filepath=str(out/'minecart-on-rails.png');bpy.ops.render.render(write_still=True)
+scene.render.filepath=str(out/(NAME+'-on-rails.png'));bpy.ops.render.render(write_still=True)
 print('MINECART_COMPLETE',source,flush=True)

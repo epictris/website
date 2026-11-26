@@ -128,6 +128,7 @@ sleeper_endgrain(sleepend)
 rail_wear(tracktop)
 rail_wear(trackedge,edge=True)
 from edge_weathering import weather, bake_object
+from rail_profile import rail_geometry
 for mat in wood:
     sleeper_paint(mat,timber=True)
     weather(mat,(.34,.19,.055),.012)
@@ -377,22 +378,10 @@ def rail_segment(curved=False,broken=False):
     sleeper_parts(.95,0)
     sleeper_array(curved,radius*angle if curved else length,radius)
     for s in [-1,1]:
-        # True continuous I-section profile, no gaps between rail slices.
-        profile=[(-.10,.158),(.10,.158),(.10,.180),(.035,.185),(.04,.201),(.095,.208),(.095,.242),(-.095,.242),(-.095,.208),(-.04,.201),(-.035,.185),(-.10,.180)]
+        # True continuous I-section profile, no gaps between rail slices (rail_profile.py).
         intervals=([(0,.40),(.55,1)] if s<0 else [(0,.45),(.60,1)]) if broken else [(0,1)]
         for lo,hi in intervals:
-            verts=[]; steps=32
-            for j in range(steps+1):
-                t=lo+(hi-lo)*j/steps; p=center(t); n=Vector((-tangent(t).y,tangent(t).x,0))
-                for idx,(w,z) in enumerate(profile):
-                    fracture=(.035*math.sin(idx*2.7)+.025*math.cos(idx*1.3)) if broken and ((j==steps and hi<1) or (j==0 and lo>0)) else 0
-                    bite=.011*max(0,math.sin(t*math.pi*9+s*1.8+(1 if w>0 else 3)))**14 if z>.20 and 0<j<steps else 0
-                    ww=w-math.copysign(bite,w) if abs(w)>.08 else w
-                    verts.append(p+n*(s*.57+ww)+Vector((fracture,0,z)))
-            m=len(profile); faces=[tuple(range(m-1,-1,-1))]
-            for j in range(steps):
-                for k in range(m): faces.append((j*m+k,j*m+(k+1)%m,(j+1)*m+(k+1)%m,(j+1)*m+k))
-            faces.append(tuple(steps*m+k for k in range(m)))
+            verts,faces=rail_geometry(center,tangent,s,lo,hi,broken)
             mesh=bpy.data.meshes.new('Continuous forged I rail'); mesh.from_pydata(verts,[],faces); mesh.update()
             o=bpy.data.objects.new('Rail • continuous I profile',mesh); current.objects.link(o); mesh.materials.append(trackmetal); mesh.materials.append(tracktop); mesh.materials.append(trackedge)
             for p in mesh.polygons: p.material_index=1 if p.normal.z>.6 else 0

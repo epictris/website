@@ -87,6 +87,7 @@ def sleeper_endgrain(material,attribute='paint_coords'):
     rgba=np.concatenate([np.clip(rgb,0,1),np.ones((h,w,1))],axis=2).astype(np.float32)
     im=bpy.data.images.new('Sleeper • crosscut growth rings and checks',width=w,height=h,alpha=True)
     im.colorspace_settings.name='Non-Color';im.pixels.foreach_set(rgba.ravel());im.pack()
+    im['generated_by']='tools/blender/mineshaft/painted_surfaces.py'
     n=material.node_tree.nodes;l=material.node_tree.links;p=n.get('Principled BSDF')
     attr=n.new('ShaderNodeAttribute');attr.attribute_name=attribute
     sep=n.new('ShaderNodeSeparateXYZ');l.new(attr.outputs['Vector'],sep.inputs[0])
@@ -121,6 +122,7 @@ def sleeper_paint(material,timber=False):
     rgba=np.concatenate([np.clip(rgb,0,1),np.ones((h,w,1))],axis=2).astype(np.float32)
     im=bpy.data.images.new('Sleeper • painted ochre grain',width=w,height=h,alpha=True)
     im.colorspace_settings.name='Non-Color';im.pixels.foreach_set(rgba.ravel());im.pack()
+    im['generated_by']='tools/blender/mineshaft/painted_surfaces.py'
     n=material.node_tree.nodes;l=material.node_tree.links;p=n.get('Principled BSDF')
     coord=n.new('ShaderNodeAttribute');coord.attribute_name='paint_coords'
     scale=n.new('ShaderNodeVectorMath');scale.operation='MULTIPLY';scale.inputs[1].default_value=(.52,2.85,2.85 if timber else 1)

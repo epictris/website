@@ -1,0 +1,47 @@
+{
+  "format": 4,
+  "root": {
+    "type": "StaticBody2D",
+    "id": "89f0r5h4",
+    "name": "mine-track-broken",
+    "order": 0,
+    "color": "#6b7280",
+    "opacity": 0.5,
+    "friction": 1,
+    "grouped": true,
+    "children": [
+      {
+        "type": "Model3D",
+        "id": "wzq7xqc0",
+        "name": "mine-rail-segment-broken",
+        "model": "mine-rail-segment-broken"
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "nv3vz21f",
+        "name": "Track before the break",
+        "x": 62.45,
+        "y": -12.1,
+        "shape": {
+          "kind": "rect",
+          "w": 124.9,
+          "h": 24.2
+        },
+        "material": "steel"
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "17a5ic8m",
+        "name": "Track after the break",
+        "x": 199.6,
+        "y": -12.1,
+        "shape": {
+          "kind": "rect",
+          "w": 120.8,
+          "h": 24.2
+        },
+        "material": "steel"
+      }
+    ]
+  }
+}

@@ -286,6 +286,16 @@ function prefabApi(): Plugin {
           }
         }
       };
+      // A prefab written any other way - by hand, a `git checkout`, a tool -
+      // reaches neither this API nor vite's watcher, and the glob kept the
+      // library it was first transformed with: four prefabs written by a
+      // script on 2026-11-26 were listed in the Prefabs tab (its list reads
+      // the folder) while Place expanded each against a library without it,
+      // an empty holder. A watcher of our own, as the level API has, and not
+      // vite's, so a write still cannot restart the server.
+      watch(dir, (_event, name) => {
+        if (typeof name === "string" && name.endsWith(".json")) invalidate(fileFor(name.slice(0, -".json".length)));
+      });
       server.middlewares.use("/api/prefabs", (req, res) => {
         const send = (status: number, body: unknown) => {
           res.statusCode = status;

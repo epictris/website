@@ -31,6 +31,25 @@ contains the overview floor, lights, camera, hook and extra display lantern only
 | mine-pickaxe | Tapered iron head, ground pivot |
 | minecart | Open tapered iron hopper, four spoked wheels, steel push grips at both ends; tread-height pivot |
 
+Build the short tiling track segments the track prefabs draw (two sleepers 1.3 m
+apart, the spacing measured on Tris's reference, and 0.65 m of rail beyond each;
+2.6 m long), from the kit's straight and broken track files:
+
+```sh
+blender -b -noaudio --factory-startup --python-exit-code 1 --python rope/tools/blender/mineshaft/build_rail_segment.py
+blender -b -noaudio --factory-startup --python-exit-code 1 --python rope/tools/blender/mineshaft/build_rail_segment.py -- broken
+blender -b -noaudio --factory-startup --python-exit-code 1 --python rope/tools/blender/mineshaft/build_rail_segment.py -- bare
+cd rope
+just model mine-rail-segment
+just model mine-rail-segment-broken
+just model mine-rail-segment-bare
+```
+
+They keep the kit file's sleeper assembly, its Repeat sleepers modifier set to
+the segment's length and spacing, and rebuild the rails with the kit's section,
+`rail_profile.py`, which `build.py` uses too; their edge wear is baked as
+`build.py` bakes it. Rebuild them after rebuilding the kit.
+
 Build the standalone minecart and its two inspection renders:
 
 ```sh
@@ -65,6 +84,28 @@ with a 45° heading. Collection custom properties also record these values.
 The overview is an asset inspection scene, not an edit to a game level. Export
 individual models with the existing `just model <name>` workflow when placing
 them in a level. Collision remains independently authored in the level editor.
+
+The images the kit's scripts paint (`edge_weathering.py`'s `… • baked edge paint`,
+`painted_surfaces.py`'s sleeper grain and end grain) carry a `generated_by` custom
+property naming the script, so the exporter credits them as originals; the kit's
+`.blend` files built before 2026-11-26 were tagged in place.
+
+## Prefabs
+
+`rope/prefabs/` places the kit with its collision (docs/prefabs.md), in pixels, y down:
+
+| Prefab | Body | Collision |
+| --- | --- | --- |
+| mine-track | static; origin at the track's start on the ground; draws `mine-rail-segment` at scale 0.6 (Tris, 2026-11-26), so a piece is 1.56 m | Tris's own: a rect under each sleeper |
+| mine-rail | static; same frame and scale as mine-track; draws `mine-rail-segment-bare` (the rails alone) | one steel rect over the rails, 1.56 m long, 0.095-0.145 m up (the rail head level with mine-track's) |
+| mine-track-broken | static; same frame; draws `mine-rail-segment-broken` | two steel rects from the ground to the rail head, open where both rails are broken (1.249-1.392 m, narrower than the ball) |
+| mine-sleeper | static; origin at the foot, centred | one rect, 0.40 x 0.20 m |
+| mine-lantern | rigid; origin at the top of the crown loop, the hang point (the model sits 0.305 m up) | the mesh's side-view convex hull, hook-proof, 180 kg/m³ (25 kg); a warm flickering light at the flame and an `Anchor2D` at the origin to chain it from |
+
+Segments butt end to end at 260 px, so a run of track is as long as its segments,
+2.6 m at a time, and the sleepers stay 1.3 m apart across every join. The track's collision is a 2D silhouette in
+the play plane, which lies between the two rails: the ball rolls at rail-head
+height, and the minecart (origin at the rail head) sits on it.
 
 ## Adjusting rail slat spacing
 

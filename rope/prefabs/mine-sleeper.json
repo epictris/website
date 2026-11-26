@@ -1,0 +1,33 @@
+{
+  "format": 4,
+  "root": {
+    "type": "StaticBody2D",
+    "id": "7nysb2j2",
+    "name": "mine-sleeper",
+    "order": 0,
+    "color": "#6b7280",
+    "opacity": 0.5,
+    "friction": 1,
+    "grouped": true,
+    "children": [
+      {
+        "type": "Model3D",
+        "id": "1uzgrsql",
+        "name": "mine-sleeper-a",
+        "model": "mine-sleeper-a"
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "vq6knwn9",
+        "name": "Sleeper",
+        "x": 0,
+        "y": -10.075,
+        "shape": {
+          "kind": "rect",
+          "w": 40.16,
+          "h": 20.15
+        }
+      }
+    ]
+  }
+}

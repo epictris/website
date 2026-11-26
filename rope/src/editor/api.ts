@@ -55,11 +55,12 @@ export async function loadPrefab(name: string): Promise<PrefabData> {
   return (await res.json()) as PrefabData;
 }
 
-export async function savePrefab(name: string, data: PrefabData): Promise<void> {
+export async function savePrefab(name: string, data: PrefabData, opts: { keepalive?: boolean } = {}): Promise<void> {
   const res = await fetch(`${PREFABS}/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
+    keepalive: opts.keepalive ?? false,
   });
   if (!res.ok) throw new Error(`save failed: ${res.status}`);
 }

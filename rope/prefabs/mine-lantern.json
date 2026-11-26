@@ -1,0 +1,94 @@
+{
+  "format": 4,
+  "root": {
+    "type": "RigidBody2D",
+    "id": "7ke52qur",
+    "name": "mine-lantern",
+    "order": 0,
+    "color": "#6b7280",
+    "opacity": 0.5,
+    "friction": 0.5,
+    "grouped": true,
+    "children": [
+      {
+        "type": "Model3D",
+        "id": "w191rgaz",
+        "name": "mine-oil-lantern",
+        "model": "mine-oil-lantern",
+        "y": -30.5
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "c7uizj2o",
+        "name": "Lantern",
+        "shape": {
+          "kind": "poly",
+          "verts": [
+            {
+              "x": -37.9,
+              "y": 52.0
+            },
+            {
+              "x": -31.2,
+              "y": 29.1
+            },
+            {
+              "x": -4.8,
+              "y": 1.8
+            },
+            {
+              "x": 4.8,
+              "y": 1.8
+            },
+            {
+              "x": 31.2,
+              "y": 29.1
+            },
+            {
+              "x": 37.9,
+              "y": 52.0
+            },
+            {
+              "x": 36.5,
+              "y": 83.6
+            },
+            {
+              "x": 29.2,
+              "y": 115.9
+            },
+            {
+              "x": -29.2,
+              "y": 115.9
+            },
+            {
+              "x": -36.5,
+              "y": 83.6
+            }
+          ]
+        },
+        "impermeable": true,
+        "material": "custom",
+        "density": 180
+      },
+      {
+        "type": "Light3D",
+        "id": "fgircdc3",
+        "name": "Flame",
+        "x": 0,
+        "y": 74.5,
+        "z": 0,
+        "color": "#ffb070",
+        "intensity": 2,
+        "range": 1600,
+        "flicker": 0.1
+      },
+      {
+        "type": "Anchor2D",
+        "id": "a9diql6m",
+        "name": "Hang point",
+        "x": 0,
+        "y": 0
+      }
+    ]
+  }
+}

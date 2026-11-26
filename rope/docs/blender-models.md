@@ -85,5 +85,6 @@ Its `.blend` is published as a source beside the scenes' (`scripts/sceneSources.
 ## Not yet
 
 - Unplayed: the pipeline was proved on a throwaway lantern through the editor and the game render path headlessly (2026-11-13); no level carries a model yet.
+  The mineshaft kit's track, sleeper and lantern are prefabs with their collision (`prefabs/mine-*.json`, listed in `tools/blender/mineshaft/README.md`), drawn and simulated headlessly on 2026-11-26 and placed in no level.
 - Collision is not suggested from the model.
   A body's outline is traced by hand over the model drawn in the 3D view.

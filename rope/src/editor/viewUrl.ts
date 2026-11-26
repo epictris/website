@@ -34,6 +34,8 @@ export interface VisualsView {
 
 export interface EditorView {
   level: string | null;
+  // The prefab open over the level, if one is (`?prefab=`).
+  prefab: string | null;
   cam: LevelView | null;
   vis: VisualsView | null;
   // The workspace's name as written; the editor parses it (workspaces.ts).
@@ -60,6 +62,7 @@ export function readEditorView(search: string): EditorView {
   const v = numbers(q.get("vis"), [6]);
   return {
     level: q.get("level") || null,
+    prefab: q.get("prefab") || null,
     cam:
       c && c[2]! > 0
         ? {
@@ -96,6 +99,7 @@ export function editorViewHref(href: string, view: EditorView): string {
     else q.set(key, value);
   };
   put("level", view.level);
+  put("prefab", view.prefab);
   const c = view.cam;
   put(
     "cam",

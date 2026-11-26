@@ -43,6 +43,16 @@ function toastElement(): HTMLElement {
   return el;
 }
 
+// Take a message down before its time once what it said no longer holds -
+// only if it is still the one showing, so a newer message is left alone.
+export function hideToast(text: string): void {
+  const el = document.getElementById(TOAST_ID);
+  if (!el || el.style.display === "none" || el.textContent !== text) return;
+  el.style.display = "none";
+  if (hideTimer !== null) clearTimeout(hideTimer);
+  hideTimer = null;
+}
+
 export function showToast(text: string, tone: ToastTone = "ok"): void {
   const el = toastElement();
   el.textContent = text;

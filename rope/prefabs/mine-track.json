@@ -1,0 +1,46 @@
+{
+  "format": 4,
+  "root": {
+    "type": "StaticBody2D",
+    "id": "1sldxp3n",
+    "name": "mine-track",
+    "children": [
+      {
+        "type": "CollisionShape2D",
+        "id": "5vhzq2ct",
+        "name": "Rect",
+        "shape": {
+          "kind": "rect",
+          "w": 23.39029435025175,
+          "h": 7.825855605703196
+        },
+        "x": 116.61358694559388,
+        "y": -3.8343899107181034
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "qbidrn5n",
+        "name": "Rect2",
+        "shape": {
+          "kind": "rect",
+          "w": 23.73060533554316,
+          "h": 7.669879453657486
+        },
+        "x": 38.75527631327418,
+        "y": -3.963441258301689
+      },
+      {
+        "type": "Model3D",
+        "id": "42cfsuos",
+        "name": "mine-rail-segment",
+        "model": "mine-rail-segment",
+        "scale": 0.6
+      }
+    ],
+    "grouped": true,
+    "color": "#555555",
+    "opacity": 0.5,
+    "friction": 1,
+    "order": 1
+  }
+}

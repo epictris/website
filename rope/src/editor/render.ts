@@ -2022,6 +2022,8 @@ export function drawEditor(
   // the pieces it would leave (so what a click will do is seen before it is
   // done), and whether its end has landed on a corner.
   cutDraft: { from: Vec2; to: Vec2; pieces: readonly (readonly Vec2[])[]; corner: boolean } | null = null,
+  // Whether the spawn is drawn: not over an open prefab, which has none.
+  spawnShown = true,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -2883,34 +2885,36 @@ export function drawEditor(
     ctx.stroke();
     ctx.globalAlpha = was;
   };
-  const p = model.player.pos;
-  ctx.strokeStyle = PLAYER;
-  spawnGlyph(p);
-  ctx.lineWidth = worldLine * 1.5;
-  const tick = model.player.radius * 1.6;
-  ctx.beginPath();
-  ctx.moveTo(p.x - tick, p.y);
-  ctx.lineTo(p.x + tick, p.y);
-  ctx.moveTo(p.x, p.y - tick);
-  ctx.lineTo(p.x, p.y + tick);
-  ctx.stroke();
-
-  // ...and where a rolling entry brings it in from (see `SpawnData.roll`): the
-  // same ring at the point the ball is actually placed, with a dashed run to the
-  // spawn it rolls to. Drawn because the entry is the one part of the spawn that
-  // is not AT the spawn, and because what it has to be authored against is the
-  // camera region that frames it - which cannot be sized by eye against a number
-  // in a panel.
-  if (model.player.roll !== 0) {
-    const from = p.withX(p.x + model.player.roll);
-    ctx.setLineDash([worldLine * 6, worldLine * 6]);
-    ctx.lineWidth = worldLine;
+  if (spawnShown) {
+    const p = model.player.pos;
+    ctx.strokeStyle = PLAYER;
+    spawnGlyph(p);
+    ctx.lineWidth = worldLine * 1.5;
+    const tick = model.player.radius * 1.6;
     ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(p.x, p.y);
+    ctx.moveTo(p.x - tick, p.y);
+    ctx.lineTo(p.x + tick, p.y);
+    ctx.moveTo(p.x, p.y - tick);
+    ctx.lineTo(p.x, p.y + tick);
     ctx.stroke();
-    ctx.setLineDash([]);
-    spawnGlyph(from);
+
+    // ...and where a rolling entry brings it in from (see `SpawnData.roll`): the
+    // same ring at the point the ball is actually placed, with a dashed run to the
+    // spawn it rolls to. Drawn because the entry is the one part of the spawn that
+    // is not AT the spawn, and because what it has to be authored against is the
+    // camera region that frames it - which cannot be sized by eye against a number
+    // in a panel.
+    if (model.player.roll !== 0) {
+      const from = p.withX(p.x + model.player.roll);
+      ctx.setLineDash([worldLine * 6, worldLine * 6]);
+      ctx.lineWidth = worldLine;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      spawnGlyph(from);
+    }
   }
 
   ctx.restore();

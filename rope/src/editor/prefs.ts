@@ -195,3 +195,25 @@ export function writeLastLevel(name: string | null): void {
     // Unwritable storage: the next editor opens empty.
   }
 }
+
+// The prefab open over that level, if one was, which a fresh editor opens
+// again once the level is in: a prefab is a scene of its own, and a reload
+// in the middle of editing one comes back to it.
+export const OPEN_PREFAB_KEY = "rope.editor.prefab";
+
+export function readOpenPrefab(): string | null {
+  try {
+    return localStorage.getItem(OPEN_PREFAB_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function writeOpenPrefab(name: string | null): void {
+  try {
+    if (name === null) localStorage.removeItem(OPEN_PREFAB_KEY);
+    else localStorage.setItem(OPEN_PREFAB_KEY, name);
+  } catch {
+    // Unwritable storage: a reload opens the level.
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "format": 4,
+  "nodes": [
+    {
+      "type": "Sun",
+      "id": "qu0fenvr",
+      "name": "Sun"
+    },
+    {
+      "type": "Environment",
+      "id": "hzf2k8ei",
+      "name": "Environment"
+    },
+    {
+      "type": "Spawn2D",
+      "id": "mvb55ci1",
+      "name": "Spawn",
+      "x": 0,
+      "y": -100,
+      "radius": 8
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "w3fwn7sa",
+      "name": "StaticBody2D",
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "gzs1nk63",
+          "name": "Poly",
+          "shape": {
+            "kind": "poly",
+            "verts": [
+              {
+                "x": 9.999999999999956,
+                "y": -4.999999999999991
+              },
+              {
+                "x": 10.000000000000025,
+                "y": 5
+              },
+              {
+                "x": -9.999999999999964,
+                "y": 4.999999999999982
+              },
+              {
+                "x": -10.000000000000025,
+                "y": -4.999999999999991
+              }
+            ]
+          },
+          "debug": {
+            "on": true
+          }
+        },
+        {
+          "type": "Anchor2D",
+          "id": "1",
+          "name": "Anchor",
+          "x": 0.26074551119597,
+          "y": 4.999999999999982
+        }
+      ],
+      "grouped": true,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "order": 0,
+      "x": -190.00000000000003,
+      "y": -325
+    },
+    {
+      "type": "RigidBody2D",
+      "id": "hzi4vtl8",
+      "name": "RigidBody2D",
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "lesbusez",
+          "name": "Rect",
+          "shape": {
+            "kind": "rect",
+            "w": 150,
+            "h": 10
+          },
+          "debug": {
+            "on": true
+          }
+        },
+        {
+          "type": "Anchor2D",
+          "id": "2",
+          "name": "Anchor",
+          "x": -0.008998430666062873,
+          "y": -5.000000000000004
+        }
+      ],
+      "grouped": true,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "order": 1,
+      "x": -190.00000000000003,
+      "y": -170
+    },
+    {
+      "type": "Chain",
+      "id": "3ful9gkg",
+      "name": "Chain",
+      "order": 0,
+      "a": "1",
+      "b": "2"
+    }
+  ]
+}

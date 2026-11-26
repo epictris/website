@@ -1,25 +1,26 @@
 {
   "ball": {
     "file": "/roots/ball.glb",
-    "sha256": "9391d4d7d5cd3423318e4ad76d58cb30d05fab31a09acfda2cbde923703fbcc3",
-    "bytes": 1839312,
+    "sha256": "c2c884d25644b6d3565084bfb7f06215c381c6af0f1b18b71b0f7e3ae9ddb690",
+    "bytes": 1758288,
     "keys": [
-      "09be26353c961d31",
       "273a299ad5749d6b",
+      "4640cdd656d11bd0",
       "46f69c3e550b05b4",
-      "518a502ea9a2991b",
       "5252c86033b76458",
-      "69dac56983ec699b",
+      "59ea5ad42e2c2af9",
       "6c3a635c6f490f5b",
+      "7769dc72c1d754a3",
       "8772b96132e8f022",
       "890f3d9dbfbe031d",
+      "8e899959099fcab5",
       "a22d920b51f13b96",
       "a2e903dda7738931",
-      "c551b326ff386b30",
+      "a4a2f0deaf1af387",
+      "b47d0839cc574777",
       "cdb3068947b48aaf",
       "f8589193fdd00398",
-      "fb75420091674035",
-      "fd2475457f16c675"
+      "fb49cc2a2a49cd6b"
     ]
   }
 }
