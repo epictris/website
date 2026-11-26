@@ -30,13 +30,16 @@ A body's frame is its node's own placement, stored and moved only when the body 
 
 ## Layers
 
-Every item carries a **`layer`**, a fixed filter by what the item is, listed in draw order: `scene` (the level itself: every shape, every light, everything in a body), `shelter` (the front walls of enclosed caves, which only the sun sees, see [**Shelters**](lighting-and-surfaces.md#shelters)), `fog` (the regional fog volumes), `camera` (the camera-behaviour volumes, see [**Camera**](camera.md) below), `fireflies` (the firefly paths) and `notes` (authoring annotations, see below).
+Every item carries a **`layer`**, a fixed filter by what the item is, listed in draw order: `scene` (the level itself: every shape, every light, everything in a body, and the plane's two volumes that are things in the level, fog and shelters), `camera` (the camera-behaviour volumes, see [**Camera**](camera.md) below) and `notes` (authoring annotations, see below).
+A `fireflies` layer held the firefly paths until fireflies were removed on 2026-11-26.
 They are the type filters of the plan's data layers, and the user's own layers sit beside them ([below](#data-layers)).
 
-The **fog** layer offers rectangles and circles, a transform, and an inward edge falloff (100 px = 1 m).
-Its items are `FogRegion2D` nodes.
-`fogRegionsEnabled` (the tree's `fogMasked`) preserves an explicitly empty mask after the last region is deleted, including undo/redo; Environment's **fog regions only** checkbox restores global fog when unchecked.
-See [regional fog](lighting-and-surfaces.md#regional-fog).
+**Fog and shelters were layers until 2026-11-26** and are scene objects now (`EdObject` `fog` and `shelter`), for the reason lights stopped being one ([below](#layers)): a fog region is not a KIND OF LAYER, it is a thing in the level that owns its fog, and a shelter is a cave's front wall.
+A **fog region** is a `FogRegion2D` node: a rect or a circle (its panel switches between them, keeping its extent), a transform, and its own fog - `amount`, `colour` and an inward edge `falloff` (100 px = 1 m) - in `EdItem.fog` ([regional fog](lighting-and-surfaces.md#regional-fog)).
+`+Fog` drags one out carrying a fog worth seeing (`NEW_FOG`), and the scene tree's `+` adds one at the view's centre.
+A **shelter** is a `Shelter2D` node ([**Shelters**](lighting-and-surfaces.md#shelters)): `+Shelter` clicks out its outline as `+Poly` does, concave corners and all, and its panel carries the wall's `front`.
+Neither ever joins a body (`canShareBody`): the camera and the sky read both as fixed in the world.
+With fog on the regions there is no level-wide fog left to mask, so the `fogMasked` flag and the Environment panel's **fog regions only** box went with them: a level with no fog region has no fog.
 
 A click on anything off the scene layer selects the item itself, in one click: none of it is in a body, so the body step the scene layer takes first (body, then object) would be a panel of physics, bounce and mover fields for a thing that has none.
 
@@ -51,13 +54,14 @@ The **active** layer is what new items are drawn onto, and it breaks a tie in th
 Within a layer a **collision** object wins over a light whose reach it sits inside, since a click means the thing that decides where the player can go, and authored order breaks the rest.
 Every visible layer nevertheless draws at **full opacity**, active or not: dimming made a layer harder to read against the geometry it annotates, the layer list already says which one a click will hit, and visibility is the control for getting a layer out of the way.
 The layers are the 2D workspace's: the Formations and Decorations workspaces work on the scene layer alone and do not draw the others ([editor](editor.md#workspaces-2d-formations-decorations-texturing)).
-The toolbar's layer list picks it (**Tab** cycles, in 2D) and carries a **visibility** and a **lock** toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target, and the last visible layer refuses to go (hiding everything would leave a blank canvas nothing can be clicked on).
+The layer list over the scene tree (in the right dock since 2026-11-26, shown in 2D) picks it (**Tab** cycles, in 2D) and carries a **visibility** and a **lock** toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target, and the last visible layer refuses to go (hiding everything would leave a blank canvas nothing can be clicked on).
 The two toggles are deliberately independent: hiding gets a layer *out of the way*, locking keeps it **on screen but out of harm's way** — the reference you are working against.
 Both survive a reload: the browser remembers them (`rope.editor.layers`, [editor](editor.md)), and boot applies them through the same setters the toggles use, so a remembered hidden active layer moves the edit focus just as a click would.
 So a locked layer draws exactly as before and only loses the edit paths: picking, being drawn into (`refreshToolButtons` offers Select alone while the active layer is locked, and `setTool` refuses a draw tool there so the keyboard shortcuts cannot arm one either), and membership of the selection.
 With nothing pickable on it, the empty inspector says the layer is locked rather than repeating the usual "click a body", which would read as the editor being broken.
 A paste unlocks the layers it lands on for the same reason it un-hides them.
-The list stacks **vertically**, with the toggles in two icon columns down the left - eye then padlock - because a layer stack is a fixed, ordered set you read down rather than a row of toolbar buttons.
+The list stacks **vertically**, each layer a row of its toggles - eye then padlock - and its name, because a layer stack is a fixed, ordered set you read down rather than a row of toolbar buttons.
+The eye and the padlock draw no pressed fill: their drawing (open or shut, lifted or closed) is their state.
 Both are inline SVG (`eyeIcon`, `lockIcon`) rather than emoji or font glyphs, so they inherit the toolbar colour through `currentColor`, stay crisp at any DPI, and look the same on every platform.
 The eye is open when the layer draws and a dimmed closed lid when it does not; the padlock's *resting* state is unlocked, so it is the dim one (a row of lit padlocks would read as "everything is locked") and locked is amber, the layer list having already spent the accent blue on "active".
 A cross-layer selection gets **one panel per layer** rather than a reconciled mixed one, since the layers' properties have nothing in common (a note has no kind, a camera region no fill); the panels come in layer order, under a summary that carries the single Duplicate/Delete row, which is why the per-layer panels drop theirs (`selectionSpansLayers`) — a row inside the "2 regions" panel that also deleted the selected notes would be lying about its scope.
@@ -77,9 +81,12 @@ The belt panel edits it as `width`, `texture` (a picker of the surfaces, the fla
 The wheel the panel's `r` edits is kept in the same set a polygon's picked corners are (`selectedVerts`), so every rule that drops that set drops it too, and every corner edit asks `vertexEditTarget`, which a belt never is.
 A fresh item's appearance comes from `newItemStyle`, keyed by what is being DRAWN rather than by the layer alone (the scene layer draws two different things): a shape starts at the body defaults, a light at a warm flame it then authors away from, and camera regions and notes at their fixed editor-furniture colours.
 
-Two panels sit above the selection and are always shown, because what they edit is the **level** rather than anything in it: **Level** (the title, `intro` and `unlisted` - see [**Levels**](levels.md)) and **Environment** (the light and air).
-Both are carried through the model for the same reason the spawn's `hang` flag is: the editor rewrites the whole file, so a block the model does not know about is a block the first autosave deletes, and nothing about that loss is visible in the editor - the scene is rebuilt from the model, so it goes on looking however the model says.
-A level that touches neither panel writes neither block, which is what keeps every level from before them byte-identical through a save.
+**Nothing in the inspector is always shown** (since 2026-11-26): it is the selection's window, and with nothing selected it is not drawn.
+What used to sit above the selection is where it belongs now.
+The level's light is its **Sun** and **Environment** nodes ([level-format](level-format.md#the-levels-light)), picked in the scene tree like the spawn, each node's fields carried in its `extra` (`skyFields`, `lightNode`, `environmentOfModel`); deleting the Sun is how a level goes underground.
+The background and the 3D camera are the top bar's (`EdModel.background`, `EdModel.camera`).
+The level select's `title`, `intro` and `unlisted` (`EdModel.meta`, [**Levels**](levels.md)) have no control, since there is one main level, and are still carried through the model for the reason the spawn's `hang` flag is: the editor rewrites the whole file, so a block the model does not know about is a block the first autosave deletes, and nothing about that loss is visible in the editor.
+A level that authors none of them writes no block, which keeps every level from before them byte-identical through a save.
 
 The level's **finish line** is a body `kind` (see [**The finish line**](levels.md#the-finish-line)), picked like any other, and its panel carries no fields at all - being entered is the whole of it - only a line saying what happens when the player gets there, which is the one thing about it that is not on the canvas.
 On the canvas it is an area like the others, filled with its own glyph: a chequerboard, cut out of a near-white wash thin enough to see the gantry through (a killzone is drawn to be avoided and can shout; a finish line is drawn around the prop the player is aiming at).
@@ -105,8 +112,9 @@ Hidden and locked are this session's view state, never written; the game ignores
 
 ## The scene tree
 
-The panel bottom-left is the **scene tree** (it replaced the body outliner on 2026-11-26): every node of the level, nested as the level is nested, each row with its class's mark, `2D` or `3D`, its name, a mark when it is grouped, a `+` and an eye.
-Over it a breadcrumb shows the selected node's path of names.
+The right dock is the **scene tree** (it replaced the body outliner on 2026-11-26, and moved from the bottom of the left dock to a resizable right dock the same day): every node of the level, nested as the level is nested, each row with its class's mark, `2D` or `3D` (nothing for a node with no place, the Sun and the Environment among them), its name, a mark when it is grouped, a `+` and an eye.
+Over it a breadcrumb shows the selected node's path of names, and over that the **data layers** ([below](#data-layers)) and a **search** field with **expand all** and **collapse all**.
+A search shows the nodes whose name or class holds the query and the rows down to each (dimmed, opened whatever was open), and the heading counts the matches; Escape or clearing it gives back the tree as it was left.
 In the 3D workspaces it lists only what is in the workspace or holds something that is.
 
 - **A row click selects exactly that node**, grouped or not, as Godot's does; Shift or Ctrl extends the selection.
@@ -117,7 +125,8 @@ In the 3D workspaces it lists only what is in the workspace or holds something t
   Reparenting and reordering never change a body's build order key, so they change draw order in the editor and nothing in the sim ([level-format](level-format.md#build-order)).
 - **Double-click** a name to rename it in place; Enter keeps it (suffixed when a sibling has it), Escape puts it back.
   The Node section's `name` field does the same.
-- **`+`** adds a node under the row: a `Node2D`, a `Node3D`, a static or rigid body, a killzone, an anchor or a folder `Node`, standing where its parent stands, offered only where the tree would have it.
+- **`+`** adds a node under the row (the heading's `+`, at the top level): a `Node2D`, a `Node3D`, a static or rigid body, a killzone, an anchor, a fog region, a shelter or a folder `Node`, standing where its parent stands, and the level's `Sun` or `Environment` while it has none, each offered only where the tree would have it (`canParent`: the light stands at the top or in a folder, and holds nothing).
+- **Delete** with nodes picked as themselves (a body, a group, the Sun) takes each with everything under it; a node holding the spawn is refused, since the spawn is the level's.
 - **The eye** hides the node and everything under it (as **H** does), a session view setting like the rest of hiding.
 
 Which rows are open is kept by node id across rebuilds, so a drag does not collapse the tree under the pointer; the tree is rebuilt when the model changes and only re-highlighted when the selection does, since a real level is several hundred nodes.

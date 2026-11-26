@@ -43,7 +43,6 @@ import type {
   CollisionObjectData,
   DecorationObjectData,
   EnvironmentData,
-  FireflyPathData,
   FogRegionData,
   FormationData,
   GuidePiece,
@@ -63,7 +62,7 @@ import type {
 } from "./levelFormat";
 
 // The revision of the level format that writes a tree (`LevelTree.format`).
-export const TREE_FORMAT = 3;
+export const TREE_FORMAT = 4;
 
 // ---------------------------------------------------------------------------
 // The classes
@@ -180,11 +179,6 @@ export interface CameraPathNode extends NodeCommon, CameraPathData {
   type: "CameraPath2D";
 }
 
-// A light's swarm names its path by the path's node id.
-export interface FireflyPathNode extends NodeCommon, Omit<FireflyPathData, "id"> {
-  type: "FireflyPath2D";
-}
-
 export interface ShelterNode extends NodeCommon, ShelterData {
   type: "Shelter2D";
 }
@@ -195,6 +189,26 @@ export interface FogRegionNode extends NodeCommon, FogRegionData {
 
 export interface NoteNode extends NodeCommon, NoteData {
   type: "Note2D";
+}
+
+// THE LEVEL'S LIGHT (format 4), as Godot holds it: a `Sun` node is the
+// directional light and an `Environment` node the sky and the fill. Neither is
+// spatial - the sun is a direction, the environment is everywhere - and a
+// level holds at most one of each (`validateTree`). They compile to
+// `LevelData.environment`, the block every renderer reads.
+//
+// No `Sun` node is NO SUN: a level lit by its own lamps (an underground one)
+// deletes it, which is what `sunIntensity: 0` said in the flat form. No
+// `Environment` node is the renderer's default sky and fill.
+export const SUN_FIELDS = ["sunX", "sunY", "sunZ", "sunColor", "sunIntensity"] as const;
+export const ENVIRONMENT_FIELDS = ["skyColor", "groundColor", "fillIntensity", "envIntensity", "hdri", "hdriRotation", "hdriBackground"] as const;
+
+export interface SunNode extends NodeCommon, Pick<EnvironmentData, (typeof SUN_FIELDS)[number]> {
+  type: "Sun";
+}
+
+export interface EnvironmentNode extends NodeCommon, Pick<EnvironmentData, (typeof ENVIRONMENT_FIELDS)[number]> {
+  type: "Environment";
 }
 
 export interface Node3DNode extends NodeCommon, Pose3D {
@@ -227,9 +241,8 @@ export interface ModelNode extends NodeCommon, Omit<ModelObjectData, "type"> {
   type: "Model3D";
 }
 
-export interface LightNode extends NodeCommon, Omit<LightObjectData, "type" | "path"> {
+export interface LightNode extends NodeCommon, Omit<LightObjectData, "type"> {
   type: "Light3D";
-  path?: string;
 }
 
 // Chains and vines are not spatial: their points are anchors. Like bodies they
@@ -276,10 +289,11 @@ export type LevelNode =
   | CheckpointNode
   | CameraRegionNode
   | CameraPathNode
-  | FireflyPathNode
   | ShelterNode
   | FogRegionNode
   | NoteNode
+  | SunNode
+  | EnvironmentNode
   | Node3DNode
   | FormationNode
   | DecorationNode
@@ -304,10 +318,11 @@ export const NODE_TYPES: readonly NodeType[] = [
   "Checkpoint2D",
   "CameraRegion2D",
   "CameraPath2D",
-  "FireflyPath2D",
   "Shelter2D",
   "FogRegion2D",
   "Note2D",
+  "Sun",
+  "Environment",
   "Node3D",
   "Formation3D",
   "Decoration3D",
@@ -323,12 +338,15 @@ export const NODE_TYPES: readonly NodeType[] = [
 export interface LevelTree {
   format: number;
   meta?: LevelMetaData;
-  environment?: EnvironmentData;
   camera?: LevelCameraData;
-  // Fog only inside the level's `FogRegion2D` nodes, so a level with none of
-  // them has fog nowhere. Absent is fog everywhere, which is what a level that
-  // never authored a fog region has always had (`LevelData.fogRegions`
-  // absent versus empty).
+  // What is behind everything (`EnvironmentData.backgroundColor`): the
+  // letterbox and the horizon. Absent is the page's own.
+  background?: string;
+  // FORMAT 3 ONLY, read by `upgradeTree` and never written: the level's light
+  // as one block, and fog everywhere unless `fogMasked` kept it to the fog
+  // regions. Format 4 holds them as `Sun` / `Environment` nodes and as each
+  // `FogRegion2D`'s own amount and colour.
+  environment?: EnvironmentData;
   fogMasked?: boolean;
   // The editor's DATA LAYERS by name (a node's `layers` name them). Editor
   // only, like groups: the game ignores them.
@@ -372,7 +390,6 @@ const NODE_2D_TYPES: ReadonlySet<NodeType> = new Set([
   "Checkpoint2D",
   "CameraRegion2D",
   "CameraPath2D",
-  "FireflyPath2D",
   "Shelter2D",
   "FogRegion2D",
   "Note2D",
@@ -386,7 +403,6 @@ export const WORLD_FIXED_TYPES: ReadonlySet<NodeType> = new Set([
   "Checkpoint2D",
   "CameraRegion2D",
   "CameraPath2D",
-  "FireflyPath2D",
   "Shelter2D",
   "FogRegion2D",
 ]);
@@ -789,7 +805,7 @@ export interface MigrateOptions {
 // anchors alone becomes a `Node2D` (a `Node3D` for a 3D body).
 //
 // Every id that exists is kept - formation and decoration ids as they are,
-// anchor and firefly path numbers written as strings - so the paint sidecars,
+// anchor numbers written as strings - so the paint sidecars,
 // the sculpt store and the formation store need no change; everything else is
 // minted, deterministically.
 export function migrateToTree(data: LevelData, opts: MigrateOptions): LevelTree {
@@ -801,7 +817,6 @@ export function migrateToTree(data: LevelData, opts: MigrateOptions): LevelTree 
       if (o.type === "anchor") taken.add(String(o.id));
     }
   }
-  for (const p of data.fireflyPaths ?? []) taken.add(String(p.id));
   const mint = idMinter(taken);
 
   const nodes: LevelNode[] = [];
@@ -905,10 +920,6 @@ export function migrateToTree(data: LevelData, opts: MigrateOptions): LevelTree 
 
   for (const r of data.cameraRegions ?? []) nodes.push({ type: "CameraRegion2D", id: mint(), name: "CameraRegion", ...r });
   for (const p of data.cameraPaths ?? []) nodes.push({ type: "CameraPath2D", id: mint(), name: "CameraPath", ...p });
-  for (const p of data.fireflyPaths ?? []) {
-    const { id, ...rest } = p;
-    nodes.push({ type: "FireflyPath2D", id: String(id), name: "FireflyPath", ...rest });
-  }
   for (const s of data.shelters ?? []) nodes.push({ type: "Shelter2D", id: mint(), name: "Shelter", ...s });
   for (const f of data.fogRegions ?? []) nodes.push({ type: "FogRegion2D", id: mint(), name: "FogRegion", ...f });
   for (const n of data.notes ?? []) nodes.push({ type: "Note2D", id: mint(), name: "Note", ...n });
@@ -957,13 +968,121 @@ export function migrateToTree(data: LevelData, opts: MigrateOptions): LevelTree 
     used.add(n.id);
   });
 
-  return {
-    format: TREE_FORMAT,
+  // Written as the format-3 tree the flat form maps onto one for one, and
+  // upgraded from there, so a flat level and a format-3 file become a
+  // format-4 tree by the one route.
+  return upgradeTree({
+    format: 3,
     ...(data.meta ? { meta: data.meta } : {}),
     ...(data.environment ? { environment: data.environment } : {}),
     ...(data.camera ? { camera: data.camera } : {}),
     ...(data.fogRegions !== undefined ? { fogMasked: true } : {}),
     nodes,
+  });
+}
+
+// The size of the fog region that stands in for format 3's fog EVERYWHERE
+// (`upgradeTree`), in file units whatever they are: far past anything a
+// camera frames, so every ray crosses the plane inside it.
+export const FOG_EVERYWHERE_SIZE = 1e7;
+
+// FORMAT 3 TO 4 (`LEVEL_FORMAT`). The level-wide `environment` block becomes
+// a `Sun` node (its sun fields), an `Environment` node (its sky, fill and
+// captured sky) and the `background` property; its fog moves onto the fog
+// regions, each taking the block's amount and colour where it has none of its
+// own. A format-3 level that kept fog to its regions (`fogMasked`, or any
+// region at all, which compiled the same) needs nothing more. One whose fog was
+// EVERYWHERE is given a single region that covers everything a camera can
+// frame, since fog now lives in fog nodes. Pure, and the identity on a tree
+// already at format 4; the ids it mints are derived from the tree's own, so a
+// file read twice upgrades to the same nodes. It also folds out the retired
+// fireflies (`dropFireflies`), whatever the format.
+export function upgradeTree(tree: LevelTree): LevelTree {
+  return dropFireflies(upgradeLight(tree));
+}
+
+// FIREFLIES, REMOVED 2026-11-26. A swarm was a point light with `fireflies`
+// set, the light being the swarm's own glow, and it could name a
+// `FireflyPath2D` to guide the player along. Both go: the swarm's light with
+// its swarm (a light hanging in the air with nothing glowing would be a light
+// from nowhere), every firefly path, and a `path` left on any other light.
+// Render-only all of it, so nothing a replay reads changes. The identity on a
+// tree that holds none, which is every tree written since.
+function dropFireflies(tree: LevelTree): LevelTree {
+  const isSwarm = (n: LevelNode): boolean => n.type === "Light3D" && ((n as unknown as { fireflies?: number }).fireflies ?? 0) > 0;
+  const isPath = (n: LevelNode): boolean => (n.type as string) === "FireflyPath2D";
+  const stale = (n: LevelNode): boolean => n.type === "Light3D" && "path" in n;
+  let found = false;
+  walkNodes(tree.nodes, (n) => void (found ||= isSwarm(n) || isPath(n) || stale(n)));
+  if (!found) return tree;
+  const keep = (list: readonly LevelNode[]): LevelNode[] =>
+    list.flatMap((n) => {
+      if (isSwarm(n) || isPath(n)) return [];
+      const { path: _p, fireflies: _f, ...rest } = n as LevelNode & { path?: unknown; fireflies?: unknown };
+      const out = (n.type === "Light3D" ? rest : { ...n }) as LevelNode;
+      if (n.children) out.children = keep(n.children);
+      return [out];
+    });
+  return { ...tree, nodes: keep(tree.nodes) };
+}
+
+// FORMAT 3 TO 4, the light: see `upgradeTree`.
+function upgradeLight(tree: LevelTree): LevelTree {
+  if (tree.format >= 4 && tree.environment === undefined && tree.fogMasked === undefined) return tree;
+  const { environment, fogMasked, ...rest } = tree;
+  const env: EnvironmentData = environment ?? {};
+  const nodes = structuredClone(tree.nodes) as LevelNode[];
+  const taken = new Set<string>();
+  walkNodes(nodes, (n) => void taken.add(n.id));
+  const mint = idMinter(taken);
+  const names = new Set(nodes.map((n) => n.name));
+  const fresh = (name: string): string => {
+    const free = uniqueName(name, names);
+    names.add(free);
+    return free;
+  };
+  const pick = (keys: readonly (keyof EnvironmentData)[]): Partial<EnvironmentData> =>
+    Object.fromEntries(keys.flatMap((k) => (env[k] !== undefined ? [[k, env[k]]] : [])));
+
+  const regions: FogRegionNode[] = [];
+  walkNodes(nodes, (n) => void (n.type === "FogRegion2D" && regions.push(n)));
+  const fog = {
+    ...(env.fogAmount !== undefined ? { amount: env.fogAmount } : {}),
+    ...(env.fogColor !== undefined ? { color: env.fogColor } : {}),
+  };
+  for (const r of regions) {
+    if (r.amount === undefined && fog.amount !== undefined) r.amount = fog.amount;
+    if (r.color === undefined && fog.color !== undefined) r.color = fog.color;
+  }
+  // A tree that already holds its light nodes (one half-upgraded by hand) keeps
+  // them: a second Sun would be a second sun.
+  const has = (type: NodeType): boolean => {
+    let found = false;
+    walkNodes(nodes, (n) => void (found ||= n.type === type));
+    return found;
+  };
+  const lead: LevelNode[] = [
+    ...(has("Sun") ? [] : [{ type: "Sun", id: mint(), name: fresh("Sun"), ...pick(SUN_FIELDS) } as SunNode]),
+    ...(has("Environment") ? [] : [{ type: "Environment", id: mint(), name: fresh("Environment"), ...pick(ENVIRONMENT_FIELDS) } as EnvironmentNode]),
+  ];
+  if (!fogMasked && regions.length === 0 && (env.fogAmount ?? 0) > 0) {
+    lead.push({
+      type: "FogRegion2D",
+      id: mint(),
+      name: fresh("Fog"),
+      x: 0,
+      y: 0,
+      rot: 0,
+      shape: { kind: "rect", w: FOG_EVERYWHERE_SIZE, h: FOG_EVERYWHERE_SIZE },
+      falloff: 0,
+      ...fog,
+    });
+  }
+  return {
+    ...rest,
+    format: TREE_FORMAT,
+    ...(env.backgroundColor !== undefined ? { background: env.backgroundColor } : {}),
+    nodes: [...lead, ...nodes],
   };
 }
 
@@ -998,8 +1117,10 @@ function objectNode(o: SceneObjectData, mint: () => string): LevelNode | null {
       return { type: "Anchor2D", id: String(id), name: "Anchor", ...rest };
     }
     case "light": {
-      const { type: _t, path, node: _n, ...rest } = o;
-      return defined({ type: "Light3D", id: mint(), name: "Light", ...rest, ...(path !== undefined ? { path: String(path) } : {}) }) as LightNode;
+      // A retired swarm light (`fireflies`) comes across as it was written and
+      // is folded out by the upgrade (`dropFireflies`).
+      const { type: _t, node: _n, ...rest } = o;
+      return defined({ type: "Light3D", id: mint(), name: "Light", ...rest }) as LightNode;
     }
     case "model": {
       const { type: _t, node: _n, ...rest } = o;
@@ -1136,7 +1257,6 @@ function expandOne(n: LevelNode, prefabs: PrefabLibrary, stack: string[], key: n
     if (node.type === "Formation3D" && node.guide.kind === "collision" && node.guide.subset) {
       node.guide = { ...node.guide, subset: node.guide.subset.map((s) => `${n.id}/${s}`) };
     }
-    if (node.type === "Light3D" && node.path) node.path = `${n.id}/${node.path}`;
     for (const c of node.children ?? []) prefix(c);
   };
   for (const c of expanded.children ?? []) prefix(c);
@@ -1292,8 +1412,11 @@ interface Ctx {
 // decorations, models, lamps) is not compiled at all: the sim never reads it,
 // and the renderer, the editor and the tools read it from the tree
 // (`lookNodes`).
-export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLibrary()): CompiledLevel {
+export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabLibrary()): CompiledLevel {
+  const tree = upgradeTree(source);
   const problems: string[] = [];
+  let sun: SunNode | null = null;
+  let environmentNode: EnvironmentNode | null = null;
   const nodes = expandInstances(tree.nodes, prefabsAt(tree.lengthScale ?? 1, prefabs), problems);
   const nodeOf = new Map<object, string>();
   const tag = <T extends object>(o: T, id: string): T => {
@@ -1309,7 +1432,6 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
   let player: SpawnData | null = null;
   const cameraRegions: CameraRegionData[] = [];
   const cameraPaths: CameraPathData[] = [];
-  const fireflyPaths: (FireflyPathData & { key: string })[] = [];
   const shelters: ShelterData[] = [];
   const fogRegions: FogRegionData[] = [];
   const notes: NoteData[] = [];
@@ -1422,9 +1544,6 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
       case "CameraPath2D":
         cameraPaths.push(tag({ ...strip(n), ...here2 } as CameraPathData, n.id));
         return;
-      case "FireflyPath2D":
-        fireflyPaths.push({ ...strip(n), ...here2, id: 0, key: n.id } as FireflyPathData & { key: string });
-        return;
       case "Shelter2D":
         shelters.push(tag({ ...strip(n), ...here2 } as ShelterData, n.id));
         return;
@@ -1433,6 +1552,14 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
         return;
       case "Note2D":
         notes.push(tag({ ...strip(n), ...here2 } as NoteData, n.id));
+        return;
+      case "Sun":
+        if (sun) problems.push(`a second Sun (${n.id}) is ignored`);
+        else sun = n;
+        return;
+      case "Environment":
+        if (environmentNode) problems.push(`a second Environment (${n.id}) is ignored`);
+        else environmentNode = n;
         return;
       case "Chain":
         chains.push({ node: n, key: orderKeyOf(n), seq: seq++ });
@@ -1464,8 +1591,6 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
   for (const [id, o] of anchorObjects) o.id = numbers.get(id)!;
   const anchorNumber = (id: string): number => numbers.get(id) ?? (/^\d+$/.test(id) ? Number(id) : -1);
 
-  const pathNumbers = numberIds(fireflyPaths.map((p) => p.key));
-  for (const p of fireflyPaths) p.id = pathNumbers.get(p.key)!;
 
   const ordered = [...bodies].sort((a, b) => compareKeys(a.key, b.key) || a.seq - b.seq);
   const byOrder = <T extends { key: number[]; seq: number }>(list: T[]): T[] => [...list].sort((a, b) => compareKeys(a.key, b.key) || a.seq - b.seq);
@@ -1476,9 +1601,9 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
     ...(tree.meta ? { meta: tree.meta } : {}),
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(cameraPaths.length ? { cameraPaths } : {}),
-    ...(fireflyPaths.length ? { fireflyPaths: fireflyPaths.map(({ key, ...p }) => tag(p, key)) } : {}),
     ...(shelters.length ? { shelters } : {}),
-    ...(fogRegions.length || tree.fogMasked ? { fogRegions } : {}),
+    // Fog lives in the fog regions (format 4), so a level with none has none.
+    ...(fogRegions.length ? { fogRegions } : {}),
     ...(notes.length ? { notes } : {}),
     ...(checkpoints.length ? { checkpoints } : {}),
     ...(chains.length
@@ -1506,12 +1631,30 @@ export function compileLevel(tree: LevelTree, prefabs: PrefabLibrary = prefabLib
           }),
         }
       : {}),
-    ...(tree.environment ? { environment: tree.environment } : {}),
+    ...environmentOf(sun, environmentNode, tree.background),
     ...(tree.camera ? { camera: tree.camera } : {}),
   };
   if (!player) problems.push("the level has no Spawn2D");
   for (const b of [...ordered, ...gathered]) nodeOf.set(b.data, b.node);
   return { data, bodyNodes: [...ordered.map((b) => b.node), ...gathered.map((g) => g.node)], nodes, problems, nodeOf };
+}
+
+// The flat `environment` block a level's light nodes compile to: the sun's
+// fields, the environment's, the background. No `Sun` node is no sun
+// (`sunIntensity: 0`, which builds no light). A level whose nodes author
+// nothing writes no block, exactly as a format-3 level with none did.
+function environmentOf(sun: SunNode | null, env: EnvironmentNode | null, background: string | undefined): { environment?: EnvironmentData } {
+  const fields = (n: LevelNode | null, keys: readonly (keyof EnvironmentData)[]): Partial<EnvironmentData> => {
+    if (!n) return {};
+    const r = n as unknown as Record<string, unknown>;
+    return Object.fromEntries(keys.flatMap((k) => (r[k] !== undefined ? [[k, r[k]]] : [])));
+  };
+  const out: EnvironmentData = {
+    ...(sun ? fields(sun, SUN_FIELDS) : { sunIntensity: 0 }),
+    ...fields(env, ENVIRONMENT_FIELDS),
+    ...(background !== undefined ? { backgroundColor: background } : {}),
+  };
+  return Object.keys(out).length ? { environment: out } : {};
 }
 
 function numberIds(ids: readonly string[]): Map<string, number> {
@@ -1642,6 +1785,7 @@ export function validateTree(nodes: readonly LevelNode[], opts: ValidateOptions 
   for (const p of problems) (p.includes(ORPHANED_OVERRIDE) ? warn : error)("", p);
 
   let spawns = 0;
+  const lightNodes = new Set<NodeType>();
   const anchors = new Set<string>();
   const links: { id: string; ends: string[] }[] = [];
 
@@ -1668,6 +1812,16 @@ export function validateTree(nodes: readonly LevelNode[], opts: ValidateOptions 
       if (opts.prefab) error(n.id, `a prefab may not hold a Spawn2D`);
     }
     if (type === "Checkpoint2D" && opts.prefab) error(n.id, `a prefab may not hold a Checkpoint2D`);
+    if (type === "Sun" || type === "Environment") {
+      // The level's light: one of each, and the level's alone, at the top of
+      // the tree or in a folder, holding nothing (the compile reads no node
+      // under one).
+      if (opts.prefab) error(n.id, `a prefab may not hold a ${type}; the level's light is the level's`);
+      else if (lightNodes.has(type)) error(n.id, `a second ${type} (${n.name}); a level has one`);
+      lightNodes.add(type);
+      if (parent && parent.type !== "Node") error(n.id, `${n.name} (${type}) sits under ${parent.name}; the level's light stands at the top or in a Node`);
+      if (n.children?.length) error(n.id, `${n.name} (${type}) holds nodes; it holds none`);
+    }
     if (type === "Area2D" && !AREA_KINDS.includes(n.area)) error(n.id, `${n.name} is an area of unknown kind "${String(n.area)}"`);
     if (isBodyNode(n) && !(n.children ?? []).some(function hasShape(c: LevelNode): boolean {
       return !c.disabled && (c.type === "CollisionShape2D" || (!isBodyNode(c) && (c.children ?? []).some(hasShape)));
@@ -1737,6 +1891,9 @@ export function scaleNode(n: LevelNode, factor: number, prefabs: PrefabLibrary =
   const s = strip(n) as Record<string, unknown>;
   switch (n.type) {
     case "Node":
+    // A direction, colours and multipliers: no lengths (see EnvironmentData).
+    case "Sun":
+    case "Environment":
       return n;
     case "Node2D":
     case "Anchor2D":
@@ -1757,10 +1914,8 @@ export function scaleNode(n: LevelNode, factor: number, prefabs: PrefabLibrary =
       return { ...c, ...rest } as LevelNode;
     }
     case "Light3D": {
-      const { path, ...rest } = s as Record<string, unknown> & { path?: string };
-      const o = scaleObject({ type: "light", ...rest } as LightObjectData, factor);
-      const { type: _t, ...scaled } = o;
-      return { ...c, ...scaled, ...(path !== undefined ? { path } : {}) } as LevelNode;
+      const { type: _t, ...scaled } = scaleObject({ type: "light", ...s } as LightObjectData, factor);
+      return { ...c, ...scaled } as LevelNode;
     }
     case "Model3D": {
       const { type: _t, ...scaled } = scaleObject({ type: "model", ...s } as ModelObjectData, factor);
@@ -1786,12 +1941,6 @@ export function scaleNode(n: LevelNode, factor: number, prefabs: PrefabLibrary =
       return { ...c, ...(scaleVia({ cameraRegions: [s as unknown as CameraRegionData] }, factor).cameraRegions?.[0] ?? scalePose(s, factor)) } as LevelNode;
     case "CameraPath2D":
       return { ...c, ...(scaleVia({ cameraPaths: [s as unknown as CameraPathData] }, factor).cameraPaths?.[0] ?? scalePose(s, factor)) } as LevelNode;
-    case "FireflyPath2D": {
-      const p = scaleVia({ fireflyPaths: [{ id: 0, ...s } as unknown as FireflyPathData] }, factor).fireflyPaths?.[0];
-      if (!p) return { ...c, ...scalePose(s, factor) } as LevelNode;
-      const { id: _id, ...rest } = p;
-      return { ...c, ...rest } as LevelNode;
-    }
     case "Shelter2D":
       return { ...c, ...(scaleVia({ shelters: [s as unknown as ShelterData] }, factor).shelters?.[0] ?? scalePose(s, factor)) } as LevelNode;
     case "FogRegion2D":
@@ -1857,7 +2006,10 @@ export function scaleTree(nodes: readonly LevelNode[], factor: number, prefabs: 
   });
 }
 
-export function scaleLevelTree(tree: LevelTree, factor: number, prefabs: PrefabLibrary = prefabLibrary()): LevelTree {
+export function scaleLevelTree(source: LevelTree, factor: number, prefabs: PrefabLibrary = prefabLibrary()): LevelTree {
+  // A format-3 tree is read as the format-4 tree it is, so what is scaled is
+  // what will be written.
+  const tree = upgradeTree(source);
   const carried = scaleVia({ ...(tree.camera ? { camera: tree.camera } : {}) }, factor);
   const { lengthScale: was, ...rest } = tree;
   // Back at the file's own units within rounding (1/100 * 100) is exactly 1.
@@ -1866,7 +2018,6 @@ export function scaleLevelTree(tree: LevelTree, factor: number, prefabs: PrefabL
     ...rest,
     ...(Math.abs(lengthScale - 1) > 1e-12 ? { lengthScale } : {}),
     ...(tree.meta ? { meta: { ...tree.meta } } : {}),
-    ...(tree.environment ? { environment: { ...tree.environment } } : {}),
     ...(carried.camera ? { camera: carried.camera } : {}),
     nodes: scaleTree(tree.nodes, factor, prefabs),
   };

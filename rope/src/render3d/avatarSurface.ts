@@ -61,17 +61,16 @@
 // nothing but the avatar and because a page has one `Scene3D` drawing one.
 
 import * as THREE from "three";
+// The line the `fog_fragment` chunk (`editorFog.ts`) mixes toward the fog's
+// tint with, and the one this module rewrites. Named so the rewrite fails
+// LOUDLY if the chunk changes: a `replace` that matches nothing is a patch
+// that silently does nothing, and the avatar would go back to the world's air
+// with no diagnostic anywhere. Importing it also installs the chunk.
+import { FOG_MIX } from "./editorFog";
 
 // How much of the world's fog the avatar takes, as a multiple of it: 0 is none
 // (three's `fog: false`), 1 is the air everything else is drawn through.
 export const AVATAR_FOG = 0.35;
-
-// The line three's `fog_fragment` chunk mixes toward the fog colour with, and
-// the one this module rewrites. Named so the rewrite fails LOUDLY if a three
-// upgrade changes the chunk: a `replace` that matches nothing is a patch that
-// silently does nothing, and the avatar would go back to the world's air with
-// no diagnostic anywhere.
-const FOG_MIX = "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );";
 
 // A number as a GLSL float literal: `1` is an int in GLSL and would not compile
 // in a float multiply.
@@ -80,7 +79,7 @@ function glslFloat(v: number): string {
   return /[.eE]/.test(s) ? s : `${s}.0`;
 }
 
-// Three's own `fog_fragment` chunk with the fog factor scaled by `scale` before
+// The `fog_fragment` chunk with the fog factor scaled by `scale` before
 // the mix. Exported so `cli render3d` can read it without a GPU.
 export function avatarFogChunk(scale: number = AVATAR_FOG): string {
   const chunk = THREE.ShaderChunk.fog_fragment;
@@ -89,7 +88,7 @@ export function avatarFogChunk(scale: number = AVATAR_FOG): string {
   }
   return chunk.replace(
     FOG_MIX,
-    `gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor * ${glslFloat(scale)} );`,
+    `gl_FragColor.rgb = mix( gl_FragColor.rgb, fogTint, fogFactor * ${glslFloat(scale)} );`,
   );
 }
 

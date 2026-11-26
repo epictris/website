@@ -51,8 +51,9 @@ A `Model3D` multiplies its own scale; a `Formation3D` keeps its guide as authore
 
 ## In the editor
 
-**The Prefabs tab** (beside Level, in every workspace) is the library, at the top of the inspector: each prefab with **Place** and **Open**, a name field, **New prefab** and **Save selection as prefab**.
+**The Prefabs tab** of the right dock (beside the scene tree's Scene tab, in every workspace) is the library: each prefab with **Place** and **Open**, a name field, **New prefab** and **Save selection as prefab**.
 It took the place of the Assets tab (retired 2026-11-26), whose reusable rocks are prefabs now.
+An open prefab is edited in the Scene tab, under a banner naming it with **Back to the level**, and is lit by the level's own Sun and Environment, which stand beside it while it is open and are never written into it.
 
 - **Place** puts an instance at the view's centre, grouped and built after every other body (`nextOrder`).
 - **Open** edits the prefab in place of the level, with every tool and workspace: the level's model, its undo steps, its name and its view are put aside and given back by **Back to the level**.

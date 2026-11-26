@@ -89,9 +89,10 @@ const HIDDEN_IN_2D = ["body/Formation", "formation/Formation", "body/Decorations
 const SHOWN: Record<Exclude<Workspace, "2d">, readonly string[]> = {
   formations: [
     "node/",
-    "level/Level",
-    "level/Environment",
-    "level/3D camera",
+    // The level's own nodes, picked in the scene tree: the spawn and the
+    // light (the Sun, the Environment) read the same in every workspace.
+    "level/Player spawn",
+    "light/",
     "body/Transform",
     "body/Formation",
     "formation/Transform",
@@ -101,18 +102,20 @@ const SHOWN: Record<Exclude<Workspace, "2d">, readonly string[]> = {
   ],
   decorations: [
     "node/",
-    "level/Level",
-    "level/Environment",
-    "level/3D camera",
+    // The level's own nodes, picked in the scene tree: the spawn and the
+    // light (the Sun, the Environment) read the same in every workspace.
+    "level/Player spawn",
+    "light/",
     "body/Decorations",
     "formation/Decorations",
     "decoration/",
   ],
   texturing: [
     "node/",
-    "level/Level",
-    "level/Environment",
-    "level/3D camera",
+    // The level's own nodes, picked in the scene tree: the spawn and the
+    // light (the Sun, the Environment) read the same in every workspace.
+    "level/Player spawn",
+    "light/",
     "body/Materials",
     "formation/Materials",
     "decoration/",
@@ -136,7 +139,6 @@ const CLICKABLE: Record<Workspace, ReadonlySet<NodeType>> = {
     "Checkpoint2D",
     "CameraRegion2D",
     "CameraPath2D",
-    "FireflyPath2D",
     "Shelter2D",
     "FogRegion2D",
     "Note2D",
@@ -173,6 +175,13 @@ export const PRIMARY_SECTIONS: readonly string[] = [
   "decoration/Decoration",
   // A placed prefab's: which prefab, what this instance changes in it.
   "node/Prefab",
+  // The level's own nodes and volumes: what they ARE is the whole of their
+  // panel, so it is open when one is picked.
+  "level/Player spawn",
+  "light/Sun",
+  "light/Environment",
+  "fog/Fog",
+  "shelter/Wall",
 ];
 
 // What the inspector says with nothing selected, in the 3D workspaces (2D says

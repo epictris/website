@@ -1,10 +1,15 @@
 # Level files and format
 
-`fogRegions?: FogRegionData[]` controls where environmental fog appears. Each region has `x`, `y`, `rot` (radians), a rectangle (`shape: {kind: "rect", w, h}`) or circle (`shape: {kind: "circle", r}`), and optional `falloff`. Positions, sizes and falloff are disk pixels, converted to metres by `scaleLevelData`; absent falloff defaults to 3 m, zero makes a hard edge. Fade runs inward from the boundary. Missing `fogRegions` retains global fog, while `[]` disables fog everywhere. Regions do not affect physics or illumination. The editor preserves the difference between missing and empty, including deleting the final region.
+`fogRegions?: FogRegionData[]` is where the fog is, and since format 4 what it is.
+Each region has `x`, `y`, `rot` (radians), a rectangle (`shape: {kind: "rect", w, h}`) or circle (`shape: {kind: "circle", r}`), and optional `falloff`, `amount` and `color`.
+Positions, sizes and falloff are disk pixels, converted to metres by `scaleLevelData`; absent falloff defaults to 3 m, zero makes a hard edge, and the fade runs inward from the boundary.
+`amount` (a fraction, as `EnvironmentData.fogAmount`) and `color` are the region's own fog; absent, they fall back to the environment block's `fogAmount` / `fogColor`, which is how the flat form and a format-3 tree wrote one fog for every region.
+In the flat form, missing `fogRegions` keeps the environment's fog everywhere and `[]` disables it everywhere; a format-4 tree compiles its `FogRegion2D` nodes to `fogRegions` and nothing to the environment's fog, so a level with no region has no fog.
+Regions do not affect physics or illumination.
 
 ## Level files
 
-Levels save and load to `rope/levels/*.json` as **node trees** in pixels (`LevelTree`, format 3, [below](#the-node-tree)), through a **dev-only REST API** (`GET/PUT/DELETE /api/levels[/<name>]`) added by the `levelApi` Vite plugin in `vite.config.ts`.
+Levels save and load to `rope/levels/*.json` as **node trees** in pixels (`LevelTree`, format 4, [below](#the-node-tree)), through a **dev-only REST API** (`GET/PUT/DELETE /api/levels[/<name>]`) added by the `levelApi` Vite plugin in `vite.config.ts`.
 The built app has no server, so the editor is a dev tool.
 The flat `LevelData` form (the generated `levelData.ts`, and every level file before 2026-11-26) is still read, and is what a tree compiles to for the sim.
 
@@ -38,9 +43,9 @@ The types are in `src/level/nodes.ts`; a file is a `LevelTree`:
 
 | Field | What it is |
 |---|---|
-| `format` | 3 (`TREE_FORMAT`, the same number as `LEVEL_FORMAT`: one revision line for both forms) |
-| `meta`, `environment`, `camera` | the level-wide blocks, as in the flat form (below) |
-| `fogMasked` | fog only inside the `FogRegion2D` nodes; absent is fog everywhere (the flat form's absent versus empty `fogRegions`) |
+| `format` | 4 (`TREE_FORMAT`, the same number as `LEVEL_FORMAT`: one revision line for both forms) |
+| `meta`, `camera` | the level-wide blocks, as in the flat form (below) |
+| `background` | what is behind everything (the flat form's `environment.backgroundColor`) |
 | `layers` | the editor's data layers by name ([editor-model](editor-model.md#data-layers)); the game ignores them |
 | `nodes` | the top-level nodes |
 
@@ -61,7 +66,9 @@ Every node has `id`, `name`, and optionally `children`, `grouped` (what a canvas
 | `Anchor2D` | a chain or vine end | pose |
 | `Spawn2D` | the spawn, exactly one per level | the `player` block's fields |
 | `Checkpoint2D` | a named spawn | `checkpoint` (what `?checkpoint=` names), `x`, `y` |
-| `CameraRegion2D`, `CameraPath2D`, `FireflyPath2D`, `Shelter2D`, `FogRegion2D`, `Note2D` | the plane's volumes, paths and notes | their flat entries' fields |
+| `CameraRegion2D`, `CameraPath2D`, `Shelter2D`, `FogRegion2D`, `Note2D` | the plane's volumes, paths and notes | their flat entries' fields (a fog region's own `amount` and `color` among them) |
+| `Sun` | the level's sunlight, at most one, not spatial ([below](#the-levels-light)) | `sunX`, `sunY`, `sunZ`, `sunColor`, `sunIntensity` |
+| `Environment` | the level's sky and fill, at most one, not spatial | `skyColor`, `groundColor`, `fillIntensity`, `envIntensity`, `hdri`, `hdriRotation`, `hdriBackground` |
 | `Node3D` | a frame in the scene | `x`, `y`, `z`, `rot`, `tilt: [x, y]` |
 | `Formation3D` | rock ([formations](formations.md)) | 3D pose, and a formation's recipe, guide and `built` |
 | `Decoration3D` | moss, ivy, a fern... grown on its parent, always a `Formation3D` | a decoration's fields; no pose (its anchor is in the formation's frame) |
@@ -76,9 +83,21 @@ A `Node3D` under a `Node2D` takes the 2D frame lifted into 3D, then its own; sca
 
 **Identity.**
 A node's `id` is eight random base-36 characters, unique in its file, minted once and never changed by a rename, a move or an edit (`newNodeId`).
-It is the one thing a reference uses: a chain names its anchors by node id, a collision guide's `subset` and a root branch's `parent` name `CollisionShape2D` node ids, a swarm's `path` names a `FireflyPath2D` node, a prefab override names the prefab node it overrides.
+It is the one thing a reference uses: a chain names its anchors by node id, a collision guide's `subset` and a root branch's `parent` name `CollisionShape2D` node ids, a prefab override names the prefab node it overrides.
 Inside a placed prefab a node's full id is the instance ids down to it and then its own (`instA/instB/node`).
 A **name** is a label, unique only among siblings: a clash takes the next free number (`Rock`, `Rock2`, `uniqueName`), so a path of names (`Rocks/Ledge/Formation`, `nodePath`) addresses one node and is printed beside engine body indices, but is never stored as a reference, since it changes whenever something is renamed or moved.
+
+### The level's light
+
+Since format 4 (2026-11-26) the level's light is nodes, as Godot holds it: a **`Sun`** (the directional light, a `DirectionalLight3D`) and an **`Environment`** (a `WorldEnvironment`: the sky, captured or generated, and the hemisphere fill), and the level's fog is its `FogRegion2D` nodes, each owning its `amount` and `color`.
+Neither light node is spatial: the sun is a direction and the environment is everywhere, so they stand at the top of the tree or in a folder `Node`, hold no nodes, and a level has at most one of each (`validateTree`; a prefab has none).
+`compileLevel` writes them back as the flat form's `environment` block (`environmentOf`): the Sun's fields, the Environment's, and `background` as `backgroundColor`.
+**No `Sun` node is no sun** (`sunIntensity: 0`, which builds no light): deleting it is how a level goes underground.
+No `Environment` node is the renderer's default sky and fill.
+
+**The format-3 upgrade** (`upgradeTree`, run by `loadLevelTree`, `compileLevel`, `scaleLevelTree` and the editor's `modelFromTree`, and by `migrateToTree` on everything flat) reads a tree's `environment` block into a `Sun` and an `Environment` node at the top of the tree and the `background` property, and moves its fog onto the fog regions: each takes the block's `fogAmount` and `fogColor` where it has none of its own.
+A format-3 level with fog EVERYWHERE (no region and no `fogMasked`) gets one region that covers anything a camera can frame (1e7 units square, no falloff), since fog lives in fog nodes now; none of the levels or bundles had one.
+The upgrade is pure, the identity on a format-4 tree, and mints its ids from the tree's own, so a file read twice upgrades the same way; the editor writes format 4 the next time it saves the level.
 
 ### Compiling: the sim never sees the tree
 
@@ -108,7 +127,7 @@ A body inside an instance keys as the tuple of the instance's `order` and its ow
 ### The gate, and the proof
 
 `normalizeLevelData(raw)` is `compileLevel(loadLevelTree(raw))` with the expanded tree attached as `LevelData.tree`, which the 3D renderer draws the look from and the sim never reads.
-`loadLevelTree` returns a tree as it is, and runs anything flat through the legacy half of the gate: `normalizeFlat` folds every retired flat form (below), and `migrateToTree` turns the result into a tree with exactly its nesting, keeping every id that exists (formation and decoration ids as they are, anchor and firefly path numbers as strings) and minting the rest deterministically, so an unconverted level names its nodes the same on every load.
+`loadLevelTree` returns a tree as it is, and runs anything flat through the legacy half of the gate: `normalizeFlat` folds every retired flat form (below), and `migrateToTree` turns the result into a tree with exactly its nesting, keeping every id that exists (formation and decoration ids as they are, anchor numbers as strings) and minting the rest deterministically, so an unconverted level names its nodes the same on every load.
 So every level, every recorded bundle and the Godot extractor's output reach the sim through `compileLevel`; `flatLevelOf` is the flat level a source compiles to, without its node references, which is what a recording embeds so it replays as played whatever its prefabs become.
 
 **`cli nodes`** (`src/sim/nodeCases.ts`) is the proof that the tree changes nothing the sim reads:
@@ -132,8 +151,9 @@ The level hash (`levelFileHash`, over the file's bytes) changed for every level 
 - a body under an `AnimatableBody2D`, a `RigidBody2D`, an `Area2D` or a breakable `StaticBody2D` (`bodyMovesOrVanishes`): in the editor the child would ride its parent, in play it would simulate on its own or be left floating when the parent breaks;
 - a `Decoration3D` whose parent is not a `Formation3D`;
 - an `Anchor2D` on an area;
-- a node the camera, the fog or the sky reads as fixed in the world (`WORLD_FIXED_TYPES`: spawn, checkpoint, camera regions and paths, firefly paths, shelters, fog regions) under something that moves;
+- a node the camera, the fog or the sky reads as fixed in the world (`WORLD_FIXED_TYPES`: spawn, checkpoint, camera regions and paths, shelters, fog regions) under something that moves;
 - a level without exactly one `Spawn2D`, a prefab with any spawn or checkpoint;
+- a second `Sun` or `Environment`, one anywhere but the top of the tree or a folder `Node`, one holding nodes, a prefab holding either;
 - a chain or vine naming an anchor that is not in the level, two nodes with one id, two siblings with one name, an instance of a missing prefab or of itself.
 
 A body with no shapes is warned about, not refused: it builds nothing and should be a `Node2D`.
@@ -142,7 +162,7 @@ A body with no shapes is warned about, not refused: it builds nothing and should
 
 What follows describes the fields of the flat form, which is what a tree compiles to and what the sim reads.
 In a tree each lives on the node that compiles to it: a body's fields on its body node, a collision object's on its `CollisionShape2D`, a light's on its `Light3D`, the `player` block on the `Spawn2D`, a camera region on its `CameraRegion2D`, and so on.
-Where the flat form names something by index or number (a root branch's `parent`, a chain's anchor ids, a swarm's `path`), the tree names it by node id.
+Where the flat form names something by index or number (a root branch's `parent`, a chain's anchor ids), the tree names it by node id.
 
 Beside the geometry a level carries a few lists that are not bodies: `cameraRegions` and `cameraPaths` (how it is framed), `shelters` (the front walls of enclosed caves, which only the sun sees, [**Shelters**](lighting-and-surfaces.md#shelters)), `notes` (authoring commentary nothing reads), `chains` and `vines` (what is strung between bodies), and **`checkpoints`** - named spawns, each a name and a point, which `?checkpoint=NAME` moves `player` to before the level is built (see [**Checkpoints**](running.md#checkpoints)).
 A chain names its two anchors and, optionally, the anchors it is routed over (`via`) or **knotted through** (`through`, with `lengths`, `slack` and `substeps` - a rope bridge; see [scene-chains](scene-chains.md#tied-chains)); `scaleLevelData` scales `length` and `lengths` and leaves the ids, the slack ratio and the substep count alone.
@@ -152,7 +172,7 @@ The lookup is what enforces the name instead - trimmed, case-folded, first match
 The `player` block is the spawn (`SpawnData`): a point, the avatar radius, and three fields that say how the run OPENS - **`hang`**, **`roll`** and **`arrival`**.
 A spawn with `hang: true` opens the ball & chain run already on its anchor - see [**The spawn anchor**](ball-coil-and-hook.md#the-spawn-anchor) - and one without it starts the ball on the ground, which is every level authored before the field.
 It anchors the chain; it does not lift the ball, so a level that starts hanging is authored by putting the spawn where the ball should *hang*, under something to hang from.
-The editor offers it as `hang` in the Player spawn group, and carries it through the model for the reason the environment block is carried: the editor writes the whole file back, so a field the model does not know about is a field the first autosave *deletes*.
+The editor offers it as `hang` in the spawn node's Player spawn panel, and carries it through the model for the reason the lens is carried: the editor writes the whole file back, so a field the model does not know about is a field the first autosave *deletes*.
 
 **`roll`** opens the level on the ball rolling in from off to one side - see [**The rolling entry**](ball-rolling.md#the-rolling-entry).
 It is a signed offset along x (pixels on disk, metres in the sim), negative to come in from the left: the ball is placed there, rolls to the spawn, and the player's aim and deploy do nothing until it arrives.
@@ -168,7 +188,7 @@ The editor carries it through the model without offering it, for the reason `han
 
 The **`meta`** block is what the level select reads: a `title` to show, `intro` for the one level shown first, and `unlisted` for a level that is off the menu but still played by `?level=` - see [**Levels**](levels.md).
 Nothing in it is a length, so it crosses `scaleLevelData` whole; everything in it is optional, so a level that authors no block is a listed level named after its registry id.
-The editor carries it through `EdModel.meta` and offers it as the **Level** panel, for the reason `hang` and the environment block are carried: a block the model does not know about is a block the first autosave deletes.
+The editor carries it through `EdModel.meta` without offering it (the **Level** panel that did was retired on 2026-11-26: there is one main level), for the reason `hang` is carried: a block the model does not know about is a block the first autosave deletes.
 
 A collision `curve` may **taper**: `tip` is its width at its last node, `width` at its first (a length, absent = a bar of one width, built bit-identically).
 A curve may be a **root** branch: `root: {}` for a trunk, `root: { parent, at }` for a branch growing out of the root piece at index `parent` in the same body's `objects`, `at` (a fraction of that piece's arc length) along it, its own first node being that junction - see [**Roots**](roots.md#the-format).
@@ -238,8 +258,6 @@ Its fields, and what `scaleLevelData` does to each:
 | `wakeDelay` | point only, seconds from the trigger to the start of the rise; absent = 0 | no |
 | `wakeRise` | point only, seconds from dark to full; absent = `DEFAULT_WAKE_RISE` (0.6), 0 = instant | no |
 | `wakeFall` | point only, seconds from full to dark once the ball has left; absent = `DEFAULT_WAKE_FALL` (1.5), 0 = instant | no |
-| `fireflies` | point only: a firefly swarm of this many motes (capped at `FIREFLY_MAX`, 32); absent or 0 = an ordinary light | no |
-| `path` | swarm only: the `id` of the firefly path it guides the player along; absent = the camera paths | no (an id) |
 
 `beam` and `dust` are the spot's cone made visible - see [**Beams**](lighting-and-surfaces.md#beams).
 Both are absent (0) on every light authored before them, and the editor writes them only on a spot and only when nonzero, so a level that never sets one saves byte-identically.
@@ -249,15 +267,8 @@ The beam is not occluded by geometry: a shaft that should stop at a floor is aut
 `wake` is a length and converts like `range`; the three times are seconds and pass through untouched.
 The editor writes the four only on a point light with a nonzero `wake`, and each time only when it is set, so a level that never sets one saves byte-identically; a waking light's `castShadow` is ignored.
 
-`fireflies` makes a point light a **firefly swarm**: the light's placement is where the motes hover, and once the ball comes within `wake` (absent = `DEFAULT_FIREFLY_NOTICE`, 2.5 m) they follow it for the rest of the run - see [**Fireflies**](lighting-and-surfaces.md#fireflies).
-A swarm is never a waking light: it reads `wake` as its notice distance and ignores the three times, which the editor does not write for one.
-Its absent `color`, `intensity` and `range` are the firefly's (`FIREFLY_COLOR`, `FIREFLY_INTENSITY`, `FIREFLY_RANGE`) rather than a lamp's, and the editor loads and saves a swarm against those, so a swarm that never sets them saves none of them; its `castShadow` is ignored.
-
-`path` ties a swarm to a **firefly path** (`fireflyPaths`, top-level beside `cameraPaths`): `{ id, x, y, rot, verts }`, the camera path's curve (local verts under the placement, optional Bézier `inX`/`inY`/`outX`/`outY` handles, node order the way forward) with an `id` and nothing else.
-The swarm reads that path alone instead of the camera paths, and when the player reaches its end it flies back along it to its start and waits there - see [**Fireflies**](lighting-and-surfaces.md#fireflies).
-The placement, the nodes and the handles are lengths and convert; `id` and `rot` do not.
-A path with fewer than two distinct nodes, or repeating an earlier path's `id`, is dropped at load with a warning, and a `path` naming no path is warned about by the renderer and read as absent.
-The editor writes `path` only on a swarm, and `fireflyPaths` only when there is one, so a level that uses neither saves byte-identically.
+A light once carried `fireflies` (a swarm of that many motes, the light being the swarm's own glow) and `path` (the firefly path, top-level `fireflyPaths`, it guided the player along).
+Fireflies were removed on 2026-11-26: a swarm's light and every firefly path are folded out at load (`dropFireflies` in `nodes.ts`), and a stale `path` on any other light is dropped.
 
 A **model object** (`ModelObjectData`, `type: "model"`) places a 3D model of the library on its body, which carries it - see [blender-models](blender-models.md).
 `model` names it (`assets-src/models/<model>.blend`), `z` is its origin's depth off the body's plane toward the camera, `rotX`/`rotY` tilt it about the screen's axes before its turn in the plane, and `scale` sizes it against how it was modelled.

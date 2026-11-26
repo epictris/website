@@ -45,6 +45,12 @@
 // The editor's camera is not a player's, so while authoring every surface is
 // fogged by the depth the GAME's camera sees it at instead (`editorFog.ts`).
 //
+// A level that draws FOG REGIONS has its air region by region: each region its
+// own amount and colour, falling back to the level-wide `fogAmount` and
+// `fogColor` where it authors none (`regionAirOf`, `fogRegions.ts`). Then
+// `scene.fog` is on whenever any region has air, whether or not the level-wide
+// amount is set, and it stands for the thickest region's.
+//
 // The environment is what makes the PBR maps mean anything. A
 // `MeshStandardMaterial` gets its specular response from reflections, so with
 // lights alone there is nothing for a surface to reflect but one directional
@@ -62,10 +68,11 @@
 
 import * as THREE from "three";
 import { installStableShadowFiltering } from "./shadowFiltering";
-import type { EnvironmentData } from "../level/levelFormat";
+import type { EnvironmentData, FogRegionData } from "../level/levelFormat";
 import { loadedHdri, loadHdri } from "./assets";
 // Replaces three's fog chunks before any material is made (see `editorFog.ts`).
 import "./editorFog";
+import { setFogRegions, setFogRegionsShown, type RegionAir } from "./fogRegions";
 // ...and its light loop, so a lamp is shaded only where it reaches
 // (`lightReach.ts`), and every built-in vertex shader's position is invariant,
 // which the scenery's depth prepass rests on (`depthPrepass.ts`).
@@ -150,6 +157,18 @@ function fogOf(env: EnvironmentData | undefined): { color: string; density: numb
   return { color: env?.fogColor ?? env?.backgroundColor ?? DEFAULT_SKY, density: fogDensity(amount) };
 }
 
+// A fog region's own air: its `amount` and `color`, or the level's where it
+// authors none, by the same fallbacks the level-wide fog takes (`fogOf`), so a
+// region that authors nothing is exactly the level's fog inside it. The
+// colour is converted as `scene.fog`'s is (a `THREE.Color` of the hex).
+export function regionAirOf(region: FogRegionData, env: EnvironmentData | undefined): RegionAir {
+  const amount = region.amount ?? env?.fogAmount ?? 0;
+  return {
+    color: new THREE.Color(region.color ?? env?.fogColor ?? env?.backgroundColor ?? DEFAULT_SKY),
+    density: amount > 0 ? fogDensity(amount) : 0,
+  };
+}
+
 // The tone mapping's exposure (`configureRenderer`). three's ACES Filmic
 // divides it by 0.6 before the curve.
 export const TONE_MAPPING_EXPOSURE = 1.0;
@@ -209,17 +228,25 @@ export class Environment {
   private rotation = 0;
   private hdriAsBackground = false;
   // The level's air, and the density it authored (see `setFogShown`).
-  private readonly fog: THREE.FogExp2 | null;
-  private readonly fogDensity: number;
+  private fog: THREE.FogExp2 | null = null;
+  private fogDensity = 0;
   private fogShown = true;
+  // The fog regions the air was last resolved for (`setFogRegions`), and
+  // their air; `fogResolved` false until the first resolve.
+  private fogRegions: readonly FogRegionData[] | undefined = undefined;
+  private fogAir: readonly RegionAir[] = [];
+  private fogResolved = false;
 
   constructor(
     private readonly scene: THREE.Scene,
-    env?: EnvironmentData,
+    private readonly env?: EnvironmentData,
     // Optional so a host that has no renderer to hand (a test, a scene built
     // before the canvas exists) still gets the lights; it simply gets no
     // reflections, which is what this looked like before there were any.
     renderer?: THREE.WebGLRenderer,
+    // The level's fog regions, each with air of its own (`setFogRegions`).
+    // Absent is the level-wide fog alone.
+    fogRegions?: readonly FogRegionData[],
   ) {
     // The authored block with every default applied, read once and shared by
     // the lights and the generated sky, so the two cannot disagree.
@@ -309,22 +336,65 @@ export class Environment {
       }
     }
 
-    // A level that authors none has no `scene.fog` at all rather than a fog of
-    // zero density - three.js runs the fog chunks either way.
-    const fog = fogOf(env);
-    this.fog = fog ? new THREE.FogExp2(new THREE.Color(fog.color), fog.density) : null;
-    this.fogDensity = fog?.density ?? 0;
-    scene.fog = this.fog;
+    setFogRegionsShown(true);
+    this.setFogRegions(fogRegions);
   }
 
-  // Draw the authored fog, or hold it at zero density: the editor hides the
-  // air while authoring and ▶ Test brings it back. Zero rather than taking
-  // `scene.fog` away, because the fog is part of every program's key - removed
-  // and restored, the first test would recompile every material in the level.
-  // At zero density three's own chunk mixes in exactly none of it.
+  // The level's fog regions (`fogRegions.ts`), each with its own air resolved
+  // against this level's, handed to every shader; and `scene.fog` set to
+  // match. Called with the level each frame, so an edited region reaches the
+  // picture without a rebuild; the same list again is a no-op.
+  //
+  // A level that has no air anywhere has no `scene.fog` at all rather than a
+  // fog of zero density - three.js runs the fog chunks either way. One that
+  // has some keeps ONE `FogExp2` and changes it in place, because the fog is
+  // part of every program's key and a new object makes three look every
+  // material's program up again. With regions, it carries the thickest
+  // region's air: what turns three's fog on (`USE_FOG`, `FOG_EXP2`), and what
+  // a reader of the fog as one thing sees; the shaders read the regions.
+  setFogRegions(regions: readonly FogRegionData[] | undefined): void {
+    if (this.fogResolved && regions === this.fogRegions) return;
+    this.fogResolved = true;
+    this.fogRegions = regions;
+    this.fogAir = regions?.map((r) => regionAirOf(r, this.env)) ?? [];
+    setFogRegions(regions, this.fogAir, (this.renderer?.outputColorSpace ?? THREE.SRGBColorSpace) as THREE.ColorSpace);
+    let air: { color: THREE.Color; density: number } | null = null;
+    if (regions === undefined) {
+      const level = fogOf(this.env);
+      air = level ? { color: new THREE.Color(level.color), density: level.density } : null;
+    } else {
+      for (const a of this.fogAir) if (a.density > (air?.density ?? 0)) air = a;
+    }
+    if (!air) {
+      this.fog = null;
+      this.fogDensity = 0;
+    } else {
+      this.fog ??= new THREE.FogExp2(0, 0);
+      this.fog.color.copy(air.color);
+      this.fogDensity = air.density;
+      this.fog.density = this.fogShown ? air.density : 0;
+    }
+    this.scene.fog = this.fog;
+  }
+
+  // The regions the fog was last resolved for and each one's air, or null for
+  // the level-wide fog: for what reads the air outside the shaders (the
+  // colour a shaft's glow takes, `LightShafts.select`).
+  regionAir(): { regions: readonly FogRegionData[]; air: readonly RegionAir[] } | null {
+    return this.fogRegions ? { regions: this.fogRegions, air: this.fogAir } : null;
+  }
+
+  // Draw the authored fog, or hold it at zero: the editor hides the air while
+  // authoring and ▶ Test brings it back. Zero rather than taking `scene.fog`
+  // away, because the fog is part of every program's key - removed and
+  // restored, the first test would recompile every material in the level. The
+  // level-wide fog is held at zero density, where three's own law mixes in
+  // exactly none of it, and the regions' air by their switch
+  // (`setFogRegionsShown`).
   setFogShown(shown: boolean): void {
     this.fogShown = shown;
     if (this.fog) this.fog.density = shown ? this.fogDensity : 0;
+    setFogRegionsShown(shown);
   }
 
   // Whether the sun casts its shadow (see `Scene3D.setShadows`).

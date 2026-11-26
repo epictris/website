@@ -25,7 +25,7 @@
 //      first, over the out-of-focus pixels only (an in-focus one keeps its
 //      samples untouched), upsampled from the small texels that are themselves
 //      out of focus, so no in-focus colour leaks in at an edge; then the
-//      water, the fireflies, the spray and the beams' dust near the plane, sharp,
+//      water, the spray and the beams' dust near the plane, sharp,
 //      depth-tested against the scene's own multisampled depth, still there.
 //      They write no depth, so step 2 would read the scenery BEHIND the water
 //      and blur the water with it.

@@ -28,7 +28,7 @@ export type GuidePart =
   | "spawn"
   // A camera region's or a shelter's outline.
   | "region"
-  // A camera path or firefly path.
+  // A camera path.
   | "path"
   // A note: a text box, an arrow or a checkpoint.
   | "note";

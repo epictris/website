@@ -29,6 +29,17 @@
 // shaft far off is dimmed by the air in front of it the way the fog says.
 // A level with no fog still has `SHAFT_AIR` of air, so a beam always shows.
 //
+// WITH FOG REGIONS (`fogRegions.ts`) F is the surfaces' own law for the
+// pixel's ray: every region's exp2 law at its own density, times its edge
+// weight where the ray crosses the plane (the same for every step of the
+// ray), the thickest taken, F(d) = max_i w_i law_i(d). A max of laws that
+// only grow with depth only grows, so every step's F(b) - F(a) is light, never
+// a debt, and the steps along a ray sum to exactly the F the surface at its
+// end is fogged by: the shaft and the rock around it cannot disagree about
+// how much air there is, whichever region each stands in. The colour a step
+// scatters is the air's at its deeper end, the regions' tint a surface there
+// would take, at full value (`stepTint`).
+//
 // WHAT LIGHTS THE AIR: the spot's own cone and penumbra (three's own
 // `smoothstep(coneCos, penumbraCos, cos)`), the beam's fade along its reach,
 // its rays, its flicker, and its shadow map: a spot that casts shadows is cut
@@ -56,7 +67,14 @@ import {
   type Shaft,
 } from "./beam";
 import { GAME_FOG_CAMERA, worldZInView } from "./editorFog";
-import { fogRegionUniforms, REGION_FOG_GLSL } from "./fogRegions";
+import type { FogRegionData } from "../level/levelFormat";
+import {
+  fogRegionFog,
+  fogRegionUniforms,
+  fogRegionWeight,
+  REGION_FOG_GLSL,
+  type RegionAir,
+} from "./fogRegions";
 
 // The light a fully visible beam (`beam = 1`) puts into its air, as a
 // multiple of the spot's colour, relative to the fog colour the rest of the
@@ -175,7 +193,20 @@ const MARCH_FRAGMENT = /* glsl */ `
   uniform vec2 fogGameCamera;
   uniform vec4 worldZ;
 
-  float fogAt(float depth) {
+  // Where this pixel's view ray crosses the gameplay plane: the point the fog
+  // regions read it at, the same for every step along it (set in main).
+  vec2 rayPoint;
+  // Whether the air marched is the fog regions' own (\`fogRegions.ts\`).
+  bool regionAir;
+
+  // The fog law at a depth along this pixel's ray: the fraction a surface
+  // there takes, and (with regions) the colour it is mixed toward in \`tint\`.
+  // With regions it is the surfaces' own law, region by region, edge weights
+  // and all (\`regionFog\`); otherwise the level-wide fog's, or SHAFT_AIR.
+  float fogAt(float depth, inout vec3 tint) {
+    // The working-space colours (texel 2): the hue is taken in linear light,
+    // as \`select\` takes the level-wide fog's from \`fog.color\`.
+    if (regionAir) return regionFog(rayPoint, depth, 2, tint);
     if (fogMode == 2) return 1.0 - exp(-fogDensity * fogDensity * depth * depth);
     if (fogMode == 1) return smoothstep(fogNear, fogFar, depth);
     return ${f(SHAFT_AIR)} * depth;
@@ -185,14 +216,31 @@ const MARCH_FRAGMENT = /* glsl */ `
   // between their depths from this camera; or, while the game's camera stands
   // in, the air the game would put in a stretch that long (in view depth) at
   // the depth that camera sees it from - its in-scatter and the transmittance
-  // in front of it, as the surfaces around it are fogged.
-  float airBetween(vec3 a, vec3 b) {
+  // in front of it, as the surfaces around it are fogged. \`tint\` is the colour
+  // of the air at the deeper end, which is the colour a surface there takes.
+  float airBetween(vec3 a, vec3 b, inout vec3 tint) {
+    vec3 nearTint = tint;
     if (fogGameCamera.x > 0.5) {
       float g = fogGameCamera.y - (dot(worldZ.xyz, 0.5 * (a + b)) + worldZ.w);
       float h = 0.5 * abs(a.z - b.z);
-      return fogAt(max(g + h, 0.0)) - fogAt(max(g - h, 0.0));
+      float deep = fogAt(max(g + h, 0.0), tint);
+      return deep - fogAt(max(g - h, 0.0), nearTint);
     }
-    return fogAt(-b.z) - fogAt(-a.z);
+    float deep = fogAt(-b.z, tint);
+    return deep - fogAt(-a.z, nearTint);
+  }
+
+  // The colour a step's light takes from the air it scatters off: the air's
+  // hue at full value (its largest channel scaled to 1), by SHAFT_FOG_TINT,
+  // as \`LightShafts.select\` tints the level-wide fog's on the CPU. Only where
+  // the regions' air is of more than one colour (\`regionTints\`); with one
+  // colour that tint is already in \`light\`, folded in on the CPU, so a
+  // single region is bit for bit the level-wide fog's shaft.
+  uniform bool regionTints;
+  vec3 stepTint(vec3 tint) {
+    if (!regionTints) return vec3(1.0);
+    float top = max(tint.r, max(tint.g, tint.b));
+    return top > 0.0 ? mix(vec3(1.0), tint / top, ${f(SHAFT_FOG_TINT)}) : vec3(1.0);
   }
 
   // The interval of t on o + t d inside the cone's forward nappe and within
@@ -342,6 +390,10 @@ const MARCH_FRAGMENT = /* glsl */ `
     vec3 d = normalize(farP.xyz / farP.w - o);
     // Up to the surface this pixel shows, or the far plane past the sky.
     float tScene = (sceneZ - o.z) / d.z;
+    vec3 worldOrigin = (viewToWorld * vec4(o, 1.0)).xyz;
+    vec3 worldAlong = (viewToWorld * vec4(o + d, 1.0)).xyz;
+    rayPoint = regionFogPoint(worldOrigin, worldAlong);
+    regionAir = fogMode != 0 && fogRegions.enabled == 1;
     vec2 span = coneInterval(o, d);
     float t0 = max(span.x, 0.0);
     float t1 = min(span.y, tScene);
@@ -351,13 +403,15 @@ const MARCH_FRAGMENT = /* glsl */ `
       // Interleaved gradient noise (Jimenez): which point of its step each
       // step is sampled at, different for neighbouring pixels.
       float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-      float collected = 0.0;
+      vec3 collected = vec3(0.0);
       for (int i = 0; i < ${SHAFT_STEPS}; i++) {
         float ta = t0 + float(i) * dt;
         vec3 p = o + (ta + jitter * dt) * d;
         float l = lit(p);
         if (l > 0.0) {
-          collected += l * shadowAt(p, jitter + float(i) * 0.618034) * airBetween(o + ta * d, o + (ta + dt) * d);
+          vec3 tint = vec3(1.0);
+          float air = airBetween(o + ta * d, o + (ta + dt) * d, tint);
+          collected += (l * shadowAt(p, jitter + float(i) * 0.618034) * air) * stepTint(tint);
         }
       }
       sum = light * collected;
@@ -370,16 +424,18 @@ const MARCH_FRAGMENT = /* glsl */ `
     if (h1 > h0) {
       float dt = (h1 - h0) / float(${HALO_STEPS});
       float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.00583715, 0.06711056))));
-      float collected = 0.0;
+      vec3 collected = vec3(0.0);
       for (int i = 0; i < ${HALO_STEPS}; i++) {
         float ta = h0 + float(i) * dt;
-        collected += halo(o + (ta + jitter * dt) * d) * airBetween(o + ta * d, o + (ta + dt) * d);
+        vec3 tint = vec3(1.0);
+        float air = airBetween(o + ta * d, o + (ta + dt) * d, tint);
+        collected += (halo(o + (ta + jitter * dt) * d) * air) * stepTint(tint);
       }
       sum += light * collected;
     }
-    vec3 worldOrigin = (viewToWorld * vec4(o, 1.0)).xyz;
-    vec3 worldAlong = (viewToWorld * vec4(o + d, 1.0)).xyz;
-    gl_FragColor = vec4(sum * regionFogForRay(worldOrigin, worldAlong), -sceneZ);
+    // The regions' edges are already in their own law; the level-wide fog and
+    // SHAFT_AIR are masked by them here, as the surfaces are.
+    gl_FragColor = vec4(sum * (regionAir ? 1.0 : regionFogAt(rayPoint)), -sceneZ);
   }`;
 
 const COMPOSITE_FRAGMENT = /* glsl */ `
@@ -463,6 +519,7 @@ function marchMaterial(shadowed: boolean): THREE.ShaderMaterial {
       time: { value: 0 },
       fogMode: { value: 0 },
       fogDensity: { value: 0 },
+      regionTints: { value: false },
       fogNear: { value: 0 },
       fogFar: { value: 1 },
       // The editor's shared one, by reference (see `editorFog.ts`).
@@ -515,42 +572,81 @@ export class LightShafts {
   private readonly aim = new THREE.Vector3();
   private readonly scratch = new THREE.Vector3();
   private readonly clearColor = new THREE.Color();
-  // This frame's `SHAFT_FOG_TINT`, from the scene's fog.
+  // This frame's `SHAFT_FOG_TINT`, from the scene's fog (white with fog
+  // regions, whose air the march tints step by step).
   private readonly tint = new THREE.Color();
+  private readonly glowTint = new THREE.Color();
+  // Whether the march tints each step by the regions' air (several colours).
+  private regionTints = false;
+  private readonly glowAt = new THREE.Vector3();
   // The shafts in view this frame, chosen by `select`.
   private readonly inView: Shaft[] = [];
 
   constructor(private readonly renderer: THREE.WebGLRenderer) {}
+
+  // The tint the fog regions' air gives a glow light (see `select`): the
+  // colour a surface where it hangs would be fogged toward, read where this
+  // camera's ray to it crosses the plane and at the depth it is fogged by
+  // (`fogDepth()` in `editorFog.ts`: the game's camera while one stands in),
+  // by as much of it as the regions' edges let in there.
+  private airTint(
+    regionAir: { regions: readonly FogRegionData[]; air: readonly RegionAir[] },
+    light: THREE.Object3D,
+    camera: THREE.Camera,
+  ): THREE.Color {
+    const p = light.getWorldPosition(this.glowAt);
+    const depth = GAME_FOG_CAMERA.x > 0.5
+      ? Math.max(GAME_FOG_CAMERA.y - p.z, 0)
+      : -this.scratch.copy(p).applyMatrix4(camera.matrixWorldInverse).z;
+    const eye = camera.getWorldPosition(this.scratch);
+    const dz = p.z - eye.z;
+    const s = Math.abs(dz) > 1e-5 ? -eye.z / dz : 1;
+    const x = Math.abs(dz) > 1e-5 ? eye.x + (p.x - eye.x) * s : p.x;
+    const y = Math.abs(dz) > 1e-5 ? eye.y + (p.y - eye.y) * s : p.y;
+    // three's y is up, the level's down.
+    const { tint } = fogRegionFog(regionAir.regions, regionAir.air, x, -y, depth);
+    if (!tint) return this.glowTint.setRGB(1, 1, 1);
+    return hueOf(tint, fogRegionWeight(regionAir.regions, x, -y), this.glowTint);
+  }
 
   // Which of `shafts` this view can see, kept for `render`; true when any.
   // Before the frame is drawn, so a frame with none in view keeps no depth.
   // Also where every shaft's glow lights are set for the frame (in view or
   // not: a shaft just off screen still lights the rock that is on it), which
   // is why it takes the fog.
+  //
+  // With fog regions (`regionAir`, from `Environment.regionAir`) the air may
+  // have no one colour: then the march tints each step by the air it crosses
+  // (the shader's `stepTint`), so `light` goes to it untinted; regions all of
+  // one colour tint `light` as the level-wide fog does. Either way each glow light
+  // takes the colour of the air where it hangs - the tint a surface at that
+  // place would be fogged toward (`fogRegionFog`), faded to white over the
+  // regions' edges as their air is, so a glow crossing an edge does not
+  // change colour at a line.
   select(
     shafts: readonly Shaft[],
     camera: THREE.Camera,
     fog: THREE.Fog | THREE.FogExp2 | null,
+    regionAir: { regions: readonly FogRegionData[]; air: readonly RegionAir[] } | null = null,
   ): boolean {
     this.inView.length = 0;
     if (shafts.length === 0) return false;
+    camera.updateMatrixWorld();
+    const regions = fog ? regionAir : null;
     this.tint.setRGB(1, 1, 1);
-    if (fog) {
-      const c = fog.color;
-      const top = Math.max(c.r, c.g, c.b);
-      if (top > 0) {
-        this.tint.setRGB(c.r / top, c.g / top, c.b / top);
-        this.tint.lerp(WHITE, 1 - SHAFT_FOG_TINT);
-      }
-    }
+    // One colour of air (the level-wide fog's, or every region's alike): its
+    // hue goes into `light` on the CPU, as it always did. Several: white, and
+    // the march tints each step (`regionTints`).
+    const one = fog ? (regions ? oneColour(regions.air) : fog.color) : null;
+    this.regionTints = fog !== null && regions !== null && one === null;
+    if (one) hueOf(one, 1, this.tint);
     for (const s of shafts) {
       const on = s.light.visible ? s.level : 0;
       for (const g of s.glow) {
-        g.color.copy(s.light.color).multiply(this.tint);
+        g.color.copy(s.light.color).multiply(regions ? this.airTint(regions, g, camera) : this.tint);
         g.intensity = s.glowIntensity * on;
       }
     }
-    camera.updateMatrixWorld();
     this.viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.viewProjection);
     for (const s of shafts) {
@@ -627,6 +723,7 @@ export class LightShafts {
         );
         u.phase!.value = s.phase;
         u.time!.value = clock;
+        u.regionTints!.value = this.regionTints;
         if (fog instanceof THREE.FogExp2) {
           u.fogMode!.value = 2;
           u.fogDensity!.value = fog.density;
@@ -714,5 +811,30 @@ export class LightShafts {
 }
 
 const WHITE = new THREE.Color(1, 1, 1);
+
+// The one colour every region with any air has, or null where they differ
+// (or none has air).
+function oneColour(air: readonly RegionAir[]): THREE.Color | null {
+  let one: THREE.Color | null = null;
+  for (const a of air) {
+    if (!(a.density > 0)) continue;
+    if (one && !one.equals(a.color)) return null;
+    one = a.color;
+  }
+  return one;
+}
+
+// The tint a fog colour gives the light it scatters: its hue at full value
+// (its largest channel scaled to 1), by SHAFT_FOG_TINT times `weight` of it,
+// into `out`. White for a black fog. The shader's `stepTint` is the same.
+function hueOf(c: THREE.Color, weight: number, out: THREE.Color): THREE.Color {
+  out.setRGB(1, 1, 1);
+  const top = Math.max(c.r, c.g, c.b);
+  if (top > 0) {
+    out.setRGB(c.r / top, c.g / top, c.b / top);
+    out.lerp(WHITE, 1 - SHAFT_FOG_TINT * weight);
+  }
+  return out;
+}
 const X = new THREE.Vector3(1, 0, 0);
 const Y = new THREE.Vector3(0, 1, 0);

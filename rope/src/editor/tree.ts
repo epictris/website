@@ -206,6 +206,10 @@ export function rename(tree: EdTree, id: string, name: string): void {
 
 // --- structure -----------------------------------------------------------------
 
+// The level's light nodes: not spatial, one of each, never inside anything but
+// a folder.
+const LIGHT_TYPES: ReadonlySet<NodeType> = new Set(["Sun", "Environment"]);
+
 // Where a node may NOT go: under itself or its own descendants, a 2D node under
 // a 3D one, a body under a body that moves or can vanish, a decoration
 // anywhere but on a formation. The same rules `validateTree` holds a file to,
@@ -221,6 +225,10 @@ export function canParent(tree: EdTree, id: string, parent: string | null): stri
   if (parent === id || isDescendant(tree, parent, id)) return "a node cannot go inside itself";
   const p = tree.nodes.get(parent);
   if (!p) return "no such parent";
+  // The level's light is the level's: at the top of the tree or in a folder,
+  // and holding nothing.
+  if (LIGHT_TYPES.has(p.type)) return `a ${p.type} holds no nodes`;
+  if (LIGHT_TYPES.has(n.type) && p.type !== "Node") return `the ${n.type} stands at the top of the tree or in a folder`;
   if (n.type === "Decoration3D" && p.type !== "Formation3D") return "a decoration grows on a formation";
   // The new parent and its ancestors up to the first plain `Node`, which
   // starts a fresh world frame.

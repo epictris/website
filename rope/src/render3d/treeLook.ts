@@ -320,7 +320,7 @@ export class TreeLook {
   // are added, which is the tree's.
   private mountLight(n: LevelNode & { type: "Light3D" }, parent: THREE.Object3D, carrier: Carrier): void {
     if (!this.opts.rig) return;
-    const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, path: _p, ...rest } = n;
+    const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...rest } = n;
     const data = { type: "light", ...rest } as LightObjectData;
     const mounted = this.opts.rig.add(
       parent,

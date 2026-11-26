@@ -26,14 +26,13 @@ import type { TieChain } from "../engine/ties";
 import type { VineCord } from "../level/vines";
 import { RopeVineClamp } from "../lib/vineClamp";
 import type { LevelVisualSource } from "../level/buildBodies";
-import { isCollisionObject, type EnvironmentData, type FireflyPathData, type LevelBodyData } from "../level/levelFormat";
+import { isCollisionObject, type EnvironmentData, type FogRegionData, type LevelBodyData } from "../level/levelFormat";
 import type { LevelNode } from "../level/nodes";
 import { TreeLook } from "./treeLook";
 import type { Camera } from "../render/camera";
 import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { useBakedLighting } from "./bakedLighting";
-import { setFogRegions } from "./fogRegions";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { LevelScene } from "./levelScene";
@@ -47,9 +46,7 @@ import { VineSlimeLayer } from "./vineSlimeVisual";
 import type { VineSlime } from "../render/vineSlime";
 import { bakeGlassWear } from "./glassWear";
 import { BALL_GLOW, BALL_GLOW_INTENSITY, BALL_GLOW_RANGE, glassWearShown } from "./glassMaterial";
-import type { CameraRule } from "../render/cameraController";
 import { configureRenderer, Environment } from "./environment";
-import type { LightRig } from "./lights";
 import {
   applyPose,
   CAMERA_FAR,
@@ -103,14 +100,6 @@ export interface Scene3DLevel {
   // runs on (`beltRenderTime`). Absent = a host with no running sim (the
   // editor's preview), whose belts stand still.
   readonly frame?: number;
-  // The level's camera rules, whose PATHS are the authored way forward the
-  // fireflies hover ahead of the ball along - as level geometry, read once,
-  // never the camera's state. Absent = no path, which is every host that
-  // predates them and every level that authors none.
-  readonly cameraRules?: readonly CameraRule[];
-  // The level's firefly paths (metres): a swarm that names one guides the
-  // player along it instead of the camera paths. Absent = none.
-  readonly fireflyPaths?: readonly FireflyPathData[];
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
@@ -527,12 +516,6 @@ export class Scene3D {
     // recorded and before `prewarm` compiles against the scene's lights (see
     // `LightRig.buildPool`). A level with no waking light builds none.
     slot.lights.buildPool(slot.root);
-    // The authored routes the fireflies read (see `Scene3DLevel.cameraRules`
-    // and `Scene3DLevel.fireflyPaths`).
-    slot.lights.setRoutes(
-      (level.cameraRules ?? []).flatMap((r) => (r.kind === "path" ? [r.index] : [])),
-      level.fireflyPaths ?? [],
-    );
     // The vines' tubes, which their first sync builds: here, so that a level
     // prepared ahead of being shown (the editor's ▶ Test) has paid for them.
     slot.vines.sync(level.vines ?? NO_VINES, 1, beltRenderTime(level.frame ?? 0, 1));
@@ -557,7 +540,7 @@ export class Scene3D {
     previous?.root.removeFromParent();
     this.current = slot;
     this.scene.add(slot.root);
-    this.setEnvironment(slot.level.visualSource.data.environment);
+    this.setEnvironment(slot.level.visualSource.data.environment, slot.level.visualSource.data.fogRegions);
     // The switches may have moved while it was down.
     this.applyShown(slot);
     if (!this.reflectionOn) slot.ballVisual?.setReflection(null);
@@ -667,19 +650,18 @@ export class Scene3D {
     return this.current?.lights.glowLevels() ?? [];
   }
 
-  // The firefly swarms' states, in authored order, for a probe.
-  swarmStates(): ReturnType<LightRig["swarmStates"]> {
-    return this.current?.lights.swarmStates() ?? [];
-  }
-
   // The environment a level authored, so a host that rebuilds the scene without
-  // a level (the editor, between loads) can still light it.
-  setEnvironment(env: EnvironmentData | undefined): void {
+  // a level (the editor, between loads) can still light it; and its fog
+  // regions, whose air falls back to the environment's (`Environment.setFogRegions`).
+  setEnvironment(env: EnvironmentData | undefined, fogRegions?: readonly FogRegionData[]): void {
     const key = JSON.stringify(env ?? null);
-    if (key === this.envKey) return;
+    if (key === this.envKey) {
+      this.env.setFogRegions(fogRegions);
+      return;
+    }
     this.envKey = key;
     this.env.dispose();
-    this.env = new Environment(this.scene, env, this.renderer);
+    this.env = new Environment(this.scene, env, this.renderer, fogRegions);
     this.env.setFogShown(this.fogShown);
     this.env.setShadows(this.shadowsOn);
   }
@@ -1388,7 +1370,7 @@ export class Scene3D {
     slime: VineSlime | null = null,
   ): void {
     const rect = this.viewportRect;
-    setFogRegions(level.visualSource.data.fogRegions);
+    this.env.setFogRegions(level.visualSource.data.fogRegions);
     // The level's own visuals, built the first time it is drawn if nothing
     // asked for it before (`setLevel`).
     if (!this.current) this.setLevel(level);
@@ -1524,7 +1506,6 @@ export class Scene3D {
     slot.lights.update(clock, {
       ball: level.ball ? level.ball.renderPosition(alpha) : null,
       view: centre,
-      world: level.world,
     });
     // After the visuals are synced and before the frame is drawn: a highlight is
     // a material swap on meshes the reconciliation above may have only just
@@ -1547,7 +1528,7 @@ export class Scene3D {
     // when a shaft is in view. Chosen before the reflection, because this is
     // also where the shafts' glow lights are set for the frame.
     const fog = this.env.shownFog();
-    const shafts = this.lightShafts.select(slot.lights.shafts(), this.camera, fog);
+    const shafts = this.lightShafts.select(slot.lights.shafts(), this.camera, fog, this.env.regionAir());
     // Before the ball's probe, so the pool the ball sees carries its mirror.
     this.mirrorPool();
     this.captureReflection(level);

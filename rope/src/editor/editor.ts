@@ -202,7 +202,6 @@ import {
   type EdModel,
   glowModel,
   mushroomModel,
-  fireflyModel,
   cloneRouteNode,
   peakSurfaceSpeed,
   routeNode,
@@ -225,13 +224,16 @@ import {
   type World3,
   modelFromTree,
   toTree,
+  lightNode,
+  environmentOfModel,
+  NEW_FOG,
 } from "./model";
 import { pickTagOf } from "../render3d/bodyVisuals";
 import { paintLayerAt } from "../render3d/paintLayers";
 import { setMaterialLayerSource } from "../render3d/materialLayers";
 import { MaterialMasks } from "./materialMasks";
-import { ancestors, bodyAbove, canParent, childrenOf, clickTarget, cloneTree, layersOf, outermostGroup, nextOrder, pathOf, removeSubtree, rename as renameNode, type EdBody, type EdNode } from "./tree";
-import { is3D, lookNodes, newNodeId, poseOfFrame, prefabLibrary, relative2D, scaleLevelTree, setPrefab, walkNodes, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type NodeType, type PrefabData } from "../level/nodes";
+import { ancestors, bodyAbove, canParent, childrenOf, clickTarget, cloneTree, descendants, layersOf, outermostGroup, nextOrder, pathOf, removeSubtree, rename as renameNode, type EdBody, type EdNode } from "./tree";
+import { ENVIRONMENT_FIELDS, is3D, lookNodes, newNodeId, poseOfFrame, prefabLibrary, relative2D, scaleLevelTree, setPrefab, walkNodes, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type NodeType, type PrefabData } from "../level/nodes";
 import { materialLabel } from "../formation/materialLayer";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { FormationJobs, mountJobsPanel } from "./formationJobs";
@@ -309,7 +311,6 @@ import {
   curvePieceCount,
   routeHandlePoints,
   routeMidpoints,
-  lightSwarms,
 } from "./render";
 import {
   CUSTOM_MATERIAL,
@@ -423,13 +424,14 @@ import {
   LIGHT_SHADOW_RADIUS,
 } from "../render3d/lights";
 import { DEFAULT_WAKE_FALL, DEFAULT_WAKE_RISE } from "../render3d/glow";
-import { DEFAULT_FIREFLY_NOTICE, FIREFLY_MAX } from "../render3d/fireflies";
 import { colorInput } from "./colorPicker";
 import {
+  readDockWidth,
   readLastLevel,
   readLayerSettings,
   readRootWidths,
   readViewSettings,
+  writeDockWidth,
   writeLastLevel,
   writeLayerSettings,
   writeRootWidths,
@@ -457,7 +459,11 @@ type Tool =
   | "light"
   | "model"
   | "glow"
-  | "fireflies";
+  // The plane's volumes that are things in the level: a fog region dragged out
+  // as a box (`FogRegion2D`), a cave's front wall clicked out as an outline
+  // like +Poly's (`Shelter2D`).
+  | "fog"
+  | "shelter";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -479,17 +485,13 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "light",
     "model",
     "glow",
-    "fireflies",
     "chain",
     "vine",
     "root",
+    "fog",
+    "shelter",
   ],
-  // A shelter is a volume: no path, which encloses nothing.
-  shelter: ["select", "rect", "circle", "poly"],
-  fog: ["select", "rect", "circle"],
   camera: ["select", "rect", "circle", "poly", "path"],
-  // A firefly path is a route and nothing else: no regions to draw.
-  fireflies: ["select", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
 };
 
@@ -508,15 +510,10 @@ const chainable = (b: EdItem): boolean =>
 // What the inspector says when nothing is selected: what the active layer is
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
-  fog: "Fog layer: draw a rectangle or circle where haze should be present. Fog fades inward from its boundary over the region's falloff distance. Outside the regions the view is clear; overlapping regions do not add fog. Colour and strength stay in the Environment panel. Place a region over the grotto and leave the sheltered cave outside it. Tab switches layer.",
   scene:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is what its bodies carry - formations, their decorations, models - and a shape is drawn in 3D only while its Debug section's draw box is ticked (it starts ticked). +Chain drags a chain from one body to another. New body puts the selected pieces under one new body; drag a row in the scene tree (bottom left) onto another to reparent it. Ctrl+G groups the selection, so a click selects the group first and a second click goes inside (Ctrl+Shift+G ungroups; Alt+click picks the thing under the pointer itself). The scene tree lists every node and is the way to reach one with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no body above it stands on its own (a shaft down a grate, a fill); a lamp you can see goes under the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
-  shelter:
-    "Shelter layer: the front walls of enclosed caves. A shelter is the wall between the camera and the cave, cut away so the player can be seen, put back for the sun alone: never drawn, it casts the sun's shadow, so the cave's rock faces and its inside go out of the sun while its blue-grey air stays. Draw it over the cave (+Poly clicks out the outline, concave corners and all; +Rect / +Circle drag one out); the dotted outline is where its shadow lands on the play plane. Tab switches layer.",
+    "Scene layer. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of. What a level LOOKS like is what its bodies carry - formations, their decorations, models - and a shape is drawn in 3D only while its Debug section's draw box is ticked (it starts ticked). +Chain drags a chain from one body to another. New body puts the selected pieces under one new body; drag a row in the scene tree (the right column) onto another to reparent it. +Fog drags out a fog region, which owns its fog (amount, colour, falloff); +Shelter clicks out a cave's front wall, which hides the cave from the sun alone. Ctrl+G groups the selection, so a click selects the group first and a second click goes inside (Ctrl+Shift+G ungroups; Alt+click picks the thing under the pointer itself). The scene tree lists every node and is the way to reach one with no outline, like a light. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no body above it stands on its own (a shaft down a grate, a fill); a lamp you can see goes under the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
-  fireflies:
-    "Fireflies layer. +Path clicks out a FIREFLY PATH (Enter to finish), start to end. Give a swarm its number in the swarm's `path` field and the swarm guides the player along it instead of the camera paths; when the player reaches the end, the swarm flies back along it to the start and waits there. Tab switches layer.",
   notes:
     "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out, +Checkpoint drops a named place to start from - play with ?checkpoint=NAME to spawn there instead of at the level's spawn, or select one and press ▶ Test. None of the three is drawn in play. Tab switches layer.",
 };
@@ -1278,8 +1275,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Whether the editor's own view draws the level's fog. Off by default: the
   // haze is the player's view of the level, and through it a distant piece is
   // hard to judge. ▶ Test always draws it. A view setting like `snapOn`, so it
-  // is not written into the level.
-  let fogInEditor = false;
+  // is not written into the level, and remembered with the others.
+  let fogInEditor = viewSettings.fog;
   // Whether the 3D scene draws EVERY collision shape's debug geometry, ticked or
   // not, here and in ▶ Test - to see the collision under a dressed level
   // without flipping, and then having to remember to unflip, each shape's own
@@ -1378,7 +1375,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A run-of-clicks draft, and which tool is drafting it: `+Poly` closes into an
   // outline, `+Path` ends open as a camera path. One draft rather than two so
   // Esc, Enter, the title readout and the preview cannot drift apart per tool.
-  let polyDraft: { kind: "poly" | "path"; verts: Vec2[] } | null = null;
+  let polyDraft: { kind: "poly" | "path" | "shelter"; verts: Vec2[] } | null = null;
   // A ROOT being drawn (`+ Root`, docs/roots.md): its nodes so far in world
   // metres and each node's Bézier handles (pulled out by dragging as it is
   // placed), the widths it will taper between, and - for a branch - the root
@@ -1549,7 +1546,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // put under a group), in pixels. A string says why it cannot be one.
   function prefabOfModel(): PrefabData | string {
     const tree = scaleLevelTree(toTree(model), PIXELS_PER_METER);
-    const nodes = tree.nodes.filter((n) => n.type !== "Spawn2D");
+    // Neither the spawn nor the level's light it is shown in is the prefab's.
+    const nodes = tree.nodes.filter((n) => n.type !== "Spawn2D" && n.type !== "Sun" && n.type !== "Environment");
     if (!nodes.length) return "the prefab is empty";
     const root: LevelNode = nodes.length === 1 ? nodes[0]! : ({ type: "Node2D", id: newNodeId(), name: prefabName ?? "Prefab", children: nodes } as LevelNode);
     const refused = validateTree([root], { prefab: true }).filter((p) => p.error);
@@ -1604,10 +1602,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!levelSession) {
       levelSession = { model: shelve(model), history: history.map(shelve), future: future.map(shelve), name: currentName, dirty, cam: camera.position, zoom: camera.zoom, pose: visuals?.view ?? null };
     }
+    // Lit as the level is: its Sun and Environment stand beside the prefab
+    // while it is open (no lengths in them, so the units do not matter), and
+    // are never written into it (`prefabOfModel`).
+    const light = toTree(model).nodes.filter((n) => n.type === "Sun" || n.type === "Environment");
     prefabMode = true;
     prefabName = name;
+    // What is open is worked on in the scene tree; the banner over it is the
+    // way back.
+    prefabsShown = false;
     currentName = null;
-    replaceModel(modelFromTree(scaleLevelTree({ format: TREE_FORMAT, nodes: [data.root] }, PX)));
+    replaceModel(modelFromTree(scaleLevelTree({ format: TREE_FORMAT, nodes: [...light, data.root] }, PX)));
     await loadPaint(name);
     resetHistory();
     dirty = false;
@@ -1617,7 +1622,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectedVerts.clear();
     selectedBodyIds.clear();
     solidSel = null;
-    setBodySelection(model.tree.roots[0] ?? null);
+    setBodySelection(model.tree.roots.find((r) => { const t = model.tree.nodes.get(r)?.type; return t !== "Sun" && t !== "Environment"; }) ?? null);
     refreshDocButtons();
     rebuildInspector();
     updateTitle();
@@ -1827,17 +1832,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return model.tree.nodes.get(owner)?.instance?.editable ? id : owner;
   }
 
-  // The Level / Prefabs buttons say which document is open.
+  // The dock's tabs say which pane is up, and the pane shows it; a prefab open
+  // for editing says so over the tree, with the way back.
   function refreshDocButtons(): void {
-    workspaceBtns.prefabs?.classList.toggle("active", prefabsShown || prefabMode);
-    workspaceBtns.prefabs?.setAttribute("aria-pressed", String(prefabsShown || prefabMode));
-    workspaceBtns.level?.classList.toggle("active", !prefabMode);
-    workspaceBtns.level?.setAttribute("aria-pressed", String(!prefabMode));
+    workspaceBtns.prefabs?.classList.toggle("active", prefabsShown);
+    workspaceBtns.prefabs?.setAttribute("aria-selected", String(prefabsShown));
+    workspaceBtns.level?.classList.toggle("active", !prefabsShown);
+    workspaceBtns.level?.setAttribute("aria-selected", String(!prefabsShown));
+    scenePane.hidden = prefabsShown;
+    prefabPane.hidden = !prefabsShown;
+    prefabBanner.hidden = !prefabMode;
+    prefabBannerName.textContent = `Prefab ${prefabName ?? ""}`;
   }
 
-  // THE PREFAB LIBRARY, at the top of the inspector while the Prefabs tab is
-  // up or a prefab is open.
+  // THE PREFAB LIBRARY, the right dock's Prefabs pane.
   function buildPrefabsGroup(): void {
+    prefabPane.innerHTML = "";
     const g = el("div", "ed-group");
     g.appendChild(
       heading(
@@ -1903,7 +1913,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     branch.disabled = selectionNodes().length !== 1;
     actions.append(make, branch);
     g.appendChild(actions);
-    inspector.appendChild(g);
+    prefabPane.appendChild(g);
   }
 
   // --- undo/redo ------------------------------------------------------------
@@ -1917,7 +1927,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const modelMetaWaiters = new Map<string, Array<() => void>>();
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => withLinks({
-    fogRegionsEnabled: m.fogRegionsEnabled,
     player: {
       pos: m.player.pos,
       radius: m.player.radius,
@@ -1931,6 +1940,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cam: { ...b.cam },
       light: { ...b.light },
       note: { ...b.note },
+      shelter: { ...b.shelter },
+      fog: { ...b.fog },
       modelRef: { ...b.modelRef },
     })),
     chains: m.chains.map(cloneChain),
@@ -1940,14 +1951,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // items at the copied bodies.
     tree: cloneTree(m.tree),
     dataLayers: [...m.dataLayers],
-    // Mutated in place by the environment panel exactly as `cam` and `light`
-    // are, so a snapshot sharing it would alias the state it restores.
-    environment: m.environment ? { ...m.environment } : undefined,
-    // Mutated in place by the camera fields, for the same reason.
+    // A string: nothing to alias. (The Sun and Environment nodes' fields are
+    // their nodes' `extra`, copied with the tree.)
+    background: m.background,
+    // Mutated in place by the top bar's lens fields exactly as `cam` and
+    // `light` are, so a snapshot sharing it would alias the state it restores.
     camera: m.camera ? { ...m.camera } : undefined,
-    // Mutated in place by the Level panel, exactly as the environment block is
-    // and for the same reason: a shared reference would alias the state the
-    // undo is meant to be restoring.
     meta: { ...m.meta },
   });
   const resetHistory = (): void => {
@@ -3527,7 +3536,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function markDirty(): void {
     // The tree and the lists agree after every edit (`reconcileTree`).
     reconcileTree(model);
-    if (model.items.some((i) => i.layer === "fog")) model.fogRegionsEnabled = true;
     // Every edit leaves a root a tree (rootEditing.ts): a branch whose parent
     // went away is a trunk, and every branch starts on its parent again.
     syncRoots(model);
@@ -3605,8 +3613,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // out would draw a stale pose.
   //
   // What is NOT re-derived for such an edit is the throwaway world's own
-  // collision, which only the preview's fireflies read (they keep off solid
-  // scenery); it catches up at the next edit that rebuilds.
+  // collision, which nothing drawn in the preview reads; it catches up at the
+  // next edit that rebuilds.
   function sceneKeyOf(data: LevelData, itemOf: ReadonlyMap<SceneTag, number>, vines: unknown): string {
     const nm = (v: number): number => Math.round(v * 1e9) / 1e9;
     const restsAsAuthored = (b: LevelBodyData): boolean =>
@@ -3762,9 +3770,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // and solving them here to draw them would be a second simulation running
       // under the editor.
       sceneChains: [],
-      // Read by no swarm here (nobody is in the preview to follow), but
-      // handed over so a swarm naming a path finds it rather than warning.
-      fireflyPaths: data.fireflyPaths ?? [],
       visualSource: { data, built },
       // THE AVATAR AT THE SPAWN, because a level is authored against the thing
       // that plays it. Every gap, ledge and shelf in the file is a decision
@@ -4254,30 +4259,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   root.appendChild(brand);
   root.appendChild(bar);
 
-  // What is being edited: the level, or a prefab (the Prefabs tab). How it
-  // is seen is the one 3D view's, the same for both.
+  // The right dock's tabs: the SCENE tree of what is open (the level, or the
+  // prefab being edited), or the PREFAB library. How it is seen is the one 3D
+  // view's, the same for both.
   const workspaceBtns: Partial<Record<"level" | "prefabs", HTMLButtonElement>> = {};
-  if (visuals) {
-    const row = el("div", "ed-row");
-    bar.appendChild(row);
-    workspaceBtns.level = button("Level", () => {
-      prefabsShown = false;
-      if (prefabMode) void closePrefab();
-      else {
-        refreshDocButtons();
-        rebuildInspector();
-      }
-    });
-    workspaceBtns.level.title = "Edit the level";
-    workspaceBtns.prefabs = button("Prefabs", () => {
-      prefabsShown = !prefabsShown || prefabMode;
-      refreshDocButtons();
-      rebuildInspector();
-    });
-    workspaceBtns.prefabs.title = "The prefab library: shared node trees to place, open and make (plans/node-tree.md \"Prefabs\")";
-    row.append(workspaceBtns.level, workspaceBtns.prefabs);
-    workspaceBtns.level.classList.add("active");
-  }
+  workspaceBtns.level = button("Scene", () => {
+    prefabsShown = false;
+    refreshDocButtons();
+    rebuildInspector();
+  });
+  workspaceBtns.level.title = "The scene tree: every node of what is open, nested as it is nested";
+  workspaceBtns.prefabs = button("Prefabs", () => {
+    prefabsShown = true;
+    refreshDocButtons();
+    rebuildInspector();
+  });
+  workspaceBtns.prefabs.title = "The prefab library: shared node trees to place, open and make (plans/node-tree.md \"Prefabs\")";
+  for (const b of [workspaceBtns.level, workspaceBtns.prefabs]) b.setAttribute("role", "tab");
 
   const fileRow = el("div", "ed-row ed-file-row ed-commandbar");
   root.appendChild(fileRow);
@@ -4334,6 +4332,165 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   btnSounds.title = "Assign sound files to the game's events: rolling, attaching, bouncing, winding, the whoosh";
   fileRow.append(btnSounds);
 
+  // THE LEVEL'S OWN SETTINGS, beside the files: what is behind everything and
+  // the 3D camera's lens. Level-wide and few, so here rather than in a panel;
+  // the level's light is its Sun and Environment nodes, its fog its fog
+  // regions. Built here, before anything can rebuild the inspector, which
+  // refreshes them (`refreshLevelSettings`).
+  const levelSettings = el("div", "ed-level-settings");
+  levelSettings.setAttribute("role", "group");
+  levelSettings.setAttribute("aria-label", "Level settings");
+  const bgInput = colorInput(model.background ?? DEFAULT_ENVIRONMENT.backgroundColor, beginAction, (hex) => {
+    model.background = hex;
+    markDirty();
+  });
+  bgInput.el.title = "Background: what is behind everything - the horizon and the letterbox bars. A fog region with no colour of its own takes it.";
+  bgInput.el.setAttribute("aria-label", "Background colour");
+  const bgLabel = labelWrap("Background", bgInput.el);
+  // A number in the top bar: blank is the default (`onEmpty`), and a focused
+  // field is left alone by a refresh, as the inspector's are.
+  const levelNums: { input: HTMLInputElement; get: () => number | null }[] = [];
+  const levelNum = (
+    label: string,
+    title: string,
+    step: number,
+    placeholder: string,
+    get: () => number | null,
+    set: (v: number) => void,
+    onEmpty: () => void,
+  ): HTMLElement => {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.className = "ed-num";
+    input.step = String(step);
+    input.placeholder = placeholder;
+    input.title = title;
+    input.setAttribute("aria-label", label);
+    input.addEventListener("focus", () => beginAction());
+    input.addEventListener("keydown", (e) => e.stopPropagation());
+    input.addEventListener("input", () => {
+      if (input.value.trim() === "") onEmpty();
+      else {
+        const v = parseFloat(input.value);
+        if (!Number.isFinite(v)) return;
+        set(v);
+      }
+      markDirty();
+    });
+    levelNums.push({ input, get });
+    const wrap = labelWrap(label, input);
+    wrap.title = title;
+    return wrap;
+  };
+  const lensCam = (): LevelCameraData => (model.camera ??= {});
+  const dropLens = (key: keyof LevelCameraData): void => {
+    if (!model.camera) return;
+    delete model.camera[key];
+    if (Object.keys(model.camera).length === 0) model.camera = undefined;
+  };
+  const lensField = levelNum(
+    "Lens mm",
+    "The 3D camera's 35 mm-equivalent focal length. Longer flattens the scene toward orthographic, shorter deepens it; the gameplay plane stays framed the same because the camera dollies to keep it so. Blank is the default.",
+    5,
+    focalLengthFromFov(FOV_Y_DEG).toFixed(1),
+    () => model.camera?.focalLength ?? null,
+    // Below a millimetre the field of view runs out past 170 degrees and the
+    // frame stops being a picture of anything.
+    (v) => (lensCam().focalLength = Math.max(1, v)),
+    () => dropLens("focalLength"),
+  );
+  const camZField = levelNum(
+    "Cam z",
+    "How far the 3D camera stands along z from where the zoom puts it, positive toward you. The plane at this depth is framed exactly like the 2D view; at anything but 0 the gameplay plane is drawn smaller (positive) or larger (negative) than the overlay's outlines, handles and reticle.",
+    10,
+    "0",
+    () => (model.camera?.zOffset === undefined ? null : model.camera.zOffset * M2PX),
+    (v) => (lensCam().zOffset = v * PX),
+    () => dropLens("zOffset"),
+  );
+  levelSettings.append(bgLabel, lensField, camZField);
+  fileRow.append(levelSettings);
+  function refreshLevelSettings(): void {
+    if (!bgInput.editing) bgInput.value = model.background ?? DEFAULT_ENVIRONMENT.backgroundColor;
+    for (const f of levelNums) if (document.activeElement !== f.input) f.input.value = fmtOrBlank(f.get());
+  }
+
+  // THE RIGHT DOCK: the scene tree of what is open (or the prefab library),
+  // full height and as wide as the author drags it. What is selected in it is
+  // edited in the inspector, the window floating to its left.
+  const rightDock = el("aside", "ed-right-dock");
+  rightDock.setAttribute("aria-label", "Scene");
+  const dockResize = el("div", "ed-dock-resize");
+  dockResize.setAttribute("role", "separator");
+  dockResize.setAttribute("aria-orientation", "vertical");
+  dockResize.setAttribute("aria-label", "Resize the scene tree");
+  dockResize.title = "Drag to resize; double-click for the default width";
+  const dockTabs = el("div", "ed-dock-tabs");
+  dockTabs.setAttribute("role", "tablist");
+  dockTabs.append(workspaceBtns.level, workspaceBtns.prefabs);
+  const prefabBanner = el("div", "ed-prefab-banner");
+  const prefabBannerName = el("span", "ed-prefab-banner-name");
+  const prefabBack = button("Back to the level", () => void closePrefab());
+  prefabBack.title = "Save the prefab and go back to the level, every instance of it showing the edit";
+  prefabBanner.append(prefabBannerName, prefabBack);
+  prefabBanner.hidden = true;
+  const scenePane = el("div", "ed-dock-pane ed-scene-pane");
+  const prefabPane = el("div", "ed-dock-pane ed-prefab-pane");
+  prefabPane.hidden = true;
+  rightDock.append(dockResize, dockTabs, prefabBanner, scenePane, prefabPane);
+  root.appendChild(rightDock);
+  // The width, in CSS pixels: never so narrow a name cannot be read, never
+  // more than half the window.
+  const DOCK_DEFAULT_WIDTH = 300;
+  const clampDock = (px: number): number => Math.round(Math.min(Math.max(200, px), Math.max(200, window.innerWidth * 0.5)));
+  const setDockWidth = (px: number): void => root.style.setProperty("--dock-width", `${clampDock(px)}px`);
+  setDockWidth(readDockWidth() ?? DOCK_DEFAULT_WIDTH);
+  dockResize.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dockResize.setPointerCapture(e.pointerId);
+    dockResize.classList.add("active");
+    const move = (m: PointerEvent): void => setDockWidth(window.innerWidth - m.clientX);
+    const up = (u: PointerEvent): void => {
+      dockResize.releasePointerCapture(u.pointerId);
+      dockResize.classList.remove("active");
+      dockResize.removeEventListener("pointermove", move);
+      dockResize.removeEventListener("pointerup", up);
+      writeDockWidth(rightDock.getBoundingClientRect().width);
+    };
+    dockResize.addEventListener("pointermove", move);
+    dockResize.addEventListener("pointerup", up);
+  });
+  dockResize.addEventListener("dblclick", () => {
+    setDockWidth(DOCK_DEFAULT_WIDTH);
+    writeDockWidth(DOCK_DEFAULT_WIDTH);
+  });
+  // A window made narrower keeps the dock inside its half of it.
+  window.addEventListener("resize", () => setDockWidth(rightDock.getBoundingClientRect().width));
+
+  // THE VIEWPORT'S OWN CONTROLS, over its top edge: the overlays, the way back
+  // to the plane, the game's camera, and the preview settings. How the level is
+  // SEEN here, not what it is - so neither the workspace's dock nor a panel.
+  const viewBar = el("div", "ed-viewbar");
+  viewBar.setAttribute("aria-label", "View");
+  root.appendChild(viewBar);
+  // ...and down its right edge, beside the dock: the view cube and the lens,
+  // then the inspector, the selection's window, under them.
+  const floatCol = el("div", "ed-float");
+  root.appendChild(floatCol);
+  // The status line along the viewport's foot: what is open, whether it is
+  // saved, what is in it, and the draft or notice of the moment.
+  const statusLine = el("div", "ed-status");
+  statusLine.setAttribute("role", "status");
+  root.appendChild(statusLine);
+  // Where the top bars end, for everything placed under them (`--chrome-top`):
+  // the command bar wraps on a narrow window, and a fixed number would put
+  // the docks over its second row.
+  const chromeTop = (): void => root.style.setProperty("--chrome-top", `${Math.round(fileRow.getBoundingClientRect().bottom)}px`);
+  new ResizeObserver(chromeTop).observe(fileRow);
+  chromeTop();
+
   // The workspace tabs (1, 2, 3), as Blender's are along its top bar.
   const workspaceTabs = el("div", "ed-ws-tabs");
   workspaceTabs.setAttribute("role", "tablist");
@@ -4342,7 +4499,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   for (const ws of WORKSPACES) {
     const b = button(WORKSPACE_LABELS[ws], () => setWorkspace(ws));
     b.setAttribute("role", "tab");
-    b.title = WORKSPACE_TITLES[ws];
+    // What the workspace is, then how to work in it: the help the inspector
+    // used to show with nothing selected.
+    b.title = ws === "2d" ? WORKSPACE_TITLES[ws] : `${WORKSPACE_TITLES[ws]}\n\n${WORKSPACE_EMPTY_HINTS[ws]}`;
     workspaceTabBtns.set(ws, b);
     workspaceTabs.appendChild(b);
   }
@@ -4368,7 +4527,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     light: button("Light", () => setTool("light")),
     model: button("Model", () => setTool("model")),
     glow: button("Glow", () => { placingMushroom = false; setTool("glow"); }),
-    fireflies: button("Fireflies", () => setTool("fireflies")),
+    fog: button("Fog", () => setTool("fog")),
+    shelter: button("Shelter", () => setTool("shelter")),
   };
   const mushroomButton = button("Mushroom", () => { placingMushroom = true; setTool("glow"); });
   mushroomButton.title = "Click to plant a glowing, bouncy mushroom. Its cap expands on impact. Adjust Bounce and Launch on its body.";
@@ -4383,13 +4543,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "Click out a curve: a bar stroked to its width, which a rail's cuff slides along. Enter or double-click finishes it, Esc drops it.",
     camera:
       "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.",
-    fireflies:
-      "Click out a firefly path, start to end: the route a swarm naming it in its `path` field guides the player along. Enter or double-click finishes it, Esc drops it. At the end the swarm leaves the player and flies back to the start.",
-    shelter: "",
-    fog: "",
     notes: "",
   };
   toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
+  toolBtns.fog.title =
+    "Drag out a fog region: the air inside it thickens with distance from the camera by its own amount and colour, fading in from its edge over its falloff. Outside every region the view is clear, and overlapping regions do not add. A rect or a circle (its panel switches).";
+  toolBtns.shelter.title =
+    "Click out a shelter - the front wall of an enclosed cave, concave corners and all (Enter or click the first vertex to close, Esc to cancel). It is never drawn: it casts the sun's shadow alone, so the cave's rock faces and its inside go out of the sun while its air stays. The dotted outline is where the shadow lands on the play plane.";
   toolBtns.chain.title =
     "Drag from one body to another to string a chain between them. Shift-release on a body ties the chain there and keeps going (a rope bridge: post, each slat's two ends, ..., post); a plain click on a body ends it, Esc drops it";
   toolBtns.belt.title =
@@ -4403,8 +4563,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   toolBtns.glow.title =
     "Click to drop a glowing mushroom: one static body holding a collision box and a WAKING light that stays dark until the ball comes within its wake (the dashed ring) and fades out after it leaves. Give the body a model (or a formation) for its look; what glows in it follows the light. The 3D preview shows it awake.";
-  toolBtns.fireflies.title =
-    "Click to drop a swarm of fireflies: a body holding only the swarm's light, which is where they hover. When the ball comes within the dashed ring they follow it for the rest of the run, looping around it and lighting it wherever it goes - or, given a firefly path (the fireflies layer) in their `path` field, along that path until the player reaches its end.";
   toolBtns.checkpoint.title =
     "Click to drop a named spawn. Playing with ?checkpoint=NAME starts there instead of at the level's spawn - and stays there over a reset - so an area can be playtested without swinging out to it first. Selecting one and pressing ▶ Test starts the test there.";
   const kindSel = document.createElement("select");
@@ -4504,7 +4662,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     h.textContent = text;
     return h;
   };
-  const toolGroups = [toolGroup("Collision"), toolGroup("Gameplay"), toolGroup("Scene")];
+  const toolGroups = [toolGroup("Collision"), toolGroup("Gameplay"), toolGroup("Scene"), toolGroup("Volumes")];
   toolRow.append(
     toolBtns.select,
     kindWrap,
@@ -4520,10 +4678,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.root,
     mushroomButton,
     toolBtns.glow,
-    toolBtns.fireflies,
     toolGroups[2]!,
     toolBtns.light,
     toolBtns.model,
+    toolGroups[3]!,
+    toolBtns.fog,
+    toolBtns.shelter,
     toolBtns.text,
     toolBtns.arrow,
     toolBtns.checkpoint,
@@ -5015,8 +5175,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // It stacks vertically, with the visibility boxes in a column down the left:
   // a layer stack is a fixed, ordered set you read down, not a row of toolbar
   // buttons, and one row per layer leaves room for a name of any length.
-  const layerList = el("div", "ed-layers");
-  bar.appendChild(layerList);
+  // It stands in the right dock, over the data layers and the scene tree
+  // (Tris, 2026-11-26): what is shown, locked and drawn onto is set where
+  // the nodes are, not among the tools.
+  const layerList = el("div", "ed-layers ed-type-layers");
   const layerHeading = el("div", "ed-layer-label");
   layerHeading.textContent = "Layers";
   layerList.appendChild(layerHeading);
@@ -5035,7 +5197,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     layerLocks[l] = lock;
     const b = button(l, () => setLayer(l));
     b.classList.add("ed-layer-btn");
-    b.title = `Edit the ${l} layer (Tab cycles)`;
+    b.title = `Edit the ${l} layer (Tab cycles).\n\n${EMPTY_HINTS[l]}`;
     layerBtns[l] = b;
     row.append(eye, lock, b);
     layerList.appendChild(row);
@@ -5043,13 +5205,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     setLayerLocked(l, false); // ditto
   }
 
-  // DATA LAYERS (plans/node-tree.md "Editor"): the user's own, under the
-  // type filters above. Each has an eye and a lock, and assigns or unassigns
-  // the selection; a node is in its ancestors' layers too, so a layer holding
-  // a body holds everything in it. Made with `+`, removed with `×` (which
-  // takes it off every node).
+  // DATA LAYERS (plans/node-tree.md "Editor"): the user's own, over the
+  // scene tree in the right dock, since what they hold is its nodes (the type
+  // layers are the 2D workspace's, in the left dock). Each has an eye and a
+  // lock, and assigns or unassigns the selection; a node is in its ancestors'
+  // layers too, so a layer holding a body holds everything in it. Made with
+  // `+`, removed with `×` (which takes it off every node).
   const dataLayerList = el("div", "ed-layers ed-data-layers");
-  bar.appendChild(dataLayerList);
   function buildDataLayers(): void {
     dataLayerList.innerHTML = "";
     const head = el("div", "ed-layer-label");
@@ -5060,7 +5222,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       input.placeholder = "layer name";
       head.appendChild(input);
       input.focus();
+      // Once: Enter (or Escape) takes the field away, and taking it away blurs
+      // it, which would end the edit a second time on a field already gone.
+      let finished = false;
       const done = (keep: boolean): void => {
+        if (finished) return;
+        finished = true;
         const name = input.value.trim();
         input.remove();
         if (!keep || !name || model.dataLayers.includes(name)) return;
@@ -5235,13 +5402,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     rebuildInspector();
   }
 
-  const testRow = el("div", "ed-row");
+  // PREVIEW SETTINGS: what the editor's view (and ▶ Test) draws, as a menu
+  // off the viewport bar. Editor settings, remembered per browser, never
+  // written into the level.
+  const testRow = el("div", "ed-row ed-preview-panel");
   const previewOptions = document.createElement("details");
   previewOptions.className = "ed-preview-options";
   const previewSummary = document.createElement("summary");
+  previewSummary.className = "ed-btn";
   previewSummary.textContent = "Preview settings";
   previewOptions.append(previewSummary, testRow);
-  bar.appendChild(previewOptions);
+  viewBar.appendChild(previewOptions);
+  // A click anywhere else closes the menu, as a menu does.
+  window.addEventListener("pointerdown", (e) => {
+    if (previewOptions.open && !previewOptions.contains(e.target as Node)) previewOptions.open = false;
+  }, true);
   // Where a ▶ Test starts: the SELECTED CHECKPOINT if one is picked, and
   // otherwise the level's own spawn.
   //
@@ -5329,14 +5504,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     sceneChk.title =
       "Draw the bodies' look - their formations, decorations and models - here and in ▶ Test. Untick to see the collision and what the game draws itself (water, belts, chains, lights, the ball) on their own; a hidden look is not picked or dropped onto. An editor setting: the game always draws it.";
     testRow.append(sceneChk);
+    const fogChk = checkbox("fog in editor", fogInEditor, (v) => {
+      fogInEditor = v;
+      writeViewSetting("fog", v);
+    });
+    fogChk.title =
+      "Draw the fog regions' fog in the editor's view as well as in ▶ Test - as the game's camera sees it, at any zoom or orbit. Off, a distant piece is easier to judge. An editor setting: ▶ Test always draws it.";
+    testRow.append(fogChk);
   }
 
   // View toggle. Only offered when there is a WebGL context to toggle: a machine
   // that cannot draw the scene should not be shown two dead buttons.
   const viewBtns: Partial<Record<ViewMode, HTMLButtonElement>> = {};
   if (scene3d) {
-    const viewRow = el("div", "ed-row");
-    bar.appendChild(viewRow);
+    const viewRow = el("div", "ed-row ed-view-btns");
+    viewBar.prepend(viewRow);
     const setViewMode = (m: ViewMode): void => {
       viewMode = m;
       for (const [k, b] of Object.entries(viewBtns)) {
@@ -5376,7 +5558,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     setViewMode(viewMode);
     refreshOrbitBtn();
     viewCube = new ViewCube({ face: swingView, projection: setProjection });
-    root.appendChild(viewCube.el);
+    floatCol.appendChild(viewCube.el);
     setProjection(projection);
   }
 
@@ -5449,17 +5631,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   const title = el("div", "ed-title");
-  bar.appendChild(title);
+  statusLine.appendChild(title);
 
-  // Inspector.
+  // THE INSPECTOR: the selection's window, floating over the viewport under
+  // the view cube and the lens, beside the scene tree it was picked in. Not
+  // drawn with nothing selected.
   const inspector = el("div", "ed-inspector");
   inspector.setAttribute("aria-label", "Properties");
-  root.appendChild(inspector);
-  // On a narrow screen, make room for the scene; either drawer can be
-  // reached explicitly instead of pinning both over the entire viewport.
+  inspector.hidden = true;
+  floatCol.appendChild(inspector);
+  // On a narrow screen, make room for the scene; either dock can be reached
+  // explicitly instead of pinning both over the entire viewport.
   const paneSwitcher = el("div", "ed-pane-switcher");
   const paneButtons = new Map<string, HTMLButtonElement>();
-  for (const [label, pane] of [["Tools & objects", "tools"], ["Properties", "properties"]]) {
+  for (const [label, pane] of [["Tools", "tools"], ["Scene", "scene"]]) {
     const toggle = button(label!, () => {
       const opening = !root.classList.contains(`ed-${pane}-open`);
       for (const [key, control] of paneButtons) {
@@ -5475,24 +5660,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   root.appendChild(paneSwitcher);
 
   // --- outliner -------------------------------------------------------------
-  // The level as it actually IS: a list of bodies, each expandable into the
-  // scene objects that make it up.
+  // The level as it actually IS: every node, nested as it is nested, in the
+  // right dock (its Scene tab), the data layers over it.
   //
-  // It exists because a body is the unit the format is written in and the canvas
-  // cannot show one. On the canvas a body is a diamond and a dashed hull around
-  // shapes that look like separate things; the objects that have no outline at
-  // all - a light, a mesh dressing on a wall - are either a faint ring or
-  // nothing. So "which body is this in, and what else is in it" was a question
-  // you answered by clicking things and watching what else lit up.
+  // It exists because the canvas cannot show the structure: on it a body is a
+  // diamond and a dashed hull around shapes that look like separate things,
+  // and the nodes with no outline at all - a light, the Sun, a plain group -
+  // are a faint ring or nothing.
   //
-  // Camera regions and notes are deliberately NOT here. Neither is a body:
-  // neither is drawn in play, neither builds anything, and listing them would
-  // make the panel a second copy of the layer list rather than a view of the
-  // level's structure.
+  // The LEFT dock is the workspace's alone: its tools, its layers, its
+  // brushes.
   const outliner = el("div", "ed-outliner");
+  // The layers first - the type layers (2D's), then the data layers - over
+  // the tree and its search: what is shown and locked is set before what is
+  // picked (Tris, 2026-11-26).
+  scenePane.append(layerList, dataLayerList, outliner);
   const leftDock = el("aside", "ed-left-dock");
-  leftDock.setAttribute("aria-label", "Tools, layers and objects");
-  leftDock.append(bar, outliner);
+  leftDock.setAttribute("aria-label", "Workspace tools");
+  leftDock.append(bar);
   root.appendChild(leftDock);
   const outlinerHead = el("div", "ed-outliner-head");
   const outlinerTitle = el("span", "ed-outliner-title");
@@ -5502,13 +5687,62 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     outlinerOpen = !outlinerOpen;
     outlinerToggle.setAttribute("aria-expanded", String(outlinerOpen));
     outlinerBody.style.display = outlinerOpen ? "" : "none";
+    outlinerTools.style.display = outlinerOpen ? "" : "none";
   });
   outlinerToggle.classList.add("ed-twist");
   outlinerToggle.innerHTML = uiIcon("chevron");
   outlinerToggle.setAttribute("aria-label", "Show objects");
   outlinerToggle.setAttribute("aria-expanded", "true");
-  outlinerHead.append(outlinerToggle, outlinerTitle);
-  outliner.append(outlinerHead, outlinerBody);
+  // `+` on the heading adds at the top level, as a row's `+` adds under it.
+  const outlinerAdd = button("+", () => showAddChildMenu(null, outlinerAdd));
+  outlinerAdd.classList.add("ed-out-head-add");
+  outlinerAdd.title = "Add a node at the top of the tree: a group, a body, fog, a shelter, the level's Sun or Environment";
+  outlinerHead.append(outlinerToggle, outlinerTitle, outlinerAdd);
+  // SEARCH, and opening or folding every row at once. A query shows the
+  // nodes whose name (or class) holds it, and the rows above each, opened
+  // down to it whatever was open before, so a match is never hidden in a
+  // folded row; clearing it gives back the tree as it was left. Escape clears.
+  const outlinerTools = el("div", "ed-out-tools");
+  const searchWrap = el("label", "ed-out-search");
+  searchWrap.innerHTML = uiIcon("search");
+  const outlinerSearch = document.createElement("input");
+  outlinerSearch.type = "search";
+  outlinerSearch.className = "ed-text";
+  outlinerSearch.placeholder = "Search nodes";
+  outlinerSearch.setAttribute("aria-label", "Search the scene tree");
+  outlinerSearch.addEventListener("input", () => {
+    outlinerRev = -1;
+    refreshOutliner();
+  });
+  outlinerSearch.addEventListener("keydown", (e) => {
+    // The tree's field, not the canvas's shortcuts.
+    e.stopPropagation();
+    if (e.key === "Escape" && outlinerSearch.value) {
+      outlinerSearch.value = "";
+      outlinerRev = -1;
+      refreshOutliner();
+    }
+  });
+  searchWrap.appendChild(outlinerSearch);
+  const expandAll = button("", () => {
+    for (const n of model.tree.nodes.values()) if (listedChildren(n).length) expandedBodies.add(n.id);
+    outlinerRev = -1;
+    refreshOutliner();
+  });
+  expandAll.innerHTML = uiIcon("expandAll");
+  expandAll.title = "Expand every row";
+  expandAll.setAttribute("aria-label", "Expand all");
+  const collapseAll = button("", () => {
+    expandedBodies.clear();
+    outlinerRev = -1;
+    refreshOutliner();
+  });
+  collapseAll.innerHTML = uiIcon("collapseAll");
+  collapseAll.title = "Collapse every row";
+  collapseAll.setAttribute("aria-label", "Collapse all");
+  for (const b of [expandAll, collapseAll]) b.classList.add("ed-out-tool");
+  outlinerTools.append(searchWrap, expandAll, collapseAll);
+  outliner.append(outlinerHead, outlinerTools, outlinerBody);
 
   // THE SCENE TREE (plans/node-tree.md "Editor"): every node of the level,
   // nested as the level is nested. A row click selects exactly that node,
@@ -5584,7 +5818,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     Checkpoint2D: "⚑",
     CameraRegion2D: "⬚",
     CameraPath2D: "⤳",
-    FireflyPath2D: "✦",
     Shelter2D: "⌂",
     FogRegion2D: "≋",
     Note2D: "✎",
@@ -5595,6 +5828,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     Chain: "⛓",
     Vine: "⌇",
     Instance: "⧉",
+    Sun: "☼",
+    Environment: "◐",
   };
 
   // The class a node shows as: a body's follows what it is now.
@@ -5611,6 +5846,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the workspace, or something under it is.
   function inTreeWorkspace(n: EdNode): boolean {
     if (workspace === "2d") return true;
+    // The level's light is what every workspace's rock is judged under.
+    if (n.type === "Sun" || n.type === "Environment") return true;
     const item = n.item !== null ? itemOf(n.item) : null;
     if (item && inWs(item)) return true;
     return n.children.some((c) => {
@@ -5632,12 +5869,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     nodeRows.clear();
     outlinerBody.innerHTML = "";
     let count = 0;
+    // The search: the nodes that match, and every node with a match below it
+    // (shown for the path, dimmed, opened). Null with no query.
+    const query = outlinerSearch.value.trim().toLowerCase();
+    const matched = new Set<string>();
+    const onPath = new Set<string>();
+    if (query) {
+      const visit = (id: string): boolean => {
+        const n = model.tree.nodes.get(id);
+        if (!n || !inTreeWorkspace(n)) return false;
+        let below = false;
+        for (const c of listedChildren(n)) if (visit(c)) below = true;
+        const hit = n.name.toLowerCase().includes(query) || shownType(n).toLowerCase().includes(query);
+        if (hit) matched.add(n.id);
+        if (below) onPath.add(n.id);
+        return hit || below;
+      };
+      for (const r of model.tree.roots) visit(r);
+    }
     const addRow = (n: EdNode, depth: number): void => {
       if (!inTreeWorkspace(n)) return;
+      if (query && !matched.has(n.id) && !onPath.has(n.id)) return;
       count++;
-      const open = expandedBodies.has(n.id);
+      const open = query ? onPath.has(n.id) : expandedBodies.has(n.id);
       const type = shownType(n);
-      const row = el("div", `ed-out-row node${n.body ? " body" : ""}${n.item !== null ? " obj" : ""}`);
+      const row = el("div", `ed-out-row node${n.body ? " body" : ""}${n.item !== null ? " obj" : ""}${query && !matched.has(n.id) ? " ctx" : ""}`);
       row.style.paddingLeft = `${depth}ch`;
       row.draggable = true;
       const listed = listedChildren(n);
@@ -5657,7 +5913,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const cls = classOfNode(n);
       mark.title = n.instance ? `Instance of the prefab ${n.instance.prefab} (a ${cls})` : type;
       const dim = el("span", "ed-out-dim");
-      dim.textContent = is3D(cls) ? "3D" : cls === "Node" || cls === "Chain" || cls === "Vine" || cls === "Instance" ? "" : "2D";
+      dim.textContent = is3D(cls) ? "3D" : cls === "Node" || cls === "Chain" || cls === "Vine" || cls === "Instance" || cls === "Sun" || cls === "Environment" ? "" : "2D";
       const label = el("span", "ed-out-label");
       label.textContent = n.name;
       label.title = `${pathOf(model.tree, n.id)} · ${type}${n.item !== null ? ` · ${objectLabel(itemOf(n.item)!, M2PX)}` : ""}`;
@@ -5747,7 +6003,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const n = model.tree.nodes.get(r);
       if (n) addRow(n, 0);
     }
-    outlinerTitle.textContent = `Scene (${model.tree.nodes.size})`;
+    outlinerTitle.textContent = query ? `Scene (${matched.size} of ${model.tree.nodes.size})` : `Scene (${model.tree.nodes.size})`;
+    if (query && !matched.size) {
+      const none = el("div", "ed-hint ed-out-none");
+      none.textContent = `No node matches "${outlinerSearch.value.trim()}"`;
+      outlinerBody.appendChild(none);
+    }
     void count;
   }
 
@@ -5801,7 +6062,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     input.addEventListener("mousedown", (e) => e.stopPropagation());
   }
 
-  // The `+` on a row: the nodes that may be added under it.
+  // The `+` on a row (or on the tree's heading, for the top level): the nodes
+  // that may be added under it, and only those (`canParent`). The level's
+  // light is offered while it has none of that class.
   function showAddChildMenu(parent: string | null, anchor: HTMLElement): void {
     const kinds: { type: NodeType; label: string }[] = [
       { type: "Node2D", label: "Node2D (a group in the plane)" },
@@ -5810,12 +6073,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       { type: "RigidBody2D", label: "RigidBody2D" },
       { type: "Area2D", label: "Area2D (killzone)" },
       { type: "Anchor2D", label: "Anchor2D" },
+      { type: "FogRegion2D", label: "Fog (a fog region)" },
+      { type: "Shelter2D", label: "Shelter (a cave's front wall)" },
+      { type: "Sun", label: "Sun (the level's sunlight)" },
+      { type: "Environment", label: "Environment (the sky and fill)" },
       { type: "Node", label: "Node (a folder)" },
-    ];
+    ].filter((k) => {
+      if ((k.type === "Sun" || k.type === "Environment") && lightNode(model, k.type)) return false;
+      return canParentNew(parent, k.type as NodeType, true);
+    }) as { type: NodeType; label: string }[];
     const menu = el("div", "ed-out-menu");
     for (const k of kinds) {
-      const probe = { type: k.type } as EdNode;
-      void probe;
       const item = el("div", "ed-out-menu-item");
       item.textContent = `${TYPE_MARK[k.type] ?? ""} ${k.label}`;
       item.addEventListener("mousedown", (e) => {
@@ -5852,6 +6120,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       return;
     }
+    if (type === "FogRegion2D" || type === "Shelter2D") {
+      // A volume of a size worth seeing at the view's centre (or its parent's
+      // place), to be dragged and reshaped from there.
+      if (!canParentNew(parent, type)) return;
+      const fog = type === "FogRegion2D";
+      const item: EdItem = {
+        ...blankItem("scene", fog ? "fog" : "shelter", ""),
+        ...newItemStyle("scene", fog ? "fog" : "shelter"),
+        shape: { kind: "rect", w: 4, h: 3 },
+        pos: at.pos,
+        ...(fog ? { fog: { ...NEW_FOG } } : {}),
+      };
+      beginAction();
+      addItem(model, item, parent);
+      if (parent !== null) expandedBodies.add(parent);
+      markDirty();
+      setSelection([item.id]);
+      return;
+    }
     if (!canParentNew(parent, type)) return;
     beginAction();
     const body =
@@ -5866,12 +6153,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Would a new node of `type` be allowed under `parent`? Asked of a stand-in
   // so the rule stays the tree's (`canParent`).
-  function canParentNew(parent: string | null, type: NodeType): boolean {
+  function canParentNew(parent: string | null, type: NodeType, quiet = false): boolean {
     const probe = "__probe__";
-    model.tree.nodes.set(probe, { ...model.tree.nodes.values().next().value!, id: probe, type, parent: null, children: [], body: type.endsWith("Body2D") || type === "Area2D" ? defaultBody(0) : null, item: null });
+    const like = model.tree.nodes.values().next().value;
+    if (!like) return parent === null;
+    model.tree.nodes.set(probe, { ...like, id: probe, type, parent: null, children: [], body: type.endsWith("Body2D") || type === "Area2D" ? defaultBody(0) : null, item: null, extra: {} });
     const why = canParent(model.tree, probe, parent);
     model.tree.nodes.delete(probe);
-    if (why) flashNotice(why);
+    if (why && !quiet) flashNotice(why);
     return why === null;
   }
 
@@ -5935,20 +6224,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // short on a level that only uses geometry.
     // Bodies rather than items: a body is the unit the level is written in, and
     // the outliner counts the same thing the same way.
-    const bodies = new Set(
-      model.items.filter((i) => i.layer === "scene").map((i) => i.unit),
-    ).size;
+    // The scene's things, its volumes (fog, shelters) counted on their own.
+    const things = model.items.filter((i) => i.layer === "scene" && i.object !== "fog" && i.object !== "shelter");
+    const bodies = new Set(things.map((i) => i.unit)).size;
     const lights = model.items.filter((i) => i.object === "light").length;
     // The notes layer holds two different things (see `EdNote`), so it is
     // counted as two: "3 notes" that silently included two checkpoints would be
     // a count of neither.
     const checkpoints = model.items.filter(isCheckpointNote).length;
+    const objects = (o: EdObject, one: string, many: string): string => {
+      const n = model.items.filter((i) => i.object === o && i.layer === "scene").length;
+      return n ? ` · ${n} ${n === 1 ? one : many}` : "";
+    };
     const extra =
+      objects("shelter", "shelter", "shelters") +
+      objects("fog", "fog region", "fog regions") +
       ([
-        ["shelter", "shelter", "shelters"],
-        ["fog", "fog region", "fog regions"],
         ["camera", "cam", "cam"],
-        ["fireflies", "firefly path", "firefly paths"],
         ["notes", "note", "notes"],
       ] as const)
         .map(([l, one, many]) => {
@@ -5981,7 +6273,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           (rootDraft.verts.length >= 2 ? " · Enter to grow it" : "")
         : "";
     const named = prefabMode ? `prefab ${prefabName ?? "(unnamed)"}` : (currentName ?? "(unsaved)");
-    title.textContent = `${named}${state} · ${count("scene")} objects${extra}${draft}${notice ? ` · ${notice}` : ""}`;
+    title.textContent = `${named}${state} · ${things.length} object${things.length === 1 ? "" : "s"}${extra}${draft}${notice ? ` · ${notice}` : ""}`;
   }
   function flashNotice(text: string): void {
     notice = text;
@@ -6129,7 +6421,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Can this item share a body with others? Anything in the scene can: an
   // area may have any number of shapes (plans/node-tree.md "Area2D with
   // several shapes"), its overlap, push, drag and drawing reading every piece.
-  const canShareBody = (b: EdItem) => b.layer === "scene";
+  // A fog region and a shelter are volumes the camera and the sky read as
+  // fixed in the world (`WORLD_FIXED_TYPES`), so they are never part of one.
+  const canShareBody = (b: EdItem) => b.layer === "scene" && b.object !== "fog" && b.object !== "shelter";
 
   // An area is a region of space rather than a piece of stuff, so it is made of
   // nothing and carries no density. Every other kind does, `anchor` included:
@@ -9545,17 +9839,67 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
-  // Fog regions retain the environment's fog, fading inward at their edges.
+  // A FOG REGION owns its fog (`FogRegion2D`): how thick, what colour, and
+  // how far in from its edge it fades up to that.
   function buildFogGroup(regions: EdItem[]): void {
     const group = el("div", "ed-group");
-    group.appendChild(heading(regions.length === 1 ? `Fog region #${regions[0]!.id}` : `${regions.length} fog regions selected`,
-      "Fog is present inside this outline and clear outside it. The falloff fades inward from the edge; overlapping regions use the strongest fog without adding together."));
+    group.appendChild(heading(regions.length === 1 ? `Fog #${regions[0]!.id}` : `${regions.length} fog regions selected`,
+      "Fog is present inside this outline and clear outside it, thickening with distance from the camera. The falloff fades it in from the edge; where regions overlap a surface takes the thickest fog any of them gives it, tinted by each in proportion, never the sum."));
     const transform = section(group, "fog/Transform", "Transform");
     addTransformFields(transform, groupNum(transform, regions), regions);
-    const g = section(group, "fog/Edge", "Edge fade");
-    groupNum(g, regions)("falloff", (b) => (b.fogFalloff ?? DEFAULT_FOG_FALLOFF) * M2PX,
-      (b, v) => { b.fogFalloff = Math.max(0, v * PX); }, 10);
-    describe(g, "Distance in pixels from the outline to full fog. Zero gives a hard edge. The Environment panel controls fog colour and strength.");
+
+    const g = section(group, "fog/Fog", "Fog", true);
+    const num = groupNum(g, regions);
+    // A fraction rather than a density, so it is neither a length nor scaled
+    // on the way to disk; stepped in twentieths, since the useful range is the
+    // bottom of it. Blank is no fog at all.
+    const amount = num(
+      "amount",
+      (b) => b.fog.amount ?? NaN,
+      (b, v) => (b.fog = { ...b.fog, amount: Math.min(1, Math.max(0, v)) }),
+      0.05,
+      { placeholder: "0", onEmpty: () => { for (const b of regions) b.fog = { ...b.fog, amount: null }; } },
+    );
+    describe(amount, "How much of the fog colour a surface 20 m from the camera takes on - about where the gameplay plane sits - from 0 (clear) toward 1. Nearer surfaces take less and further ones more, on the exponential law.");
+    const cw = fieldRow("colour");
+    const fallback = environmentOfModel(model).backgroundColor ?? DEFAULT_ENVIRONMENT.backgroundColor;
+    const ci = colorInput(regions[0]!.fog.color ?? fallback, beginAction, (hex) => {
+      for (const b of regions) b.fog = { ...b.fog, color: hex };
+      markDirty();
+    });
+    cw.appendChild(ci.el);
+    describe(cw, "The air's colour. Unset, it is the level's background.");
+    g.appendChild(cw);
+    const falloff = num(
+      "falloff",
+      (b) => (b.fog.falloff ?? DEFAULT_FOG_FALLOFF) * M2PX,
+      (b, v) => (b.fog = { ...b.fog, falloff: Math.max(0, v * PX) }),
+      10,
+    );
+    describe(falloff, "Distance in pixels from the outline in to full fog. Zero gives a hard edge.");
+
+    // Rect or circle: the two outlines a fog region may have. The switch keeps
+    // the region's extent - a rect becomes the circle that fits its width,
+    // a circle the square that holds it.
+    const sw = fieldRow("shape");
+    const pair = el("span", "ed-pair");
+    for (const kind of ["rect", "circle"] as const) {
+      const b = button(kind, () => {
+        if (regions.every((r) => r.shape.kind === kind)) return;
+        beginAction();
+        for (const r of regions) {
+          const s = r.shape;
+          if (kind === "circle" && s.kind === "rect") r.shape = { kind: "circle", r: Math.max(s.w, s.h) / 2 };
+          if (kind === "rect" && s.kind === "circle") r.shape = { kind: "rect", w: s.r * 2, h: s.r * 2 };
+        }
+        markDirty();
+        rebuildInspector();
+      });
+      b.classList.toggle("active", regions.every((r) => r.shape.kind === kind));
+      pair.appendChild(b);
+    }
+    sw.appendChild(pair);
+    g.appendChild(sw);
     addActionsRow(group);
     inspector.appendChild(group);
   }
@@ -9597,38 +9941,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(group);
   }
 
-  // A FIREFLY PATH's panel (see `FireflyPathData`): its number, the swarms
-  // that name it, and the curve's own actions. It frames nothing, so there is
-  // nothing else to author on it.
-  function buildFireflyPathGroup(paths: EdItem[]): void {
-    const g = el("div", "ed-group");
-    g.appendChild(
-      heading(
-        paths.length === 1 ? `Firefly path ${paths[0]!.pathId}` : `${paths.length} firefly paths selected`,
-        "A route a firefly swarm guides the player along, in the direction it was drawn - instead of the camera paths. A swarm follows it once its `path` field names this path's number. When the player reaches the END (the bar) the swarm stops following, flies back along the path to the START (the ring) and waits there, noticing the player again once they have left its ring and come back.",
-      ),
-    );
-    const transform = section(g, "ffpath/Transform", "Transform");
-    describe(
-      transform,
-      "Edit it like a camera path: drag a node, its round grips to shape the curve, an edge midpoint to insert one, Alt+click to remove one.",
-    );
-    addTransformFields(transform, groupNum(transform, paths), paths);
-    // Which swarms follow it: a path none names is drawn for nothing.
-    const followers = el("div", "ed-hint");
-    followers.textContent = paths
-      .map((p) => {
-        const swarms = model.items.filter(
-          (i) => i.object === "light" && lightSwarms(i) && i.light.path === p.pathId,
-        );
-        return `path ${p.pathId}: ${swarms.length === 0 ? "no swarm names it" : `followed by ${swarms.length} swarm${swarms.length === 1 ? "" : "s"}`}`;
-      })
-      .join("; ");
-    g.insertBefore(followers, transform.parentElement);
-    appendPathActions(transform, paths, "Reverse the direction of travel - which end the swarm waits at, and which it leaves the player at");
-    addActionsRow(g);
-    inspector.appendChild(g);
-  }
 
   // Three whole-path actions, because each is miserable to do node by node.
   function appendPathActions(g: HTMLElement, paths: EdItem[], reverseTitle: string): void {
@@ -9761,22 +10073,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A waking light is point-only (the pool that serves it is point
       // lights), so turning one into a spot takes its wake with it - said in
       // the status line, since the fields that showed it are about to go.
-      // A swarm is point-only for the same reason, and goes the same way.
       let slept = 0;
       for (const b of lights) {
         b.light.kind = kind;
-        if (kind === "spot" && (b.light.wake > 0 || b.light.fireflies > 0)) {
+        if (kind === "spot" && b.light.wake > 0) {
           b.light.wake = 0;
-          b.light.fireflies = 0;
           slept++;
         }
       }
       markDirty();
-      if (slept > 0) {
-        flashNotice(
-          `a spot cannot wake or swarm: cleared wake and fireflies on ${slept} light${slept === 1 ? "" : "s"}`,
-        );
-      }
+      if (slept > 0) flashNotice(`a spot cannot wake: cleared the wake on ${slept} light${slept === 1 ? "" : "s"}`);
       rebuildInspector(); // the cone fields appear or go
     });
     const kw = fieldRow("kind");
@@ -9802,61 +10108,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const lightNum = num;
     if (lights.every((b) => b.light.kind === "point")) {
-      num = groupNum(section(g, "light/Wake", "Wake & fireflies"), lights);
-      // A FIREFLY SWARM (see `LightObjectData.fireflies`): this many motes
-      // hovering at the light until the ball comes within `wake`, then
-      // following it. Blank or 0 is an ordinary light.
-      const swarmInput = num(
-        "fireflies",
-        (b) => (b.light.fireflies > 0 ? b.light.fireflies : NaN),
-        (b, v) => (b.light.fireflies = Math.min(FIREFLY_MAX, Math.max(0, Math.round(v)))),
-        1,
-        {
-          placeholder: "none",
-          onEmpty: () => {
-            for (const b of lights) b.light.fireflies = 0;
-          },
-        },
-      );
-      // The times below appear or go with it.
-      swarmInput.addEventListener("change", () => rebuildInspector());
-      const swarming = lights.every((b) => b.light.fireflies > 0);
-
-      // The FIREFLY PATH it guides the player along (see
-      // `LightObjectData.path`), by the number the fireflies layer labels it
-      // with. Blank = the camera paths, followed for the rest of the run.
-      if (swarming) {
-        const ids = new Set(model.items.filter((i) => i.layer === "fireflies").map((i) => i.pathId));
-        const pathInput = num(
-          "path",
-          (b) => b.light.path ?? NaN,
-          (b, v) => (b.light.path = Math.max(1, Math.round(v))),
-          1,
-          {
-            placeholder: "camera",
-            onEmpty: () => {
-              for (const b of lights) b.light.path = null;
-            },
-          },
-        );
-        describe(
-          pathInput,
-          "The number of a firefly path (the fireflies layer) this swarm guides the player along; blank reads the camera paths.",
-        );
-        pathInput.addEventListener("change", () => rebuildInspector());
-        // A number naming no path is read as blank (see `LightRig.placeFor`),
-        // which is silent in play - so it is said here.
-        const missing = [
-          ...new Set(
-            lights.flatMap((b) => (b.light.path !== null && !ids.has(b.light.path) ? [b.light.path] : [])),
-          ),
-        ];
-        if (missing.length > 0) {
-          warn(
-            `No firefly path ${missing.join(", ")} on the fireflies layer: the swarm reads the camera paths until there is one.`,
-          );
-        }
-      }
+      num = groupNum(section(g, "light/Wake", "Wake"), lights);
 
       // A WAKING light (see `LightObjectData.wake`): dark until the ball comes
       // within `wake`, then rising to its intensity with the glowing shapes of
@@ -9869,8 +10121,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         (b, v) => (b.light.wake = Math.max(0, v * PX)),
         10,
         {
-          // A swarm reads the wake as where it notices the ball.
-          placeholder: swarming ? String(Math.round(DEFAULT_FIREFLY_NOTICE * M2PX)) : "always on",
+          placeholder: "always on",
           onEmpty: () => {
             for (const b of lights) b.light.wake = 0;
           },
@@ -9880,8 +10131,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // not - rebuilt once the value is committed rather than per keystroke,
       // which would take the caret out of the field being typed into.
       wakeInput.addEventListener("change", () => rebuildInspector());
-      // A swarm is never dark, so it has no times to author.
-      if (!lights.some((b) => b.light.fireflies > 0) && lights.every((b) => b.light.wake > 0)) {
+      if (lights.every((b) => b.light.wake > 0)) {
         // Seconds, floored at 0; blank is the renderer's default (no delay,
         // DEFAULT_WAKE_RISE, DEFAULT_WAKE_FALL).
         const secs = (
@@ -9949,17 +10199,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // handed between sources as they wake, and a shadow map swapped with it
     // would flash (see `render3d/lights.ts`). The box stays, greyed, so the
     // authored flag is visible and survives turning the wake off again.
-    // A swarm is served by a pool too, and casts none either.
-    const waking = lights.some(
-      (b) => b.light.kind === "point" && (b.light.wake > 0 || b.light.fireflies > 0),
-    );
+    const waking = lights.some((b) => b.light.kind === "point" && b.light.wake > 0);
     shadowBox.disabled = waking;
     const sw = fieldRow("shadows");
     if (waking) {
-      describe(
-        sw,
-        "A waking light or a firefly swarm casts no shadow (the pool lights that serve them cast none).",
-      );
+      describe(sw, "A waking light casts no shadow (the pool lights that serve it cast none).");
       sw.style.opacity = "0.5";
     }
     sw.appendChild(shadowBox);
@@ -10335,193 +10579,57 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
-  // WHAT THIS LEVEL IS (`LevelMetaData`): its name on the level select, whether
-  // it is the introduction, and whether it is on the list at all. Level-wide
-  // like the environment block below, so it sits at the top of the inspector and
-  // is always shown.
-  //
-  // Authored here rather than hand-edited for the reason every other level-wide
-  // block is: the editor rewrites the whole file, so the only way to keep a
-  // field is to know about it, and a field the editor knows about is a field it
-  // may as well offer. A level that touches nothing here writes no block, which
-  // is what keeps every level from before the field byte-identical.
-  function buildLevelGroup(): void {
-    const g = section(inspector, "level/Level", "Level", true);
-
-    const title = document.createElement("input");
-    title.className = "ed-text";
-    title.value = model.meta.title ?? "";
-    title.placeholder = currentName ?? "the file name";
-    // One undo step per editing session, snapshotted on the first keystroke -
-    // the rule the checkpoint name field and the note textarea both follow.
-    let edited = false;
-    title.addEventListener("blur", () => (edited = false));
-    title.addEventListener("input", () => {
-      if (!edited) {
-        beginAction();
-        edited = true;
-      }
-      // A title is one line, cleaned the way a checkpoint name is: it is shown
-      // in a list, and a pasted newline is a row that breaks the rule under it.
-      const text = title.value.replace(/\s+/g, " ").trim();
-      if (text) model.meta.title = text;
-      else delete model.meta.title;
-      markDirty();
-    });
-    const tw = fieldRow("title");
-    tw.appendChild(title);
-    describe(tw, "What the level select shows. Blank = the level's own id.");
-    g.appendChild(tw);
-
-    const flag = (
-      label: string,
-      get: () => boolean,
-      set: (on: boolean) => void,
-      tip: string,
-    ): void => {
-      const wrap = fieldRow(label);
-      describe(wrap, tip);
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = get();
-      box.addEventListener("change", () => {
-        beginAction();
-        set(box.checked);
-        markDirty();
-        rebuildInspector();
-      });
-      wrap.appendChild(box);
-      g.appendChild(wrap);
-    };
-
-    flag(
-      "intro",
-      () => model.meta.intro === true,
-      (on) => {
-        if (on) model.meta.intro = true;
-        else delete model.meta.intro;
-      },
-      "Show this level first on the level select, above the rule. Exactly one listed level may be the introduction; `cli levels` is what says so.",
-    );
-    flag(
-      "unlisted",
-      () => model.meta.unlisted === true,
-      (on) => {
-        if (on) model.meta.unlisted = true;
-        else delete model.meta.unlisted;
-      },
-      "Keep this level off the level select. It is still played by ?level=ID - which is what the sandboxes are, and what a level that has no finish line yet wants to be.",
-    );
-
-    describe(g, model.meta.unlisted
-      ? "Off the level select, reachable by ?level= only."
-      : model.meta.intro
-        ? "The first level on the level select."
-        : "On the level select, in alphabetical order of title. A listed level needs a finish line to end at.");
-  }
-
-  // The level's light and air (`EnvironmentData`). Level-wide rather than
-  // per-selection, so it sits with the player spawn at the top of the inspector
-  // and is always shown.
-  //
-  // It is here mostly for one field: `sun ×` at 0 is how a level says it is
-  // UNDERGROUND, and without a control for it an author dressing an interior
-  // with the lights layer would have to hand-edit the file for the one decision
-  // the whole layer is downstream of.
-  //
-  // A level with no environment block carries none until something is authored,
-  // which is what keeps a file that never touches this byte-identical.
-  // The level's 3D camera (`LevelCameraData`): the lens it wears and how far
-  // along z it stands. Level-wide like the environment, and like it a level
-  // carries no block until one of these is authored; clearing both fields drops
-  // the block again.
-  function buildLensGroup(): void {
-    const g = section(inspector, "level/3D camera", "3D camera", true);
-    const cam =(): LevelCameraData => (model.camera ??= {});
-    const drop = (key: keyof LevelCameraData): void => {
-      if (!model.camera) return;
-      delete model.camera[key];
-      if (Object.keys(model.camera).length === 0) model.camera = undefined;
-    };
-    const focal = numField(
-      g,
-      "focal mm",
-      () => model.camera?.focalLength ?? null,
-      // Below a millimetre the field of view runs out past 170 degrees and the
-      // frame stops being a picture of anything.
-      (v) => (cam().focalLength = Math.max(1, v)),
-      5,
-      false,
-      {
-        placeholder: `${focalLengthFromFov(FOV_Y_DEG).toFixed(1)} (default)`,
-        onEmpty: () => drop("focalLength"),
-      },
-    );
-    describe(
-      focal,
-      "35 mm-equivalent focal length. Longer flattens the scene toward orthographic, shorter deepens it; the gameplay plane stays framed the same because the camera dollies to keep it so.",
-    );
-    const z = numField(
-      g,
-      "cam z",
-      () => (model.camera?.zOffset === undefined ? null : model.camera.zOffset * M2PX),
-      (v) => (cam().zOffset = v * PX),
-      10,
-      false,
-      { placeholder: "0", onEmpty: () => drop("zOffset") },
-    );
-    describe(
-      z,
-      "How far the camera stands along z from where the zoom puts it, positive toward you. The plane at this depth is framed exactly like the 2D view; at anything but 0 the gameplay plane is drawn smaller (positive) or larger (negative) than the overlay's outlines, handles and reticle.",
-    );
-  }
-
-  function buildEnvironmentGroup(): void {
-    const g = section(inspector, "level/Environment", "Environment", true);
-    const authored = model.environment !== undefined;
-    describe(g, authored
-      ? "The sun is a light at infinity, so it reaches everything in frame equally: right outdoors, wrong underground. Drop `sun ×` and `env ×` to 0 and the level is lit only by what the lights layer puts in it."
-      : "Using the renderer's own defaults (a warm sun, a cool fill). Edit any field to author a block for this level.");
-
-    // Reads fall back to the renderer's defaults, so the fields show what the
-    // level actually looks like rather than blanks; the first write is what
-    // mints the block.
-    type EnvKey = keyof EnvironmentData & string;
-    const env = (): Record<string, unknown> =>
-      (model.environment ??= {}) as Record<string, unknown>;
-    const cur = (k: EnvKey): number | string =>
-      (model.environment?.[k] ?? DEFAULT_ENVIRONMENT[k]) as number | string;
-
-    const numEnv = (label: string, key: EnvKey, step: number, clamp?: (v: number) => number): void => {
-      numField(
-        g,
-        label,
-        () => cur(key) as number,
-        (v) => {
-          env()[key] = clamp ? clamp(v) : v;
-        },
-        step,
-      );
-    };
-    const colorEnv = (label: string, key: EnvKey): void => {
+  // THE LEVEL'S LIGHT (format 4): the `Sun` and `Environment` nodes' own
+  // fields, held in the node's `extra` (`skyFields`). Reads fall back to the
+  // renderer's defaults, so a field shows what the level actually looks like
+  // rather than a blank; a node that authors nothing writes no field.
+  type EnvKey = keyof EnvironmentData & string;
+  function lightFieldHelpers(g: HTMLElement, n: EdNode) {
+    const cur = (k: EnvKey): number | string | boolean => (n.extra[k] ?? DEFAULT_ENVIRONMENT[k]) as number | string | boolean;
+    const numEnv = (label: string, key: EnvKey, step: number, clamp?: (v: number) => number): HTMLInputElement =>
+      numField(g, label, () => cur(key) as number, (v) => (n.extra = { ...n.extra, [key]: clamp ? clamp(v) : v }), step);
+    const colorEnv = (label: string, key: EnvKey): HTMLElement => {
       const cw = fieldRow(label);
       const ci = colorInput(cur(key) as string, beginAction, (hex) => {
-        env()[key] = hex;
+        n.extra = { ...n.extra, [key]: hex };
         markDirty();
       });
       cw.appendChild(ci.el);
       g.appendChild(cw);
+      return cw;
     };
+    const drop = (...keys: EnvKey[]): void => {
+      const next = { ...n.extra };
+      for (const k of keys) delete next[k];
+      n.extra = next;
+    };
+    return { cur, numEnv, colorEnv, drop };
+  }
+  const nonNeg = (v: number): number => Math.max(0, v);
 
-    const nonNeg = (v: number): number => Math.max(0, v);
-    numEnv("sun ×", "sunIntensity", 0.1, nonNeg);
-    colorEnv("sun col", "sunColor");
+  // THE SUN: a light at infinity, so it reaches everything in frame equally -
+  // right outdoors, wrong underground, where a level deletes its Sun (or turns
+  // it to 0) and is lit by its own lamps alone.
+  function buildSunGroup(n: EdNode): void {
+    const g = section(inspector, "light/Sun", "Sun", true);
+    const { numEnv, colorEnv } = lightFieldHelpers(g, n);
+    describe(g, "The level's sunlight: a light at infinity that casts the shadows. Delete this node (or turn it to 0) and the level is lit only by its own lights - how an underground level is made.");
+    numEnv("intensity", "sunIntensity", 0.1, nonNeg);
+    colorEnv("colour", "sunColor");
     // The direction the sunlight TRAVELS, in the sim's frame: +x right, +y down,
     // +z toward the camera. Not normalised and not a length, so it neither
     // scales nor needs to be typed to any particular magnitude.
-    numEnv("sun dir x", "sunX", 0.1);
-    numEnv("sun dir y", "sunY", 0.1);
-    numEnv("sun dir z", "sunZ", 0.1);
+    describe(numEnv("dir x", "sunX", 0.1), "The way the light travels, +x to the right. Not normalised: only the direction counts.");
+    describe(numEnv("dir y", "sunY", 0.1), "The way the light travels, +y down the screen.");
+    describe(numEnv("dir z", "sunZ", 0.1), "The way the light travels, +z toward the camera: negative shines into the scene from in front.");
+  }
+
+  // THE ENVIRONMENT: the sky the level is lit and reflected by, and the
+  // hemisphere fill.
+  function buildEnvironmentGroup(n: EdNode): void {
+    const g = section(inspector, "light/Environment", "Environment", true);
+    const { cur, numEnv, colorEnv, drop } = lightFieldHelpers(g, n);
+    describe(g, "The sky the level is lit and reflected by, and the fill from above and below. Drop `env ×` near 0 and a surface out of reach of the level's own lights goes dark, which an interior wants.");
     numEnv("fill ×", "fillIntensity", 0.1, nonNeg);
     colorEnv("sky col", "skyColor");
     colorEnv("ground col", "groundColor");
@@ -10541,7 +10649,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const ss = document.createElement("select");
     ss.className = "ed-select";
     const skies = new Set(hdriNames());
-    const named = (model.environment?.hdri ?? "") as string;
+    const named = (cur("hdri") || "") as string;
     if (named) skies.add(named);
     for (const key of ["", ...[...skies].sort()]) {
       const o = document.createElement("option");
@@ -10551,20 +10659,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     ss.value = named;
     ss.addEventListener("change", () => {
-      // Choosing the generated sky on a level that authors no block must not
-      // mint one: "no environment" is a state a file is entitled to be in, and
-      // opening the panel is not authoring.
-      if (!ss.value && model.environment === undefined) return;
+      if (ss.value === named) return;
       beginAction();
-      if (ss.value) env().hdri = ss.value;
-      else {
-        // The two fields that only mean anything against a capture go with it,
-        // rather than sitting in the file describing a sky the level no longer
-        // names.
-        delete env().hdri;
-        delete env().hdriRotation;
-        delete env().hdriBackground;
-      }
+      if (ss.value) n.extra = { ...n.extra, hdri: ss.value };
+      // The two fields that only mean anything against a capture go with it,
+      // rather than sitting in the file describing a sky the level no longer
+      // names.
+      else drop("hdri", "hdriRotation", "hdriBackground");
       markDirty();
       rebuildInspector();
     });
@@ -10580,63 +10681,30 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const bw = fieldRow("hdr bg");
       const bb = document.createElement("input");
       bb.type = "checkbox";
-      bb.checked = model.environment?.hdriBackground === true;
+      bb.checked = cur("hdriBackground") === true;
       describe(
         bw,
         "Draw the sky behind the level as well as reflecting it. A 1k capture is ample for the reflection and visibly soft as a background - re-optimise it larger before leaning on this.",
       );
       bb.addEventListener("change", () => {
         beginAction();
-        if (bb.checked) env().hdriBackground = true;
-        else delete env().hdriBackground;
+        if (bb.checked) n.extra = { ...n.extra, hdriBackground: true };
+        else drop("hdriBackground");
         markDirty();
       });
       bw.appendChild(bb);
       g.appendChild(bw);
     }
 
-    colorEnv("background", "backgroundColor");
-    // Air, thickening with distance from the camera. The number is how much of
-    // it a surface 20 m away takes on (`FOG_REFERENCE_DISTANCE`, about where the
-    // gameplay plane sits): 0 is none, and it is a fraction rather than a density
-    // so it is neither a length nor scaled on the way to disk. Stepped in
-    // twentieths, since the useful range is the bottom of it.
-    numEnv("fog", "fogAmount", 0.05, (v) => Math.min(1, Math.max(0, v)));
-    colorEnv("fog col", "fogColor");
-    const regionRow = fieldRow("fog regions only");
-    const regionCheck = document.createElement("input");
-    regionCheck.type = "checkbox";
-    regionCheck.checked = model.fogRegionsEnabled === true || model.items.some((i) => i.layer === "fog");
-    describe(regionRow, "Restrict fog to the Fog layer's regions. With no regions, the whole level is clear. Untick after deleting regions to restore global fog.");
-    regionCheck.disabled = model.items.some((i) => i.layer === "fog");
-    regionCheck.addEventListener("change", () => {
-      beginAction();
-      model.fogRegionsEnabled = regionCheck.checked;
-      markDirty();
-    });
-    regionRow.appendChild(regionCheck);
-    g.appendChild(regionRow);
-    const fw = fieldRow("show fog in editor");
-    const fb = document.createElement("input");
-    fb.type = "checkbox";
-    fb.checked = fogInEditor;
-    describe(
-      fw,
-      "Draw the fog in the editor's view as well as in ▶ Test - as the game's camera sees it, at any zoom or orbit. An editor setting, not saved with the level.",
-    );
-    fb.addEventListener("change", () => (fogInEditor = fb.checked));
-    fw.appendChild(fb);
-    g.appendChild(fw);
-
-    if (authored) {
+    if (ENVIRONMENT_FIELDS.some((k) => n.extra[k] !== undefined)) {
       const row = el("div", "ed-row");
       const clear = button("Use defaults", () => {
         beginAction();
-        model.environment = undefined;
+        drop(...ENVIRONMENT_FIELDS);
         markDirty();
         rebuildInspector();
       });
-      clear.title = "Drop this level's environment block and take the renderer's own";
+      clear.title = "Clear every field this node authors and take the renderer's own sky and fill";
       row.appendChild(clear);
       g.appendChild(row);
     }
@@ -10651,6 +10719,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // build returned - and the ones the workspace does not show.
       pruneEmptySections(inspector, (key) => sectionShown(workspace, key));
       refreshWorkspaceDock();
+      // The window is drawn only while it has something to say.
+      inspector.hidden = inspector.childElementCount === 0;
+      // The right dock's prefab pane and the top bar's level settings read the
+      // model too, and every change of it comes through here.
+      if (prefabsShown) buildPrefabsGroup();
+      refreshDocButtons();
+      refreshLevelSettings();
     }
   }
 
@@ -10725,6 +10800,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function buildNodePanel(n: EdNode): void {
     addNodeSection(n.id);
     if (n.type === "Node") return; // a folder has no transform
+    // The level's own nodes: what they are, not where (the spawn's place is
+    // its own fields, and the light has none).
+    if (n.extra["spawn"] === true) return buildPlayerGroup();
+    if (n.type === "Sun") return buildSunGroup(n);
+    if (n.type === "Environment") return buildEnvironmentGroup(n);
     const t = section(inspector, "node/Transform", "Transform", true);
     const at = (): World3 => worldOfNode(model, n.id);
     const write = (w: Partial<World3>): void => setNodeWorld(model, n.id, { ...at(), ...w });
@@ -10871,15 +10951,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     noteText = null;
     inspector.innerHTML = "";
 
-    if (prefabMode || prefabsShown) buildPrefabsGroup();
-    if (!prefabMode) buildLevelGroup();
-
-    // The level's own groups; a prefab has no spawn, sky or lens of its own.
-    if (!prefabMode) {
-      buildPlayerGroup();
-      buildEnvironmentGroup();
-      buildLensGroup();
-    }
+    // The inspector is the SELECTION's: the level's own settings are nodes
+    // (the spawn, the Sun, the Environment, picked in the scene tree) or the
+    // top bar's (the background, the 3D camera). With nothing selected the
+    // window is not drawn at all (`refreshInspectorShown`).
 
     // Chains carry their own, exclusive selection (see `selectedChainIds`).
     const chains = selectedChains();
@@ -10925,26 +11000,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
 
     const sel = selectedBodies();
-    if (!sel.length) {
-      // One line saying what is (not) selected; how to put something on the
-      // layer is its help. A locked layer explains itself first: with nothing
-      // pickable on it, the usual "click a body" help would read as the editor
-      // being broken.
-      // The 3D workspaces work on the scene layer whichever one 2D left active.
-      const layer = workspace === "2d" ? activeLayer : "scene";
-      const locked = lockedLayers.has(layer);
-      const line = fieldRow(locked ? `${layer} layer locked` : "No selection", "div", "ed-field ed-hint");
-      describe(
-        line,
-        locked
-          ? `The ${layer} layer is locked: it still draws, but nothing on it can be picked, drawn or edited. Use the padlock in the layer list (2D workspace) to unlock it.`
-          : workspace === "2d"
-            ? EMPTY_HINTS[activeLayer]
-            : WORKSPACE_EMPTY_HINTS[workspace],
-      );
-      inspector.appendChild(line);
-      return;
-    }
+    // Nothing selected: no window. How to put something on a layer is that
+    // layer's button's help, and a workspace's is its tab's.
+    if (!sel.length) return;
     if (sel.length === 1) addNodeSection(sel[0]!.node);
     // A selection may span KINDS of thing, and their properties have nothing in
     // common (a note has no kind, a camera region no fill, a light no shape), so
@@ -10969,23 +11027,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "decoration",
       "camera",
       "campath",
-      "ffpath",
       "shelter",
       "fog",
       "notes",
     ] as const;
     const panelOf = (b: EdItem): (typeof PANELS)[number] =>
-      b.layer === "fog" ? "fog" : b.layer === "camera"
+      b.layer === "camera"
         ? b.shape.kind === "path"
           ? "campath"
           : "camera"
-        : b.layer === "fireflies"
-          ? "ffpath"
-          : b.layer === "shelter"
-            ? "shelter"
-            : b.layer === "notes"
-              ? "notes"
-              : b.object;
+        : b.layer === "notes"
+          ? "notes"
+          : b.object;
     const panels = PANELS.filter((k) => sel.some((b) => panelOf(b) === k));
     selectionSpansLayers = panels.length > 1;
     if (selectionSpansLayers) {
@@ -11007,7 +11060,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const items = sel.filter((b) => panelOf(b) === k);
       if (k === "camera") buildCameraGroup(items);
       else if (k === "campath") buildCameraPathGroup(items);
-      else if (k === "ffpath") buildFireflyPathGroup(items);
       else if (k === "shelter") buildShelterGroup(items);
       else if (k === "fog") buildFogGroup(items);
       else if (k === "light") buildLightsGroup(items);
@@ -11184,13 +11236,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return next;
   }
 
-  // The next free firefly path id, unique across the level's firefly paths -
-  // the scope a swarm names its path in.
-  function newFireflyPathId(): number {
-    let next = 1;
-    for (const i of model.items) if (i.layer === "fireflies" && i.pathId >= next) next = i.pathId + 1;
-    return next;
-  }
 
   // A fresh ANCHOR object on `host`, at a world point pushed onto that item's
   // surface. It joins the host's BODY, which is the whole point of the anchor
@@ -11220,7 +11265,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       modelRef: defaultModelRef(),
       formation: null, decoration: null,
       anchorId: newAnchorId(),
-      pathId: 0,
     };
   }
 
@@ -11425,16 +11469,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     graftAndSelect(arrived);
   }
 
-  // `+ Fireflies`: the body `fireflyBody` describes, the way `placeGlow` places
-  // a mushroom - always a body of its own.
-  function placeFireflies(at: Vec2): void {
-    const arrived = fireflyModel(at);
-    beginAction();
-    graftAndSelect(arrived);
-  }
-
-  function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow" | "fireflies">, start: Vec2): EdItem {
-    const object: EdObject = t === "light" ? "light" : t === "model" ? "model" : "collision";
+  function newDrawnItem(t: Exclude<Tool, "select" | "chain" | "glow">, start: Vec2): EdItem {
+    const object: EdObject = t === "light" ? "light" : t === "model" ? "model" : t === "fog" ? "fog" : t === "shelter" ? "shelter" : "collision";
     const style = newItemStyle(activeLayer, object);
     // Not in the tree yet: `insertDrawn` puts it there, into the body it is
     // drawn into or a new one.
@@ -11504,9 +11540,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // every instant, never a shape with no direction.
       return {
         ...base,
-        // A firefly path is named by an id swarms refer to it by (see
-        // `EdItem.pathId`), minted here so it has one from the first instant.
-        pathId: activeLayer === "fireflies" ? newFireflyPathId() : 0,
         shape: {
           kind: "path",
           verts: [new Vec2(-gridStep, 0), new Vec2(gridStep, 0)],
@@ -11516,7 +11549,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       };
     }
-    if (t === "poly") {
+    if (t === "fog") {
+      // A rect at the grid step that the drag sizes, as +Rect's, carrying a
+      // fog worth seeing from the first instant.
+      return { ...base, shape: { kind: "rect", w: gridStep, h: gridStep }, fog: { ...NEW_FOG } };
+    }
+    if (t === "poly" || t === "shelter") {
       // A placeholder triangle; the caller replaces the loop with the drafted
       // hull immediately. It exists so the item is a well-formed convex polygon
       // at every instant, never a shape with no vertices.
@@ -11570,7 +11608,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // stands on its own, and so does everything on the other layers.
   // `bodyProps` sets what a new body is born with.
   function insertDrawn(item: EdItem, bodyProps: Partial<EdBody> = {}): EdItem {
-    const host = item.layer === "scene" ? soleBodyId() : null;
+    const host = canShareBody(item) ? soleBodyId() : null;
     const hostNode = host !== null ? model.tree.nodes.get(host) : undefined;
     if (hostNode?.body && bodyMembers(model.items, host!).every(canShareBody)) return addItem(model, item, host);
     if (item.layer === "scene" && item.object === "collision") {
@@ -11620,7 +11658,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       updateTitle();
       return;
     }
-    const item = newDrawnItem("poly", drawn[0]!);
+    const item = newDrawnItem(draft.kind === "shelter" ? "shelter" : "poly", drawn[0]!);
     // The loop is clicked out in WORLD metres, so the item starts at the world
     // origin and `centreShapeOrigin` below moves `pos` onto the drawn outline's
     // centroid - the one place a shape's origin is placed for it, and the only
@@ -11895,9 +11933,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const b of model.items) {
       if (doomed.has(b.id) && isRootItem(b)) for (const d of rootDescendants(model, b)) doomed.add(d.id);
     }
-    if (!doomed.size && !selectedChainIds.size && !selectedVineIds.size) return;
+    // ...and a node selected AS ITSELF (a body, a group, the Sun) goes with
+    // everything under it, the ones that carry nothing included. The spawn
+    // is the level's and stays.
+    const holdsSpawn = (id: string): boolean =>
+      model.tree.nodes.get(id)?.extra["spawn"] === true || descendants(model.tree, id).some((d) => d.extra["spawn"] === true);
+    const doomedNodes = [...selectedBodyIds].filter((id) => model.tree.nodes.has(id) && !holdsSpawn(id));
+    if (doomedNodes.length < [...selectedBodyIds].filter((id) => model.tree.nodes.has(id)).length) flashNotice("the spawn is the level's own: it is not deleted");
+    if (!doomed.size && !doomedNodes.length && !selectedChainIds.size && !selectedVineIds.size) return;
     beginAction();
     model.items = model.items.filter((b) => !doomed.has(b.id));
+    for (const id of doomedNodes) {
+      const gone = removeSubtree(model.tree, id);
+      const lost = new Set(gone.flatMap((n) => (n.item !== null ? [n.item] : [])));
+      if (lost.size) model.items = model.items.filter((b) => !lost.has(b.id));
+      for (const n of gone) {
+        if (n.chain !== null) selectedChainIds.add(n.chain);
+        if (n.vine !== null) selectedVineIds.add(n.vine);
+      }
+    }
     model.chains = model.chains.filter((c) => !selectedChainIds.has(c.id));
     model.vines = model.vines.filter((v) => !selectedVineIds.has(v.id));
     // A chain whose anchor has just gone has nothing left to hold, and an anchor
@@ -12054,7 +12108,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
     const host = pasteHostBody(arrived.items);
     beginAction();
-    // Anchor and firefly path numbers are re-minted by the graft, so a paste
+    // Anchor numbers are re-minted by the graft, so a paste
     // into a level that already holds anchor 1 does not end up with two.
     const before = new Set(model.tree.nodes.keys());
     graftAndSelect(arrived, delta, null);
@@ -12947,12 +13001,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const drawTool = tool;
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
-    if (drawTool === "poly" || drawTool === "path") {
+    if (drawTool === "poly" || drawTool === "path" || drawTool === "shelter") {
       const p = snapVec(world);
       // A path is finished by Enter or a double-click, never by clicking back on
       // its first vertex: an open run may legitimately end where it started (a
       // loop of a level), and closing on it would make that unauthorable.
-      if (drawTool === "poly" && polyDraft && polyDraft.verts.length >= 3) {
+      if (drawTool !== "path" && polyDraft && polyDraft.verts.length >= 3) {
         const first = canvasScreen(polyDraft.verts[0]!);
         if (scr.distanceTo(first) <= POLY_CLOSE_PX) {
           commitPolyDraft();
@@ -13025,11 +13079,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // box and its waking light - so there is nothing to drag out.
     if (drawTool === "glow") {
       placeGlow(snapVec(world));
-      return;
-    }
-    // ...and the fireflies tool, a body holding the swarm's light.
-    if (drawTool === "fireflies") {
-      placeFireflies(snapVec(world));
       return;
     }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
@@ -13478,7 +13527,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return out;
     };
     // LINES FIRST: a line drawn on the plane off the scene layer (a camera
-    // path, a firefly path, a note's arrow) that the click lands on comes
+    // path, a note's arrow) that the click lands on comes
     // ahead of everything else, whichever layer is active, as a chain or a
     // vine does. It is a stroke a few pixels wide, so a click on it can
     // hardly mean anything else, and it cannot swallow the clicks around it

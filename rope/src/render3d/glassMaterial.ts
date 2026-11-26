@@ -32,6 +32,7 @@
 
 import * as THREE from "three";
 import { AVATAR_FOG, avatarFogChunk } from "./avatarSurface";
+import { FOG_MIX } from "./editorFog";
 import { wearProbe } from "./reflectionProbe";
 import { COAT_IOR, COAT_THICKNESS_NM } from "./glassCoat";
 import { FRAME_COPY_PARS } from "./frameCopy";
@@ -51,9 +52,9 @@ const F0 = ((GLASS_IOR - 1) / (GLASS_IOR + 1)) ** 2;
 
 // The lines of three's shaders this rewrites, named so a three upgrade that
 // rewords either fails loudly rather than drawing the glass opaque (see the
-// same rule in avatarSurface.ts).
+// same rule in avatarSurface.ts). The fog's is the `fog_fragment` chunk's
+// own (`editorFog.ts`).
 const OPAQUE_LINE = "gl_FragColor = vec4( outgoingLight, diffuseColor.a );";
-const FOG_MIX = "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );";
 
 function glslFloat(v: number): string {
   const s = String(v);
@@ -641,7 +642,7 @@ const FRAME_BEHIND_MIPS = 3;
 const FRAME_BEHIND_FLOOR = "vec3( 1e-3 )";
 const FRAME_BEHIND = (dir: string): string => `max( probeOn ? probeIntensity * textureLod( probeCube, transformDirectionByInverseViewMatrix( ${dir}, viewMatrix ), ${glslFloat(FRAME_BEHIND_MIPS)} ).rgb : vec3( 0.0 ), ${FRAME_BEHIND_FLOOR} )`;
 
-// Three's `fog_fragment` for glass that shows the frame behind it: the fog is
+// The `fog_fragment` chunk for glass that shows the frame behind it: the fog is
 // laid over the light the glass ITSELF sends (`glassSeen` is what of the
 // frame behind came through, fogged already), in proportion to how much of
 // the frame it hides (`glassCover`).
@@ -652,7 +653,7 @@ export function seeThroughFogChunk(scale: number = AVATAR_FOG): string {
   }
   return chunk.replace(
     FOG_MIX,
-    `gl_FragColor.rgb = glassSeen + mix( gl_FragColor.rgb - glassSeen, fogColor * glassCover, fogFactor * ${glslFloat(scale)} );`,
+    `gl_FragColor.rgb = glassSeen + mix( gl_FragColor.rgb - glassSeen, fogTint * glassCover, fogFactor * ${glslFloat(scale)} );`,
   );
 }
 

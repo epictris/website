@@ -89,13 +89,6 @@ import {
   LightRig,
 } from "../render3d/lights";
 import {
-  DEFAULT_FIREFLY_NOTICE,
-  FIREFLY_MAX,
-  FIREFLY_POOL,
-  Swarm,
-  swarmParams,
-} from "../render3d/fireflies";
-import {
   scaleLevelData,
   scaleObject,
   isLightObject,
@@ -175,9 +168,6 @@ import {
   type EdItem,
   type EdModel,
   glowBody,
-  fireflyBody,
-  FIREFLY_COUNT,
-  FIREFLY_NOTICE,
   GLOW_COLOR,
   GLOW_CUBE,
   GLOW_EMISSIVE,
@@ -1133,7 +1123,7 @@ function visualsGuides(): CaseResult[] {
 
   // A hidden layer draws nothing; a locked one draws and answers no pick; no
   // selection, no handles.
-  guides.sync(view({ visibleLayers: new Set<EdLayer>(["camera", "fireflies", "notes"]) }));
+  guides.sync(view({ visibleLayers: new Set<EdLayer>(["camera", "notes"]) }));
   const hidden = guides.tags().length + guides.named("outline").length;
   guides.sync(view({ lockedLayers: new Set<EdLayer>(["scene"]) }));
   const lockedTags = guides.tags().length;
@@ -2623,7 +2613,14 @@ function fogBand(): CaseResult[] {
     bodies: [{ kind: "static", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 10, h: 10 } }],
     environment: { fogAmount: 0.25, fogColor: "#2b2f36" },
   };
-  const converted = scaleLevelData(authored, PX).environment!;
+  // Wherever the gate puts it: the level-wide block, or (since fog belongs
+  // to the regions) the region a level-wide fog is carried into.
+  const scaledLevel = scaleLevelData(authored, PX);
+  const region = scaledLevel.fogRegions?.length === 1 ? scaledLevel.fogRegions[0] : undefined;
+  const converted = {
+    fogAmount: scaledLevel.environment?.fogAmount ?? region?.amount,
+    fogColor: scaledLevel.environment?.fogColor ?? region?.color,
+  };
   const unscaled = converted.fogAmount === 0.25 && converted.fogColor === "#2b2f36";
   // The editor fogs by the game camera's depths (`editorFog.ts`) through ONE
   // uniform object every material shares, which holds only while three's
@@ -2640,7 +2637,8 @@ function fogBand(): CaseResult[] {
   const sharedCustom =
     THREE.UniformsUtils.merge([THREE.UniformsLib.fog]).fogGameCamera?.value === GAME_FOG_CAMERA;
   const chunks =
-    THREE.ShaderChunk.fog_fragment.includes("fogDepth()") &&
+    THREE.ShaderChunk.fog_pars_fragment.includes("float d = fogDepth();") &&
+    THREE.ShaderChunk.fog_fragment.includes("fogOfFragment( fogTint )") &&
     THREE.ShaderChunk.fog_pars_fragment.includes("fogGameCamera.y - vFogWorldZ") &&
     THREE.ShaderChunk.fog_vertex.includes("vFogWorldZ");
   setGameFogCamera(12.5);
@@ -4536,7 +4534,7 @@ function avatarSurface(): CaseResult[] {
   const hadChunk = shader.fragmentShader.includes("#include <fog_fragment>");
   mat.onBeforeCompile(shader as never, null as never);
   const patched = shader.fragmentShader;
-  const scaled = patched.includes(`fogFactor * ${AVATAR_FOG}`);
+  const scaled = patched.includes(`mix( gl_FragColor.rgb, fogTint, fogFactor * ${AVATAR_FOG} )`);
   const once = patched.split(`fogFactor * ${AVATAR_FOG}`).length === 2;
   const replaced = !patched.includes("#include <fog_fragment>");
   const key = mat.customProgramCacheKey();
@@ -5169,248 +5167,6 @@ function glowCases(): CaseResult[] {
     });
   }
 
-  // FIREFLIES. Only the plumbing has cases here: how a swarm flies (its lag,
-  // its spread, its leashes) is feel, and gets its cases once it has been
-  // played and settled (CLAUDE.md, "Validate the behaviour before writing the
-  // cases").
-
-  // The format: `fireflies` is a count and passes untouched; a swarm reads
-  // `wake` as its notice distance and is never a waking light; a spot never
-  // swarms; the count is clamped.
-  {
-    const scaled = scaleObject({ type: "light", fireflies: 12, wake: 250 }, PX) as LightObjectData;
-    const swarm = swarmParams(scaled);
-    const bare = swarmParams({ type: "light", fireflies: 5 });
-    const spot = swarmParams({ type: "light", kind: "spot", fireflies: 5 });
-    const none = swarmParams({ type: "light", fireflies: 0 });
-    const big = swarmParams({ type: "light", fireflies: FIREFLY_MAX + 10 });
-    const ok =
-      scaled.fireflies === 12 &&
-      swarm !== null &&
-      swarm.count === 12 &&
-      near(swarm.notice, 2.5) &&
-      wakeParams(scaled) === null &&
-      bare !== null &&
-      bare.notice === DEFAULT_FIREFLY_NOTICE &&
-      spot === null &&
-      none === null &&
-      big?.count === FIREFLY_MAX;
-    out.push({
-      name: "format: fireflies is a count, a swarm notices at `wake` and never wakes, a spot never swarms",
-      pass: ok,
-      detail: `12 @ 250 px -> ${JSON.stringify(swarm)}, waking ${wakeParams(scaled) === null ? "no" : "YES"}; bare ${JSON.stringify(bare)}; spot ${JSON.stringify(spot)}; 0 ${JSON.stringify(none)}; ${FIREFLY_MAX + 10} -> ${big?.count}`,
-    });
-  }
-
-  // The rig: a swarm mounts no light of its own and spends none of the budget;
-  // a level with no swarm builds no firefly light and no mote draw (so every
-  // existing level is the scene it was); the pool never exceeds FIREFLY_POOL.
-  {
-    const rigOf = (swarms: number, steady: number) => {
-      const rig = new LightRig();
-      const scene = new THREE.Scene();
-      const body = new THREE.Group();
-      scene.add(body);
-      let own = 0;
-      for (let i = 0; i < steady; i++) rig.add(body, { type: "light", range: 4 }, { x: i, y: 0, rot: 0, z: 0 });
-      for (let i = 0; i < swarms; i++) {
-        const m = rig.add(body, { type: "light", fireflies: 8 }, { x: i, y: 1, rot: 0, z: 0 });
-        m?.holder.traverse((o) => {
-          if ((o as THREE.Light).isLight) own++;
-        });
-      }
-      rig.buildPool(scene);
-      let lights = 0;
-      let draws = 0;
-      scene.traverse((o) => {
-        if ((o as THREE.Light).isLight) lights++;
-        if ((o as THREE.Points).isPoints && o.name === "fireflies") draws++;
-      });
-      rig.dispose();
-      return { lights, draws, own };
-    };
-    const none = rigOf(0, 3);
-    const few = rigOf(2, LIGHT_BUDGET);
-    const many = rigOf(FIREFLY_POOL + 3, 0);
-    const ok =
-      none.lights === 3 &&
-      none.draws === 0 &&
-      few.lights === LIGHT_BUDGET + 2 &&
-      few.draws === 1 &&
-      many.lights === FIREFLY_POOL &&
-      many.draws === 1 &&
-      few.own + many.own === 0;
-    out.push({
-      name: "fireflies: a level with no swarm builds nothing, a swarm spends no light budget, the pool never exceeds FIREFLY_POOL",
-      pass: ok,
-      detail: `0 swarms + 3 steady: ${none.lights} lights, ${none.draws} draws; 2 + ${LIGHT_BUDGET} steady: ${few.lights} lights, ${few.draws} draw; ${FIREFLY_POOL + 3} swarms: ${many.lights} lights (FIREFLY_POOL ${FIREFLY_POOL}); a swarm's own lights: ${few.own + many.own}`,
-    });
-  }
-
-  // The swarm is reproducible (two hatchings of the same seed fly the same
-  // path, so a headless grab is evidence), stays home with no ball to follow,
-  // and follows once the ball has come within its notice - for good.
-  {
-    const params = swarmParams({ type: "light", fireflies: 10 })!;
-    const home = { x: 0, y: 0, z: 0.5 };
-    const a = new Swarm(params, home, 3);
-    const b = new Swarm(params, home, 3);
-    const alone = new Swarm(params, home, 3);
-    for (let i = 0; i < 120; i++) {
-      a.step(1 / 60, home, { x: 1, y: 0, z: 0 });
-      b.step(1 / 60, home, { x: 1, y: 0, z: 0 });
-      alone.step(1 / 60, home, null);
-    }
-    const same = a.positions.every((v, i) => v === b.positions[i]);
-    const far = new Swarm(params, home, 3);
-    far.step(1 / 60, home, { x: DEFAULT_FIREFLY_NOTICE * 1.01, y: 0, z: 0 });
-    const farHome = !far.following;
-    far.step(1 / 60, home, { x: DEFAULT_FIREFLY_NOTICE * 0.99, y: 0, z: 0 });
-    const noticed = far.following;
-    far.step(1 / 60, home, { x: 50, y: 0, z: 0 });
-    const ok = same && a.following && !alone.following && farHome && noticed && far.following;
-    out.push({
-      name: "fireflies: a swarm is reproducible, stays home with no ball, and follows once the ball comes within notice",
-      pass: ok,
-      detail: `same seed ${same ? "same path" : "DIFFERENT PATHS"}; no ball ${alone.following ? "FOLLOWS" : "home"}; just outside notice ${farHome ? "home" : "FOLLOWS"}, just inside ${noticed ? "follows" : "HOME"}, then 50 m away ${far.following ? "still follows" : "LET GO"}`,
-    });
-  }
-
-  // A swarm on a FIREFLY PATH, through the rig that looks the path up by id:
-  // it follows the ball along the path, leaves it at the path's end, flies back
-  // to the start (not its authored home) and waits there - not noticing the
-  // ball, still standing at the end within reach of nothing, until it has
-  // come back. A swarm on the camera paths beside it follows for good.
-  {
-    const rig = new LightRig();
-    const scene = new THREE.Scene();
-    const body = new THREE.Group();
-    scene.add(body);
-    rig.add(body, { type: "light", fireflies: 6, path: 4 }, { x: -1, y: -0.5, rot: 0, z: 0.5 });
-    rig.add(body, { type: "light", fireflies: 6 }, { x: -1, y: -0.5, rot: 0, z: 0.5 });
-    rig.buildPool(scene);
-    // Sim frame, metres: 10 m to the right along y = 0, starting at x = 0.
-    rig.setRoutes([], [{ id: 4, x: 0, y: 0, rot: 0, verts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }]);
-    let t = 0;
-    const ball = { x: -1.5, y: 0 };
-    const run = (seconds: number, vx: number) => {
-      for (let i = 0; i < seconds * 60; i++) {
-        ball.x += vx / 60;
-        t += 1 / 60;
-        rig.update(t, { ball, view: ball });
-      }
-      return rig.swarmStates();
-    };
-    const state = (s: { following: boolean; returning: boolean }) =>
-      s.following ? "follow" : s.returning ? "return" : "home";
-    const rolling = run(3, 3); // x 7.5: on the way
-    const atEnd = run(1.5, 3); // x 12: past the end
-    const back = run(8, 0); // 10 m at RETURN_SPEED, and time to settle
-    const [pathed, camera] = back;
-    const waitsAtStart = Math.hypot(pathed!.x - 0, pathed!.y - 0) < 0.6;
-    const returned = run(4.5, -3); // x -1.5: back past the start
-    const ok =
-      state(rolling[0]!) === "follow" &&
-      state(atEnd[0]!) === "return" &&
-      state(pathed!) === "home" &&
-      waitsAtStart &&
-      state(camera!) === "follow" &&
-      state(returned[0]!) === "follow";
-    rig.dispose();
-    out.push({
-      name: "fireflies: a swarm on a firefly path leaves the player at its end, flies back to its start, and waits there until they come back",
-      pass: ok,
-      detail: `rolling ${state(rolling[0]!)}; past the end ${state(atEnd[0]!)}; 8 s later ${state(pathed!)} at ${pathed!.x.toFixed(2)},${pathed!.y.toFixed(2)} (start 0,0; home -1,-0.5); camera-path swarm ${state(camera!)}; back at the start ${state(returned[0]!)}`,
-    });
-  }
-
-  // The editor: a firefly path round-trips with its id and curve (and no
-  // keys), a swarm's `path` round-trips, and a light that is not a swarm never
-  // writes one.
-  {
-    const raw: RawLevelData = {
-      player: { x: 0, y: 0, radius: 20 },
-      bodies: [
-        {
-          kind: "static",
-          x: 100,
-          y: -300,
-          rot: 0,
-          objects: [
-            { type: "light", fireflies: 9, path: 3 },
-            { type: "light", path: 3 },
-          ],
-        },
-      ],
-      fireflyPaths: [{ id: 3, x: 50, y: 60, rot: 0.5, verts: [{ x: 0, y: 0 }, { x: 400, y: 0, inX: -100, inY: 40 }] }],
-    };
-    const model = modelFromDisk(raw);
-    const disk = modelToFlatDisk(model);
-    // The lamps are the look, so they are read from the saved tree, where a
-    // swarm names its path by the `FireflyPath2D` node's id.
-    const tree = modelToDisk(model).nodes;
-    const [swarm, lamp] = lookNodes(tree).filter((q) => q.node.type === "Light3D").map((q) => q.node as LightNode);
-    const p = disk.fireflyPaths?.[0];
-    const named = swarm?.path !== undefined ? findNode(tree, swarm.path) : null;
-    const ok =
-      disk.fireflyPaths?.length === 1 &&
-      p!.id === 3 &&
-      near(p!.x, 50) &&
-      near(p!.y, 60) &&
-      near(p!.rot, 0.5) &&
-      p!.verts.length === 2 &&
-      near(p!.verts[1]!.x, 400) &&
-      near(p!.verts[1]!.inX!, -100) &&
-      near(p!.verts[1]!.inY!, 40) &&
-      Object.keys(p!.verts[1]!).length === 4 &&
-      disk.cameraPaths === undefined &&
-      named?.type === "FireflyPath2D" &&
-      lamp!.path === undefined;
-    out.push({
-      name: "editor: firefly paths and a swarm's `path` survive a save; only a swarm writes `path`",
-      pass: ok,
-      detail: `paths ${JSON.stringify(disk.fireflyPaths)}; camera paths ${JSON.stringify(disk.cameraPaths)}; swarm path ${swarm?.path} (names a ${named?.type ?? "missing node"}); lamp path ${lamp?.path}`,
-    });
-  }
-
-  // The editor: `fireflies` round-trips on a point light, a swarm's colour,
-  // intensity and reach are omitted at the FIREFLY's defaults (not a lamp's),
-  // a swarm never writes the wake times, a spot never writes it at all; and
-  // `+ Fireflies` places a body holding only the swarm's light.
-  {
-    const level = (light: LightObjectData): RawLevelData => ({
-      player: { x: 0, y: 0, radius: 20 },
-      bodies: [{ kind: "static", x: 100, y: -300, rot: 0, objects: [light] }],
-    });
-    // The save is the editor's tree, where the lamp is a `Light3D` node.
-    const saved = (light: LightObjectData) =>
-      lookNodes(modelToDisk(modelFromDisk(level(light))).nodes).find((p) => p.node.type === "Light3D")!.node as LightNode;
-    const swarm = saved({ type: "light", fireflies: 9, wake: 300, wakeRise: 0.4 });
-    const spot = saved({ type: "light", kind: "spot", fireflies: 9 });
-    const tinted = saved({ type: "light", fireflies: 9, color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY });
-    const body = fireflyBody(new Vec2(4, -2));
-    const l = body.objects.filter(isLightObject);
-    const ok =
-      swarm.fireflies === 9 &&
-      near(swarm.wake!, 300) &&
-      swarm.wakeRise === undefined &&
-      swarm.color === undefined &&
-      swarm.intensity === undefined &&
-      swarm.range === undefined &&
-      spot.fireflies === undefined &&
-      tinted.color === DEFAULT_LIGHT_COLOR &&
-      tinted.intensity === DEFAULT_LIGHT_INTENSITY &&
-      body.objects.length === 1 &&
-      l.length === 1 &&
-      l[0]!.fireflies === FIREFLY_COUNT &&
-      l[0]!.wake === FIREFLY_NOTICE &&
-      l[0]!.color === undefined;
-    out.push({
-      name: "editor: fireflies survive a save against the firefly's own defaults; + Fireflies places a body holding only the swarm",
-      pass: ok,
-      detail: `swarm ${JSON.stringify(swarm)}; spot ${JSON.stringify({ fireflies: spot.fireflies })}; lamp-coloured swarm ${JSON.stringify({ color: tinted.color, intensity: tinted.intensity })}; + Fireflies ${JSON.stringify(body.objects)}`,
-    });
-  }
   return out;
 }
 
@@ -5870,7 +5626,7 @@ function glassSurface(): CaseResult[] {
     hollowFrag.includes("gl_FragColor = vec4( frameEncode( hollowThrough + hollowAdded ), 1.0 );") &&
     hollowFrag.split("lensLights[ c ] +=").length - 1 === 3 &&
     hollowFrag.includes("if ( distance( pointLight.position, lensC ) > lensRadius )") &&
-    hollowFrag.includes("glassSeen + mix( gl_FragColor.rgb - glassSeen, fogColor * glassCover") &&
+    hollowFrag.includes("glassSeen + mix( gl_FragColor.rgb - glassSeen, fogTint * glassCover") &&
     !hollowFrag.includes("#include <tonemapping_fragment>") &&
     !hollowFrag.includes("#include <colorspace_fragment>") &&
     Math.abs((hollowShader.uniforms.lensInner?.value as number) - 0.114) < 1e-9 &&

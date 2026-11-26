@@ -25,6 +25,9 @@ export interface EditorViewSettings {
   // The Decorations workspace's "Collision": the collision outlines drawn
   // over the rocks, for reference (docs/editor.md).
   collision: boolean;
+  // Preview settings' "fog": the fog regions' fog drawn in the editor's view
+  // as well as in ▶ Test.
+  fog: boolean;
 }
 
 export const VIEW_SETTINGS_KEY = "rope.editor.view";
@@ -41,6 +44,7 @@ const DEFAULTS: EditorViewSettings = {
   guides: true,
   rocks: true,
   collision: false,
+  fog: false,
 };
 
 export function readViewSettings(): EditorViewSettings {
@@ -143,6 +147,28 @@ export function readRootWidths(): RootWidths {
 export function writeRootWidths(widths: { start: number; tip: number }): void {
   try {
     localStorage.setItem(ROOT_WIDTHS_KEY, JSON.stringify(widths));
+  } catch {
+    // Unwritable storage: remembered for this session only.
+  }
+}
+
+// How wide the right dock (the scene tree) is, in CSS pixels, as the author
+// last dragged it. Null for never set or unreadable; the caller clamps it to
+// the window it is shown in.
+export const DOCK_WIDTH_KEY = "rope.editor.dockWidth";
+
+export function readDockWidth(): number | null {
+  try {
+    const v = Number(localStorage.getItem(DOCK_WIDTH_KEY));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeDockWidth(px: number): void {
+  try {
+    localStorage.setItem(DOCK_WIDTH_KEY, String(Math.round(px)));
   } catch {
     // Unwritable storage: remembered for this session only.
   }

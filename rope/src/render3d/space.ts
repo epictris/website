@@ -32,8 +32,8 @@ import type { Camera } from "../render/camera";
 import type { LevelCameraData } from "../level/levelFormat";
 
 // Half the height, in device pixels, of the target being drawn into: what every
-// point sprite sized in METRES (the water's spray, a beam's dust, the
-// fireflies) needs to turn its size into `gl_PointSize`. One uniform object,
+// point sprite sized in METRES (the water's spray, a beam's dust) needs to
+// turn its size into `gl_PointSize`. One uniform object,
 // shared by reference with all of their materials, so a pass into a target of
 // another size - the ball's reflection probe draws the scene into 128 px cube
 // faces - sets it once for everybody and puts it back, instead of drawing every

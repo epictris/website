@@ -59,7 +59,10 @@ import {
   relative2D,
   scaleLevelTree,
   TREE_FORMAT,
+  upgradeTree,
   walkNodes,
+  SUN_FIELDS,
+  ENVIRONMENT_FIELDS,
   type LevelNode,
   type LevelTree,
   type NodeFormationGuide,
@@ -119,7 +122,6 @@ import {
   movePeakFactor,
   type MoveMode,
   type CameraPathData,
-  type FireflyPathData,
   type ShelterData,
   type CameraRegionData,
   type ChainData,
@@ -167,7 +169,6 @@ import {
   DEFAULT_SPOT_ANGLE,
   DEFAULT_SPOT_PENUMBRA,
 } from "../render3d/lights";
-import { FIREFLY_COLOR, FIREFLY_INTENSITY, FIREFLY_RANGE, FOLLOW_Z } from "../render3d/fireflies";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
 // `scene` is the level's bodies, `camera` the camera-behaviour volumes and
@@ -196,24 +197,37 @@ import { FIREFLY_COLOR, FIREFLY_INTENSITY, FIREFLY_RANGE, FOLLOW_Z } from "../re
 // welding them into a body meant a cross-layer selection. What distinguishes
 // them is `EdItem.object`, which is what the FORMAT distinguishes them by.
 //
-// `fireflies` holds the FIREFLY PATHS (`FireflyPathData`): routes a swarm
-// guides the player along, drawn with the camera path's curve tools but
-// belonging to no camera. Editor furniture like the camera layer - nothing on
-// it is a body or drawn in play.
+// A `fireflies` layer held the firefly paths until fireflies were removed on
+// 2026-11-26.
 //
-// `shelter` holds the SHELTERS (`ShelterData`): the cut-away front walls of
-// enclosed caves, put back for the sun alone. Drawn as nothing in play, but
-// seen there all the same, as the sun's shadow over everything behind them.
-export type EdLayer = "scene" | "shelter" | "fog" | "camera" | "fireflies" | "notes";
-export const ED_LAYERS: EdLayer[] = ["scene", "shelter", "fog", "camera", "fireflies", "notes"];
+// Shelters and fog were layers of their own until 2026-11-26, and they went
+// for the reason lights did: a fog region is not a KIND OF LAYER, it is a
+// thing in the level (a `FogRegion2D` node owning its fog), and so is a
+// shelter (a `Shelter2D`). They are scene objects (`EdObject` "fog" and
+// "shelter"), added with their own tools or the scene tree's `+`.
+export type EdLayer = "scene" | "camera" | "notes";
+export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
 
-// A SHELTER's own fields (`ShelterData`), on every item and read only on the
-// shelter layer, as `cam` is read only on the camera layer. null = the
+// A SHELTER's own fields (`ShelterData`), on every item and read only on a
+// shelter object, as `cam` is read only on the camera layer. null = the
 // format's default (DEFAULT_SHELTER_FRONT).
 export interface EdShelter {
   front: number | null; // metres in front of the gameplay plane
 }
 export const defaultShelter = (): EdShelter => ({ front: null });
+
+// A FOG region's own fog (`FogRegionData`), on every item and read only on a
+// fog object. null = absent: the default falloff (DEFAULT_FOG_FALLOFF), no
+// fog, and the background's colour.
+export interface EdFog {
+  falloff: number | null; // metres inward from the edge to full fog
+  amount: number | null; // the fraction a surface 20 m away takes on
+  color: string | null;
+}
+export const defaultFog = (): EdFog => ({ falloff: null, amount: null, color: null });
+// What a fog region drawn in the editor starts as: a haze worth seeing, in
+// the air's own blue-grey, so a fresh region is not an empty box.
+export const NEW_FOG: EdFog = { falloff: null, amount: 0.3, color: "#2a5075" };
 
 // What KIND of scene object an item is - the SAME set the format has, and one
 // editor item per authored object.
@@ -239,7 +253,12 @@ export const defaultShelter = (): EdShelter => ({ front: null });
 // one's) there too, saved beside the level rather than in it. Its anchor is in
 // the formation's frame, so its `pos` is only where its mark is drawn on the
 // plane, found from the formation item whenever it is needed.
-export type EdObject = "collision" | "light" | "anchor" | "model" | "formation" | "decoration";
+//
+// `fog` and `shelter` are the plane's two volumes that are things in the level
+// rather than authoring furniture: a fog region (`FogRegion2D`, its fog in
+// `fog`) and a cave's front wall (`Shelter2D`, its fields in `shelter`). Never
+// in a body.
+export type EdObject = "collision" | "light" | "anchor" | "model" | "formation" | "decoration" | "fog" | "shelter";
 
 // A DECORATION object's own fields, and a painted one's strokes. Replaced
 // whole on an edit, as a formation's are.
@@ -512,13 +531,6 @@ export interface EdLight {
   wakeDelay: number | null;
   wakeRise: number | null;
   wakeFall: number | null;
-  // Point only: a FIREFLY SWARM of this many motes (see
-  // `LightObjectData.fireflies`), 0 = an ordinary light. A swarm reads `wake`
-  // as where it notices the ball and never reads the three times.
-  fireflies: number;
-  // Swarm only: the id of the firefly path it guides the player along (see
-  // `LightObjectData.path`), null = the camera paths.
-  path: number | null;
 }
 
 // Notes-layer properties (see NoteData, CheckpointData). A note is always a
@@ -698,9 +710,10 @@ export interface EdItem {
   light: EdLight;
   // Notes layer:
   note: EdNote;
-  // Shelter layer:
+  // Shelter objects:
   shelter: EdShelter;
-  fogFalloff?: number;
+  // Fog objects:
+  fog: EdFog;
   // Anchor objects only: the id `ChainData` names this end by. It is PRESERVED
   // through a load and a save rather than minted fresh each time, so a level
   // that goes through the editor untouched comes back with the same ids it went
@@ -712,10 +725,6 @@ export interface EdItem {
   // A decoration object's (see `EdDecoration`); null on everything else.
   decoration: EdDecoration | null;
   anchorId: number;
-  // Firefly paths only (the fireflies layer): the id a swarm names this path
-  // by (`FireflyPathData.id`, `LightObjectData.path`), preserved through a
-  // load and a save for the anchor's reason. 0 on everything else.
-  pathId: number;
 }
 
 // A detached copy of a shape. Undo snapshots, duplicate, copy/paste and the
@@ -887,8 +896,6 @@ export interface EdBodyFrame {
 // them: what a 3D frame (`Node3D`, `Formation3D`) stands off the plane by.
 
 export interface EdModel {
-  // Preserve an explicit empty mask after its last region is deleted.
-  fogRegionsEnabled?: boolean;
   // The spawn: where it is, how big the avatar is, whether the run starts on
   // the anchor (`SpawnData.hang`), how far off to the side it rolls in from
   // (`SpawnData.roll`, metres here as every length in the model is, 0 for no
@@ -913,37 +920,55 @@ export interface EdModel {
   // The level's data layers, by name (`LevelTree.layers`): what a node's
   // `layers` may name.
   dataLayers: string[];
-  // The level's light and air (see `EnvironmentData`). One object rather than a
-  // list, because it is a property of the LEVEL and not of anything in it.
+  // The level's light is NODES (a `Sun` and an `Environment`, their fields in
+  // the node's `extra`), and its fog is its fog regions'; what is left of the
+  // retired environment block is the level property below.
   //
-  // It is carried here rather than left out because the editor rewrites the
-  // whole file every 750 ms, so anything it does not carry is DELETED from disk
-  // the first time a level is opened - and this block is exactly the thing a
-  // level lit from inside cannot do without (`sunIntensity: 0` is how a level
-  // says it is underground). Nothing about that failure is visible in the
-  // editor: the scene is rebuilt from the model, so it goes on looking however
-  // the model says, and the loss only shows up next time the game loads the file.
-  environment: EnvironmentData | undefined;
+  // What is behind everything (`LevelTree.background`), or undefined for the
+  // page's own. Edited in the top bar beside the 3D camera.
+  background: string | undefined;
   // The 3D camera's lens and z offset (`LevelCameraData`), in metres like the
-  // rest of the model. Carried for the environment's reason: a block the editor
-  // does not write back is a block it deletes 750 ms after the level is opened.
+  // rest of the model. Carried because the editor rewrites the whole file every
+  // 750 ms: a block it does not write back is a block it deletes the moment
+  // the level is opened.
   camera: LevelCameraData | undefined;
   // What the level select shows (see `LevelMetaData`): the title, and whether
-  // this level is the introduction or off the list entirely.
-  //
-  // Carried here for the reason `environment` and `player.hang` are: the editor
-  // rewrites the whole file every 750 ms, so a block it does not know about is
-  // a block DELETED from disk the first time the level is opened - and nothing
-  // about that loss is visible in the editor, since the scene is rebuilt from
-  // the model. It only shows up as a level that has silently fallen off the
-  // menu.
-  //
-  // Always an object rather than `undefined`, unlike `environment`: its three
-  // fields are what the Level panel edits, and a panel that has to mint the
-  // block before it can write a title is a panel with a state to get wrong.
+  // this level is the introduction or off the list entirely. No longer edited
+  // here (there is one main level), but carried for the camera's reason: a
+  // block the editor did not know about would be DELETED from disk the first
+  // time the level is opened, and the level would silently fall off the menu.
   // Empty is what a level that authors nothing has, and an empty block is
   // written back as no block at all (see `toLevelData`).
   meta: LevelMetaData;
+}
+
+// The fields a `Sun` / `Environment` node authors (`SUN_FIELDS`,
+// `ENVIRONMENT_FIELDS`), out of a node or its `extra`, which is where the
+// editor carries them: every field it sets and nothing else.
+export function skyFields(n: object): Partial<EnvironmentData> {
+  const r = n as Record<string, unknown>;
+  return Object.fromEntries(
+    [...SUN_FIELDS, ...ENVIRONMENT_FIELDS].flatMap((k) => (r[k] !== undefined ? [[k, r[k]]] : [])),
+  ) as Partial<EnvironmentData>;
+}
+
+// The one `Sun` / `Environment` node the level has, or null.
+export function lightNode(model: EdModel, type: "Sun" | "Environment"): EdNode | null {
+  for (const n of model.tree.nodes.values()) if (n.type === type && n.extra["inInstance"] === undefined) return n;
+  return null;
+}
+
+// The level's environment block as its nodes compile it (`environmentOf` in
+// level/nodes.ts): what the panels read their defaults against and the
+// canvas's shelter shadows are cast by. No Sun node is no sun.
+export function environmentOfModel(model: EdModel): EnvironmentData {
+  const sun = lightNode(model, "Sun");
+  const env = lightNode(model, "Environment");
+  return {
+    ...(sun ? skyFields(sun.extra) : { sunIntensity: 0 }),
+    ...(env ? skyFields(env.extra) : {}),
+    ...(model.background !== undefined ? { backgroundColor: model.background } : {}),
+  };
 }
 
 // Every field of the environment block, in the order the inspector shows them,
@@ -1032,8 +1057,6 @@ export const defaultLight = (): EdLight => ({
   wakeDelay: null,
   wakeRise: null,
   wakeFall: null,
-  fireflies: 0,
-  path: null,
 });
 
 export const defaultNote = (): EdNote => ({
@@ -1093,53 +1116,9 @@ export function glowModel(pos: Vec2): EdModel {
 }
 
 // The values a light object's absent `color`, `intensity` and `range` take in
-// the renderer (`LightRig.add`): a swarm's are the firefly's, anything else's a
-// lamp's. The loader fills an item from these and the save omits a field equal
-// to them, so a swarm reads as a swarm on the panel and on disk alike.
-export function lightDefaultsFor(swarm: boolean): { color: string; intensity: number; range: number } {
-  return swarm
-    ? { color: FIREFLY_COLOR, intensity: FIREFLY_INTENSITY, range: FIREFLY_RANGE }
-    : { color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY, range: DEFAULT_LIGHT_RANGE };
-}
-
-// `+ Fireflies`: what one click drops. Editor defaults like `+ Glow`'s, to be
-// played; the colour, intensity and reach are left to the renderer's firefly
-// defaults (`lightDefaultsFor`) so tuning those tunes every swarm that did not
-// ask for its own.
-export const FIREFLY_COUNT = 12;
-export const FIREFLY_NOTICE = 2.5; // metres
-// Off the plane like a lamp, so the idle knot hangs in the air in front of the
-// rock rather than inside it: the depth the swarm flies at once it follows
-// (`FOLLOW_Z`), so noticing the ball moves it across the level and not
-// toward the camera.
-export const FIREFLY_HOME_Z = FOLLOW_Z; // metres
-
-// The body `+ Fireflies` places at `pos` (metres): a body holding nothing but
-// the swarm's light, which is its home. No collision - the ball flies through
-// fireflies - and no geometry, since the motes are drawn by the renderer. Pure,
-// so `cli render3d` can hold it.
-export function fireflyBody(pos: Vec2): LevelBodyData {
-  return {
-    kind: "static",
-    x: pos.x,
-    y: pos.y,
-    rot: 0,
-    objects: [
-      {
-        type: "light",
-        z: FIREFLY_HOME_Z,
-        wake: FIREFLY_NOTICE,
-        fireflies: FIREFLY_COUNT,
-      },
-    ],
-  };
-}
-
-// ...as editor items, through the same loader a level comes in by (see
-// `glowModel`).
-export function fireflyModel(pos: Vec2): EdModel {
-  return modelFromTree(loadLevelTree({ player: { x: pos.x, y: pos.y, radius: 0.08 }, bodies: [fireflyBody(pos)] }));
-}
+// the renderer (`LightRig.add`). The loader fills an item from these and the
+// save omits a field equal to them, so the panel and the file agree.
+export const LIGHT_DEFAULTS = { color: DEFAULT_LIGHT_COLOR, intensity: DEFAULT_LIGHT_INTENSITY, range: DEFAULT_LIGHT_RANGE } as const;
 
 // Camera regions and notes are editor-only furniture — they are never drawn in
 // game, so their appearance is fixed here rather than authored and saved.
@@ -1147,9 +1126,6 @@ export const CAMERA_REGION_COLOR = "#c792ea";
 export const CAMERA_REGION_OPACITY = 0.12;
 export const NOTE_COLOR = "#98c379";
 export const NOTE_OPACITY = 0.08;
-// A firefly path is drawn in the firefly's own colour, so it reads as the
-// swarms' and not as the camera's.
-export const FIREFLY_PATH_COLOR = FIREFLY_COLOR;
 // A shelter is drawn in a cold slate blue, the colour of the shade it makes:
 // apart from the camera's violet, and dark enough under its wash that the
 // wall reads as the part of the level kept out of the sun.
@@ -1182,9 +1158,8 @@ export function newItemStyle(
   object: EdObject,
 ): { color: string; opacity: number } {
   if (layer === "camera") return { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY };
-  if (layer === "fireflies") return { color: FIREFLY_PATH_COLOR, opacity: CAMERA_REGION_OPACITY };
-  if (layer === "shelter") return { color: SHELTER_COLOR, opacity: SHELTER_OPACITY };
-  if (layer === "fog") return { color: FOG_REGION_COLOR, opacity: 0.08 };
+  if (object === "shelter") return { color: SHELTER_COLOR, opacity: SHELTER_OPACITY };
+  if (object === "fog") return { color: FOG_REGION_COLOR, opacity: 0.08 };
   if (layer === "notes") return { color: NOTE_COLOR, opacity: NOTE_OPACITY };
   if (object === "light") return { color: DEFAULT_LIGHT_COLOR, opacity: LIGHT_FILL_OPACITY };
   return { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY };
@@ -1362,11 +1337,11 @@ export function blankItem(layer: EdLayer, object: EdObject, node: string): EdIte
     light: defaultLight(),
     note: defaultNote(),
     shelter: defaultShelter(),
+    fog: defaultFog(),
     modelRef: defaultModelRef(),
     formation: null,
     decoration: null,
     anchorId: 0,
-    pathId: 0,
   };
 }
 
@@ -1469,7 +1444,7 @@ function pathShape(c: { verts: readonly CameraPathVert[] }): EdShape {
 
 // One light object as the item that edits it.
 function lightItem(l: LightObjectData, node: string): EdItem {
-  const d = lightDefaultsFor(l.kind !== "spot" && (l.fireflies ?? 0) > 0);
+  const d = LIGHT_DEFAULTS;
   return {
     ...blankItem("scene", "light", node),
     shape: { kind: "circle", r: l.range ?? d.range },
@@ -1493,8 +1468,6 @@ function lightItem(l: LightObjectData, node: string): EdItem {
       wakeDelay: l.wakeDelay ?? null,
       wakeRise: l.wakeRise ?? null,
       wakeFall: l.wakeFall ?? null,
-      fireflies: l.fireflies ?? 0,
-      path: l.path ?? null,
     },
   };
 }
@@ -1537,7 +1510,10 @@ function objectItem(o: SceneObjectData, node: string): EdItem | null {
 }
 
 // The model of a level from its tree, in metres.
-export function modelFromTree(tree: LevelTree): EdModel {
+export function modelFromTree(source: LevelTree): EdModel {
+  // A format-3 tree is read as format 4 (`upgradeTree`): its environment block
+  // as light nodes and a background, its fog on its regions.
+  const tree = upgradeTree(source);
   const compiled = compileLevel(tree);
   const data = compiled.data;
   const nodeOf = compiled.nodeOf;
@@ -1611,20 +1587,13 @@ export function modelFromTree(tree: LevelTree): EdModel {
 
   // THE LOOK, from the tree itself (it is not the sim's, so not compiled):
   // rocks, lamps, models, and decorations grown on their rock, placed where
-  // their anchor lands on it. A lamp's swarm path is named by its path's node;
-  // the editor holds the path's number (`EdItem.pathId`).
-  const pathNumber = new Map<string, number>();
-  for (const p of data.fireflyPaths ?? []) {
-    const node = nodeOf.get(p);
-    if (node) pathNumber.set(node, p.id);
-  }
-  const numberOfPath = (path: string): number => pathNumber.get(path) ?? (/^\d+$/.test(path) ? Number(path) : -1);
+  // their anchor lands on it.
   const rocks: EdItem[] = [];
   for (const { node: n, formation: rockId } of lookNodes(compiled.nodes)) {
     switch (n.type) {
       case "Light3D": {
-        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, path, ...fields } = n;
-        add(lightItem({ type: "light", ...fields, ...(path !== undefined ? { path: numberOfPath(path) } : {}) } as LightObjectData, id));
+        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n;
+        add(lightItem({ type: "light", ...fields } as LightObjectData, id));
         break;
       }
       case "Model3D": {
@@ -1668,10 +1637,10 @@ export function modelFromTree(tree: LevelTree): EdModel {
   }
 
   // The volumes, paths and marks of the plane.
-  const region = (layer: EdLayer, node: string, shape: ShapeData): EdItem => ({
-    ...blankItem(layer, "collision", node),
+  const region = (layer: EdLayer, node: string, shape: ShapeData, object: EdObject = "collision"): EdItem => ({
+    ...blankItem(layer, object, node),
     shape: edShape(shape),
-    ...newItemStyle(layer, "collision"),
+    ...newItemStyle(layer, object),
   });
   for (const r of data.cameraRegions ?? []) {
     const node = nodeOf.get(r);
@@ -1681,17 +1650,13 @@ export function modelFromTree(tree: LevelTree): EdModel {
     const node = nodeOf.get(c);
     if (node) add({ ...blankItem("camera", "collision", node), shape: pathShape(c), color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY, cam: { ...cameraOf(c), offset: Vec2.ZERO, lockX: null, lockY: null, keepInFrame: true } });
   }
-  for (const p of data.fireflyPaths ?? []) {
-    const node = nodeOf.get(p);
-    if (node) add({ ...blankItem("fireflies", "collision", node), shape: pathShape(p), ...newItemStyle("fireflies", "collision"), pathId: p.id });
-  }
   for (const s of data.shelters ?? []) {
     const node = nodeOf.get(s);
-    if (node) add({ ...region("shelter", node, s.shape), shelter: { front: s.front ?? null } });
+    if (node) add({ ...region("scene", node, s.shape, "shelter"), shelter: { front: s.front ?? null } });
   }
   for (const f of data.fogRegions ?? []) {
     const node = nodeOf.get(f);
-    if (node) add({ ...region("fog", node, f.shape), ...(f.falloff !== undefined ? { fogFalloff: f.falloff } : {}) });
+    if (node) add({ ...region("scene", node, f.shape, "fog"), fog: { falloff: f.falloff ?? null, amount: f.amount ?? null, color: f.color ?? null } });
   }
   const noteItem = (node: string, shape: EdShape, note: EdNote): EdItem => ({
     ...blankItem("notes", "collision", node),
@@ -1766,6 +1731,8 @@ export function modelFromTree(tree: LevelTree): EdModel {
     if (n.type === "Spawn2D") e.extra = { ...e.extra, spawn: true };
     // A chain's and a vine's build order key (the sim builds them in it).
     if (n.type === "Chain" || n.type === "Vine") e.extra = { ...e.extra, order: n.order };
+    // The level's light: what the node authors, every field it sets.
+    if (n.type === "Sun" || n.type === "Environment") e.extra = { ...e.extra, ...skyFields(n) };
   });
 
   const model: EdModel = {
@@ -1777,12 +1744,11 @@ export function modelFromTree(tree: LevelTree): EdModel {
       arrival: data.player.arrival ?? "",
     },
     items,
-    ...(tree.fogMasked ? { fogRegionsEnabled: true } : {}),
     chains,
     vines,
     tree: edTree,
     dataLayers: [...(tree.layers ?? [])],
-    environment: tree.environment ? { ...tree.environment } : undefined,
+    background: tree.background,
     camera: tree.camera ? { ...tree.camera } : undefined,
     meta: { ...tree.meta },
   };
@@ -1878,7 +1844,7 @@ export function pathDataOf(i: EdItem): CameraPathData {
 // only where it was authored: absent is the format's default, so the file
 // keeps following it.
 export function shelterDataOf(i: EdItem): ShelterData | null {
-  if (i.layer !== "shelter") return null;
+  if (i.object !== "shelter") return null;
   const s = i.shape;
   const shape: ShapeData | null =
     s.kind === "rect"
@@ -1899,14 +1865,16 @@ export function shelterDataOf(i: EdItem): ShelterData | null {
 }
 
 export function fogRegionDataOf(i: EdItem): FogRegionData | null {
-  if (i.layer !== "fog" || (i.shape.kind !== "rect" && i.shape.kind !== "circle")) return null;
+  if (i.object !== "fog" || (i.shape.kind !== "rect" && i.shape.kind !== "circle")) return null;
   return { x: i.pos.x, y: i.pos.y, rot: i.rot, shape: { ...i.shape },
-    ...(i.fogFalloff !== undefined ? { falloff: i.fogFalloff } : {}) };
+    ...(i.fog.falloff !== null ? { falloff: i.fog.falloff } : {}),
+    ...(i.fog.amount !== null ? { amount: i.fog.amount } : {}),
+    ...(i.fog.color !== null ? { color: i.fog.color } : {}) };
 }
 
 // The line where the edge fade reaches full strength, for both editors.
 export function fogRegionInner(i: EdItem): EdItem | null {
-  const f = Math.max(0, i.fogFalloff ?? DEFAULT_FOG_FALLOFF);
+  const f = Math.max(0, i.fog.falloff ?? DEFAULT_FOG_FALLOFF);
   if (f === 0) return null;
   const s = i.shape;
   if (s.kind === "rect" && s.w > 2 * f && s.h > 2 * f) {
@@ -1957,10 +1925,10 @@ export function shapeDataOf(i: EdItem): ShapeData {
 }
 
 // A light item's fields as written: a field left at its default is not.
-function lightFields(i: EdItem): Omit<LightObjectData, "type" | "x" | "y" | "rot" | "path"> & { pathId?: number } {
+function lightFields(i: EdItem): Omit<LightObjectData, "type" | "x" | "y" | "rot"> {
   const d = defaultLight();
   const spot = i.light.kind === "spot";
-  const fill = lightDefaultsFor(!spot && i.light.fireflies > 0);
+  const fill = LIGHT_DEFAULTS;
   return {
     ...(spot ? { kind: "spot" as const } : {}),
     ...(i.light.z !== d.z ? { z: i.light.z } : {}),
@@ -1985,17 +1953,11 @@ function lightFields(i: EdItem): Omit<LightObjectData, "type" | "x" | "y" | "rot
     ...(!spot && i.light.wake > 0
       ? {
           wake: i.light.wake,
-          ...(i.light.fireflies > 0
-            ? {}
-            : {
-                ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
-                ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
-                ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
-              }),
+          ...(i.light.wakeDelay !== null ? { wakeDelay: i.light.wakeDelay } : {}),
+          ...(i.light.wakeRise !== null ? { wakeRise: i.light.wakeRise } : {}),
+          ...(i.light.wakeFall !== null ? { wakeFall: i.light.wakeFall } : {}),
         }
       : {}),
-    ...(!spot && i.light.fireflies > 0 ? { fireflies: i.light.fireflies } : {}),
-    ...(!spot && i.light.fireflies > 0 && i.light.path !== null ? { pathId: i.light.path } : {}),
   };
 }
 
@@ -2161,8 +2123,6 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
   const chainById = new Map(model.chains.map((c) => [c.id, c]));
   const vineById = new Map(model.vines.map((v) => [v.id, v]));
   const nodeOfItem = (id: number): string | null => itemById.get(id)?.node ?? null;
-  const pathNode = new Map<number, string>();
-  for (const i of model.items) if (i.layer === "fireflies") pathNode.set(i.pathId, i.node);
 
   const write = (id: string, parentFrame: World3): LevelNode | null => {
     const n = model.tree.nodes.get(id);
@@ -2182,12 +2142,12 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
 
     // The placement, in the parent's frame.
     const pose3 = POSE_3D.has(n.type);
-    const placed = n.type !== "Node" && n.type !== "Decoration3D" && n.type !== "Chain" && n.type !== "Vine";
+    const placed = n.type !== "Node" && n.type !== "Decoration3D" && n.type !== "Chain" && n.type !== "Vine" && n.type !== "Sun" && n.type !== "Environment";
     if (placed) {
       const own: Pose3D = n.local ?? {};
       const loaded = n.local !== null && sameWorld(composeWorld(parentFrame, pose3 ? own : { x: own.x, y: own.y, rot: own.rot }), world);
       const local: Pose3D = loaded ? own : relativeLocal(parentFrame, world);
-      const required = n.type === "Spawn2D" || n.type === "Checkpoint2D" || n.type.endsWith("Region2D") || n.type === "CameraPath2D" || n.type === "FireflyPath2D" || n.type === "Shelter2D" || n.type === "Note2D";
+      const required = n.type === "Spawn2D" || n.type === "Checkpoint2D" || n.type.endsWith("Region2D") || n.type === "CameraPath2D" || n.type === "Shelter2D" || n.type === "Note2D";
       const put = (k: "x" | "y" | "rot" | "z", v: number | undefined): void => {
         if (v === undefined) return;
         if (loaded ? true : v !== 0) out[k] = v;
@@ -2211,6 +2171,8 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
     if (n.body && !n.instance) {
       out["type"] = bodyNodeType(n.body);
       Object.assign(out, bodyFields(n.body));
+    } else if (n.type === "Sun" || n.type === "Environment") {
+      Object.assign(out, skyFields(n.extra));
     } else if (n.extra["spawn"] === true) {
       out["radius"] = model.player.radius;
       if (model.player.hang) out["hang"] = true;
@@ -2277,7 +2239,7 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
       if (own.length) out["children"] = own;
       return out as unknown as LevelNode;
     } else if (item) {
-      Object.assign(out, itemFields(model, item, n, nodeOfItem, pathNode));
+      Object.assign(out, itemFields(model, item, n, nodeOfItem));
     }
 
     const kids = n.children.flatMap((c) => write(c, frameForChildren(model, n)) ?? []);
@@ -2288,9 +2250,8 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
   return {
     format: TREE_FORMAT,
     ...(Object.keys(metaOf(model)).length ? { meta: metaOf(model) } : {}),
-    ...(model.environment ? { environment: { ...model.environment } } : {}),
+    ...(model.background !== undefined ? { background: model.background } : {}),
     ...(model.camera ? { camera: { ...model.camera } } : {}),
-    ...(model.fogRegionsEnabled ? { fogMasked: true } : {}),
     ...(model.dataLayers.length && !keep ? { layers: [...model.dataLayers] } : {}),
     // The editor works in metres; its instances expand at that scale.
     lengthScale: PX,
@@ -2339,7 +2300,7 @@ function instanceOverrides(model: EdModel, n: EdNode, writeChild: (id: string) =
   const nowById = new Map<string, Record<string, unknown>>();
   const rootType = (n.extra["rootType"] ?? n.type) as NodeType;
   const rootItem = n.item !== null ? model.items.find((i) => i.id === n.item) : undefined;
-  const rootNow: Record<string, unknown> = n.body ? { type: rootType, ...bodyFields(n.body) } : rootItem ? itemFields(model, rootItem, { ...n, type: rootType }, (id) => model.items.find((i) => i.id === id)?.node ?? null, new Map()) : {};
+  const rootNow: Record<string, unknown> = n.body ? { type: rootType, ...bodyFields(n.body) } : rootItem ? itemFields(model, rootItem, { ...n, type: rootType }, (id) => model.items.find((i) => i.id === id)?.node ?? null) : {};
   nowById.set(prefab.root.id, rootNow);
   for (const c of n.children) {
     if (model.tree.nodes.get(c)?.extra["inInstance"] === undefined) continue;
@@ -2401,7 +2362,7 @@ export function subModel(model: EdModel, items: readonly EdItem[]): EdModel {
 // added to `target` under fresh ids, moved by `offset`, its top-level nodes
 // under `parent` (the level's root when null) with names free there, and its
 // bodies' build order keys after every key `target` has, in their own order.
-// What paste, duplicate and the placing tools (`+ Glow`, `+ Fireflies`) do.
+// What paste, duplicate and the placing tools (`+ Glow`, `+ Mushroom`) do.
 // Returns the items and the top-level nodes it added.
 export function graftModel(
   target: EdModel,
@@ -2441,21 +2402,10 @@ export function graftModel(
   for (const i of items) {
     if (i.root?.parent != null) i.root = { ...i.root, parent: itemIds.get(i.root.parent) ?? null };
   }
-  // Anchor and firefly path numbers are content (a chain, a swarm names them),
-  // so the arrivals take numbers the target does not use yet.
+  // Anchor numbers are content (a chain names them), so the arrivals take
+  // numbers the target does not use yet.
   let nextAnchor = Math.max(0, ...target.items.filter((i) => i.object === "anchor").map((i) => i.anchorId)) + 1;
-  let nextPath = Math.max(0, ...target.items.filter((i) => i.layer === "fireflies").map((i) => i.pathId)) + 1;
-  const pathIds = new Map<number, number>();
-  for (const i of items) {
-    if (i.object === "anchor") i.anchorId = nextAnchor++;
-    if (i.layer === "fireflies") {
-      pathIds.set(i.pathId, nextPath);
-      i.pathId = nextPath++;
-    }
-  }
-  for (const i of items) {
-    if (i.object === "light" && i.light.path !== null && pathIds.has(i.light.path)) i.light = { ...i.light, path: pathIds.get(i.light.path)! };
-  }
+  for (const i of items) if (i.object === "anchor") i.anchorId = nextAnchor++;
   const chainIds = new Map<number, number>();
   for (const c of source.chains) {
     const id = newBodyId();
@@ -2496,8 +2446,13 @@ export function graftModel(
       instance: n.instance ? structuredClone(n.instance) : null,
       extra: { ...n.extra, ...(typeof n.extra["order"] === "number" ? { order: base + (n.extra["order"] as number) - sourceMin } : {}) },
     };
-    // The spawn is the level's own: a fragment never brings one.
+    // The spawn is the level's own: a fragment never brings one. Nor does it
+    // bring the light: a fragment read through the loader (a placed mushroom,
+    // an old flat copy) is given a default Sun and Environment by the upgrade
+    // (`upgradeTree`), and grafting those would put a sun back into a level
+    // that deleted its own to go underground.
     if (copy.extra["spawn"] === true) continue;
+    if (n.type === "Sun" || n.type === "Environment") continue;
     target.tree.nodes.set(id, copy);
   }
   const roots = source.tree.roots.flatMap((r) => {
@@ -2532,15 +2487,13 @@ export function nodeTypeOfItem(i: EdItem): NodeType {
               ? "Model3D"
               : i.object === "formation"
                 ? "Formation3D"
-                : "Decoration3D";
+                : i.object === "fog"
+                  ? "FogRegion2D"
+                  : i.object === "shelter"
+                    ? "Shelter2D"
+                    : "Decoration3D";
     case "camera":
       return i.shape.kind === "path" ? "CameraPath2D" : "CameraRegion2D";
-    case "fireflies":
-      return "FireflyPath2D";
-    case "shelter":
-      return "Shelter2D";
-    case "fog":
-      return "FogRegion2D";
     case "notes":
       return i.note.kind === "checkpoint" ? "Checkpoint2D" : "Note2D";
   }
@@ -2552,6 +2505,8 @@ export function defaultNameOf(i: EdItem): string {
   if (i.object === "decoration" && i.decoration) return i.decoration.kind[0]!.toUpperCase() + i.decoration.kind.slice(1);
   if (i.object === "collision" && i.layer === "scene") return i.root ? "Root" : i.shape.kind === "path" ? "Curve" : i.shape.kind[0]!.toUpperCase() + i.shape.kind.slice(1);
   if (i.object === "formation") return "Formation";
+  if (i.object === "fog") return "Fog";
+  if (i.object === "shelter") return "Shelter";
   if (i.object === "light") return "Light";
   if (i.object === "anchor") return "Anchor";
   const type = nodeTypeOfItem(i);
@@ -2811,7 +2766,6 @@ function itemFields(
   i: EdItem,
   n: EdNode,
   nodeOfItem: (id: number) => string | null,
-  pathNode: ReadonlyMap<number, string>,
 ): Record<string, unknown> {
   switch (n.type) {
     case "CollisionShape2D":
@@ -2829,11 +2783,8 @@ function itemFields(
         ...(m.scale !== 1 ? { scale: m.scale } : {}),
       };
     }
-    case "Light3D": {
-      const { pathId, ...rest } = lightFields(i);
-      const path = pathId !== undefined ? pathNode.get(pathId) : undefined;
-      return { ...rest, ...(path ? { path } : {}) };
-    }
+    case "Light3D":
+      return lightFields(i);
     case "Formation3D": {
       if (!i.formation) return {};
       const { id: _id, guide, ...f } = i.formation;
@@ -2849,19 +2800,6 @@ function itemFields(
     case "CameraPath2D": {
       const { x: _x, y: _y, rot: _r, ...p } = pathDataOf(i);
       return p;
-    }
-    case "FireflyPath2D": {
-      const { x: _x, y: _y, rot: _r, verts } = pathDataOf(i);
-      return {
-        verts: verts.map((v) => ({
-          x: v.x,
-          y: v.y,
-          ...(v.inX !== undefined ? { inX: v.inX } : {}),
-          ...(v.inY !== undefined ? { inY: v.inY } : {}),
-          ...(v.outX !== undefined ? { outX: v.outX } : {}),
-          ...(v.outY !== undefined ? { outY: v.outY } : {}),
-        })),
-      };
     }
     case "Shelter2D": {
       const s = shelterDataOf(i);
@@ -3828,9 +3766,8 @@ function bodyKindLabel(members: readonly EdItem[]): string {
   // A body of nothing but a formation: a background guide's rock.
   if (first.object === "formation") return "backdrop";
   if (first.layer === "camera") return "camera";
-  if (first.layer === "fireflies") return "fireflies";
-  if (first.layer === "shelter") return "shelter";
-  if (first.layer === "fog") return "fog";
+  if (first.object === "shelter") return "shelter";
+  if (first.object === "fog") return "fog";
   if (first.layer === "notes") return first.note.kind === "checkpoint" ? "checkpoint" : "note";
   return "decor";
 }
@@ -3866,10 +3803,8 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
     return item.note.kind === "arrow" ? "arrow" : "text";
   }
   if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
-  // A firefly path is named by the number swarms name it by.
-  if (item.layer === "fireflies") return `firefly path ${item.pathId}`;
-  if (item.layer === "shelter") return "shelter";
-  if (item.layer === "fog") return "fog region";
+  if (item.object === "shelter") return "shelter";
+  if (item.object === "fog") return "fog";
   const form =
     item.shape.kind === "rect"
       ? `${n(item.shape.w)}×${n(item.shape.h)}`
@@ -4825,13 +4760,14 @@ export function distanceToVine(model: EdModel, v: EdVine, world: Vec2): number {
 // A blank level: a single wide floor under a spawn point so it is immediately
 // testable.
 export function emptyModel(): EdModel {
-  // A spawn over a wide floor, a body of one piece, through the loader a level
-  // comes in by. The floor's debug geometry is on, as every piece a new level
-  // is blocked out in is. Unnamed and listed: a new level belongs on the menu,
-  // and the Level panel is where it is given a title.
+  // A sun, the default sky, a spawn over a wide floor, a body of one piece,
+  // through the loader a level comes in by. The floor's debug geometry is on,
+  // as every piece a new level is blocked out in is.
   return modelFromTree({
     format: TREE_FORMAT,
     nodes: [
+      { type: "Sun", id: newNodeId(), name: "Sun" },
+      { type: "Environment", id: newNodeId(), name: "Environment" },
       { type: "Spawn2D", id: newNodeId(), name: "Spawn", x: 0, y: -1, radius: 0.08 },
       {
         type: "StaticBody2D",

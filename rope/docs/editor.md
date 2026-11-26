@@ -10,7 +10,8 @@ right button, or a **left** drag on anything not selected), wheel-zoom about the
 click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
 The editor is arranged as four **workspaces**, one per workflow - 2D, Formations, Decorations and Texturing ([below](#workspaces-2d-formations-decorations-texturing)).
-The editor edits the level's **node tree** ([level-format](level-format.md#the-node-tree)), listed in the **scene tree** bottom-left, with groups, data layers and prefabs ([editor-model](editor-model.md), [prefabs](prefabs.md)).
+The editor edits the level's **node tree** ([level-format](level-format.md#the-node-tree)), listed in the **scene tree** (the right dock), with groups, data layers and prefabs ([editor-model](editor-model.md), [prefabs](prefabs.md)).
+How the screen is laid out is [below](#authoring-interface).
 What a level LOOKS like is what its nodes carry - formations and the decorations grown on them ([formations](formations.md)), models of the library ([blender-models](blender-models.md)) - and a collision shape is drawn in 3D only by its own **debug geometry** ([below](#debug-geometry)).
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
@@ -59,27 +60,10 @@ It is seen by the square's debug geometry, in the body's purple; a model or rock
 There is nobody in the editor's scene to wake anything, and an author has to see what a mushroom lights before anyone does.
 **▶ Test** turns the preview off, so a test wakes them for the ball exactly as the game does.
 
-## Fireflies: `+ Fireflies`
+## Fireflies (removed)
 
-A point light's panel has a `fireflies` field above `wake` (a whole count, blank or 0 for an ordinary light, capped at `FIREFLY_MAX`).
-With it set the light is a **firefly swarm** (see [Fireflies](lighting-and-surfaces.md#fireflies)): `wake` is where the swarm notices the ball (blank = `DEFAULT_FIREFLY_NOTICE`, shown as the placeholder), the three wake times go away since a swarm is never dark, and `shadows` greys out as for a waking light.
-Turning a swarm into a spot clears `fireflies` and `wake` with a notice in the status line.
-On the canvas the notice distance is the same dashed ring and grip as a waking light's, drawn at the default when `wake` is blank, and the label says `N fireflies · notice D`.
-
-**`+ Fireflies`** (beside `+ Glow`) places a swarm with one click: a static body holding only the swarm's light, `FIREFLY_COUNT` (12) motes, `wake` `FIREFLY_NOTICE` (2.5 m), `z` `FIREFLY_HOME_Z` (0.5 m) so the knot hangs in the air in front of the rock, and the firefly's own colour, intensity and reach left to the renderer's defaults.
-There is no collision: the ball flies through fireflies.
-
-In the editor's 3D view a swarm hovers at its home: the ball drawn at the spawn is not a player, and the preview (`LightRig.previewAwake`) hands no ball to the swarms - before 2026-09-25 it did, and a swarm authored within notice of the spawn flew off its home to hover by it; **▶ Test** has them follow the ball as the game does.
-
-### Firefly paths: the `fireflies` layer
-
-A swarm can be given a route of its own instead of the camera paths: a **firefly path** (see [Fireflies](lighting-and-surfaces.md#fireflies)), authored on the `fireflies` layer (between `camera` and `notes`) with **`+ Path`**, which draws it exactly as a camera path is drawn and edited - click out the nodes start to end, Enter to finish, drag a node or its round grips, an edge midpoint to insert one, Alt+click to remove one, and `Reverse` / `Smooth` / `Sharpen` in its panel.
-It carries no framing and no keys, so its panel has only the placement, those three actions, and which swarms follow it.
-Each path is numbered (`firefly path N`, minted on draw, kept through a save, fresh on a duplicate), and a swarm's panel has a `path` field under `fireflies` that takes that number; blank (the `camera` placeholder) is the camera paths.
-A number naming no path is said under the field, since in play it silently reads as blank.
-Duplicating a swarm keeps its `path`; duplicating a swarm together with its path points the copy at the copied path.
-
-On the canvas a firefly path is a dashed line in the firefly's colour with the camera path's direction arrows, a ring at its START (where a swarm that has left the player waits) and a bar across its END (where it leaves them), labelled at the start with its number and how many swarms follow it; a swarm's label gains `path N`.
+Fireflies - the `+ Fireflies` tool, a light's `fireflies` and `path` fields, and the `fireflies` layer of firefly paths - were removed from the game and the editor on 2026-11-26 at Tris's call.
+A level that still holds any loses them at load (`dropFireflies`, [level-format](level-format.md#the-levels-light)); the git history has the feature as it was.
 
 ## Berry vines
 
@@ -244,7 +228,7 @@ A section a build leaves empty is dropped (`pruneEmptySections`).
 
 Descriptions are not printed in the panel.
 They are **hover help**: a name with a dotted underline (a field's label, a section's header, a panel's title) shows its description in a popup beside the inspector while the pointer rests on it, and at no other time.
-Live status stays printed: warnings (a vine's light links, a missing firefly path, the shadow budget), readouts, the checkpoint URL.
+Live status stays printed: warnings (a vine's light links, the shadow budget), readouts, the checkpoint URL.
 The helpers are `src/editor/panelUi.ts` (`section`, `fieldRow`, `heading`, `describe`); new panel text goes through `describe`, never a paragraph under the field.
 
 The kind picker covers `static`, `rigid`, `killzone`, `force`, `water`; the **hook-proof**
@@ -317,7 +301,7 @@ What the ray can meet, and what each answers with (`pickTagOf`):
 **In the 2D workspace the plane comes first** (`pickCandidatesAt`, 2026-11-24): within the active layer, whatever is hit on the plane itself (an outline, a model's marker, a light's icon) is ahead of anything only the ray meets, however near, and the plane's own rules settle it among them.
 Before, the nearest thing drawn won there too, so a rock on a 2D body, which bulges out in front of the plane, took the click on the collision outline drawn over it: on a copy of `ball.json` seen from its spawn, 79 of 364 grid points drilled into the rock instead of the collision piece.
 The rock is still reached by clicking again (body, its collision, its rock, then what is behind).
-**A line off the scene layer comes before all of it** (2026-11-24): a click on a camera path, a firefly path or a note's arrow picks it first, whichever layer is active, as a chain or a vine is picked.
+**A line off the scene layer comes before all of it** (2026-11-24): a click on a camera path or a note's arrow picks it first, whichever layer is active, as a chain or a vine is picked.
 It is a stroke a few pixels wide, so it cannot swallow the clicks around it as an area on another layer would, which is why the active layer leads otherwise; behind it, the river's camera path over water or a backdrop rock took three to five clicks, or more than the cycle reached.
 A collision curve, on the scene layer, is a bar with a width and keeps the ordinary rules.
 Once a path is selected a press on its line may land on its own handles (a node, a grip, an edge midpoint, which inserts a node), so to reach what is under a selected path, click just beside the line.
@@ -425,22 +409,22 @@ The policy is one module, `src/editor/workspaces.ts`; the editor asks it.
 | | 2D | Formations | Decorations | Texturing |
 |---|---|---|---|---|
 | View | the gameplay plane head on, locked | free 3D | free 3D | free 3D |
-| Dock | the draw tools grouped (Collision, Gameplay, Scene), `kind`, the root widths, the type layers and the data layers | Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision | the material library (a button a material), Bake N out of date, Show Collision |
+| Dock | the draw tools grouped (Collision, Gameplay, Scene, Volumes: Fog and Shelter), `kind`, the root widths (the type layers are over the scene tree, in 2D only) | Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision | the material library (a button a material), Bake N out of date, Show Collision |
 | Drawn and picked | everything on the plane, all layers; not what stands in 3D (a rock or model with no body above it) or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations but material layers | the scene layer's formations and their material layers |
-| Inspector | everything but the Formation, Decorations and Materials sections | Level, Environment, 3D camera, a body's Transform and Formation | Level, Environment, 3D camera, a rock's Decorations, a decoration's panel | Level, Environment, 3D camera, a rock's Materials, a material layer's panel |
+| Inspector | everything but the Formation, Decorations and Materials sections | the spawn, Sun and Environment, a body's Transform and Formation | the spawn, Sun and Environment, a rock's Decorations, a decoration's panel | the spawn, Sun and Environment, a rock's Materials, a material layer's panel |
 
-**What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), what a click or a band picks (`pickableItems`), and what the scene tree lists (in the 3D workspaces, only the nodes in the workspace and those holding one).
+**What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), what a click or a band picks (`pickableItems`), and what the scene tree lists (in the 3D workspaces, only the nodes in the workspace and those holding one, and the Sun and the Environment, which every rock is judged under).
 What a click on a grouped node stops at is the workspace's too (`clickableIn`, [editor-model](editor-model.md#groups)): in Decorations a click on a fern selects the fern, though the body above it is grouped.
 Chains, vines, berries and the spawn marker are the plane's and are picked in 2D only; the solid guides are drawn and picked in Formations only, where in the others they were wireframe in front of the rock.
 The scene itself is drawn whole in every workspace: the rocks are the reference 2D is drawn against, and the collision outlines are a formation's guide.
 Switching drops from the selection whatever the new workspace does not hold, as hiding a layer does: it could be neither seen nor clicked, but a nudge, a field or a Delete would still reach it.
 The draw tools are 2D's (`setTool` refuses one elsewhere, so their keys arm nothing), and the brush ends whenever the workspace changes.
-**Level** and **Prefabs**, above the dock in every workspace, say which document is being edited: the level, or the prefab library and an open prefab ([prefabs](prefabs.md#in-the-editor)).
-They replaced the Formations dock's **Level** / **Assets** pair (retired 2026-11-26), whose reusable rocks are prefabs now.
+The right dock's **Scene** and **Prefabs** tabs, the same in every workspace, show the tree of what is open or the prefab library ([prefabs](prefabs.md#in-the-editor)).
+They replaced the Level / Prefabs buttons that sat over the left dock (and those the Formations dock's **Level** / **Assets** pair, retired 2026-11-26, whose reusable rocks are prefabs now), since the left dock is the workspace's alone.
 Texturing is painting a rock with materials from the library, live: [formations](formations.md#material-layers).
 
 **The inspector** is filtered by section key (`sectionShown`, applied by `pruneEmptySections`), so a rock's panel in Formations is its recipe rather than its bounce, friction and mover first.
-The section a workspace's work is done in (`PRIMARY_SECTIONS`: Formation, Decorations, a decoration's own) starts open until the author closes it, remembered as opened sections are (`setDefaultOpen` in `panelUi.ts`).
+The section a workspace's work is done in (`PRIMARY_SECTIONS`: Formation, Decorations, a decoration's own; and the panels that ARE their node - the spawn's, the Sun's, the Environment's, a fog region's Fog, a shelter's Wall) starts open until the author closes it, remembered as opened sections are (`setDefaultOpen` in `panelUi.ts`).
 
 **The 2D view is locked head on** (`VisualsWorkspace.headOnOnly`): the middle drag pans instead of orbiting, the wheel zooms about the plane point under the pointer (never a rock behind it, which would move the target off the plane), and **F** frames the selection's footprint with the target kept on the plane.
 Entering 2D turns a turned view back to the plane over the same place; "Align camera to plane" is not offered there, since there is nothing to align.
@@ -546,7 +530,7 @@ The one predicate the press handler asks is `inScene()` - the Visuals workspace,
 
 ## The view cube
 
-Since 2026-11-23 the top right of the viewport holds a **view cube** (`src/editor/viewCube.ts`), as Blender's, Fusion's and Unity's navigation gizmos are, with the lens under it (**Persp | Ortho**, below).
+Since 2026-11-23 the top right of the viewport holds a **view cube** (`src/editor/viewCube.ts`), as Blender's, Fusion's and Unity's navigation gizmos are, with the lens under it (**Persp | Ortho**, below) and the inspector under that.
 The cube turns with the view: six labelled faces drawn on a small 2D canvas through the pose's own basis (`poseBasis`), back to front, each label laid on its face by an affine transform so it turns and foreshortens with it.
 A click on a face swings the view to look from that side - Front (the gameplay plane head on, ending as "Align camera to plane" does), Back, Left, Right, Top (straight down, the front at the foot of the screen, as Blender's top view has it) and Bottom - about the same target and at the same distance, eased over 220 ms (`swingView`); an orbit, a pan or the wheel during the swing takes over from it.
 Face on, the other five faces are edge-on and cannot be clicked, so four arrows round the cube (Fusion's) go to the face next to it that way: the face whose normal is nearest the screen's right, left, up or down.
@@ -568,7 +552,7 @@ A **▶ Test is always perspective**, whatever the toggle says: the point of a t
 The toggle is the editor's view of the whole scene, never saved and never seen by the player.
 
 **The editor's fog is the game's.**
-The level's fog is hidden while authoring unless the Environment panel's **show fog in editor** is ticked, and when it is shown it - and the spots' lit air, which is drawn either way - hazes every surface by the depth the game's camera sees it from rather than the editor camera's, so zooming out or orbiting changes what is seen and never how foggy it is.
+The level's fog (its fog regions', [lighting-and-surfaces](lighting-and-surfaces.md#regional-fog)) is hidden while authoring unless **fog in editor** is ticked in **Preview settings**, and when it is shown it - and the spots' lit air, which is drawn either way - hazes every surface by the depth the game's camera sees it from rather than the editor camera's, so zooming out or orbiting changes what is seen and never how foggy it is.
 That camera is the one the game settles at for the place the editor is looking at.
 ▶ Test draws the fog from its own camera, which is the game's.
 See [lighting-and-surfaces](lighting-and-surfaces.md#light-and-air) for how.
@@ -695,7 +679,7 @@ When the key has not moved, what has changed is at most some pieces' debug geome
 So a corner dragged on a dressed rock rebuilds nothing, and one dragged on a drawn piece rebuilds that body's debug meshes and nothing else, which matters: a full rebuild on `ball` measured ~30 ms of building and nine shader programs re-linked (2026-10-07), every frame of a drag, and vertex drags on `ball` and on `cave` (all debug geometry) went from ~200 ms frames to the idle baseline with no program re-linked.
 Since 2026-10-17 a full rebuild re-links nothing either: the scene it replaces is disposed only after the new one has drawn a frame and taken its programs over ([**A level's scene**](render3d.md#a-levels-scene-built-shown-retired)), and nudging a body on `ball` went from ~830 ms over four frames to one ~50 ms frame.
 A new opacity below 1 compiles the see-through variant once; switching a piece on or off, recolouring it or moving its corners compiles nothing.
-The world the scene keeps is then a step behind the collision until the next rebuild, which only the preview's fireflies read.
+The world the scene keeps is then a step behind the collision until the next rebuild, which nothing drawn in the preview reads.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
 
 **The avatar stands at the spawn** (`spawnBall` in `editor.ts`, drawn by `BallVisual` like any other host's), because a level is authored against the thing that plays it.
@@ -736,6 +720,23 @@ What is left is the idle build's own frame (~70-100 ms, 1.5 s after the last thi
 
 ## Authoring interface
 
-The authoring tools are named **Just Swing**. The editor, sound mixer and audition lab share `src/styles/studio.css`: a docked navy workspace with blue selection and amber time/clip emphasis, selected through Impeccable previews. The top navigation switches tools; level file actions and Test level have their own command bar. Drawing tools, layers and objects share one bounded left dock; properties scroll independently on the right. Preview settings are disclosed separately from drawing tools.
+The authoring tools are named **Just Swing**.
+The editor, sound mixer and audition lab share `src/styles/studio.css`: a docked navy workspace with blue selection and amber time/clip emphasis, selected through Impeccable previews.
+The top navigation switches tools.
 
-At phone widths, Tools & objects and Properties open mutually exclusive drawers that start closed, leaving the canvas reachable. Native Tab navigation works while a toolbar button or disclosure has focus; Tab from the canvas still cycles edit layers. Inspector sections and sound event families are keyboard-accessible buttons with expanded state. Drawing tool shortcuts are printed beside their labels, and active tool, layer and view controls expose pressed state.
+The editor's screen (since 2026-11-26) is laid out around an unobstructed viewport:
+
+- **The command bar** carries the files (New, Load, Save, Save As, Delete File), **Sounds**, then the level's own few settings - **Background** (what is behind everything, `LevelTree.background`), **Lens mm** and **Cam z** (the 3D camera, `LevelTree.camera`; blank is the default) - the workspace tabs, and **Test level**.
+  The level's light is not here: it is its **Sun** and **Environment** nodes, and its fog is its **fog regions** ([level-format](level-format.md#the-levels-light)).
+  The level select's `title`, `intro` and `unlisted` have no control any more (there is one main level); a level that has them keeps them.
+- **The left dock is the workspace's alone**: in 2D the drawing tools, in Formations, Decorations and Texturing their own docks ([below](#workspaces-2d-formations-decorations-texturing)).
+  What a layer or a workspace is for is its button's tooltip, which is where the empty inspector used to say it.
+- **The right dock** is the **scene tree** (its Scene tab), with the layers over it - 2D's type layers (scene, camera, notes, stacked one a row) and the data layers - and a **search** field and **expand all** / **collapse all** under its heading, or the **prefab library** (its Prefabs tab, [prefabs](prefabs.md#in-the-editor)); a prefab open for editing says so over the tree, with **Back to the level**.
+  It is as wide as its left edge is dragged (double-click for the default), remembered per browser (`rope.editor.dockWidth`).
+- **Over the viewport**: along its top left the view's own controls - **Overlays**, **Align camera to plane**, **Game camera** and the **Preview settings** menu (snap, edge clamp, all debug, reflections, shadows, water, roots, scene, fog in editor; editor settings, remembered per browser, never in the level); down its right edge the view cube and **Persp | Ortho**, and under them the **inspector**, a window holding the selection's panels.
+  With nothing selected there is no window.
+  The spawn, the Sun and the Environment are nodes like any other: their panels are what the inspector shows when the scene tree picks them.
+- **The status line** along the viewport's foot says what is open, whether it is saved, what is in it, and the draft or notice of the moment.
+
+The top bars wrap on a narrow window, and everything under them follows (`--chrome-top`, measured as they resize).
+At phone widths the two docks become drawers, **Tools** and **Scene**, mutually exclusive and starting closed, leaving the canvas reachable. Native Tab navigation works while a toolbar button or disclosure has focus; Tab from the canvas still cycles edit layers. Inspector sections and sound event families are keyboard-accessible buttons with expanded state. Drawing tool shortcuts are printed beside their labels, and active tool, layer and view controls expose pressed state.

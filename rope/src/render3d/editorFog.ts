@@ -121,7 +121,8 @@ const FOG_PARS_FRAGMENT = /* glsl */ `
 		if ( fogGameCamera.x > 0.5 ) return max( fogGameCamera.y - vFogWorldZ, 0.0 );
 		return vFogDepth;
 	}
-	// The fraction of light the air takes over a depth d (three's own laws).
+	// The fraction of light the air takes over a depth d (three's own laws):
+	// the level-wide fog's.
 	float fogAmountAt( const in float d ) {
 		#ifdef FOG_EXP2
 			return 1.0 - exp( - fogDensity * fogDensity * d * d );
@@ -129,13 +130,26 @@ const FOG_PARS_FRAGMENT = /* glsl */ `
 			return smoothstep( fogNear, fogFar, d );
 		#endif
 	}
+	// The fog on this fragment: the fraction of it the air takes, and the
+	// colour it is mixed toward in \`tint\`. The regions' own air where a level
+	// authors regions (\`fogRegions.ts\`), the level-wide fog where it does not.
+	float fogOfFragment( out vec3 tint ) {
+		float d = fogDepth();
+		tint = fogColor;
+		if ( fogRegions.enabled == 1 ) return regionFog( regionFogPoint( cameraPosition, vFogWorldPosition ), d, fogRegionColours(), tint );
+		return fogAmountAt( d );
+	}
 #endif
 `;
+// The line that mixes the fog in, which the avatar and the glass rewrite
+// (`avatarSurface.ts`, `glassMaterial.ts`): `fogTint` is the colour, the
+// regions' where they are authored, `fogFactor` how much of it.
+export const FOG_MIX = "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogTint, fogFactor );";
 const FOG_FRAGMENT = /* glsl */ `
 #ifdef USE_FOG
-	float fogAirDepth = fogDepth();
-	float fogFactor = fogAmountAt( fogAirDepth ) * regionFogForRay( cameraPosition, vFogWorldPosition );
-	gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );
+	vec3 fogTint;
+	float fogFactor = fogOfFragment( fogTint );
+	${FOG_MIX}
 #endif
 `;
 

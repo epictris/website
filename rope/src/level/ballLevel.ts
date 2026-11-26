@@ -25,7 +25,6 @@ import { NO_BUTTON, type FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
   type CameraPathData,
-  type FireflyPathData,
   type CameraRegionData,
   type RawLevelData,
   type SpawnData,
@@ -141,9 +140,6 @@ export class BallLevel {
   // The two lists as the one rule set the controller governs with, built once
   // here because a path's polyline index is derived and nothing mutates it.
   readonly cameraRules: CameraRule[];
-  // The routes firefly swarms guide the player along, in metres (see
-  // FireflyPathData). Render-only.
-  readonly fireflyPaths: FireflyPathData[];
   // Chains strung between authored bodies (see Level.sceneChains).
   readonly sceneChains: SceneChain[];
   // Chains knotted through many bodies (see `Level.tieChains`).
@@ -512,7 +508,6 @@ export class BallLevel {
     this.cameraRegions = data.cameraRegions ?? [];
     this.cameraPaths = data.cameraPaths ?? [];
     this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
-    this.fireflyPaths = data.fireflyPaths ?? [];
     this.ball =new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.glass = options.ball === "glass";
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);

@@ -19,7 +19,7 @@ import {
   SHELTER_COLOR,
   FOG_REGION_COLOR,
   fogRegionInner,
-  FIREFLY_PATH_COLOR,
+  environmentOfModel,
   chainEnds,
   chainPath,
   chainViaItems,
@@ -88,7 +88,6 @@ import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 // For the one number: the multiple of the authored spawn radius the ball is
 // actually played at (see the spawn marker).
 import { BallLevel } from "../level/ballLevel";
-import { DEFAULT_FIREFLY_NOTICE } from "../render3d/fireflies";
 import { atDepth, beginWorld, makePath } from "./projectedCanvas";
 import { itemMatrix } from "./space3d";
 import * as THREE from "three";
@@ -580,7 +579,7 @@ export function outlineOf(body: EdItem): Outline {
     // build strokes it into (`lib/stroke.ts`) - the same geometry, so what is
     // drawn is what plays.
     if (body.layer === "scene") return { kind: "poly", verts: strokeOf(body.shape) };
-    // A CAMERA or FIREFLY path is an open polyline and has no outline at all - no inside,
+    // A CAMERA path is an open polyline and has no outline at all - no inside,
     // no area, nothing to fill. It is drawn by `drawCameraPath` instead, and
     // every caller here is about a closed shape, so answering its bounding box
     // would be a rectangle that is not the thing.
@@ -1145,17 +1144,9 @@ export function lightWakes(l: EdItem): boolean {
   return l.object === "light" && l.light.kind === "point" && lightTrigger(l) > 0;
 }
 
-// Is this a FIREFLY SWARM (see `LightObjectData.fireflies`)? Point-only too.
-export function lightSwarms(l: EdItem): boolean {
-  return l.object === "light" && l.light.kind === "point" && l.light.fireflies > 0;
-}
-
-// The distance the ball has to come within: the authored `wake`, or for a
-// swarm with none, the distance the renderer notices the ball at anyway - so
-// the ring is drawn wherever the game has one.
+// The distance the ball has to come within: the authored `wake`.
 export function lightTrigger(l: EdItem): number {
-  if (l.light.wake > 0) return l.light.wake;
-  return l.light.fireflies > 0 ? DEFAULT_FIREFLY_NOTICE : 0;
+  return l.light.wake;
 }
 
 // Where a locked axis pins the camera. Both axes locked is a point, so it draws
@@ -1166,11 +1157,6 @@ export function lightTrigger(l: EdItem): number {
 // be readable without selecting the path first.
 const PATH_ARROW_SPACING = 1.5;
 const PATH_ARROW_LENGTH = 0.22;
-// Metres: the radius of the ring at a firefly path's start, and half the bar
-// across its end. A little over half an arrowhead, so the ends read as marks
-// on the line rather than as objects of their own (0.2 m was a 40 px ring at
-// the default zoom, bigger than the ball).
-const FIREFLY_PATH_MARK = 0.12;
 
 // The rule a path item builds, kept across frames while its saved form is
 // unchanged. The rule is what the game builds (`pathDataOf` is the one mapping),
@@ -1301,69 +1287,6 @@ function drawCameraPath(
     // path rather than restarting at every vertex - a run of short segments
     // would otherwise be solid arrowheads.
     carried = ((carried - len) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
-  }
-}
-
-// A FIREFLY PATH (see `FireflyPathData`): the flattened curve in the
-// firefly's colour, the arrowheads that say which way it runs, a ring at its
-// START - where a swarm waits once it has flown back - and a bar across its
-// END, where it leaves the player. No corridor: a firefly path frames
-// nothing, so there is no range to draw.
-function drawFireflyPath(
-  ctx: CanvasRenderingContext2D,
-  item: EdItem,
-  worldLine: number,
-  selected: boolean,
-): void {
-  if (item.shape.kind !== "path") return;
-  // The camera's rule is built only for its polyline: the same flattening the
-  // rig gives a firefly path, which is what the swarm rides.
-  const rule = editorPathRule(item);
-  if (!rule) return;
-  const world = rule.index.verts;
-  const stroke = FIREFLY_PATH_COLOR;
-  ctx.beginPath();
-  ctx.moveTo(world[0]!.x, world[0]!.y);
-  for (const w of world.slice(1)) ctx.lineTo(w.x, w.y);
-  if (selected) {
-    ctx.strokeStyle = SELECT;
-    ctx.lineWidth = worldLine * 5;
-    ctx.stroke();
-  }
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = worldLine * 2.5;
-  ctx.setLineDash([8 * PX, 4 * PX]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  const start = world[0]!;
-  ctx.lineWidth = worldLine * 2;
-  ctx.beginPath();
-  ctx.arc(start.x, start.y, FIREFLY_PATH_MARK, 0, Math.PI * 2);
-  ctx.stroke();
-  const end = world[world.length - 1]!;
-  const before = world[world.length - 2]!;
-  const len = end.distanceTo(before);
-  if (len > 1e-9) {
-    const across = new Vec2(before.y - end.y, end.x - before.x).div(len).mul(FIREFLY_PATH_MARK);
-    ctx.beginPath();
-    ctx.moveTo(end.x + across.x, end.y + across.y);
-    ctx.lineTo(end.x - across.x, end.y - across.y);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = stroke;
-  let carried = PATH_ARROW_SPACING / 2;
-  for (let i = 0; i + 1 < world.length; i++) {
-    const a = world[i]!;
-    const b = world[i + 1]!;
-    const d0 = a.distanceTo(b);
-    if (d0 < 1e-9) continue;
-    const dir = b.sub(a).div(d0);
-    for (let d = carried; d < d0; d += PATH_ARROW_SPACING) {
-      drawPathArrow(ctx, a.add(dir.mul(d)), dir);
-    }
-    carried = ((carried - d0) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
   }
 }
 
@@ -2007,7 +1930,7 @@ export function drawEditor(
   // A polygon being clicked out: the vertices placed so far plus where the
   // pointer is, so the outline is visible while it is being drawn rather than
   // only once it closes.
-  polyDraft: { kind: "poly" | "path"; verts: readonly Vec2[]; cursor: Vec2 } | null = null,
+  polyDraft: { kind: "poly" | "path" | "shelter"; verts: readonly Vec2[]; cursor: Vec2 } | null = null,
   // Chains carry their own selection (see `selectedChainIds` in editor.ts).
   selectedChainIds: ReadonlySet<number> = new Set<number>(),
   // A chain being strung out: where it started and the knots it has been tied
@@ -2122,8 +2045,7 @@ export function drawEditor(
   // A camera PATH is excluded: this pass fills and strokes a closed outline, and
   // an open polyline has none - `outlineOf` can only answer its bounding box,
   // which is a rectangle that is not the thing. It is drawn by `drawCameraPath`
-  // in the camera pass instead, and a FIREFLY path by `drawFireflyPath` in the
-  // fireflies pass, for the same reason. Camera REGIONS and notes stay in, because they
+  // in the camera pass instead. Camera REGIONS and notes stay in, because they
   // are closed shapes and this is where their fill has always come from.
   //
   // A SCENE path stays in too, and it is the reason this is a layer test rather
@@ -2143,10 +2065,6 @@ export function drawEditor(
       // left them drawn with their layer hidden.
       visibleLayers.has(i.layer) &&
       !(i.shape.kind === "path" && i.layer !== "scene") &&
-      // A shelter is light, not stuff: its own pass below draws it, on its own
-      // layer's visibility.
-      i.layer !== "shelter" &&
-      i.layer !== "fog" &&
       !isCheckpointNote(i),
   );
   const ordered = [...geometry].sort((a, b) => Number(!propsOf(a).passable) - Number(!propsOf(b).passable));
@@ -2562,8 +2480,8 @@ export function drawEditor(
   // And over a 3D scene ("outline") there is none: the scene IS the shelter's
   // light, and this canvas is a transparent sheet over it, where a multiply
   // has nothing beneath it to darken and would paint the slate on instead.
-  const shelterItems = visibleLayers.has("shelter") ? model.items.filter((i) => i.layer === "shelter") : [];
-  const env = model.environment;
+  const shelterItems = visibleLayers.has("scene") ? model.items.filter((i) => i.object === "shelter") : [];
+  const env = environmentOfModel(model);
   const sun =
     (env?.sunIntensity ?? DEFAULT_SUN_INTENSITY) > 0
       ? { x: env?.sunX ?? DEFAULT_SUN_DIR.x, y: env?.sunY ?? DEFAULT_SUN_DIR.y, z: env?.sunZ ?? DEFAULT_SUN_DIR.z }
@@ -2605,7 +2523,7 @@ export function drawEditor(
     ctx.setLineDash([]);
   }
 
-  if (visibleLayers.has("fog")) for (const region of model.items.filter((i) => i.layer === "fog")) {
+  if (visibleLayers.has("scene")) for (const region of model.items.filter((i) => i.object === "fog")) {
     pathBody(ctx, region);
     ctx.strokeStyle = selectedIds.has(region.id) ? SELECT : FOG_REGION_COLOR;
     ctx.lineWidth = worldLine * (selectedIds.has(region.id) ? 2.5 : 1.5);
@@ -2676,12 +2594,6 @@ export function drawEditor(
     }
     drawLockMarks(ctx, r, worldLine);
   }
-
-  // Firefly paths, above the geometry for the camera regions' reason.
-  const fireflyPaths = visibleLayers.has("fireflies")
-    ? model.items.filter((i) => i.layer === "fireflies")
-    : [];
-  for (const f of fireflyPaths) drawFireflyPath(ctx, f, worldLine, selectedIds.has(f.id));
 
   // Lights above the geometry they light, for the reason camera regions are:
   // they are a statement ABOUT the scene rather than part of it, and a lamp

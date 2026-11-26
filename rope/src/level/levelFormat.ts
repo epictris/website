@@ -86,7 +86,7 @@ import type { MushroomParameters } from "./mushroom";
 // kind on the way through would be a field that forgets.
 import { dmath } from "../engine/dmath";
 import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
-import { compileLevel, isLevelTree, migrateToTree, scaleTree, type LevelNode, type LevelTree } from "./nodes";
+import { compileLevel, isLevelTree, migrateToTree, scaleTree, upgradeTree, type LevelNode, type LevelTree } from "./nodes";
 import { DEFAULT_BERRY_FRACTIONS, type StarberrySettings } from "./starberry";
 
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water" | "finish";
@@ -871,34 +871,10 @@ export interface LightObjectData extends ObjectPlacement {
   // renderer's hysteresis, so a ball resting on the edge does not strobe).
   // Absent = DEFAULT_WAKE_FALL; 0 is instant.
   wakeFall?: number;
-  // Point only. A FIREFLY SWARM of this many glowing motes (capped at
-  // `FIREFLY_MAX`), hovering about the light's placement - its home - until the
-  // ball comes within `wake` of it (absent = `DEFAULT_FIREFLY_NOTICE`), and
-  // from then on following the ball for the rest of the run, looping and
-  // swirling around it. Absent (or 0) = an ordinary light. Dimensionless.
-  //
-  // The light IS the swarm's: `color`, `intensity`, `range` and `flicker` are
-  // the swarm's light, hung at its motes' centroid wherever they fly, and `z`
-  // is the height of its home. Absent, the colour and intensity are the
-  // firefly's own (`FIREFLY_COLOR`, `FIREFLY_INTENSITY`), not a lamp's.
-  // `wakeDelay`, `wakeRise` and `wakeFall` are not read: a swarm is always
-  // lit, and it is its presence that the ball gains. Like a waking light it is
-  // served by a small fixed POOL (`FIREFLY_POOL` in `render3d/fireflies.ts`)
-  // handed to the swarms nearest the ball, and it casts no shadow.
-  //
-  // RENDER-ONLY and driven by the wall clock, like `wake`: the renderer reads
-  // the ball's position and writes nothing back, so no replay can diverge on
-  // it. Its purpose is that the player is always lit, by something the world
-  // gave them rather than a light they carry.
-  fireflies?: number;
-  // Swarm only: the `id` of the FIREFLY PATH (`FireflyPathData`) the swarm
-  // guides the player along, instead of the level's camera paths. When the
-  // player reaches that path's end the swarm stops following, flies back along
-  // the path to its start and waits there, noticing the player again once they
-  // have left its `wake` ring and come back into it. Absent = the camera paths,
-  // followed for the rest of the run. An id naming no path is warned about and
-  // treated as absent. An id, not a length.
-  path?: number;
+  // FIREFLIES were removed on 2026-11-26: a light once carried `fireflies` (a
+  // swarm of that many motes, the light being the swarm's own) and `path` (the
+  // firefly path it guided along). Both are folded out at load with the light
+  // they made (`dropFireflies` in level/nodes.ts).
 }
 
 // A named point ON a body, and the only thing a chain end ties to.
@@ -2276,27 +2252,6 @@ export interface CameraPathData {
   priority?: number;
 }
 
-// One node of a firefly path: a camera path's node without the keys, since a
-// firefly path carries no framing to key.
-export type FireflyPathVert = Pick<CameraPathVert, "x" | "y" | "inX" | "inY" | "outX" | "outY">;
-
-// A FIREFLY PATH: the route a swarm guides the player along, authored apart
-// from the camera's (see `LightObjectData.path`, which names it by `id`, and
-// "Fireflies" in docs/lighting-and-surfaces.md). The same curve as a camera
-// path - local verts under (x, y, rot), cubic Bézier handles, >= 2 distinct
-// nodes, node order the way forward - and nothing else: it frames nothing.
-//
-// Its END is where the swarm leaves the player, and its START is where the
-// swarm goes back to wait. RENDER-ONLY, like everything about fireflies.
-export interface FireflyPathData {
-  // Unique across the level's firefly paths; what a swarm names it by, so
-  // reordering the list re-ties nothing.
-  id: number;
-  x: number;
-  y: number;
-  rot: number;
-  verts: FireflyPathVert[];
-}
 
 // A SHELTER: the FRONT WALL of an enclosed cave - the wall between the camera
 // and the play space, cut away so the player can be seen, put back for the
@@ -2331,8 +2286,17 @@ export const DEFAULT_SHELTER_FRONT = 2.5;
 // How thick the wall is, metres: a shadow needs a closed solid, not a size.
 export const SHELTER_THICKNESS = 1;
 
-// A fog mask drawn on the gameplay plane. The existing depth fog is at full
-// strength inside, fading to zero over `falloff` metres INSIDE the edge.
+// A FOG volume drawn on the gameplay plane (the `FogRegion2D` node): the air
+// inside it thickens with depth from the camera by its own `amount` and takes
+// its own `color`, at full strength inside, fading to zero over `falloff`
+// metres INSIDE the edge. Overlapping regions do not add: a surface takes the
+// thickest fog any region gives it, tinted by the regions in proportion to
+// what each gives.
+//
+// `amount` and `color` belong to the region since the format-4 tree (the fog
+// node owns its fog). Absent, they fall back to the level-wide
+// `EnvironmentData.fogAmount` / `fogColor`, which is how a flat level and a
+// format-3 tree wrote one fog for every region.
 // Absent fogRegions keeps global fog; an explicit [] means no fog anywhere.
 export interface FogRegionData {
   x: number;
@@ -2340,6 +2304,10 @@ export interface FogRegionData {
   rot: number;
   shape: Extract<ShapeData, { kind: "rect" | "circle" }>;
   falloff?: number;
+  // How much of `color` a surface FOG_REFERENCE_DISTANCE from the camera takes
+  // on inside the region, a fraction as `EnvironmentData.fogAmount` is.
+  amount?: number;
+  color?: string;
 }
 export const DEFAULT_FOG_FALLOFF = 3; // metres; explicit values are pixels on disk
 
@@ -2498,7 +2466,8 @@ export function flatLevelOf(raw: LevelSource): RawLevelData {
 // sandbox) travels as it is.
 export function embeddedLevelOf(raw: LevelSource): LevelSource {
   if (!isLevelTree(raw)) return raw;
-  return { ...raw, format: LEVEL_FORMAT, nodes: compileLevel(raw).nodes };
+  const tree = upgradeTree(raw);
+  return { ...tree, format: LEVEL_FORMAT, nodes: compileLevel(tree).nodes };
 }
 
 // The level with NO OPENING: neither the rolling entry nor the recorded
@@ -2764,9 +2733,6 @@ export interface LevelData {
   // Camera paths (see CameraPathData). Absent = the rule set is regions-only,
   // which is every level authored before this field.
   cameraPaths?: CameraPathData[];
-  // The routes firefly swarms guide the player along (see FireflyPathData).
-  // Render-only. Absent = none, and every swarm reads the camera paths.
-  fireflyPaths?: FireflyPathData[];
   // The volumes the sky does not reach (see ShelterData). Render-only. Absent
   // = none, and the whole level is under the sky the environment authors.
   shelters?: ShelterData[];
@@ -2814,7 +2780,12 @@ export interface LevelData {
 // flat form only what it compiles to. One number line for both forms, so it
 // is `TREE_FORMAT` too (nodeCases holds them equal): a flat level stamped 3
 // is one compiled from a tree, and every fold below 3 has been applied.
-export const LEVEL_FORMAT = 3;
+//
+// 4: the level's light is NODES (a `Sun` and an `Environment`) and each fog
+// region owns its fog (`FogRegionData.amount` / `color`); the background is a
+// level property. The flat form is unchanged: what a format-4 tree compiles
+// to is read exactly as a format-3 one was.
+export const LEVEL_FORMAT = 4;
 
 // ---------------------------------------------------------------------------
 // The retired flat form
@@ -2931,7 +2902,6 @@ export interface RawLevelData {
   lights?: LegacyLightData[];
   cameraRegions?: CameraRegionData[];
   cameraPaths?: CameraPathData[];
-  fireflyPaths?: FireflyPathData[];
   shelters?: ShelterData[];
   fogRegions?: FogRegionData[];
   notes?: NoteData[];
@@ -3034,7 +3004,7 @@ export function normalizeLevelData(raw: LevelSource): LevelData {
 // The authored view of any level: the tree itself, or the flat form migrated
 // into one. What the editor, the renderer and the formation tools read.
 export function loadLevelTree(raw: LevelSource): LevelTree {
-  if (isLevelTree(raw)) return raw;
+  if (isLevelTree(raw)) return upgradeTree(raw);
   return migrateToTree(normalizeFlat(raw), { isMover });
 }
 
@@ -3715,10 +3685,6 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.wakeDelay !== undefined ? { wakeDelay: o.wakeDelay } : {}),
       ...(o.wakeRise !== undefined ? { wakeRise: o.wakeRise } : {}),
       ...(o.wakeFall !== undefined ? { wakeFall: o.wakeFall } : {}),
-      // A count.
-      ...(o.fireflies !== undefined ? { fireflies: o.fireflies } : {}),
-      // An id.
-      ...(o.path !== undefined ? { path: o.path } : {}),
     };
   }
   // A decoration's anchor points are lengths; normals, its turn and size (a
@@ -3955,43 +3921,6 @@ export function scaleNormalized(data: LevelData, factor: number): LevelData {
         }
       : {}),
   }));
-  // A firefly path is the camera path's curve alone: its placement, its nodes
-  // and their handles are lengths, `rot` and `id` are not. Degenerate ones are
-  // dropped here for the camera path's reason, as are repeated ids - the first
-  // keeps the id, since a swarm naming it cannot say which it meant.
-  const fireflyIds = new Set<number>();
-  const fireflyPaths = data.fireflyPaths
-    ?.filter((p, i) => {
-      const distinct = p.verts?.some((v) => v.x !== p.verts[0]!.x || v.y !== p.verts[0]!.y);
-      if ((p.verts?.length ?? 0) < 2 || !distinct) {
-        console.warn(
-          `[fireflies] fireflyPaths[${i}] (id ${p.id}) at (${p.x}, ${p.y}) has fewer than 2 distinct verts; dropped.`,
-        );
-        return false;
-      }
-      if (fireflyIds.has(p.id)) {
-        console.warn(`[fireflies] fireflyPaths[${i}] repeats id ${p.id}; dropped.`);
-        return false;
-      }
-      fireflyIds.add(p.id);
-      return true;
-    })
-    .map(
-      (p): FireflyPathData => ({
-        id: p.id,
-        x: p.x * factor,
-        y: p.y * factor,
-        rot: p.rot,
-        verts: p.verts.map((v) => ({
-          x: v.x * factor,
-          y: v.y * factor,
-          ...(v.inX !== undefined ? { inX: v.inX * factor } : {}),
-          ...(v.inY !== undefined ? { inY: v.inY * factor } : {}),
-          ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
-          ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
-        })),
-      }),
-    );
   // A shelter's placement, shape and `front` are lengths; `rot` is not. A shape that encloses nothing - a belt, a curve, a
   // polygon of fewer than three points - shelters nothing and is dropped here,
   // named, rather than drawn as a volume that does nothing.
@@ -4017,6 +3946,9 @@ export function scaleNormalized(data: LevelData, factor: number): LevelData {
       ? { kind: "circle", r: r.shape.r * factor }
       : { kind: "rect", w: r.shape.w * factor, h: r.shape.h * factor },
     ...(r.falloff !== undefined ? { falloff: Math.max(0, r.falloff * factor) } : {}),
+    // A fraction and a colour: neither is a length.
+    ...(r.amount !== undefined ? { amount: r.amount } : {}),
+    ...(r.color !== undefined ? { color: r.color } : {}),
   }));
   return {
     // A title and two flags: nothing in the block is a length, so it crosses
@@ -4025,7 +3957,6 @@ export function scaleNormalized(data: LevelData, factor: number): LevelData {
     ...(data.meta ? { meta: { ...data.meta } } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
     ...(paths ? { cameraPaths: paths } : {}),
-    ...(fireflyPaths ? { fireflyPaths } : {}),
     ...(shelters ? { shelters } : {}),
     ...(fogRegions ? { fogRegions } : {}),
     // Nothing in the environment block is a length (see EnvironmentData), so it

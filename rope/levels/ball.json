@@ -1,28 +1,34 @@
 {
-  "format": 3,
+  "format": 4,
   "meta": {
     "title": "1. river",
     "intro": true
   },
-  "environment": {
-    "sunIntensity": 6.5,
-    "sunColor": "#ffe4bd",
-    "sunX": 0.5,
-    "sunY": 1,
-    "sunZ": -0.6,
-    "skyColor": "#7ab8e0",
-    "groundColor": "#2a3f56",
-    "fillIntensity": 3,
-    "envIntensity": 0.55,
-    "backgroundColor": "#1c3856",
-    "fogColor": "#2a5075",
-    "fogAmount": 0.52
-  },
+  "background": "#1c3856",
   "camera": {
-    "focalLength": 70
+    "focalLength": 70,
+    "zOffset": 0
   },
-  "fogMasked": true,
   "nodes": [
+    {
+      "type": "Sun",
+      "id": "mgjxa4rq",
+      "name": "Sun",
+      "sunX": 0.5,
+      "sunY": 1,
+      "sunZ": -0.6,
+      "sunColor": "#ffe4bd",
+      "sunIntensity": 6.5
+    },
+    {
+      "type": "Environment",
+      "id": "xnhhkqhk",
+      "name": "Environment",
+      "skyColor": "#7ab8e0",
+      "groundColor": "#2a3f56",
+      "fillIntensity": 3,
+      "envIntensity": 0.55
+    },
     {
       "type": "Spawn2D",
       "id": "hla2m4uw",
@@ -15488,7 +15494,9 @@
         "w": 5165.000000000001,
         "h": 2120.0000000000005
       },
-      "falloff": 400
+      "falloff": 400,
+      "amount": 0.52,
+      "color": "#2a5075"
     },
     {
       "type": "Note2D",

@@ -26,7 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { collides, flatLevelOf, isMover, LEVEL_FORMAT, normalizeFlat, scaleNormalized, type AnchorObjectData, type CollisionObjectData, type LevelBodyData, type LevelData, type LevelSource, type RawLevelData } from "../level/levelFormat";
-import { compileLevel, compose3D, formationDataOf, frameOf, isLevelTree, lookNodes, migrateToTree, scaleLevelTree, TREE_FORMAT, validateTree, type LevelNode, type LevelTree, type PrefabLibrary } from "../level/nodes";
+import { compileLevel, compose3D, FOG_EVERYWHERE_SIZE, formationDataOf, frameOf, isLevelTree, lookNodes, migrateToTree, scaleLevelTree, TREE_FORMAT, upgradeTree, validateTree, walkNodes, type LevelNode, type LevelTree, type PrefabLibrary } from "../level/nodes";
 import { LEVELS } from "../level/registry";
 
 export interface NodeCaseResult {
@@ -76,7 +76,7 @@ const LOOK_OBJECTS: ReadonlySet<string> = new Set(["light", "model", "decoration
 // suffix it to keep siblings apart), so it is not part of it; neither is the
 // format stamp.
 function simView(d: LevelData): unknown {
-  const { bodies, format: _f, tree: _t, ...rest } = d;
+  const { bodies, format: _f, tree: _t, ...rest } = fogView(d);
   return {
     ...rest,
     bodies: bodies.filter(collides).map(({ name: _n, node: _node, formation: _rock, ...b }) => ({
@@ -86,6 +86,34 @@ function simView(d: LevelData): unknown {
         return rest;
       }),
     })),
+  };
+}
+
+// THE FOG AS IT IS DRAWN, not as it is written. The sim reads no fog; the
+// renderer reads each region's amount and colour, falling back to the
+// environment block's (`FogRegionData`). The flat form wrote one fog for
+// every region in that block, or fog everywhere with no regions at all; a
+// format-4 tree writes it on its regions and the "everywhere" as one region
+// over everything (`upgradeTree`). So both sides are compared as the regions'
+// effective fog, the environment block without its fog, and no region set
+// where nothing is fogged: what the renderer would draw, exactly.
+function fogView(d: LevelData): LevelData {
+  const { fogAmount, fogColor, ...env } = d.environment ?? {};
+  const regions =
+    d.fogRegions ??
+    ((fogAmount ?? 0) > 0
+      ? [{ x: 0, y: 0, rot: 0, shape: { kind: "rect" as const, w: FOG_EVERYWHERE_SIZE, h: FOG_EVERYWHERE_SIZE }, falloff: 0 }]
+      : []);
+  const drawn = regions.map((r) => {
+    const amount = r.amount ?? fogAmount;
+    const color = r.color ?? fogColor;
+    return { ...r, ...(amount !== undefined ? { amount } : {}), ...(color !== undefined ? { color } : {}) };
+  });
+  const { environment: _e, fogRegions: _f, ...rest } = d;
+  return {
+    ...rest,
+    ...(Object.keys(env).length ? { environment: env } : {}),
+    ...(drawn.some((r) => (r.amount ?? 0) > 0) ? { fogRegions: drawn } : {}),
   };
 }
 
@@ -242,6 +270,82 @@ export function runNodeTreeCases(): NodeCaseResult[] {
     const body = compileLevel(t, {}).data.bodies[0]!;
     const s = body.objects[0] as CollisionObjectData;
     check("group-frame", body.x === 100 && near(s.x, 15) && near(s.y, 0), `body at ${body.x}, shape at ${s.x}, ${s.y} in its frame (want 15, 0)`);
+  }
+
+  // THE LEVEL'S LIGHT (format 4, docs/level-format.md "The level's light").
+  {
+    // A format-3 tree's environment block becomes a Sun, an Environment and a
+    // background, its fog the regions' own; compiled, it is the block it was
+    // (but for the fog, now on the region), and upgrading twice is upgrading once.
+    const env = { sunIntensity: 6.5, sunX: 0.5, skyColor: "#7ab8e0", envIntensity: 0.55, backgroundColor: "#1c3856", fogAmount: 0.52, fogColor: "#2a5075" };
+    const region = { type: "FogRegion2D", id: "fog", name: "Fog", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 100, h: 100 } } as LevelNode;
+    const old: LevelTree = { format: 3, environment: env, fogMasked: true, nodes: [SPAWN as LevelNode, region] };
+    const up = upgradeTree(old);
+    const sun = up.nodes.find((n) => n.type === "Sun") as Record<string, unknown> | undefined;
+    const sky = up.nodes.find((n) => n.type === "Environment") as Record<string, unknown> | undefined;
+    const fog = up.nodes.find((n) => n.type === "FogRegion2D") as Record<string, unknown> | undefined;
+    check(
+      "light-upgrade",
+      up.format === TREE_FORMAT && up.environment === undefined && up.fogMasked === undefined && up.background === "#1c3856" &&
+        sun?.["sunIntensity"] === 6.5 && sun?.["sunX"] === 0.5 && sun?.["skyColor"] === undefined &&
+        sky?.["skyColor"] === "#7ab8e0" && sky?.["envIntensity"] === 0.55 && sky?.["sunIntensity"] === undefined &&
+        fog?.["amount"] === 0.52 && fog?.["color"] === "#2a5075",
+      JSON.stringify({ background: up.background, sun, sky, fog }),
+    );
+    const again = upgradeTree(up);
+    check("light-upgrade-once", again === up && upgradeTree(old).nodes.map((n) => n.id).join() === up.nodes.map((n) => n.id).join(), "a format-4 tree is left as it is, and a format-3 one upgrades to the same ids every time");
+    const compiled = compileLevel(old, {}).data;
+    const { fogAmount: _a, fogColor: _c, ...unfogged } = env;
+    const envDiff = firstDifference(compiled.environment, unfogged);
+    check("light-compile", envDiff === null && compiled.fogRegions?.[0]?.amount === 0.52, envDiff ?? "the environment block as it was, the fog on its region");
+    // No Sun node is no sun; no Environment node is the default sky.
+    const sunless = compileLevel({ format: TREE_FORMAT, nodes: [SPAWN as LevelNode, { type: "Environment", id: "e", name: "Environment" } as LevelNode] }, {}).data;
+    const lit = compileLevel({ format: TREE_FORMAT, nodes: [SPAWN as LevelNode, { type: "Sun", id: "s", name: "Sun" } as LevelNode] }, {}).data;
+    check("light-no-sun", sunless.environment?.sunIntensity === 0 && lit.environment === undefined, `sunless ${JSON.stringify(sunless.environment)}, a bare Sun ${JSON.stringify(lit.environment)}`);
+    // Fog everywhere (format 3 with no region and no mask) is one region over
+    // everything; a level with no region has no fog.
+    const everywhere = compileLevel({ format: 3, environment: { fogAmount: 0.3 }, nodes: [SPAWN as LevelNode] }, {}).data;
+    const big = everywhere.fogRegions?.[0];
+    check(
+      "light-fog-everywhere",
+      everywhere.fogRegions?.length === 1 && big?.amount === 0.3 && big.shape.kind === "rect" && big.shape.w === FOG_EVERYWHERE_SIZE && everywhere.environment?.fogAmount === undefined,
+      JSON.stringify(everywhere.fogRegions),
+    );
+    const clear = compileLevel({ format: 3, environment: { fogAmount: 0.3 }, fogMasked: true, nodes: [SPAWN as LevelNode] }, {}).data;
+    check("light-fog-none", clear.fogRegions === undefined && clear.environment === undefined, JSON.stringify({ fogRegions: clear.fogRegions, environment: clear.environment }));
+    // One of each, at the top or in a folder, holding nothing; never in a prefab.
+    const two = validateTree([SPAWN as LevelNode, { type: "Sun", id: "s1", name: "Sun" } as LevelNode, { type: "Sun", id: "s2", name: "Sun2" } as LevelNode], { prefabs: {} });
+    const nested = validateTree([SPAWN as LevelNode, { type: "Node2D", id: "g", name: "G", children: [{ type: "Environment", id: "e", name: "Environment" } as LevelNode] } as LevelNode], { prefabs: {} });
+    const foldered = validateTree([SPAWN as LevelNode, { type: "Node", id: "f", name: "F", children: [{ type: "Sun", id: "s", name: "Sun" } as LevelNode] } as LevelNode], { prefabs: {} });
+    const inPrefab = validateTree([{ type: "Sun", id: "s", name: "Sun" } as LevelNode], { prefabs: {}, prefab: true });
+    check(
+      "light-refused",
+      two.some((p) => p.error && p.message.includes("second Sun")) && nested.some((p) => p.error && p.message.includes("Environment")) &&
+        !foldered.some((p) => p.error) && inPrefab.some((p) => p.error && p.message.includes("prefab")),
+      [...two, ...nested, ...foldered, ...inPrefab].map((p) => p.message).join("; "),
+    );
+  }
+
+  // FIREFLIES, removed 2026-11-26: a swarm's light and every firefly path go
+  // at load, a stale `path` on another light is dropped, and nothing the sim
+  // reads changes; a tree that holds none is left as it is.
+  {
+    const lamp = { type: "Light3D", id: "lamp", name: "Lamp", intensity: 3, path: "fp" } as unknown as LevelNode;
+    const swarm = { type: "Light3D", id: "swarm", name: "Swarm", fireflies: 12, wake: 250 } as unknown as LevelNode;
+    const path = { type: "FireflyPath2D", id: "fp", name: "FireflyPath", x: 0, y: 0, rot: 0, verts: [{ x: 0, y: 0 }, { x: 100, y: 0 }] } as unknown as LevelNode;
+    const holder = { type: "Node2D", id: "h", name: "H", children: [swarm, lamp] } as LevelNode;
+    const before = tree([holder, path]);
+    const after = upgradeTree(before);
+    const ids: string[] = [];
+    walkNodes(after.nodes, (n) => void ids.push(n.id));
+    const kept = after.nodes.find((n) => n.id === "h")?.children?.[0] as Record<string, unknown> | undefined;
+    check(
+      "fireflies-dropped",
+      !ids.includes("swarm") && !ids.includes("fp") && ids.includes("lamp") && kept?.["path"] === undefined && kept?.["intensity"] === 3,
+      `left ${ids.join(", ")}; the lamp ${JSON.stringify(kept)}`,
+    );
+    const clean = tree([{ type: "Node2D", id: "g", name: "G" } as LevelNode]);
+    check("fireflies-none", upgradeTree(clean).nodes === upgradeTree(upgradeTree(clean)).nodes, "a tree with no fireflies upgrades to itself");
   }
 
   // Build order is the `order` key, not tree order: grouping two bodies under

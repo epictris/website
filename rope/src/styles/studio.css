@@ -43,8 +43,13 @@ body.studio { background: var(--studio-bg); color: var(--studio-text); font-fami
 .studio-nav a { text-decoration: none; color: var(--studio-muted); }
 .studio-nav a:hover { color: var(--studio-accent); }
 .studio-nav a[aria-current=page] { color: var(--studio-accent); }
-/* The level editor has fixed furniture around an unobstructed canvas. */
-.studio .ed-root { font: inherit; color: var(--studio-text); --rail-width: 300px; --inspector-width: 272px; }
+/* The level editor has fixed furniture around an unobstructed canvas: the
+   top bars, the workspace's dock on the left, the scene tree's on the right
+   (`--dock-width`, dragged by its edge and set by editor.ts), and over the
+   viewport the view bar, the view cube with the floating inspector under it,
+   and the status line along its foot. `--chrome-top` is where the top bars
+   end, measured by editor.ts as they wrap. */
+.studio .ed-root { font: inherit; color: var(--studio-text); --rail-width: 260px; --dock-width: 300px; --chrome-top: 104px; --status-height: 28px; }
 .studio .ed-bar { top: 12px; left: 12px; width: var(--rail-width); max-height: calc(68dvh - 24px); overflow-y: auto; box-sizing: border-box; gap: 0; padding: 0; border-radius: 6px; border-color: var(--studio-line); background: var(--studio-panel); box-shadow: 0 8px 24px #0003; pointer-events: auto; }
 .studio .ed-bar > :is(.ed-row,.ed-layers) { padding: .65lh 1.5ch; gap: .5lh .7ch; border-bottom: 1px solid #344359; }
 .studio .ed-bar > .ed-title { padding: .6lh 1.8ch; color: var(--studio-muted); overflow-wrap: anywhere; }
@@ -68,8 +73,17 @@ body.studio { background: var(--studio-bg); color: var(--studio-text); font-fami
 .studio .ed-layer-btn { min-width: 0; flex: 1; padding-inline: .6ch; }
 .studio .ed-eye { min-height: 26px; min-width: 22px; height: 26px; width: 22px; padding: 0; color: var(--studio-muted); border-color: transparent; background: transparent; }
 .studio .ed-eye.off,.studio .ed-lock { color: #8599b5; }
+/* An eye or a padlock says its state by its drawing (open or shut, lifted or
+   closed), so the pressed fill other toggles take would only be noise - and
+   would make a type layer's eye look unlike a data layer's beside it. */
+.studio .ed-eye[aria-pressed=true] { background: transparent; border-color: transparent; color: var(--studio-muted); }
+.studio .ed-eye[aria-pressed=true]:hover:not(:disabled) { background: var(--studio-raised); border-color: var(--studio-line); }
+.studio .ed-lock.on[aria-pressed=true] { color: var(--studio-warm); }
 .studio .ed-lock.on { color: var(--studio-warm); }
-.studio .ed-inspector { top: 12px; right: 12px; width: var(--inspector-width); box-sizing: border-box; padding: 1lh 1.6ch; gap: 1lh; max-height: calc(100dvh - 24px); border-color: var(--studio-line); border-radius: 6px; background: var(--studio-panel); }
+/* The inspector: a window floating over the viewport, in the column under
+   the view cube (`.ed-float`), as tall as it needs and scrolling past that. */
+.studio .ed-inspector { position: static; width: 300px; max-width: 100%; flex: 0 1 auto; min-height: 0; max-height: none; box-sizing: border-box; padding: .8lh 1.6ch; gap: .8lh; border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-panel); box-shadow: 0 8px 24px #0004; pointer-events: auto; }
+.studio .ed-inspector[hidden] { display: none; }
 .studio :is(.ed-heading,.ed-sec.top > .ed-sec-head) { color: var(--studio-text); font-weight: 600; border-color: var(--studio-line); padding-block: .25lh; }
 .studio .ed-sec { gap: .4lh; }
 .studio .ed-sec-head { align-items: center; min-height: 28px; }
@@ -78,10 +92,22 @@ body.studio { background: var(--studio-bg); color: var(--studio-text); font-fami
 .studio .ed-sec-body { gap: .45lh; padding-block: .25lh; }
 .studio .ed-sec-head:focus-visible { outline-offset: 0; }
 .studio .ed-hint { color: var(--studio-muted); }
-.studio .ed-outliner { width: var(--rail-width); left: 12px; bottom: 12px; max-height: calc(30dvh - 12px); box-sizing: border-box; padding: .6lh 1.2ch; border-color: var(--studio-line); border-radius: 6px; background: var(--studio-panel); }
+/* The scene tree fills the right dock's Scene pane, the data layers under it. */
+.studio .ed-outliner { position: static; flex: 1; min-height: 0; width: 100%; max-height: none; box-sizing: border-box; padding: .6lh 1.2ch; border: 0; border-radius: 0; background: transparent; }
 .studio .ed-outliner-head { padding-bottom: .4lh; border-bottom: 1px solid var(--studio-line); }
-.studio .ed-outliner-title { color: var(--studio-text); font-weight: 600; }
-.studio .ed-outliner-list { max-height: none; min-height: 0; }
+.studio .ed-outliner-title { color: var(--studio-text); font-weight: 600; flex: 1; }
+.studio .ed-out-head-add { min-height: 24px; height: 24px; padding: 0 1ch; }
+/* The tree's search and its expand / collapse all, under the heading. */
+.studio .ed-out-tools { display: flex; align-items: center; gap: .6ch; padding: .5lh 0 .3lh; }
+.studio .ed-out-search { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; color: var(--studio-muted); }
+.studio .ed-out-search > .studio-icon { position: absolute; left: .8ch; pointer-events: none; }
+.studio .ed-out-search > input { width: 100%; min-height: 28px; padding-left: 3.4ch; }
+.studio .ed-out-tool { min-height: 28px; height: 28px; width: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--studio-muted); }
+.studio .ed-out-tool:hover:not(:disabled) { color: var(--studio-text); }
+/* A row shown only for the path down to a match: there, but not what was asked for. */
+.studio .ed-out-row.ctx .ed-out-label { color: var(--studio-muted); opacity: .7; }
+.studio .ed-out-none { padding: .5lh .5ch; }
+.studio .ed-outliner-list { flex: 1; max-height: none; min-height: 0; overflow-y: auto; }
 .studio .ed-out-row { min-height: 27px; padding: .15lh .5ch; border-radius: 3px; }
 .studio .ed-out-row.sel { background: var(--studio-selected); color: #cee1ff; }
 .studio .ed-out-count,.studio .ed-out-twist { color: var(--studio-muted); }
@@ -196,25 +222,24 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-commandbar .ed-primary { margin-left: auto; }
 .studio .ed-commandbar .ed-select { width: 22ch; flex: 0 1 auto; }
 .studio .ed-commandbar .ed-danger { margin-left: 0; }
-.studio .ed-bar { top: 116px; max-height: calc(66dvh - 116px); }
-.studio .ed-inspector { top: 116px; max-height: calc(100dvh - 128px); }
-.studio .ed-root { --rail-width: 248px; --inspector-width: 276px; }
-.studio .ed-outliner { max-height: calc(34dvh - 24px); }
-.studio .ed-bar .ed-tools { grid-template-columns: repeat(2,minmax(0,1fr)); }
+/* The level's own settings, set off from the files by a rule. */
+.studio .ed-level-settings { display: flex; align-items: center; gap: 1.5ch; padding-left: 1.5ch; margin-left: .5ch; border-left: 1px solid var(--studio-line); }
+.studio .ed-level-settings .ed-inline { gap: .8ch; white-space: nowrap; }
+.studio .ed-level-settings .ed-num { width: 8ch; }
+.studio .ed-level-settings .ed-color { width: 4.5ch; height: 26px; }
 .studio .ed-layers { grid-template-columns: 1fr; }
 .studio .ed-layer-row { gap: .7ch; }
-.studio .ed-inspector::before { content: 'Properties'; font-weight: 650; padding-bottom: .6lh; border-bottom: 1px solid var(--studio-line); }
 .studio-header { min-height: 56px; flex: none; padding: 0 2.5ch; margin: 0; justify-content: flex-start; gap: 4ch; background: var(--studio-panel); }
 .studio-nav { height: 56px; align-items: stretch; gap: 2.5ch; }
 .studio-nav a { display: flex; align-items: center; border-bottom: 2px solid transparent; }
 .studio-nav a[aria-current=page] { border-color: var(--studio-accent); }
-@media (min-width: 1600px) { .studio .ed-root { --rail-width: 270px; --inspector-width: 300px; }.studio-mixer .workspace { grid-template-columns: 260px minmax(0,1fr) 320px; } }
+@media (min-width: 1600px) { .studio .ed-root { --rail-width: 270px; }.studio-mixer .workspace { grid-template-columns: 260px minmax(0,1fr) 320px; } }
 @media (max-width: 1150px) {
   .studio-mixer .workspace { grid-template-columns: 210px minmax(0,1fr) 270px; }
   .studio-mixer .draft-hint { display: none; }
   .studio-mixer #revert { margin-left: auto; }
   .studio-mixer .monitor-control { margin-left: 0; }
-  .studio .ed-root { --rail-width: 230px; --inspector-width: 248px; }
+  .studio .ed-root { --rail-width: 230px; }
 }
 @media (max-width: 850px) {
   body.studio-mixer { height: auto; min-height: 100dvh; overflow: auto; }
@@ -223,10 +248,6 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
   .studio-mixer #inspector { display: grid; grid-template-columns: 1fr 1fr; align-items: start; column-gap: 3ch; }
   .studio-mixer #inspector > .source-info:last-child { grid-column: 1 / -1; }
   .studio-mixer .arrangement { overflow: visible; }
-  .studio .ed-commandbar { min-height: 82px; }
-  .studio .ed-bar,.studio .ed-inspector { top: 150px; }
-  .studio .ed-bar { max-height: calc(66dvh - 150px); }
-  .studio .ed-inspector { max-height: calc(100dvh - 162px); }
 }
 @media (max-width: 600px) {
   .studio-header,.studio .ed-shell-header { padding-inline: 1.2ch; gap: 2ch; }
@@ -246,10 +267,6 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
   .studio-mixer #inspector { display: block; }
   .studio-mixer .monitor-control { flex-basis: 100%; }
   .studio-mixer .mix-actions { padding-inline: 1.2ch; }
-  .studio .ed-root { --rail-width: 44vw; --inspector-width: 47vw; }
-  .studio .ed-bar { left: 6px; }
-  .studio .ed-inspector { right: 6px; }
-  .studio .ed-outliner { left: 6px; bottom: 6px; }
   .studio .ed-field { flex-wrap: wrap; white-space: normal; }
   .studio .ed-field > :is(input,select,textarea) { max-width: 100%; }
   .studio .ed-shell-header .studio-nav { gap: 1ch; }
@@ -272,48 +289,77 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio-mixer .controls input[type=range] { min-height: 20px; height: 20px; margin: 0; }
 .studio-mixer .clip:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; z-index: 5; }
 @media (max-width: 850px) { .studio .snd-menu { top: 150px; max-height: calc(100dvh - 162px); } }
-.studio .ed-pane-switcher { display: none; }
-.studio .ed-preview-options { padding: .6lh 1.5ch; border-bottom: 1px solid var(--studio-line); }
-.studio .ed-preview-options summary { cursor: pointer; color: var(--studio-muted); }
-.studio .ed-preview-options .ed-row { padding-top: .6lh; gap: .5lh 1ch; }
 .studio .ed-bar .ed-tools { grid-template-columns: repeat(3,minmax(0,1fr)); gap: .35lh .5ch; }
 .studio .ed-tools .ed-btn[data-shortcut]::after { display: inline; }
 .studio .ed-tools .ed-btn { padding-inline: .5ch; }
-.studio .ed-root { --rail-width: 260px; }
 .studio .ed-bar > :is(.ed-row,.ed-layers) { padding-block: .5lh; gap: .35lh .5ch; }
 .studio .ed-btn { min-height: 30px; }
 .studio .ed-root input::placeholder { color: #99abc5; opacity: 1; }
-@media (max-width: 600px) {
-  .studio .ed-pane-switcher { display: flex; position: absolute; top: 164px; left: 8px; gap: 1ch; pointer-events: auto; }
-  .studio .ed-bar,.studio .ed-inspector,.studio .ed-outliner { display: none; }
-  .studio .ed-tools-open .ed-bar,.studio .ed-tools-open .ed-outliner,.studio .ed-properties-open .ed-inspector { display: flex; width: min(300px,calc(100vw - 16px)); }
-  .studio .ed-bar,.studio .ed-inspector { top: 206px; }
-  .studio .ed-inspector { max-height: calc(100dvh - 218px); }
-  .studio .ed-bar { max-height: calc(68dvh - 206px); }
-  .studio .ed-outliner { max-height: 28dvh; }
-  .studio .ed-tools .ed-btn[data-shortcut]::after { display: inline; }
-}
 .studio .ed-root,.studio .ed-root * { box-sizing: border-box; }
-.studio .ed-left-dock { position: absolute; top: 104px; bottom: 0; left: 0; width: var(--rail-width); display: flex; flex-direction: column; background: var(--studio-panel); border-right: 1px solid var(--studio-line); }
-.studio .ed-left-dock .ed-bar { position: static; flex: 1; min-height: 0; width: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
-.studio .ed-left-dock .ed-outliner { position: static; flex: 0 1 auto; min-height: 60px; max-height: 32%; width: 100%; border: 0; border-top: 1px solid var(--studio-line); border-radius: 0; }
-.studio .ed-outliner-list { flex: 1; }
-.studio .ed-inspector { top: 104px; right: 0; bottom: 0; max-height: none; border-width: 0 0 0 1px; border-radius: 0; }
 .studio .studio-icon { display: inline-block; vertical-align: middle; flex: none; }
 .studio .ed-sec.open > .ed-sec-head .studio-icon,.studio .snd-twist.open .studio-icon,.studio .ed-twist[aria-expanded=true] .studio-icon { transform: rotate(90deg); }
 .studio .ed-sec-twist { display: flex; align-items: center; width: 16px; }
 .studio .snd-twist { width: 16px; }
-@media (max-width: 850px) { .studio .ed-left-dock,.studio .ed-inspector { top: 138px; } }
+
+/* THE LAYOUT (editor.ts "DOM"). */
+/* The left dock: the workspace's own tools, layers and brushes, and nothing
+   else. */
+.studio .ed-left-dock { position: absolute; top: var(--chrome-top); bottom: 0; left: 0; width: var(--rail-width); display: flex; flex-direction: column; background: var(--studio-panel); border-right: 1px solid var(--studio-line); pointer-events: auto; }
+.studio .ed-left-dock .ed-bar { position: static; flex: 1; min-height: 0; width: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
+/* The right dock: the scene tree (or the prefab library), full height, as
+   wide as its left edge is dragged. */
+.studio .ed-right-dock { position: absolute; top: var(--chrome-top); bottom: 0; right: 0; width: var(--dock-width); display: flex; flex-direction: column; background: var(--studio-panel); border-left: 1px solid var(--studio-line); pointer-events: auto; }
+.studio .ed-dock-resize { position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; cursor: ew-resize; z-index: 2; touch-action: none; }
+.studio .ed-dock-resize:hover,.studio .ed-dock-resize.active { background: color-mix(in srgb, var(--studio-accent) 45%, transparent); }
+.studio .ed-dock-tabs { display: flex; flex: none; border-bottom: 1px solid var(--studio-line); }
+.studio .ed-dock-tabs .ed-btn { flex: 1; min-height: 34px; border: 0; border-radius: 0; background: transparent; color: var(--studio-muted); border-bottom: 2px solid transparent; }
+.studio .ed-dock-tabs .ed-btn + .ed-btn { border-left: 1px solid var(--studio-line); }
+.studio .ed-dock-tabs .ed-btn.active { color: var(--studio-text); background: transparent; border-bottom-color: var(--studio-accent); }
+.studio .ed-prefab-banner { display: flex; align-items: center; gap: 1ch; flex: none; padding: .4lh 1.2ch; border-bottom: 1px solid var(--studio-line); background: var(--studio-selected); }
+.studio .ed-prefab-banner[hidden] { display: none; }
+.studio .ed-prefab-banner-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.studio .ed-dock-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.studio .ed-dock-pane[hidden] { display: none; }
+.studio .ed-prefab-pane { padding: .8lh 1.2ch; overflow-y: auto; gap: .8lh; }
+/* The layers over the tree: the type layers, then the data layers, each a
+   stack read down, one layer a row. */
+.studio .ed-scene-pane > .ed-layers { flex: none; overflow-y: auto; padding: .6lh 1.2ch; gap: .35lh 1ch; border-bottom: 1px solid var(--studio-line); grid-template-columns: minmax(0,1fr); }
+.studio .ed-scene-pane > .ed-data-layers { max-height: 30%; }
+/* The view bar over the viewport's top left; the column down its right
+   edge: the view cube and the lens, then the inspector under them. */
+/* The view bar wraps within what the column on the right leaves it (the
+   cube and the lens are 220px at their widest), never under it. */
+.studio .ed-viewbar { position: absolute; top: calc(var(--chrome-top) + 8px); left: calc(var(--rail-width) + 8px); max-width: calc(100vw - var(--rail-width) - var(--dock-width) - 244px); display: flex; flex-wrap: wrap; align-items: flex-start; gap: .4lh .6ch; pointer-events: auto; }
+.studio .ed-viewbar .ed-view-btns { gap: .4lh .6ch; flex-wrap: wrap; }
+.studio .ed-viewbar .ed-btn { background: var(--studio-panel); }
+.studio .ed-float { position: absolute; top: calc(var(--chrome-top) + 8px); right: calc(var(--dock-width) + 8px); bottom: calc(var(--status-height) + 8px); display: flex; flex-direction: column; align-items: flex-end; gap: .6lh; pointer-events: none; max-width: calc(100vw - var(--dock-width) - var(--rail-width) - 16px); }
+.studio .ed-float > * { pointer-events: auto; }
+/* Preview settings: a menu off the view bar. */
+.studio .ed-preview-options { position: relative; }
+.studio .ed-preview-options > summary { list-style: none; display: inline-flex; align-items: center; gap: .6ch; cursor: pointer; border: 1px solid var(--studio-line); border-radius: 4px; }
+.studio .ed-preview-options > summary::-webkit-details-marker { display: none; }
+.studio .ed-preview-options > summary::after { content: "▾"; color: var(--studio-muted); }
+.studio .ed-preview-options[open] > summary { border-color: #759bd0; color: #cee1ff; background: var(--studio-selected); }
+.studio .ed-preview-panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; display: flex; flex-direction: column; align-items: stretch; gap: .45lh; min-width: 22ch; padding: .7lh 1.4ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 6px; box-shadow: 0 8px 24px #0005; }
+.studio .ed-preview-panel .ed-check { white-space: nowrap; }
+/* The status line along the viewport's foot. */
+.studio .ed-status { position: absolute; left: var(--rail-width); right: var(--dock-width); bottom: 0; height: var(--status-height); display: flex; align-items: center; padding: 0 1.5ch; background: var(--studio-panel); border-top: 1px solid var(--studio-line); color: var(--studio-muted); pointer-events: auto; }
+.studio .ed-status .ed-title { padding: 0; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.studio .ed-pane-switcher { display: none; }
 @media (max-width: 600px) {
- .studio .ed-left-dock { display: none; top: 206px; left: 8px; bottom: 8px; width: min(300px,calc(100vw - 16px)); border: 1px solid var(--studio-line); border-radius: 5px; }
- .studio .ed-tools-open .ed-left-dock { display: flex; }
- .studio .ed-inspector { top: 206px; right: 8px; bottom: 8px; max-height: none; border: 1px solid var(--studio-line); border-radius: 5px; }
- .studio .ed-left-dock .ed-bar { display: flex; }
- .studio .ed-properties-open .ed-inspector { display: flex; }
+  .studio .ed-root { --rail-width: 0px; --dock-width: 0px; }
+  .studio .ed-pane-switcher { display: flex; position: absolute; top: calc(var(--chrome-top) + 8px); left: 8px; gap: 1ch; pointer-events: auto; }
+  .studio .ed-viewbar { top: calc(var(--chrome-top) + 52px); }
+  .studio .ed-left-dock,.studio .ed-right-dock { display: none; top: calc(var(--chrome-top) + 52px); bottom: 8px; width: min(300px,calc(100vw - 16px)); border: 1px solid var(--studio-line); border-radius: 5px; z-index: 30; }
+  .studio .ed-left-dock { left: 8px; }
+  .studio .ed-right-dock { right: 8px; }
+  .studio .ed-dock-resize { display: none; }
+  .studio .ed-tools-open .ed-left-dock,.studio .ed-scene-open .ed-right-dock { display: flex; }
+  .studio .ed-float { top: calc(var(--chrome-top) + 96px); }
 }
-/* The formation jobs (editor/formationJobs.ts): the canvas's bottom-right
-   corner, clear of the inspector docked beside it. */
-.studio .ed-jobs { right: calc(var(--inspector-width) + 36px); bottom: 12px; width: 34ch; padding: .6lh 1.2ch; gap: .4lh;
+/* The formation jobs (editor/formationJobs.ts): the viewport's bottom-left
+   corner, over the status line, clear of the inspector down the right. */
+.studio .ed-jobs { left: calc(var(--rail-width) + 8px); right: auto; bottom: calc(var(--status-height) + 8px); width: 34ch; padding: .6lh 1.2ch; gap: .4lh;
   border-color: var(--studio-line); border-radius: 6px; background: var(--studio-panel); color: var(--studio-text); box-shadow: 0 8px 24px #0003; }
 .studio .ed-jobs-head { color: var(--studio-text); font-weight: 600; }
 .studio .ed-jobs button { min-height: 0; padding: 0 .8ch; font-weight: 400; color: var(--studio-muted); }
@@ -348,7 +394,7 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-shape-menu .ed-btn { text-align: left; }
 .studio .ed-stack-intersect .ed-stack-mode { color: #e3b45c; border-color: #e3b45c; }
 .studio .ed-btn.ed-attention { border-color: var(--studio-warm); color: var(--studio-warm); }
-@media (max-width: 600px) { .studio .ed-jobs { right: 8px; bottom: 8px; width: min(34ch, calc(100vw - 16px)); } }
+@media (max-width: 600px) { .studio .ed-jobs { left: 8px; bottom: calc(var(--status-height) + 8px); width: min(34ch, calc(100vw - 16px)); } }
 /* Workspaces (editor/workspaces.ts): tabs centred in the command bar, as
    Blender's run along its top bar; each workspace's dock groups its tools
    under small headings. */
@@ -360,9 +406,9 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-tools > .ed-tool-group:first-child { padding-top: 0; }
 .studio .ed-ws-dock > .ed-ws-hint { grid-column: 1 / -1; }
 .studio .ed-ws-dock > .ed-ws-wide { grid-column: 1 / -1; }
-/* Centred on the window where the file buttons leave room for it. */
-@media (min-width: 1400px) {
-  .studio .ed-ws-tabs { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); }
+/* Centred in the room the file buttons and the level settings leave them
+   (`margin-inline: auto`), never over them. */
+@media (min-width: 1600px) {
   .studio .ed-ws-tabs .ed-btn { min-width: 13ch; }
 }
 .studio .ed-bar .ed-ws-dock { grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -381,24 +427,21 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-sculpt-dock > .ed-inline > .ed-num { width: 9ch; }
 .studio .ed-ws-dock > .ed-brush-radius { display: flex; align-items: center; justify-content: space-between; gap: 1ch; }
 .studio .ed-ws-dock > .ed-brush-radius > .ed-num { width: 9ch; }
-/* The view cube and the lens (editor/viewCube.ts): over the viewport's top
-   right corner, clear of the inspector. */
-.studio .ed-viewnav { position: absolute; top: 116px; right: calc(var(--inspector-width) + 12px); display: flex; flex-direction: column; align-items: center; gap: .5lh; pointer-events: auto; }
+/* The view cube and the lens (editor/viewCube.ts): the top of the column
+   down the viewport's right edge (`.ed-float`), the inspector under them. */
+.studio .ed-viewnav { flex: none; display: flex; flex-direction: column; align-items: center; gap: .5lh; pointer-events: auto; }
 /* editor.html stacks its two full-window canvases with `canvas { position:
    absolute; inset: 0 }`; the cube's is in the flow. */
 .studio .ed-viewnav .ed-viewcube { display: block; position: static; inset: auto; }
 .studio .ed-viewnav .ed-lens { background: var(--studio-panel); }
 .studio .ed-viewnav .ed-lens .ed-btn { min-width: 7ch; }
-@media (max-width: 850px) { .studio .ed-viewnav { top: 150px; } }
-@media (max-width: 600px) { .studio .ed-viewnav { top: 214px; right: 8px; } }
 /* The G / R / S readout (editor.ts `xformReadout`): over the viewport's top
    left while a transform lasts, as Blender's header shows it. */
-.studio .ed-xform { position: absolute; top: 116px; left: calc(var(--rail-width) + 12px); max-width: calc(100vw - var(--rail-width) - var(--inspector-width) - 200px); padding: .4lh 1.5ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 4px; pointer-events: none; }
+.studio .ed-xform { position: absolute; top: calc(var(--chrome-top) + 52px); left: calc(var(--rail-width) + 8px); max-width: calc(100vw - var(--rail-width) - var(--dock-width) - 360px); padding: .4lh 1.5ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 4px; pointer-events: none; }
 .studio .ed-xform[hidden] { display: none; }
 .studio .ed-xform-amount { color: var(--studio-text); white-space: nowrap; }
 .studio .ed-xform-hint { color: var(--studio-muted); }
 /* The number being typed, its caret after it. */
 .studio .ed-xform-field { color: var(--studio-accent); border-right: 1px solid currentColor; padding-right: 1px; }
 .studio .ed-xform-hint.ed-xform-warn { color: var(--studio-warm); }
-@media (max-width: 850px) { .studio .ed-xform { top: 150px; } }
-@media (max-width: 600px) { .studio .ed-xform { top: 214px; left: 8px; max-width: calc(100vw - 150px); } }
+@media (max-width: 600px) { .studio .ed-xform { top: calc(var(--chrome-top) + 96px); left: 8px; max-width: calc(100vw - 150px); } }

@@ -45,7 +45,6 @@ import {
   bodyBounds,
   CAMERA_REGION_COLOR,
   ED_LAYERS,
-  FIREFLY_PATH_COLOR,
   halfExtents,
   isArrowNote,
   isCheckpointNote,
@@ -545,25 +544,25 @@ export class Guides {
     // Shelters: the volume's outline on the plane, as a camera region's, in the
     // shade's colour. The feather's inner line is the 2D canvas's: here the
     // scene itself shows where the sky gives out.
-    if (visible("shelter")) {
+    if (visible("scene")) {
       for (const item of model.items) {
-        if (item.layer !== "shelter") continue;
+        if (item.object !== "shelter") continue;
         const selected = view.selectedIds.has(item.id);
         this.outline(
           item,
           0,
           { color: selected ? SELECT : SHELTER_COLOR, px: selected ? SELECTED_OUTLINE_PX : OUTLINE_PX, dash: DASH_VOLUME },
-          pickable("shelter") ? guideTag("region", item.id) : null,
+          pickable("scene") ? guideTag("region", item.id) : null,
           "shelter",
         );
       }
     }
 
-    if (visible("fog")) for (const item of model.items) {
-      if (item.layer !== "fog") continue;
+    if (visible("scene")) for (const item of model.items) {
+      if (item.object !== "fog") continue;
       const color = view.selectedIds.has(item.id) ? SELECT : FOG_REGION_COLOR;
       this.outline(item, 0, { color, px: view.selectedIds.has(item.id) ? SELECTED_OUTLINE_PX : OUTLINE_PX, dash: null },
-        pickable("fog") ? guideTag("region", item.id) : null, "fog");
+        pickable("scene") ? guideTag("region", item.id) : null, "fog");
       const inner = fogRegionInner(item);
       if (inner) this.outline(inner, 0, { color, px: FAINT_PX, dash: DASH_VOLUME }, null, "fog-falloff");
     }
@@ -584,20 +583,6 @@ export class Guides {
       }
     }
 
-    // Firefly paths.
-    if (visible("fireflies")) {
-      for (const item of model.items) {
-        if (item.layer !== "fireflies" || item.shape.kind !== "path") continue;
-        const selected = view.selectedIds.has(item.id);
-        this.polyline(
-          pathPolyline(item),
-          0,
-          { color: selected ? SELECT : FIREFLY_PATH_COLOR, px: selected ? SELECTED_OUTLINE_PX : OUTLINE_PX, dash: null },
-          pickable("fireflies") ? guideTag("path", item.id) : null,
-          "firefly-path",
-        );
-      }
-    }
 
     // Notes.
     if (visible("notes")) {
