@@ -170,7 +170,7 @@ function treeLook(nodes: readonly LevelNode[]): Drawn[] {
       out.push({ key: lookKey("formation", formationDataOf(n) as unknown as Record<string, unknown>), ...at });
       continue;
     }
-    const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...fields } = n;
+    const { type: _t, id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, ...fields } = n;
     if (n.type === "Decoration3D") out.push({ key: lookKey("decoration", { type: "decoration", id, formation: formation ?? "", ...fields }), x: 0, y: 0, z: 0 });
     else out.push({ key: lookKey(n.type === "Light3D" ? "light" : "model", { type: n.type === "Light3D" ? "light" : "model", ...fields }), ...at });
   }

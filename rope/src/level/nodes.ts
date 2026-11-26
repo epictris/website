@@ -70,7 +70,9 @@ export const TREE_FORMAT = 4;
 
 // What every node has. `children` absent is a leaf. `grouped` changes only
 // what a click on the editor's canvas selects (plans/node-tree.md "Groups"),
-// and `layers` are the editor's user data layers; the game reads neither.
+// `locked` keeps the node and everything under it from being picked on the
+// editor's canvas (Godot's lock), and `layers` are the editor's user data
+// layers; the game reads none of the three.
 // `disabled` leaves the node and everything under it out of the level: it is
 // how a placed prefab drops one of the prefab's nodes (an override), since an
 // instance cannot delete what its prefab holds.
@@ -79,6 +81,7 @@ export interface NodeCommon {
   name: string;
   children?: LevelNode[];
   grouped?: boolean;
+  locked?: boolean;
   layers?: string[];
   disabled?: boolean;
 }
@@ -537,7 +540,7 @@ export interface PlacedLook<T extends LookNode = LookNode> {
 // A rock node as the recipe the store, the loaders and the hash are written
 // against: no pose (it is the node's, `lookNodes`' `world`), no name.
 export function formationDataOf(n: FormationNode): FormationData {
-  const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, z: _z, tilt: _tl, placedScale: _s, ...rest } = n;
+  const { type: _t, id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, z: _z, tilt: _tl, placedScale: _s, ...rest } = n;
   return { id, ...rest } as unknown as FormationData;
 }
 
@@ -1221,6 +1224,7 @@ function expandOne(n: LevelNode, prefabs: PrefabLibrary, stack: string[], key: n
     name: n.name,
     ...pose3DOf(n),
     ...(n.grouped !== undefined ? { grouped: n.grouped } : {}),
+    ...(n.locked !== undefined ? { locked: n.locked } : {}),
     ...(n.disabled !== undefined ? { disabled: n.disabled } : {}),
     ...(n.layers ? { layers: [...n.layers] } : {}),
     ...(n.children?.length ? { children: n.children.map((c) => expandOne(c, prefabs, stack, key, problems)) } : {}),
@@ -1265,6 +1269,7 @@ function expandOne(n: LevelNode, prefabs: PrefabLibrary, stack: string[], key: n
   out.id = n.id;
   out.name = n.name;
   if (n.grouped !== undefined) out.grouped = n.grouped;
+  if (n.locked !== undefined) out.locked = n.locked;
   if (n.disabled !== undefined) out.disabled = n.disabled;
   if (n.layers) out.layers = [...n.layers];
   delete out.x;
@@ -1489,7 +1494,7 @@ export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabL
           return;
         }
         const placed = compose2D(ctx.local, pose);
-        const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, root, x: _x, y: _y, rot: _r, ...rest } = n;
+        const { type: _t, id: _id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, root, x: _x, y: _y, rot: _r, ...rest } = n;
         const o: CollisionObjectData = {
           type: "collision",
           ...placeIn(ctx.local, n),
@@ -1530,7 +1535,7 @@ export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabL
         return;
       }
       case "Spawn2D": {
-        const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...rest } = n;
+        const { type: _t, id: _id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, ...rest } = n;
         if (player) problems.push(`a second Spawn2D (${n.id}) is ignored`);
         else player = tag({ ...rest, x: here2.x, y: here2.y }, n.id);
         return;
@@ -1609,7 +1614,7 @@ export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabL
     ...(chains.length
       ? {
           chains: byOrder(chains).map(({ node }) => {
-            const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, order: _o, a, b, via, through, ...rest } = node;
+            const { type: _t, id: _id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, order: _o, a, b, via, through, ...rest } = node;
             return tag(
               {
                 a: anchorNumber(a),
@@ -1626,7 +1631,7 @@ export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabL
     ...(vines.length
       ? {
           vines: byOrder(vines).map(({ node }) => {
-            const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, order: _o, anchor, anchor2, ...rest } = node;
+            const { type: _t, id: _id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, order: _o, anchor, anchor2, ...rest } = node;
             return tag({ anchor: anchorNumber(anchor), ...(anchor2 !== undefined ? { anchor2: anchorNumber(anchor2) } : {}), ...rest } as VineData, node.id);
           }),
         }
@@ -1697,12 +1702,12 @@ function rootWithoutParent(r: NodeRootBranch): RootBranchData {
 
 // A node's own data, without what every node has and without its placement.
 function strip(n: LevelNode): Record<string, unknown> {
-  const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...rest } = n as LevelNode & Record<string, unknown>;
+  const { type: _t, id: _id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, ...rest } = n as LevelNode & Record<string, unknown>;
   return rest;
 }
 
 function bodyData(n: BodyNode, world: Frame2D): LevelBodyData {
-  const { type, id: _id, name, children: _c, grouped: _g, layers: _l, disabled: _d, order: _o, x: _x, y: _y, rot: _r, ...props } = n as BodyNode & { area?: AreaKind };
+  const { type, id: _id, name, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, order: _o, x: _x, y: _y, rot: _r, ...props } = n as BodyNode & { area?: AreaKind };
   const { area, ...rest } = props as typeof props & { area?: AreaKind };
   const kind = type === "RigidBody2D" ? "rigid" : type === "Area2D" ? (area ?? "killzone") : "static";
   return { kind, name, x: world.x, y: world.y, rot: world.rot, ...rest, objects: [] };
@@ -1877,7 +1882,7 @@ function scalePose<T extends Pose3D>(n: T, factor: number): T {
   return out;
 }
 
-const COMMON_KEYS = ["type", "id", "name", "children", "grouped", "layers", "disabled"] as const;
+const COMMON_KEYS = ["type", "id", "name", "children", "grouped", "locked", "layers", "disabled"] as const;
 
 function common(n: LevelNode): NodeCommon & { type: NodeType } {
   const out: Record<string, unknown> = {};

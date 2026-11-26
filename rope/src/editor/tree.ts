@@ -85,6 +85,9 @@ export interface EdNode {
   parent: string | null;
   children: string[];
   grouped: boolean;
+  // Not picked on the canvas, nor is anything under it (Godot's lock); the
+  // scene tree still selects it. Saved in the level, read by nothing else.
+  locked: boolean;
   layers: string[];
   disabled: boolean;
   // WORLD placement in the plane, for every node that has one. For a node
@@ -354,6 +357,7 @@ export function treeOf(nodes: readonly LevelNode[], place: (n: LevelNode, parent
       parent: parent?.id ?? null,
       children: [],
       grouped: n.grouped === true,
+      locked: n.locked === true,
       layers: [...(n.layers ?? [])],
       disabled: n.disabled === true,
       pos: p.pos,

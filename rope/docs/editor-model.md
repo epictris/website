@@ -112,7 +112,7 @@ Hidden and locked are this session's view state, never written; the game ignores
 
 ## The scene tree
 
-The right dock is the **scene tree** (it replaced the body outliner on 2026-11-26, and moved from the bottom of the left dock to a resizable right dock the same day): every node of the level, nested as the level is nested, each row with its class's mark, `2D` or `3D` (nothing for a node with no place, the Sun and the Environment among them), its name, a mark when it is grouped, a `+` and an eye.
+The right dock is the **scene tree** (it replaced the body outliner on 2026-11-26, and moved from the bottom of the left dock to a resizable right dock the same day): every node of the level, nested as the level is nested, each row with its class's mark, `2D` or `3D` (nothing for a node with no place, the Sun and the Environment among them), its name, the group mark, a `+`, an eye and a padlock.
 Over it a breadcrumb shows the selected node's path of names, and over that the **data layers** ([below](#data-layers)) and a **search** field with **expand all** and **collapse all**.
 A search shows the nodes whose name or class holds the query and the rows down to each (dimmed, opened whatever was open), and the heading counts the matches; Escape or clearing it gives back the tree as it was left.
 In the 3D workspaces it lists only what is in the workspace or holds something that is.
@@ -127,7 +127,9 @@ In the 3D workspaces it lists only what is in the workspace or holds something t
   The Node section's `name` field does the same.
 - **`+`** adds a node under the row (the heading's `+`, at the top level): a `Node2D`, a `Node3D`, a static or rigid body, a killzone, an anchor, a fog region, a shelter or a folder `Node`, standing where its parent stands, and the level's `Sun` or `Environment` while it has none, each offered only where the tree would have it (`canParent`: the light stands at the top or in a folder, and holds nothing).
 - **Delete** with nodes picked as themselves (a body, a group, the Sun) takes each with everything under it; a node holding the spawn is refused, since the spawn is the level's.
+- **The group mark** (⊞) is the node's `grouped` toggle: lit blue on a grouped node, drawn dim under the pointer on one that is not, and a click flips it as Ctrl+G / Ctrl+Shift+G do, one undo step.
 - **The eye** hides the node and everything under it (as **H** does), a session view setting like the rest of hiding.
+- **The padlock** locks the node ([below](#locking)): amber on a node locked itself, dim and shut on one a node above it locks, and drawn only under the pointer otherwise, so several hundred rows do not read as a column of open padlocks; its column is kept on every row so the eyes line up.
 
 Which rows are open is kept by node id across rebuilds, so a drag does not collapse the tree under the pointer; the tree is rebuilt when the model changes and only re-highlighted when the selection does, since a real level is several hundred nodes.
 A canvas pick unfolds the rows down to what it selected and scrolls to it, so the two views cannot disagree about what is selected.
@@ -161,6 +163,17 @@ The candidates are `topmostAt`'s own rule applied down the stack rather than a s
 A fresh click starts exactly where it always did, so this is only what happens past the point the group rule stops.
 What counts as a repeat is the same point (within `CLICK_SLOP_PX`), the same stack of candidates, AND the selection still being what the last step left: anything else - the scene tree, a rubber band, an undo, a shift or alt click - has moved on, and continuing the cycle from there would jump to something nobody pointed at.
 A multi-selection is the one press that still has no pick at all, since a click that meant to drag it and did not travel must not silently collapse it to one object.
+
+## Locking
+
+Any node can be **locked** (`locked`, saved in the level like `grouped`, Godot's lock): the canvas picks neither it nor anything under it, so a backdrop rock or a finished wall stays on screen as a reference without swallowing the clicks meant for what is in front of it.
+It is saved rather than a session setting, as hiding is, because what it records is a decision about the level ("this part is done"), not about this sitting's view; the game and the compile ignore it, and `compileLevel`'s `data` is identical with every node locked or none.
+
+- **Every canvas path asks it**: a click, the cycle down the stack, a rubber band and a double-click all read `pickableItems`, which leaves out what `itemLocked` says; chains, vines and berries are picked by their own nearest-line tests and skip a locked node's (`lockedLinks`); a root branch is not drawn out of a locked root.
+- **A locked data layer locks the same way** (`nodeLocked` is the one rule: the node's own flag, an ancestor's, or a locked layer it is in), and since 2026-11-26 that includes chains and vines, which a locked data layer used to leave clickable.
+- **The scene tree still selects a locked node**, as Godot's does: it is the deliberate reach, and the way to edit a locked node's fields without unlocking it. A locked node selected so cannot be pressed and dragged on the canvas, since the press finds nothing under the pointer, but the gizmo and a nudge act on it as on any selection.
+- **Locking drops what it locks from the selection**, as locking a layer does: "out of harm's way" starts at the lock, not at the next click.
+- **Ctrl+L** locks the selection and **Ctrl+Shift+L** unlocks it (Godot's pair); the tree's padlock and the Node section's `locked` box do the same, and each is one undo step. The box is ticked and greyed on a node locked by one above it, and its hover text names that node.
 
 ## Selection
 
@@ -237,6 +250,7 @@ Selecting one and pressing **▶ Test** starts the test from it, through the sam
 
 A **compound body** is a body node with several `CollisionShape2D`s under it.
 **New body** (the selection's action row) makes one: the selected pieces are reparented under a new `StaticBody2D` on their centre of mass, each keeping where it stands, and the body is created grouped; dragging a piece out of the body in the scene tree takes it apart again.
+Cutting a shape into bodies of its own and folding bodies back into one, settings, anchors, chains and vines kept, are **Cut** and **Join** ([below](#split-and-join)).
 Until 2026-11-26 this was Ctrl+G (merge) and Ctrl+Shift+G (split), which now group and ungroup ([Groups](#groups)).
 The pieces keep their placement exactly, and what changes is that they now build as a single engine body carrying all their shapes.
 That is the whole point, and it is not about saving entries - several overlapping bodies already look the same.
@@ -277,3 +291,28 @@ The clip is applied one sibling at a time on purpose: a single even-odd clip kee
 `drawCompoundGeometry` (game) and `strokeCompoundOutline` (editor) are the two implementations of that one rule.
 Hook-only bodies keep the per-shape path, since their fill is a grate lattice punched out of each piece and a lattice has no union form.
 The headless SVG snapshot still draws the pieces separately - it is a diagnostic view, and there the decomposition is the thing worth seeing.
+
+### Split and join
+
+The two everyday edits of a body's make-up are a pair of tools (`editor/splitJoin.ts`, 2026-11-26), each one undo step, each the other's inverse: a Cut followed by a Join gives back the body as it was, one outline and all.
+
+**Cut** (the Collision group's knife) is two clicks: where the line starts and where it ends.
+Every polygon or box the line crosses **from edge to edge** is cut along it, and a run of the line that stops inside a shape cuts nothing there, so a knife has to come out the other side, as a real one does; a concave outline it crosses more than once comes apart into as many pieces.
+The line's ends snap to the corners of what it may cut (corner to corner is the exact diagonal), and to the grid otherwise; until the second click the pieces it would leave are drawn washed in turn, orange and blue, so what the click will do is seen first.
+With anything selected only the selection is cut, so a cut through a stack of overlapping walls cuts the one being worked on; a cut box becomes polygons.
+Each cut shape keeps its largest piece, and its node; the others are new shapes beside it, copies of it in every field but the outline, each with its origin on its own centre as a drawn shape's is.
+
+Then the body is **parted**: its pieces are grouped by what still touches, the pieces of one cut never counting as touching each other (the knife is what separates them), while any other piece touching two of them holds them together, as it would in the level.
+The group with the most area stays the body; every other group goes into a **new body that is a copy of it** - kind, friction, bounce, breakable, pivot, spring, mover, fill, group and data layers - with its own build order key, standing in the **same frame**, so a bearing, a swing and a route mean exactly what they did on both halves.
+Everything else in the body goes with the group it is on, or nearest to: anchors, and with them the chains and vines hung from them (a chain or vine names its anchors by item id, so moving an anchor's node carries every link on it without touching the link), lights, models, rocks and frames.
+**Alt** on the second click keeps the pieces in one body.
+A body whose pieces still touch across the cut stays one, and the notice says which.
+
+**Join** (Ctrl+J, or the selection's **Join**) folds the selected bodies into the **first one selected**: it keeps its node, name and every setting, the others' children move under it each where it stands, and the others go.
+The notice names any body whose kind differed, since its settings did not survive.
+Then the pieces that came from different bodies are **fused** into one outline wherever they overlap or share an edge, and **only when they are the same surface**: every field a piece writes but its outline (material, density, thickness, hook-proof, rail, mud, collision mask, sound material, debug look) and its data layers must agree (`surfaceKey` in `model.ts`, read off `collisionFields`, the one statement of what a piece writes, so a field added later is compared without anyone remembering to).
+Pieces that differ, are apart, touch only at a corner, or would close round a hole stay separate pieces of a compound body, and pieces that were already one body's are left as they were.
+The union is manifold-3d's `CrossSection` (Clipper2), so a shared edge is exact and a fused outline carries no seam vertices.
+A join is refused, changing nothing, when a chain would end up with both ends on the one body (the level drops a chain with nothing to constrain, so the join would silently delete it), when one selected body is inside another, when an area would be left in more than one piece (an area is one shape), and for anything in a placed prefab.
+
+`scripts/test-split-join.ts` (in `bun run test`) holds all of this to its cases, each result compiled with every chain and vine the level had.

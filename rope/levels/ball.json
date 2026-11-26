@@ -3711,7 +3711,6 @@
           }
         }
       ],
-      "grouped": true,
       "color": "#0b0e16",
       "opacity": 1,
       "friction": 1,
@@ -15883,6 +15882,18 @@
       "viscosity": 0,
       "braidSeed": 1701,
       "rope": true
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "b42fhbva",
+      "name": "StaticBody2D68",
+      "grouped": true,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "order": 103,
+      "x": 7345,
+      "y": -1865.0000000000002
     }
   ]
 }

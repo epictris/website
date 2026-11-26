@@ -1592,12 +1592,12 @@ export function modelFromTree(source: LevelTree): EdModel {
   for (const { node: n, formation: rockId } of lookNodes(compiled.nodes)) {
     switch (n.type) {
       case "Light3D": {
-        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n;
+        const { type: _t, id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n;
         add(lightItem({ type: "light", ...fields } as LightObjectData, id));
         break;
       }
       case "Model3D": {
-        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n;
+        const { type: _t, id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n;
         const item = objectItem({ type: "model", ...fields } as ModelObjectData, id);
         if (item) add(item);
         break;
@@ -1606,7 +1606,7 @@ export function modelFromTree(source: LevelTree): EdModel {
         rocks.push(add({ ...blankItem("scene", "formation", n.id), formation: formationDataOf(n) }));
         break;
       case "Decoration3D": {
-        const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...fields } = n;
+        const { type: _t, id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, ...fields } = n;
         const decoration = { id, formation: rockId ?? "", ...fields } as EdDecoration;
         const item = add({ ...blankItem("scene", "decoration", id), shape: { kind: "rect", w: MODEL_MARK / 2, h: MODEL_MARK / 2 }, decoration });
         const rock = rockId ? edTree.nodes.get(rockId) : undefined;
@@ -1997,6 +1997,18 @@ function collisionFields(i: EdItem, rootParent: (id: number) => string | null): 
   };
 }
 
+// WHAT KIND OF SURFACE a collision piece is: every field it writes but its
+// outline, and its node's data layers and enablement. Two pieces with the same
+// key differ only in where they are, which is what lets Join fuse them into
+// one outline without either losing a setting (editor/splitJoin.ts). Read off
+// `collisionFields`, the one statement of what a piece writes, so a per-piece
+// field added later is compared without anyone remembering to.
+export function surfaceKey(model: EdModel, i: EdItem): string {
+  const { shape: _s, ...fields } = collisionFields(i, () => null);
+  const n = model.tree.nodes.get(i.node);
+  return JSON.stringify({ layer: i.layer, object: i.object, fields, layers: [...(n?.layers ?? [])].sort(), disabled: n?.disabled === true });
+}
+
 // A camera region item's fields as written.
 function cameraRegionFields(i: EdItem): Omit<CameraRegionData, "x" | "y" | "rot"> {
   return {
@@ -2137,6 +2149,7 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
     const world = worldOfNode(model, id);
     const out: Record<string, unknown> = { type: n.type, id: n.id, name: n.name };
     if (n.grouped) out["grouped"] = true;
+    if (n.locked) out["locked"] = true;
     if (n.layers.length) out["layers"] = [...n.layers];
     if (n.disabled) out["disabled"] = true;
 
@@ -2311,7 +2324,7 @@ function instanceOverrides(model: EdModel, n: EdNode, writeChild: (id: string) =
   // Kept as they were: overrides naming nodes the prefab no longer has.
   for (const [id, props] of Object.entries(inst.overrides)) if (!baseById.has(id)) out[id] = structuredClone(props);
   const skip = new Set(["id", "type", "children"]);
-  const rootSkip = new Set([...skip, "name", "x", "y", "rot", "z", "tilt", "grouped", "layers", "order"]);
+  const rootSkip = new Set([...skip, "name", "x", "y", "rot", "z", "tilt", "grouped", "locked", "layers", "order"]);
   for (const [id, b] of baseById) {
     const now = nowById.get(id);
     if (!now) {
@@ -2521,6 +2534,7 @@ function blankNode(id: string, type: NodeType, name: string, parent: string | nu
     parent,
     children: [],
     grouped: false,
+    locked: false,
     layers: [],
     disabled: false,
     pos: Vec2.ZERO,

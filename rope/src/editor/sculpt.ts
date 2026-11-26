@@ -37,6 +37,7 @@ import type { SolidNode } from "../level/levelFormat";
 import { applyGuide, type FormationHost } from "./formationPanel";
 import type { EdItem } from "./model";
 import { loadedMeshes, requestMeshes, storeMesh } from "./solidGuides";
+import { toolBlock, toolize } from "./toolbar";
 
 export type SculptTool = "draw" | "grab";
 
@@ -154,6 +155,9 @@ export class SculptController {
   private readonly svg: SVGSVGElement;
   private readonly ray = new THREE.Raycaster();
   readonly dock: HTMLElement;
+  // The mode's tools (Draw, Grab, Cut) as a toolbar block, for the editor to
+  // show in place of Formations' own while sculpting.
+  readonly toolBlock: HTMLElement = toolBlock();
   private dockRefresh: () => void = () => {};
 
   constructor(private readonly host: SculptHost) {
@@ -891,25 +895,32 @@ export class SculptController {
     // Its children are the dock's grid cells (`display: contents`, shown only
     // while sculpting: studio.css).
     const dock = el("div", "ed-sculpt-dock");
-    const seg = el("div", "ed-seg ed-ws-wide");
+    // The brushes and the cut are the mode's TOOLBAR block (editor/toolbar.ts),
+    // shown in place of Formations' own while sculpting; the rest is its tool
+    // settings.
     const tools = new Map<SculptTool, HTMLButtonElement>();
-    for (const [tool, label, tip] of [
-      ["draw", "Draw", "Draw (D): build the surface up under the brush; Ctrl digs in, Shift smooths"],
-      ["grab", "Grab", "Grab (G): pull the surface under the brush with the pointer; Ctrl or Shift smooths"],
+    for (const [tool, label, icon, key, tip] of [
+      ["draw", "Draw", "sculptDraw", "D", "Build the surface up under the brush; Ctrl digs in, Shift smooths"],
+      ["grab", "Grab", "sculptGrab", "G", "Pull the surface under the brush with the pointer; Ctrl or Shift smooths"],
     ] as const) {
-      const b = button(label, () => this.setTool(tool));
+      const b = toolize(button("", () => this.setTool(tool)), label, icon);
+      b.dataset["shortcut"] = key;
       b.title = tip;
       tools.set(tool, b);
-      seg.appendChild(b);
     }
-    const cutBtn = button("Cut", () => {
-      const item = this.session ? this.host.item(this.session.itemId) : undefined;
-      if (item) this.startCut(item);
-    });
-    cutBtn.title = "Cut (C): draw a polygon; only what is inside it as seen now is kept (Alt when closing cuts it away)";
-    seg.appendChild(cutBtn);
+    const cutBtn = toolize(
+      button("", () => {
+        const item = this.session ? this.host.item(this.session.itemId) : undefined;
+        if (item) this.startCut(item);
+      }),
+      "Cut",
+      "cut",
+    );
+    cutBtn.dataset["shortcut"] = "C";
+    cutBtn.title = "Draw a polygon; only what is inside it as seen now is kept (Alt when closing cuts it away)";
+    this.toolBlock.replaceChildren(...tools.values(), cutBtn);
     const number = (label: string, tip: string, get: () => number, set: (v: number) => void, step: number): { wrap: HTMLElement; input: HTMLInputElement } => {
-      const wrap = el("label", "ed-inline ed-ws-wide");
+      const wrap = el("label", "ed-inline");
       wrap.title = tip;
       wrap.appendChild(document.createTextNode(label));
       const input = document.createElement("input");
@@ -938,11 +949,10 @@ export class SculptController {
     const remesh = button("Remesh", () => this.remesh());
     remesh.title = "Rebuild the whole mesh at the detail size (Ctrl+R): repairs a guide folded through itself";
     const done = button("Done", () => this.exit());
-    done.classList.add("ed-ws-wide");
     done.title = "Leave Sculpt (Esc): the sculpt is saved to the guide";
-    const hint = el("div", "ed-hint ed-ws-hint");
+    const hint = el("span", "ed-hint ed-toolhead-hint");
     hint.textContent = "F radius · Shift+F strength · Ctrl+Z undoes a stroke · Esc leaves";
-    dock.append(toolGroup("Sculpt"), seg, radius.wrap, strength.wrap, detail.wrap, dyn, remesh, done, hint);
+    dock.append(toolGroup("Sculpt"), radius.wrap, strength.wrap, detail.wrap, dyn, remesh, hint, done);
     this.dockRefresh = () => {
       for (const [tool, b] of tools) {
         b.classList.toggle("active", this.settings.tool === tool);

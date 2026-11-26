@@ -52,7 +52,7 @@ The types are in `src/level/nodes.ts`; a file is a `LevelTree`:
 A tree read in metres also carries `lengthScale` (its scale against the file), which is never written: a file is always at 1, in pixels.
 
 **The classes.**
-Every node has `id`, `name`, and optionally `children`, `grouped` (what a canvas click selects first, [editor-model](editor-model.md#groups)), `layers` (the data layers it is in) and `disabled` (it and everything under it are left out of the level).
+Every node has `id`, `name`, and optionally `children`, `grouped` (what a canvas click selects first, [editor-model](editor-model.md#groups)), `locked` (the canvas picks neither it nor anything under it, [editor-model](editor-model.md#locking)), `layers` (the data layers it is in) and `disabled` (it and everything under it are left out of the level).
 
 | Class | What it is | Its own fields |
 |---|---|---|

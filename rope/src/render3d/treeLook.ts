@@ -39,7 +39,7 @@ import { orientTo, placeBody3d, threeY } from "./space";
 // The flat element a node draws as, which the loaders and the paint layers
 // are written against.
 function decorationData(n: DecorationNode, formation: string): DecorationObjectData {
-  const { type: _t, id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...rest } = n;
+  const { type: _t, id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, ...rest } = n;
   return { type: "decoration", id, formation, ...rest } as DecorationObjectData;
 }
 
@@ -320,7 +320,7 @@ export class TreeLook {
   // are added, which is the tree's.
   private mountLight(n: LevelNode & { type: "Light3D" }, parent: THREE.Object3D, carrier: Carrier): void {
     if (!this.opts.rig) return;
-    const { type: _t, id: _id, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, ...rest } = n;
+    const { type: _t, id: _id, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, ...rest } = n;
     const data = { type: "light", ...rest } as LightObjectData;
     const mounted = this.opts.rig.add(
       parent,

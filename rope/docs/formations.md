@@ -95,7 +95,7 @@ The editor's Jobs panel (`src/editor/formationJobs.ts`) shows every job from eve
 A formation is a `Formation3D` node, and the editor's item of it carries its recipe and guide (`EdFormation`), so under a body it rides every move of the body, and it is undone, copied (with a fresh id) and deleted like any node.
 A body may hold any number of them; the compiled level gives the body its first one in the plane and every other its own collisionless body ([level-format](level-format.md#compiling-the-sim-never-sees-the-tree)).
 A body's panel has a Formation section; selecting the formation itself shows it too.
-Both are the **Formations workspace's** ([editor](editor.md#workspaces-2d-formations-decorations-texturing)): there it opens first and the body's physics sections are left out, and the dock offers Backdrop, the stack's Add shape and **Generate N out of date**, which builds every rock not generated or stale in one go.
+Both are the **Formations workspace's** ([editor](editor.md#workspaces-2d-formations-decorations-texturing)): there it opens first and the body's physics sections are left out, and the tool settings offer Add to guide and **Generate N out of date**, which builds every rock not generated or stale in one go.
 
 The collision guide workflow:
 
@@ -111,7 +111,7 @@ The collision guide workflow:
 The panel says whether the collision matches the guide; after a fit it does not, and that is information.
 **Fit collision to geometry**, **Align guide to collision** and **Align collision to guide** act between a formation and the shapes of its nearest body ancestor; a formation with no body above it is a background asset, and none of them applies.
 
-Background guides: each of the Formations dock's **Primitives** (or Shift+A with nothing selected) makes a top-level **`Formation3D`** with no body (it collides with nothing, so it is free to stand at a depth and tilt, with the full gizmo; see [level-format](level-format.md#2d-and-3d-bodies)) on a solid guide of that one shape, standing where the view is looking; Union / Subtract / Intersect fold other guides into it ([editor](editor.md#workspaces-2d-formations-decorations-texturing)).
+Background guides: each of the Formations toolbar's **Add box** and **Add cylinder** (or Shift+A with nothing selected) makes a top-level **`Formation3D`** with no body (it collides with nothing, so it is free to stand at a depth and tilt, with the full gizmo; see [level-format](level-format.md#2d-and-3d-bodies)) on a solid guide of that one shape, standing where the view is looking; Union / Subtract / Intersect fold other guides into it ([editor](editor.md#workspaces-2d-formations-decorations-texturing)).
 Its guide is edited as a **stack of shapes** (`src/formation/solidStack.ts`, since 2026-11-22), as Blender's boolean cutters and MagicaCSG have it: an ordered list, each shape **Add**, **Subtract** or **Intersect**, applied top to bottom onto the first.
 The shapes are boxes, cylinders (standing along their y) and meshes in the store: imported (`.glb`/`.gltf`, welded) or made by **Apply**, a sculpt or a cut ([Sculpting](#sculpting)).
 The orthographic route's leaves - ellipsoids, hulls of points, outlines pushed through a depth with a taper, and the Orthographic Studio's three-outline preset - were retired on 2026-11-23 ([plans/sculpt-guides.md](../plans/sculpt-guides.md)).
@@ -140,10 +140,10 @@ The box and cylinder are starting shapes; a sculpt edits a mesh, not a tree.
 **Apply** (the Formation panel; Blender's "apply the modifiers") meshes the whole stack into one stored mesh and makes the guide that one mesh leaf, unposed (`meshLeafTree`, a union of one so a shape added after it lands beside it), as one undo step.
 A guide that is already one unposed mesh leaf has nothing to apply (`sculptedMeshOf`).
 
-**Sculpt mode** (`src/editor/sculpt.ts`), Formations only, on one selected solid guide: the dock's **Sculpt** (in Selected), the panel's **Sculpt**, or **Ctrl+Tab** (Chrome keeps Ctrl+Tab for itself in a normal window, so there the buttons are the way in).
+**Sculpt mode** (`src/editor/sculpt.ts`), Formations only, on one selected solid guide: the tool settings' **Sculpt** (in Selected), the panel's **Sculpt**, or **Ctrl+Tab** (Chrome keeps Ctrl+Tab for itself in a normal window, so there the buttons are the way in).
 Entering applies the stack first when it has to.
 It is left by Ctrl+Tab, Esc (with no stroke in progress), **Done**, selecting anything else or leaving the workspace; a guide changed from outside meanwhile (an editor undo, a deleted body) drops the session's unsaved strokes, with a notice.
-While it is on, the guide is drawn opaque and flat shaded (Blender's Dyntopo default: a vertex normal averaged across a primitive's two-metre faces streaks them) through a matcap, grey tinted with the guide's colour, its rock and its guide shell hidden, the gizmo put away, the overlay not drawn and the dock the mode's alone; the panel shows only that it is being sculpted, so nothing else edits the guide behind the sculpt's back.
+While it is on, the guide is drawn opaque and flat shaded (Blender's Dyntopo default: a vertex normal averaged across a primitive's two-metre faces streaks them) through a matcap, grey tinted with the guide's colour, its rock and its guide shell hidden, the gizmo put away, the overlay not drawn, and the toolbar (Draw, Grab, Cut) and the tool settings the mode's alone; the panel shows only that it is being sculpted, so nothing else edits the guide behind the sculpt's back.
 Every key but the view's (Numpad, Home) and the workspaces' (1, 2, 3) is the mode's.
 
 | Key | Does |
@@ -166,7 +166,7 @@ So a box primitive's two-metre faces are split from their long edges inward unti
 Botsch's fourth step, tangential relaxation, evens them; it was tried and left out, as Blender's Dyntopo leaves it out, because it moves the surface under the brush on every dab and took the 81 only to 42 over ten dabs.
 Mid-grab only the splits run (each new vertex taken along by the grab, its start and weight its ends' mean); the whole region is tidied when the grab lets go.
 
-**Remesh** (Ctrl+R, the dock's button; Blender's voxel remesh), `src/formation/sculptRemesh.ts`: the mesh rebuilt as the zero set of its signed distance by manifold-3d's `levelSet` at the detail size (coarsened, and said, past 160³ grid points).
+**Remesh** (Ctrl+R, the tool settings' button; Blender's voxel remesh), `src/formation/sculptRemesh.ts`: the mesh rebuilt as the zero set of its signed distance by manifold-3d's `levelSet` at the detail size (coarsened, and said, past 160³ grid points).
 The distance is sampled once onto a grid, its size in a band two cells wide about the surface and its sign by winding number along columns (+z rays; any winding but zero is inside, so a fold through itself reads as the union of the overlaps).
 No sample is nearer zero than 0.002 of a cell: the marching-tetrahedra degeneracy, every vertex on a lattice point's edges gathered onto one spot where the surface passes within micrometres of it.
 A sphere at 3 cm: 75,536 triangles in 0.3 s, the volume within 0.06%.
@@ -217,7 +217,7 @@ A decoration is tied to its formation's guide, which a regenerate leaves where i
 Where it is drawn (`onRock`) is the anchor carried along the normal onto the rock that is drawn now (`src/editor/decorations.ts`).
 The overlay marks a decoration's point on its rock only while it is selected (since 2026-11-23; a mark on every one was a scatter of glyphs that told nothing the growth does not, and a decoration is picked by what grew, never by its mark).
 Decorations are made and edited in the **Decorations workspace** ([editor](editor.md#workspaces-2d-formations-decorations-texturing)): its palette arms a kind for a click on any generated rock, a rock's panel lists what grows on it (with a `+` per kind for that rock alone), and **Grow N out of date** grows every stale one.
-Its dock's **Select** (on whenever no kind is armed; picking it disarms, as Esc does) is how one is picked: a click on what grew selects that decoration, not its rock's body first as the editor's click-the-body-then-into-it would (since 2026-11-25); a click on bare rock selects the rock.
+Its toolbar's **Select** (on whenever no kind is armed; picking it disarms, as Esc does) is how one is picked: a click on what grew selects that decoration, not its rock's body first as the editor's click-the-body-then-into-it would (since 2026-11-25); a click on bare rock selects the rock.
 
 - **Placed** (a fern, a vine, mushrooms, orbs, glow flora): grown once where it stands, then only moved: dragging it moves the anchor over the guide and lands it on the rock every frame, moved in place without rebuilding the scene.
   **Its gizmo** (since 2026-11-25, `DecorationController.gizmo`) stands on it in 3D, turned as it is; before, it had the 2D object's handles, on its mark carried onto the gameplay plane, and moved only the mark.
@@ -231,10 +231,10 @@ Its dock's **Select** (on whenever no kind is armed; picking it disarms, as Esc 
   **Esc** throws away the strokes since the last Enter, or since the brush came on, in one undo step, and ends the brush (`DecorationController.cancel`, 2026-11-26, Tris: "enter to confirm, esc to cancel"): a patch made since goes, a patch a stroke absorbed comes back, and every other has its strokes put back, its strokes alone, so a growth that landed meanwhile is kept.
   Every other end (Done, Select, a press off the rock, the selection or the workspace moving on: `end`) keeps the strokes, grown or not.
   Letting the button go only ends the stroke, so several strokes, with the view moved between them, wait on one growth (since 2026-11-25; before, every release grew it and the next stroke waited on that).
-  **The palette's brush** (moss or ivy armed in the dock) is a tool of the workspace, not of the selection: a press paints the rock it lands on, adding to that rock's paint of the kind (`paintedOn`: the last made, unless lost) or starting it there, selects nothing (since 2026-11-25; selecting the new moss put its panel and gizmo over the rock being painted), and stays armed; its radius is in the dock under the palette, and Enter grows everything it painted since it was armed.
+  **The palette's brush** (moss or ivy armed on the toolbar) is a tool of the workspace, not of the selection: a press paints the rock it lands on, adding to that rock's paint of the kind (`paintedOn`: the last made, unless lost) or starting it there, selects nothing (since 2026-11-25; selecting the new moss put its panel and gizmo over the rock being painted), and stays armed; its radius is in the tool settings while it is armed, and Enter grows everything it painted since it was armed.
   Enter with nothing left to grow ends it, back to Select (since 2026-11-25), so painting ends Enter, Enter; "nothing left" is judged by the growth last asked for (`apply` keeps each one's request hash), since a growth on its way still reads as stale and judging by `stale` would ask for it again instead of ending.
   The same holds for the panel's brush and for an armed placed kind (a fern: Enter stops it, and so does a right-click, which a placed kind has no eraser for).
-  Enter is taken before the editor's focus checks: the dock's Moss button keeps the focus after it is clicked, and a focused button's own Enter would click it and disarm the brush.
+  Enter is taken before the editor's focus checks: the toolbar's Moss button keeps the focus after it is clicked, and a focused button's own Enter would click it and disarm the brush.
   The SpaceMouse's side buttons are Esc (left) and Enter (right) ([editor](editor.md#spacemouse)).
   The coverage dots follow the rock under the pointer, so what is there shows before the first press; an eraser on a rock with none of the paint does nothing.
   **Painting over another patch combines them** (since 2026-11-25; two patches on one stretch of rock were two growths through each other): a press starts on the patch under the brush (or the rock's own), and every other patch of the kind a dab reaches (its coverage covers a point the dab lays weight on: `PaintCoverage.touches`) is taken in, its strokes appended after the painted one's and the patch taken out of the level, in the stroke's undo step (`DecorationController.absorb`).

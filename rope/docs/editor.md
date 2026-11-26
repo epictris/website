@@ -16,6 +16,8 @@ What a level LOOKS like is what its nodes carry - formations and the decorations
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
 The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
+**Cut**, beside the draw tools, is a knife: two clicks draw a line, every polygon or box it crosses edge to edge is cut, and what no longer touches becomes a body of its own, taking the anchors (with their chains and vines) on its side; **Join** (Ctrl+J) folds the selected bodies into the first, fusing pieces of the same surface ([editor-model](editor-model.md#split-and-join)).
+
 `+Poly` is the one draw tool that is a run of clicks rather than a drag, because an outline
 is a vertex list and not a box: each click places a vertex, **Enter** or a click on
 the first vertex closes the loop, **Esc** drops it, and the title carries the count so the
@@ -220,7 +222,7 @@ never had a place to put them.
 ### Inspector layout: sections and hover help
 
 A selection's panel keeps its title (`Collision #12`, `Body #3 — rigid`) in view, and every property under it sits in a **collapsible section**, collapsed by default: Transform, Surface and Material on an object; Transform, Physics, Bounce, Breakable, Pivot, Spring, Mover and Fill on a body; and so on for chains, vines, camera regions and paths, lights and notes.
-Every node's panel opens with its **Node** section: its name, its class and path (its id on hover), whether it is grouped, and the data layers it is in ([editor-model](editor-model.md#groups)).
+Every node's panel opens with its **Node** section: its name, its class and path (its id on hover), whether it is grouped ([editor-model](editor-model.md#groups)) and locked ([editor-model](editor-model.md#locking)), and the data layers it is in.
 The level-wide blocks at the top (Level, Player spawn, Environment, 3D camera) are sections of their own.
 Action buttons (New body, Group or Ungroup, Duplicate, Delete) stay outside the sections, always in view.
 A section's open state is keyed by name per panel kind (`object/Surface`, `body/Mover`), so opening Surface on one wall opens it on the next, and it survives the inspector's rebuilds and a reload (localStorage, `rope.editor.openSections`).
@@ -409,7 +411,8 @@ The policy is one module, `src/editor/workspaces.ts`; the editor asks it.
 | | 2D | Formations | Decorations | Texturing |
 |---|---|---|---|---|
 | View | the gameplay plane head on, locked | free 3D | free 3D | free 3D |
-| Dock | the draw tools grouped (Collision, Gameplay, Scene, Volumes: Fog and Shelter), `kind`, the root widths (the type layers are over the scene tree, in 2D only) | Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision | the material library (a button a material), Bake N out of date, Show Collision |
+| Toolbar | Select; Rectangle, Circle, Polygon, Curve, Belt, Cut; Chain, Vine, Root, the bouncy and the glowing mushroom; Light, Model; Fog region, Shelter (the camera layer: Rectangle, Circle, Polygon, Camera path; the notes layer: Text, Arrow, Checkpoint) | Select; Add box, Add cylinder; with a solid guide selected Union, Subtract, Intersect; while sculpting Draw, Grab, Cut instead | Select; Moss, Ivy (painted); Fern, Hanging vine, Mushrooms, Pendant orbs, Glow flora (placed) | Select; Paint |
+| Tool settings | `kind`, the root widths while +Root is armed (the type layers are over the scene tree, in 2D only) | the selection's Guide / Rock / Both (Tab) and Sculpt (Ctrl+Tab; the strip is Sculpt's while it is on), Add to guide, a combine's Apply / Cancel; Show Guides / Rocks, Generate N out of date | the brush's radius while Moss or Ivy is armed; Show Collision, Grow N out of date | Material (picking one picks up Paint), the brush's radius while painting; Show Collision, Bake N out of date |
 | Drawn and picked | everything on the plane, all layers; not what stands in 3D (a rock or model with no body above it) or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations but material layers | the scene layer's formations and their material layers |
 | Inspector | everything but the Formation, Decorations and Materials sections | the spawn, Sun and Environment, a body's Transform and Formation | the spawn, Sun and Environment, a rock's Decorations, a decoration's panel | the spawn, Sun and Environment, a rock's Materials, a material layer's panel |
 
@@ -420,7 +423,7 @@ The scene itself is drawn whole in every workspace: the rocks are the reference 
 Switching drops from the selection whatever the new workspace does not hold, as hiding a layer does: it could be neither seen nor clicked, but a nudge, a field or a Delete would still reach it.
 The draw tools are 2D's (`setTool` refuses one elsewhere, so their keys arm nothing), and the brush ends whenever the workspace changes.
 The right dock's **Scene** and **Prefabs** tabs, the same in every workspace, show the tree of what is open or the prefab library ([prefabs](prefabs.md#in-the-editor)).
-They replaced the Level / Prefabs buttons that sat over the left dock (and those the Formations dock's **Level** / **Assets** pair, retired 2026-11-26, whose reusable rocks are prefabs now), since the left dock is the workspace's alone.
+They replaced the Level / Prefabs buttons that sat over the old left dock (and those the Formations dock's **Level** / **Assets** pair, retired 2026-11-26, whose reusable rocks are prefabs now).
 Texturing is painting a rock with materials from the library, live: [formations](formations.md#material-layers).
 
 **The inspector** is filtered by section key (`sectionShown`, applied by `pruneEmptySections`), so a rock's panel in Formations is its recipe rather than its bounce, friction and mover first.
@@ -433,7 +436,7 @@ Until then each 3D workspace came back at the yaw, pitch and depth it was left a
 
 **Guides and rocks** (Formations, 2026-11-23).
 Every guide is drawn in its own bright colour (`guideColor` in `src/editor/guideColors.ts`): a hue hashed from the formation's id, so it is "random" but keeps its colour through a reload, an undo or a regenerate, and the solid guides' volumes and edges and the collision guides' dashed outlines (`drawFormationGuide`) wear it alike.
-The dock's **Show** has two globals, **Guides** and **Rocks**, remembered by the browser (`guides`, `rocks` in `prefs.ts`): every guide in the level drawn or not, every generated rock drawn or not.
+The tool settings' **Show** has two globals, **Guides** and **Rocks**, remembered by the browser (`guides`, `rocks` in `prefs.ts`): every guide in the level drawn or not, every generated rock drawn or not.
 **Selected** switches the selected formations between **Guide** (the rock hidden), **Rock** (the guide hidden) and **Both**; **Tab** swaps guide and rock, as Blender's Tab swaps object and edit mode.
 A per-formation choice (`formationView`) overrides the globals until either global is set again, which clears them all, so a global always means every formation in the level.
 A guide just made (**+ Box**, **+ Cylinder**, Shift+A) or just added a shape to is shown whatever **Guides** says (`revealGuide`, 2026-11-24): it is given its own override (Guide, or Both where its rock shows), since an add that draws nothing reads as an add that did nothing.
@@ -442,11 +445,11 @@ A hidden rock is hidden as an H-hidden body is (`Scene3D.setHidden`, from `syncH
 Outside Formations the rocks are always drawn and the guides are not.
 Until this change a generated rock's guide was drawn only while it was selected; now Guides decides.
 
-**Primitives** (Formations, 2026-11-23): **+ Box** and **+ Cylinder** - the starting shapes a guide is sculpted from; outlines, the three-outline preset, hulls and ellipsoids were retired the same day ([formations](formations.md#in-the-editor)) - each make a new guide of their own - a top-level `Formation3D` with no body, whose solid guide is that one shape (`createBackdrop` with a shape) - standing at the view's target, depth included, and selected, as Blender adds at the 3D cursor; **Shift+A** with no guide selected offers the same.
-With a solid guide selected the dock adds **Add to selected guide** (the same shapes into its stack, as Shift+A then does) and **Combine with other guides**.
+**Primitives** (Formations, 2026-11-23; the toolbar's **Add box** and **Add cylinder** since 2026-11-26): the box and the cylinder - the starting shapes a guide is sculpted from; outlines, the three-outline preset, hulls and ellipsoids were retired the same day ([formations](formations.md#in-the-editor)) - each make a new guide of their own - a top-level `Formation3D` with no body, whose solid guide is that one shape (`createBackdrop` with a shape) - standing at the view's target, depth included, and selected, as Blender adds at the 3D cursor; **Shift+A** with no guide selected offers the same.
+With a solid guide selected the tool settings add **Add to guide** (the same shapes into its stack, as Shift+A then does) and the toolbar **Union**, **Subtract** and **Intersect** (combining other guides into it; **Select** ends a combine, as Esc does).
 The cylinder is a primitive of the format since this change (`prim: "cylinder"`, `size` its full extents, standing along its y), meshed by manifold-3d like the others; the generator is handed the guide's mesh, so nothing in Blender changed.
 
-**Sculpt** (Formations, 2026-11-23, Selected in the dock, the panel, or **Ctrl+Tab**): the selected solid guide shaped with **D** Draw, **G** Grab and **C** Cut, Dyntopo and Remesh, as Blender's sculpt mode; while it is on, the dock is the mode's and every key but the view's and the workspaces' is too, so **G** is the Grab brush there, not the object grab below.
+**Sculpt** (Formations, 2026-11-23, Selected in the tool settings, the panel, or **Ctrl+Tab**): the selected solid guide shaped with **D** Draw, **G** Grab and **C** Cut, Dyntopo and Remesh, as Blender's sculpt mode; while it is on, the toolbar is its three tools and the tool settings its brush's and every key but the view's and the workspaces' is too, so **G** is the Grab brush there, not the object grab below.
 **C** outside the mode cuts the selected guide's whole stack to a polygon drawn on the view.
 All of it is in [formations](formations.md#sculpting).
 
@@ -458,7 +461,7 @@ The picked guides are drawn in front and tinted (`COMBINE_PICK`) while it is cho
 **Grab, Rotate, Scale** (**G**, **R**, **S**, any workspace, 2026-11-23, Blender's modal transforms): what the gizmo would move, turn or size follows the pointer - a body, a rock or frame standing in 3D, a guide's picked shape, a multi-selection - through the gizmo's own handlers (`handlersFor`), so each does exactly what the matching handle drag would, as one undo step (`startTransform` and friends in editor.ts).
 A click or **Enter** places; **Esc** or a right click puts it back and takes the undo step away again; **X**, **Y**, **Z** hold it to that axis, and **Shift+X**, **Y**, **Z** to the plane of the other two (the same key again frees it; a turn held to a plane turns about the axis left out, as Blender's does).
 The gizmo is put away meanwhile, so the placing click cannot land on a handle.
-A readout over the viewport's top left says what it is doing and which keys apply (`xformReadout`), as Blender's header does; the title bar's notice sits under the dock's tools, out of sight in Formations.
+A readout over the viewport's top left says what it is doing and which keys apply (`xformReadout`), as Blender's header does, beside the toolbar; the status line's notice is along the viewport's foot.
 
 **Typed amounts** (2026-11-24, Blender's numeric input): digits make it exact, **metres** for a grab, **degrees** for a turn, a **factor** for a size (Tris's choice over metres of size: Blender's meaning).
 **S 1 0** sizes by 10 on every axis, **S X 5** by 5 along X, **S Shift+Y 1 2** by 12 along X and Z; **G X 5** moves 5 m along X; **R Z 9 0** turns 90° about Z, right-handed (counterclockwise seen head on), and **R 9 0** about the view axis the same way.
@@ -483,7 +486,7 @@ It is three's own move-centre handle (`XYZ`) drawn as a box (`reshapeHandle` in 
 A kind stays armed and selects nothing it makes (since 2026-11-25): a row of ferns is a row of clicks, and moss or ivy is a brush that paints whichever rock it is pressed on (a right drag erases) and grows on Enter, its radius under the palette ([formations](formations.md#decorations)).
 While a painted kind is armed or its brush is on, the brush's ring and footprint follow the pointer over the rock.
 Esc (which also throws away the strokes since the last Enter), its button again, **Select**, a press off every rock, or Enter with nothing left to grow disarms it; a placed kind is disarmed by a right-click too.
-**Select**, the dock's tool whenever nothing is armed, picks what grew: a click on moss, ivy or a fern selects that decoration, not its rock's body first.
+**Select**, the toolbar's tool whenever nothing is armed, picks what grew: a click on moss, ivy or a fern selects that decoration, not its rock's body first.
 
 **Collision** (Decorations' dock, Show, 2026-11-23): the collision outlines drawn over the rocks, as 2D draws them, for reference while dressing; never picked, so a click still lands on the rock (`referenceOutline` in `shownModel`, outside `inWorkspace`).
 Off by default, remembered by the browser (`collision` in `prefs.ts`).
@@ -729,7 +732,12 @@ The editor's screen (since 2026-11-26) is laid out around an unobstructed viewpo
 - **The command bar** carries the files (New, Load, Save, Save As, Delete File), **Sounds**, then the level's own few settings - **Background** (what is behind everything, `LevelTree.background`), **Lens mm** and **Cam z** (the 3D camera, `LevelTree.camera`; blank is the default) - the workspace tabs, and **Test level**.
   The level's light is not here: it is its **Sun** and **Environment** nodes, and its fog is its **fog regions** ([level-format](level-format.md#the-levels-light)).
   The level select's `title`, `intro` and `unlisted` have no control any more (there is one main level); a level that has them keeps them.
-- **The left dock is the workspace's alone**: in 2D the drawing tools, in Formations, Decorations and Texturing their own docks ([below](#workspaces-2d-formations-decorations-texturing)).
+- **The tool settings** (Blender's tool header, since 2026-11-26): a strip across the viewport's top holding what the workspace's tools are set to (a new body's kind, a brush's radius, Paint's material, a combine under way), then at its far end what is drawn and the workspace's bulk action (Generate, Grow, Bake). It is one row and scrolls sideways rather than wrapping, so the viewport under it never moves; hints that were paragraphs in the old dock are a line here.
+- **The toolbar** (`editor/toolbar.ts`, `editor/toolIcons.ts`, since 2026-11-26), as Blender draws its own: each workspace's tools as a column of icons down the viewport's left edge, in blocks of related tools, the active one lit blue ([the table below](#workspaces-2d-formations-decorations-texturing)).
+  The icons are one 24-unit line-art set, stroked in the text colour with one mint accent on the part that says what the tool makes.
+  A tool's name, its key and what it does are its tooltip, beside it after a short rest (or at once from the keyboard); the description is the button's own `title`, taken into the tooltip as the pointer arrives, so the browser's never shows over it.
+  A column too tall for the window carries on in a second, and what stands beside the toolbar moves over for it (`--toolbar-w`, measured off the blocks, since a wrapping flex column does not grow wider by itself).
+  It replaced the left dock of text buttons under headings, which took a quarter of the window in every workspace for a handful of buttons and options.
   What a layer or a workspace is for is its button's tooltip, which is where the empty inspector used to say it.
 - **The right dock** is the **scene tree** (its Scene tab), with the layers over it - 2D's type layers (scene, camera, notes, stacked one a row) and the data layers - and a **search** field and **expand all** / **collapse all** under its heading, or the **prefab library** (its Prefabs tab, [prefabs](prefabs.md#in-the-editor)); a prefab open for editing says so over the tree, with **Back to the level**.
   It is as wide as its left edge is dragged (double-click for the default), remembered per browser (`rope.editor.dockWidth`).
@@ -739,4 +747,4 @@ The editor's screen (since 2026-11-26) is laid out around an unobstructed viewpo
 - **The status line** along the viewport's foot says what is open, whether it is saved, what is in it, and the draft or notice of the moment.
 
 The top bars wrap on a narrow window, and everything under them follows (`--chrome-top`, measured as they resize).
-At phone widths the two docks become drawers, **Tools** and **Scene**, mutually exclusive and starting closed, leaving the canvas reachable. Native Tab navigation works while a toolbar button or disclosure has focus; Tab from the canvas still cycles edit layers. Inspector sections and sound event families are keyboard-accessible buttons with expanded state. Drawing tool shortcuts are printed beside their labels, and active tool, layer and view controls expose pressed state.
+At phone widths the scene tree's dock becomes a drawer, **Scene**, starting closed, leaving the canvas reachable; the toolbar and the tool settings stay. Native Tab navigation works while a toolbar button or disclosure has focus; Tab from the canvas still cycles edit layers. Inspector sections and sound event families are keyboard-accessible buttons with expanded state. A tool's shortcut is in its tooltip, and active tool, layer and view controls expose pressed state.

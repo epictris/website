@@ -34,7 +34,7 @@ body.studio { background: var(--studio-bg); color: var(--studio-text); font-fami
 .studio :is(.hint, .metrics) { color: var(--studio-muted); }
 .studio .hint { max-width: 85ch; }
 .studio :is(h1,h2,h3) { font: inherit; font-weight: 650; color: var(--studio-text); }
-.studio :is(.ed-bar,.ed-inspector,.ed-outliner,.snd-body,.inspector,.timeline-scroll) { scrollbar-width: thin; scrollbar-color: #536b8b transparent; }
+.studio :is(.ed-toolhead,.ed-inspector,.ed-outliner,.snd-body,.inspector,.timeline-scroll) { scrollbar-width: thin; scrollbar-color: #536b8b transparent; }
 .studio-header { display: flex; align-items: center; justify-content: space-between; gap: 2ch; border-bottom: 1px solid var(--studio-line); padding: 1lh 0; margin-bottom: 1lh; }
 .studio-header h1 { margin: 0; display: flex; align-items: center; gap: 1.5ch; }
 .studio-brand { font-weight: 750; letter-spacing: -.025em; }
@@ -44,20 +44,14 @@ body.studio { background: var(--studio-bg); color: var(--studio-text); font-fami
 .studio-nav a:hover { color: var(--studio-accent); }
 .studio-nav a[aria-current=page] { color: var(--studio-accent); }
 /* The level editor has fixed furniture around an unobstructed canvas: the
-   top bars, the workspace's dock on the left, the scene tree's on the right
-   (`--dock-width`, dragged by its edge and set by editor.ts), and over the
-   viewport the view bar, the view cube with the floating inspector under it,
-   and the status line along its foot. `--chrome-top` is where the top bars
-   end, measured by editor.ts as they wrap. */
-.studio .ed-root { font: inherit; color: var(--studio-text); --rail-width: 260px; --dock-width: 300px; --chrome-top: 104px; --status-height: 28px; }
-.studio .ed-bar { top: 12px; left: 12px; width: var(--rail-width); max-height: calc(68dvh - 24px); overflow-y: auto; box-sizing: border-box; gap: 0; padding: 0; border-radius: 6px; border-color: var(--studio-line); background: var(--studio-panel); box-shadow: 0 8px 24px #0003; pointer-events: auto; }
-.studio .ed-bar > :is(.ed-row,.ed-layers) { padding: .65lh 1.5ch; gap: .5lh .7ch; border-bottom: 1px solid #344359; }
-.studio .ed-bar > .ed-title { padding: .6lh 1.8ch; color: var(--studio-muted); overflow-wrap: anywhere; }
-.studio .ed-bar .ed-row { align-items: center; }
-.studio .ed-bar .ed-tools { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
-.studio .ed-tools > .ed-inline { grid-column: 1 / -1; justify-content: space-between; }
-.studio .ed-tools > .ed-inline .ed-select { flex: 1; }
-.studio .ed-tools .ed-btn { padding-inline: .5ch; }
+   top bars, the scene tree's dock on the right (`--dock-width`, dragged by
+   its edge and set by editor.ts), and over the viewport the workspace's tool
+   settings across its top (`--toolhead-h`), its toolbar down its left edge
+   (`--toolbar-w`), the view bar, the view cube with the floating inspector
+   under it, and the status line along its foot. `--chrome-top` is where the
+   top bars end, measured by editor.ts as they wrap; `--view-top` is where the
+   viewport itself starts, under the tool settings. */
+.studio .ed-root { font: inherit; color: var(--studio-text); --dock-width: 300px; --chrome-top: 104px; --toolhead-h: 40px; --view-top: calc(var(--chrome-top) + var(--toolhead-h)); --toolbar-w: 44px; --status-height: 28px; }
 .studio .ed-file-row .ed-select { flex: 1; width: 16ch; }
 .studio .ed-file-row .ed-danger { margin-left: auto; color: #e8af9f; }
 .studio .ed-btn { min-height: 30px; padding: .25lh 1ch; font: inherit; background: var(--studio-raised); color: var(--studio-text); border-color: var(--studio-line); }
@@ -115,6 +109,10 @@ body.studio { background: var(--studio-bg); color: var(--studio-text); font-fami
    row reads dimmed. */
 .studio .ed-out-eye { min-height: 18px; height: 18px; min-width: 20px; width: 20px; margin-left: 4px; flex: none; }
 .studio .ed-out-eye svg { width: 14px; height: 14px; }
+/* A node's padlock, after its eye: its column is kept on every row so the
+   eyes line up, but an unlocked one is drawn only under the pointer. */
+.studio .ed-out-lock { margin-left: 0; }
+.studio .ed-out-row:not(:hover) .ed-out-lock:not(.on):not(.inherited) { visibility: hidden; }
 .studio .ed-out-row.hidden .ed-out-label { opacity: 0.45; }
 .studio :is(.ed-tip,.ed-picker,.ed-dropper-chip,.ed-test-banner) { font: inherit; background: var(--studio-panel); border-color: var(--studio-line); color: var(--studio-text); }
 /* Sound assignment panel uses the same control vocabulary as the mixer. */
@@ -233,13 +231,12 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio-nav { height: 56px; align-items: stretch; gap: 2.5ch; }
 .studio-nav a { display: flex; align-items: center; border-bottom: 2px solid transparent; }
 .studio-nav a[aria-current=page] { border-color: var(--studio-accent); }
-@media (min-width: 1600px) { .studio .ed-root { --rail-width: 270px; }.studio-mixer .workspace { grid-template-columns: 260px minmax(0,1fr) 320px; } }
+@media (min-width: 1600px) { .studio-mixer .workspace { grid-template-columns: 260px minmax(0,1fr) 320px; } }
 @media (max-width: 1150px) {
   .studio-mixer .workspace { grid-template-columns: 210px minmax(0,1fr) 270px; }
   .studio-mixer .draft-hint { display: none; }
   .studio-mixer #revert { margin-left: auto; }
   .studio-mixer .monitor-control { margin-left: 0; }
-  .studio .ed-root { --rail-width: 230px; }
 }
 @media (max-width: 850px) {
   body.studio-mixer { height: auto; min-height: 100dvh; overflow: auto; }
@@ -277,8 +274,6 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
   body.studio-lab { padding-inline: 1.2ch; }
 }
 /* Control refinements shared by the authoring tools. */
-.studio .ed-tools .ed-btn[data-shortcut] { display: flex; justify-content: space-between; align-items: center; gap: .5ch; }
-.studio .ed-tools .ed-btn[data-shortcut]::after { content: attr(data-shortcut); color: var(--studio-muted); padding-inline: .3ch; }
 .studio .ed-eye { position: relative; }
 .studio .ed-eye svg { flex: none; }
 .studio .snd-menu { top: 116px; max-height: calc(100dvh - 128px); }
@@ -289,10 +284,6 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio-mixer .controls input[type=range] { min-height: 20px; height: 20px; margin: 0; }
 .studio-mixer .clip:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; z-index: 5; }
 @media (max-width: 850px) { .studio .snd-menu { top: 150px; max-height: calc(100dvh - 162px); } }
-.studio .ed-bar .ed-tools { grid-template-columns: repeat(3,minmax(0,1fr)); gap: .35lh .5ch; }
-.studio .ed-tools .ed-btn[data-shortcut]::after { display: inline; }
-.studio .ed-tools .ed-btn { padding-inline: .5ch; }
-.studio .ed-bar > :is(.ed-row,.ed-layers) { padding-block: .5lh; gap: .35lh .5ch; }
 .studio .ed-btn { min-height: 30px; }
 .studio .ed-root input::placeholder { color: #99abc5; opacity: 1; }
 .studio .ed-root,.studio .ed-root * { box-sizing: border-box; }
@@ -304,8 +295,6 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 /* THE LAYOUT (editor.ts "DOM"). */
 /* The left dock: the workspace's own tools, layers and brushes, and nothing
    else. */
-.studio .ed-left-dock { position: absolute; top: var(--chrome-top); bottom: 0; left: 0; width: var(--rail-width); display: flex; flex-direction: column; background: var(--studio-panel); border-right: 1px solid var(--studio-line); pointer-events: auto; }
-.studio .ed-left-dock .ed-bar { position: static; flex: 1; min-height: 0; width: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
 /* The right dock: the scene tree (or the prefab library), full height, as
    wide as its left edge is dragged. */
 .studio .ed-right-dock { position: absolute; top: var(--chrome-top); bottom: 0; right: 0; width: var(--dock-width); display: flex; flex-direction: column; background: var(--studio-panel); border-left: 1px solid var(--studio-line); pointer-events: auto; }
@@ -329,10 +318,10 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
    edge: the view cube and the lens, then the inspector under them. */
 /* The view bar wraps within what the column on the right leaves it (the
    cube and the lens are 220px at their widest), never under it. */
-.studio .ed-viewbar { position: absolute; top: calc(var(--chrome-top) + 8px); left: calc(var(--rail-width) + 8px); max-width: calc(100vw - var(--rail-width) - var(--dock-width) - 244px); display: flex; flex-wrap: wrap; align-items: flex-start; gap: .4lh .6ch; pointer-events: auto; }
+.studio .ed-viewbar { position: absolute; top: calc(var(--view-top) + 8px); left: calc(var(--toolbar-w) + 16px); max-width: calc(100vw - var(--toolbar-w) - var(--dock-width) - 252px); display: flex; flex-wrap: wrap; align-items: flex-start; gap: .4lh .6ch; pointer-events: auto; }
 .studio .ed-viewbar .ed-view-btns { gap: .4lh .6ch; flex-wrap: wrap; }
 .studio .ed-viewbar .ed-btn { background: var(--studio-panel); }
-.studio .ed-float { position: absolute; top: calc(var(--chrome-top) + 8px); right: calc(var(--dock-width) + 8px); bottom: calc(var(--status-height) + 8px); display: flex; flex-direction: column; align-items: flex-end; gap: .6lh; pointer-events: none; max-width: calc(100vw - var(--dock-width) - var(--rail-width) - 16px); }
+.studio .ed-float { position: absolute; top: calc(var(--view-top) + 8px); right: calc(var(--dock-width) + 8px); bottom: calc(var(--status-height) + 8px); display: flex; flex-direction: column; align-items: flex-end; gap: .6lh; pointer-events: none; max-width: calc(100vw - var(--dock-width) - var(--toolbar-w) - 24px); }
 .studio .ed-float > * { pointer-events: auto; }
 /* Preview settings: a menu off the view bar. */
 .studio .ed-preview-options { position: relative; }
@@ -343,23 +332,21 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-preview-panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; display: flex; flex-direction: column; align-items: stretch; gap: .45lh; min-width: 22ch; padding: .7lh 1.4ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 6px; box-shadow: 0 8px 24px #0005; }
 .studio .ed-preview-panel .ed-check { white-space: nowrap; }
 /* The status line along the viewport's foot. */
-.studio .ed-status { position: absolute; left: var(--rail-width); right: var(--dock-width); bottom: 0; height: var(--status-height); display: flex; align-items: center; padding: 0 1.5ch; background: var(--studio-panel); border-top: 1px solid var(--studio-line); color: var(--studio-muted); pointer-events: auto; }
+.studio .ed-status { position: absolute; left: 0; right: var(--dock-width); bottom: 0; height: var(--status-height); display: flex; align-items: center; padding: 0 1.5ch; background: var(--studio-panel); border-top: 1px solid var(--studio-line); color: var(--studio-muted); pointer-events: auto; }
 .studio .ed-status .ed-title { padding: 0; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .studio .ed-pane-switcher { display: none; }
 @media (max-width: 600px) {
-  .studio .ed-root { --rail-width: 0px; --dock-width: 0px; }
-  .studio .ed-pane-switcher { display: flex; position: absolute; top: calc(var(--chrome-top) + 8px); left: 8px; gap: 1ch; pointer-events: auto; }
-  .studio .ed-viewbar { top: calc(var(--chrome-top) + 52px); }
-  .studio .ed-left-dock,.studio .ed-right-dock { display: none; top: calc(var(--chrome-top) + 52px); bottom: 8px; width: min(300px,calc(100vw - 16px)); border: 1px solid var(--studio-line); border-radius: 5px; z-index: 30; }
-  .studio .ed-left-dock { left: 8px; }
-  .studio .ed-right-dock { right: 8px; }
+  .studio .ed-root { --dock-width: 0px; }
+  .studio .ed-pane-switcher { display: flex; position: absolute; top: calc(var(--view-top) + 8px); left: calc(var(--toolbar-w) + 16px); gap: 1ch; pointer-events: auto; }
+  .studio .ed-viewbar { top: calc(var(--view-top) + 52px); }
+  .studio .ed-right-dock { display: none; top: calc(var(--view-top) + 52px); bottom: 8px; right: 8px; width: min(300px,calc(100vw - 16px)); border: 1px solid var(--studio-line); border-radius: 5px; z-index: 30; }
   .studio .ed-dock-resize { display: none; }
-  .studio .ed-tools-open .ed-left-dock,.studio .ed-scene-open .ed-right-dock { display: flex; }
-  .studio .ed-float { top: calc(var(--chrome-top) + 96px); }
+  .studio .ed-scene-open .ed-right-dock { display: flex; }
+  .studio .ed-float { top: calc(var(--view-top) + 96px); }
 }
 /* The formation jobs (editor/formationJobs.ts): the viewport's bottom-left
    corner, over the status line, clear of the inspector down the right. */
-.studio .ed-jobs { left: calc(var(--rail-width) + 8px); right: auto; bottom: calc(var(--status-height) + 8px); width: 34ch; padding: .6lh 1.2ch; gap: .4lh;
+.studio .ed-jobs { left: calc(var(--toolbar-w) + 16px); right: auto; bottom: calc(var(--status-height) + 8px); width: 34ch; padding: .6lh 1.2ch; gap: .4lh;
   border-color: var(--studio-line); border-radius: 6px; background: var(--studio-panel); color: var(--studio-text); box-shadow: 0 8px 24px #0003; }
 .studio .ed-jobs-head { color: var(--studio-text); font-weight: 600; }
 .studio .ed-jobs button { min-height: 0; padding: 0 .8ch; font-weight: 400; color: var(--studio-muted); }
@@ -396,37 +383,62 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-btn.ed-attention { border-color: var(--studio-warm); color: var(--studio-warm); }
 @media (max-width: 600px) { .studio .ed-jobs { left: 8px; bottom: calc(var(--status-height) + 8px); width: min(34ch, calc(100vw - 16px)); } }
 /* Workspaces (editor/workspaces.ts): tabs centred in the command bar, as
-   Blender's run along its top bar; each workspace's dock groups its tools
-   under small headings. */
+   Blender's run along its top bar. */
 .studio .ed-ws-tabs { display: flex; margin-inline: auto; border: 1px solid var(--studio-line); border-radius: 5px; overflow: hidden; }
 .studio .ed-ws-tabs .ed-btn { border: 0; border-radius: 0; min-width: 11ch; }
 .studio .ed-ws-tabs .ed-btn + .ed-btn { border-left: 1px solid var(--studio-line); }
 .studio .ed-ws-tabs .ed-btn.active { border-color: var(--studio-line); }
-.studio .ed-tool-group { grid-column: 1 / -1; color: var(--studio-muted); font-weight: 600; padding-top: .35lh; }
-.studio .ed-tools > .ed-tool-group:first-child { padding-top: 0; }
-.studio .ed-ws-dock > .ed-ws-hint { grid-column: 1 / -1; }
-.studio .ed-ws-dock > .ed-ws-wide { grid-column: 1 / -1; }
 /* Centred in the room the file buttons and the level settings leave them
    (`margin-inline: auto`), never over them. */
 @media (min-width: 1600px) {
   .studio .ed-ws-tabs .ed-btn { min-width: 13ch; }
 }
-.studio .ed-bar .ed-ws-dock { grid-template-columns: repeat(2,minmax(0,1fr)); }
-/* A row of mutually exclusive buttons (the Formations dock's Guide / Rock / Both). */
+/* A row of mutually exclusive buttons (Formations' Guide / Rock / Both). */
 .studio .ed-seg { display: flex; border: 1px solid var(--studio-line); border-radius: 5px; overflow: hidden; }
 .studio .ed-seg .ed-btn { flex: 1; border: 0; border-radius: 0; }
 .studio .ed-seg .ed-btn + .ed-btn { border-left: 1px solid var(--studio-line); }
 .studio .ed-seg .ed-btn.active { border-color: var(--studio-line); }
-/* Sculpt mode (editor/sculpt.ts): while it is on, the Formations dock is the
-   mode's alone; its controls are the dock's own grid cells. */
+/* THE TOOL SETTINGS (Blender's tool header, editor.ts): a strip across the
+   viewport's top, one row of the workspace's settings, its view toggles and
+   its bulk action at the far end; it scrolls sideways rather than wrapping,
+   so the viewport under it never moves. */
+.studio .ed-toolhead { position: absolute; top: var(--chrome-top); left: 0; right: var(--dock-width); height: var(--toolhead-h); box-sizing: border-box; display: flex; align-items: center; padding: 0 1.2ch; background: var(--studio-panel); border-bottom: 1px solid var(--studio-line); overflow-x: auto; overflow-y: hidden; pointer-events: auto; }
+.studio .ed-toolhead-set { display: flex; align-items: center; gap: 1ch; flex: 1 0 auto; white-space: nowrap; }
+.studio .ed-toolhead :is(.ed-btn,select,input:not([type=checkbox])) { min-height: 28px; height: 28px; padding-block: 0; }
+.studio .ed-toolhead .ed-inline { display: inline-flex; align-items: center; gap: .7ch; }
+.studio .ed-toolhead .ed-num { width: 8ch; }
+.studio .ed-toolhead .ed-seg .ed-btn { padding-inline: 1.2ch; }
+.studio .ed-toolhead-label { color: var(--studio-muted); }
+.studio .ed-toolhead-hint { color: var(--studio-muted); }
+.studio .ed-toolhead-divider { flex: none; align-self: center; width: 1px; height: 20px; margin-inline: .4ch; background: var(--studio-line); }
+.studio .ed-toolhead-spacer { flex: 1 1 2ch; }
+/* Sculpt mode (editor/sculpt.ts): while it is on, Formations' tool settings
+   and toolbar are the mode's alone. */
 .studio .ed-ws-dock > .ed-sculpt-dock { display: none; }
 .studio .ed-ws-dock.ed-sculpting > .ed-sculpt-dock { display: contents; }
 .studio .ed-ws-dock.ed-sculpting > :not(.ed-sculpt-dock) { display: none !important; }
-.studio .ed-sculpt-dock > :is(.ed-ws-wide,.ed-ws-hint) { grid-column: 1 / -1; }
-.studio .ed-sculpt-dock > .ed-inline { display: flex; align-items: center; justify-content: space-between; gap: 1ch; }
-.studio .ed-sculpt-dock > .ed-inline > .ed-num { width: 9ch; }
-.studio .ed-ws-dock > .ed-brush-radius { display: flex; align-items: center; justify-content: space-between; gap: 1ch; }
-.studio .ed-ws-dock > .ed-brush-radius > .ed-num { width: 9ch; }
+.studio .ed-tb-set:not(.ed-sculpting) > .ed-sculpt-tools { display: none; }
+.studio .ed-tb-set.ed-sculpting > :not(.ed-sculpt-tools) { display: none !important; }
+/* THE TOOLBAR (editor/toolbar.ts), as Blender draws its own: a column of
+   icons over the viewport's left edge, in blocks of related tools, the
+   active one lit. A column too tall for the window carries on in a second. */
+.studio .ed-toolbar { position: absolute; top: calc(var(--view-top) + 8px); bottom: calc(var(--status-height) + 8px); left: 8px; display: flex; flex-direction: column; pointer-events: none; z-index: 4; }
+.studio .ed-tb-set { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; gap: 6px; max-height: 100%; }
+.studio .ed-tb-group { display: flex; flex-direction: column; gap: 2px; padding: 2px; background: color-mix(in srgb, var(--studio-panel) 94%, transparent); border: 1px solid var(--studio-line); border-radius: 6px; box-shadow: 0 4px 14px #0004; pointer-events: auto; }
+.studio .ed-tool { --tool-accent: #7fd1b0; width: 38px; height: 38px; min-height: 0; padding: 0; display: grid; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--studio-text); }
+.studio .ed-tool:hover:not(:disabled) { background: var(--studio-raised); }
+.studio .ed-tool:is(.active,[aria-pressed=true]) { background: #4772b3; color: #fff; border: 0; }
+.studio .ed-tool:is(.active,[aria-pressed=true]):hover { background: #5583c6; }
+.studio .ed-tool:disabled { opacity: .4; cursor: default; }
+.studio .ed-tool:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
+.studio .ed-tool-icon { display: block; }
+.studio .ed-tool-icon .ac { stroke: var(--tool-accent); }
+.studio .ed-tool-icon .acf { fill: var(--tool-accent); }
+/* A tool's tooltip: its name and key, then what it does, beside it. */
+.studio .ed-tooltip { position: fixed; z-index: 100; max-width: 38ch; padding: .5lh 1.2ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 5px; box-shadow: 0 8px 24px #0006; pointer-events: none; }
+.studio .ed-tooltip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 2ch; }
+.studio .ed-tooltip kbd { font: inherit; color: var(--studio-muted); }
+.studio .ed-tooltip p { margin: .3lh 0 0; color: var(--studio-muted); }
 /* The view cube and the lens (editor/viewCube.ts): the top of the column
    down the viewport's right edge (`.ed-float`), the inspector under them. */
 .studio .ed-viewnav { flex: none; display: flex; flex-direction: column; align-items: center; gap: .5lh; pointer-events: auto; }
@@ -437,11 +449,11 @@ body.studio-lab { max-width: 120ch; padding: 0 3ch 2lh; }
 .studio .ed-viewnav .ed-lens .ed-btn { min-width: 7ch; }
 /* The G / R / S readout (editor.ts `xformReadout`): over the viewport's top
    left while a transform lasts, as Blender's header shows it. */
-.studio .ed-xform { position: absolute; top: calc(var(--chrome-top) + 52px); left: calc(var(--rail-width) + 8px); max-width: calc(100vw - var(--rail-width) - var(--dock-width) - 360px); padding: .4lh 1.5ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 4px; pointer-events: none; }
+.studio .ed-xform { position: absolute; top: calc(var(--view-top) + 52px); left: calc(var(--toolbar-w) + 16px); max-width: calc(100vw - var(--toolbar-w) - var(--dock-width) - 368px); padding: .4lh 1.5ch; background: var(--studio-panel); border: 1px solid var(--studio-line); border-radius: 4px; pointer-events: none; }
 .studio .ed-xform[hidden] { display: none; }
 .studio .ed-xform-amount { color: var(--studio-text); white-space: nowrap; }
 .studio .ed-xform-hint { color: var(--studio-muted); }
 /* The number being typed, its caret after it. */
 .studio .ed-xform-field { color: var(--studio-accent); border-right: 1px solid currentColor; padding-right: 1px; }
 .studio .ed-xform-hint.ed-xform-warn { color: var(--studio-warm); }
-@media (max-width: 600px) { .studio .ed-xform { top: calc(var(--chrome-top) + 96px); left: 8px; max-width: calc(100vw - 150px); } }
+@media (max-width: 600px) { .studio .ed-xform { top: calc(var(--view-top) + 96px); left: calc(var(--toolbar-w) + 16px); max-width: calc(100vw - 150px); } }

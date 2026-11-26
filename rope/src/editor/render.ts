@@ -121,6 +121,11 @@ const BREAK_EDGE = "#c96a6a";
 const BREAK_DASH = [3 * PX, 5 * PX];
 const BREAK_HALO = 3;
 export const SELECT = "#f4a460";
+// The knife's pieces, alternating so two halves side by side read apart: the
+// selection orange and the accent blue, washed thin enough to see the level
+// through.
+const CUT_PIECE_FILL = ["rgba(244, 164, 96, 0.18)", "rgba(101, 189, 219, 0.18)"];
+const CUT_PIECE_STROKE = [SELECT, "#65bddb"];
 // A root branch's bend (`RootBranchData.bends`), where its branch is not selected.
 const BEND_MARK = "#cbccc6";
 const MARQUEE_FILL = "rgba(244,164,96,0.10)";
@@ -2013,6 +2018,10 @@ export function drawEditor(
   // one's own colour. Null elsewhere: a guide only while its formation or
   // body is selected, in the formation mark colour.
   formationGuides: { shown: (f: EdItem) => boolean; color: (f: EdItem) => string } | null = null,
+  // A knife being drawn (the Cut tool, `cutDraft` in editor.ts): its line,
+  // the pieces it would leave (so what a click will do is seen before it is
+  // done), and whether its end has landed on a corner.
+  cutDraft: { from: Vec2; to: Vec2; pieces: readonly (readonly Vec2[])[]; corner: boolean } | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -2724,6 +2733,43 @@ export function drawEditor(
       ctx.lineWidth = worldLine * 1.5;
       ctx.beginPath();
       ctx.arc(v[0]!.x, v[0]!.y, worldLine * 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // The knife: each piece it would leave outlined and washed in turn in the
+  // two cut colours, so neighbours read apart, then the line itself, dashed,
+  // with a dot at each end - a ring where the end sits on a corner.
+  if (cutDraft) {
+    cutDraft.pieces.forEach((p, k) => {
+      if (p.length < 3) return;
+      ctx.beginPath();
+      p.forEach((q, i) => (i === 0 ? ctx.moveTo(q.x, q.y) : ctx.lineTo(q.x, q.y)));
+      ctx.closePath();
+      ctx.fillStyle = CUT_PIECE_FILL[k % 2]!;
+      ctx.fill();
+      ctx.strokeStyle = CUT_PIECE_STROKE[k % 2]!;
+      ctx.lineWidth = worldLine * 1.5;
+      ctx.stroke();
+    });
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 2;
+    ctx.setLineDash([6 * worldLine, 4 * worldLine]);
+    ctx.beginPath();
+    ctx.moveTo(cutDraft.from.x, cutDraft.from.y);
+    ctx.lineTo(cutDraft.to.x, cutDraft.to.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = SELECT;
+    for (const q of [cutDraft.from, cutDraft.to]) {
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, worldLine * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (cutDraft.corner) {
+      ctx.lineWidth = worldLine * 1.5;
+      ctx.beginPath();
+      ctx.arc(cutDraft.to.x, cutDraft.to.y, worldLine * 6, 0, Math.PI * 2);
       ctx.stroke();
     }
   }

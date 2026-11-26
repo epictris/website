@@ -440,6 +440,9 @@ import {
 import { editorViewHref, MAX_ZOOM, MIN_ZOOM, readEditorView, type EditorView } from "./viewUrl";
 import { ROOT_BEND_DAMPING, ROOT_BEND_FREQ } from "../level/levelFormat";
 import type { EdRoot } from "./model";
+import { applyCut, cuttable, joinBodies, planCut } from "./splitJoin";
+import { installToolTips, refreshBlocks, setToolName, toolBlock, toolize, toolSet, watchToolbarWidth } from "./toolbar";
+import type { ToolIconName } from "./toolIcons";
 import { SoundSystem } from "../audio/soundSystem";
 import { SoundMenu } from "./soundMenu";
 
@@ -450,6 +453,10 @@ type Tool =
   | "belt"
   | "poly"
   | "path"
+  // The knife: two clicks draw a line, and every polygon or box it crosses
+  // edge to edge is cut along it, what no longer touches parted into bodies
+  // of their own (editor/splitJoin.ts).
+  | "cut"
   | "text"
   | "arrow"
   | "checkpoint"
@@ -482,6 +489,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "belt",
     "poly",
     "path",
+    "cut",
     "light",
     "model",
     "glow",
@@ -527,6 +535,8 @@ const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "force", "water",
 // drag never reads as a click, large enough that a hand shaking on a mouse
 // button does not turn a selection into a pan.
 const CLICK_SLOP_PX = 4;
+// How near a corner a knife's end lands on it, in screen pixels.
+const CUT_SNAP_PX = 8;
 // The smallest a point-like mark may be to aim at, in screen pixels. The spawn
 // marker and a checkpoint are both drawn at the avatar's radius - 16 cm across,
 // which is a handful of pixels at the zoom a level is laid out at - so both take
@@ -1376,6 +1386,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // outline, `+Path` ends open as a camera path. One draft rather than two so
   // Esc, Enter, the title readout and the preview cannot drift apart per tool.
   let polyDraft: { kind: "poly" | "path" | "shelter"; verts: Vec2[] } | null = null;
+  // A knife being drawn (the Cut tool): where its first click landed.
+  let cutDraft: { from: Vec2 } | null = null;
   // A ROOT being drawn (`+ Root`, docs/roots.md): its nodes so far in world
   // metres and each node's Bézier handles (pulled out by dragging as it is
   // placed), the widths it will taper between, and - for a branch - the root
@@ -2043,11 +2055,54 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (hiddenUserLayers.size) for (const l of layersOf(model.tree, i.node)) if (hiddenUserLayers.has(l)) return true;
     return false;
   }
-  // ...and locked: drawn, but neither picked nor edited.
-  function itemLocked(i: EdItem | null | undefined): boolean {
-    if (!i || !lockedUserLayers.size) return false;
-    for (const l of layersOf(model.tree, i.node)) if (lockedUserLayers.has(l)) return true;
+  // ...and locked: drawn, but not picked on the canvas. A node is locked by
+  // its own `locked` or an ancestor's (Godot's lock: saved in the level, the
+  // scene tree still selects it), or by a locked data layer it is in.
+  function nodeLocked(id: string): boolean {
+    const n = model.tree.nodes.get(id);
+    if (!n) return false;
+    if (n.locked || lockedBy(id) !== null) return true;
+    if (lockedUserLayers.size) for (const l of layersOf(model.tree, id)) if (lockedUserLayers.has(l)) return true;
     return false;
+  }
+  // The nearest ancestor whose own lock covers a node, or null.
+  function lockedBy(id: string): EdNode | null {
+    return ancestors(model.tree, id).find((a) => a.locked) ?? null;
+  }
+  function itemLocked(i: EdItem | null | undefined): boolean {
+    return !!i && nodeLocked(i.node);
+  }
+  // The chains and vines a click may not reach: their nodes locked. Asked once
+  // per pick rather than per chain, since a chain names no node of its own.
+  function lockedLinks(): { chains: Set<number>; vines: Set<number> } {
+    const chains = new Set<number>();
+    const vines = new Set<number>();
+    for (const n of model.tree.nodes.values()) {
+      if ((n.chain === null && n.vine === null) || !nodeLocked(n.id)) continue;
+      if (n.chain !== null) chains.add(n.chain);
+      if (n.vine !== null) vines.add(n.vine);
+    }
+    return { chains, vines };
+  }
+  // LOCK (Ctrl+L, Ctrl+Shift+L, the scene tree's padlock, the Node section's
+  // box): an edit like grouping, undone like one. What it locks leaves the
+  // selection, as a locked layer's does: "out of harm's way" starts now, not
+  // at the next click. The scene tree can select it again on purpose.
+  function setNodesLocked(ids: Iterable<string>, lock: boolean): void {
+    const nodes = [...ids].map((id) => model.tree.nodes.get(id)).filter((n): n is EdNode => !!n && n.locked !== lock);
+    if (!nodes.length) return;
+    beginAction();
+    for (const n of nodes) n.locked = lock;
+    if (lock) {
+      for (const id of [...selectedIds]) if (itemLocked(itemOf(id))) selectedIds.delete(id);
+      for (const id of [...selectedBodyIds]) if (nodeLocked(id)) selectedBodyIds.delete(id);
+      const links = lockedLinks();
+      for (const id of [...selectedChainIds]) if (links.chains.has(id)) selectedChainIds.delete(id);
+      for (const id of [...selectedVineIds]) if (links.vines.has(id)) selectedVineIds.delete(id);
+    }
+    markDirty();
+    rebuildInspector();
+    syncGizmo();
   }
   let hiddenRev = 0;
   function setBodiesHidden(ids: Iterable<string>, hide: boolean): void {
@@ -2263,6 +2318,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the canvas lands somewhere you can see: the panel jumps to the body and
     // opens it, and `refreshOutliner` scrolls the row into view.
     if (id !== null) revealBody(id);
+    rebuildInspector();
+  }
+
+  // Several bodies selected as bodies, the first first: what a split leaves.
+  function setBodiesSelection(ids: readonly string[]): void {
+    selectedIds.clear();
+    selectedVerts.clear();
+    selectedChainIds.clear();
+    selectedVineIds.clear();
+    selectedBodyIds.clear();
+    for (const id of ids) selectedBodyIds.add(id);
+    nudging = false;
+    if (ids.length) revealBody(ids[0]!);
     rebuildInspector();
   }
 
@@ -3628,7 +3696,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const w = poseOfFrame(world);
       const at = ridden && !restsAsAuthored(ridden) ? relative2D({ x: ridden.x, y: ridden.y, rot: ridden.rot }, w) : w;
       const pose = { x: nm(at.x), y: nm(at.y), rot: nm(at.rot), z: nm(w.z), tilt: [nm(w.tilt[0]), nm(w.tilt[1])] };
-      const { type: _t, name: _n, children: _c, grouped: _g, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n as LevelNode & Record<string, unknown>;
+      const { type: _t, name: _n, children: _c, grouped: _g, locked: _lk, layers: _l, disabled: _d, x: _x, y: _y, rot: _r, ...fields } = n as LevelNode & Record<string, unknown>;
       switch (n.type) {
         // A formation draws what it BUILT, where it stands: its recipe and its
         // guide change no pixel until a Generate lands, so a parameter typed
@@ -4239,9 +4307,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     refreshWorkspaceDock();
   });
 
-  // Toolbar.
-  const bar = el("div", "ed-bar");
-  bar.setAttribute("aria-label", "Level editor tools");
+  // THE TOOL SETTINGS (Blender's tool header): a strip across the top of the
+  // viewport holding what the workspace's tools are set to and what it does
+  // to the level as a whole - a new body's kind, a brush's radius, Generate.
+  // The tools themselves are the TOOLBAR, a column of icons over the
+  // viewport's left edge (editor/toolbar.ts), one set per workspace.
+  const bar = el("div", "ed-toolhead");
+  bar.setAttribute("aria-label", "Tool settings");
+  const toolbar = el("div", "ed-toolbar");
+  installToolTips(toolbar);
+  const fitToolbar = watchToolbarWidth(toolbar, root);
   const brand = el("header", "ed-shell-header");
   const brandName = document.createElement("strong");
   brandName.textContent = "Just Swing";
@@ -4507,9 +4582,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   fileRow.append(workspaceTabs);
 
-  const toolRow = el("div", "ed-row ed-tools");
+  // 2D's tool settings: the kind of body a shape tool makes, and +Root's widths.
+  const toolRow = el("div", "ed-toolhead-set");
   toolRow.setAttribute("role", "group");
-  toolRow.setAttribute("aria-label", "Drawing tools");
+  toolRow.setAttribute("aria-label", "2D tool settings");
   bar.appendChild(toolRow);
   const toolBtns: Record<Tool, HTMLButtonElement> = {
     select: button("Select", () => setTool("select")),
@@ -4518,6 +4594,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     belt: button("Belt", () => setTool("belt")),
     poly: button("Poly", () => setTool("poly")),
     path: button("Path", () => setTool("path")),
+    cut: button("Cut", () => setTool("cut")),
     text: button("Text", () => setTool("text")),
     arrow: button("Arrow", () => setTool("arrow")),
     checkpoint: button("Checkpoint", () => setTool("checkpoint")),
@@ -4530,12 +4607,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     fog: button("Fog", () => setTool("fog")),
     shelter: button("Shelter", () => setTool("shelter")),
   };
-  const mushroomButton = button("Mushroom", () => { placingMushroom = true; setTool("glow"); });
+  const mushroomButton = toolize(button("", () => { placingMushroom = true; setTool("glow"); }), "Bouncy mushroom", "mushroom");
   mushroomButton.title = "Click to plant a glowing, bouncy mushroom. Its cap expands on impact. Adjust Bounce and Launch on its body.";
   for (const [key, shortcut] of Object.entries({ select: "V", rect: "R", circle: "C", poly: "P", text: "T", arrow: "A", chain: "K", checkpoint: "S" })) {
     toolBtns[key as Tool].dataset["shortcut"] = shortcut;
     toolBtns[key as Tool].setAttribute("aria-keyshortcuts", shortcut);
   }
+  // Each tool's face and name on the toolbar.
+  const TOOL_FACES: Record<Tool, [string, ToolIconName]> = {
+    select: ["Select", "select"],
+    rect: ["Rectangle", "rect"],
+    circle: ["Circle", "circle"],
+    belt: ["Belt", "belt"],
+    poly: ["Polygon", "poly"],
+    path: ["Curve", "curve"],
+    cut: ["Cut", "cut"],
+    text: ["Text", "text"],
+    arrow: ["Arrow", "arrow"],
+    checkpoint: ["Checkpoint", "checkpoint"],
+    chain: ["Chain", "chain"],
+    vine: ["Vine", "vine"],
+    root: ["Root", "root"],
+    light: ["Light", "light"],
+    model: ["Model", "model"],
+    glow: ["Glowing mushroom", "glow"],
+    fog: ["Fog region", "fog"],
+    shelter: ["Shelter", "shelter"],
+  };
+  for (const [t, [name, icon]] of Object.entries(TOOL_FACES)) toolize(toolBtns[t as Tool], name, icon);
+  toolBtns.select.title = "Click to select, drag from empty space to rubber-band; a press on what is selected drags it";
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
   // the one gesture draws three different things.
   const PATH_TOOL_TITLE: Record<EdLayer, string> = {
@@ -4654,56 +4754,49 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   toolBtns.poly.title =
     "Click out an outline, concave corners included; Enter or the first vertex closes it, Esc cancels";
-  // The scene layer's tools, grouped by what they make: the outlines the ball
-  // collides with, the things it plays with, and what lights and dresses the
-  // plane. The other layers offer a handful each and need no headings.
+  toolBtns.cut.title =
+    "Click where a cut starts and where it ends: every polygon or box it crosses edge to edge is cut, and what no longer touches becomes a body of its own, a copy of the body it came from, taking the anchors (and the chains and vines on them) on its side. With bodies selected, only they are cut. Hold Alt on the second click to keep the pieces in one body. Snaps to corners. Esc cancels.";
+  // A heading in the tool settings: a muted word before the controls it names.
   const toolGroup = (text: string): HTMLElement => {
-    const h = el("div", "ed-tool-group");
+    const h = el("span", "ed-toolhead-label");
     h.textContent = text;
     return h;
   };
-  const toolGroups = [toolGroup("Collision"), toolGroup("Gameplay"), toolGroup("Scene"), toolGroup("Volumes")];
-  toolRow.append(
-    toolBtns.select,
-    kindWrap,
-    toolGroups[0]!,
-    toolBtns.rect,
-    toolBtns.circle,
-    toolBtns.poly,
-    toolBtns.path,
-    toolBtns.belt,
-    toolGroups[1]!,
-    toolBtns.chain,
-    toolBtns.vine,
-    toolBtns.root,
-    mushroomButton,
-    toolBtns.glow,
-    toolGroups[2]!,
-    toolBtns.light,
-    toolBtns.model,
-    toolGroups[3]!,
-    toolBtns.fog,
-    toolBtns.shelter,
-    toolBtns.text,
-    toolBtns.arrow,
-    toolBtns.checkpoint,
-    rootWidthsWrap,
+  // ...a rule between two runs of them, and the gap that pushes what follows
+  // (the workspace's Generate, Grow or Bake) to the strip's far end.
+  const toolheadDivider = (): HTMLElement => el("span", "ed-toolhead-divider");
+  const toolheadSpacer = (): HTMLElement => el("span", "ed-toolhead-spacer");
+  toolRow.append(kindWrap, rootWidthsWrap);
+  // 2D's toolbar, in blocks by what they make: select; the outlines the ball
+  // collides with (and the knife that cuts them); the things it plays with;
+  // what lights and dresses the plane; the plane's volumes; and the notes
+  // layer's. A layer shows only its own (`refreshToolButtons`), and a block
+  // with none of them shown goes.
+  const toolbar2d = toolSet(
+    "2D tools",
+    toolBlock(toolBtns.select),
+    toolBlock(toolBtns.rect, toolBtns.circle, toolBtns.poly, toolBtns.path, toolBtns.belt, toolBtns.cut),
+    toolBlock(toolBtns.chain, toolBtns.vine, toolBtns.root, mushroomButton, toolBtns.glow),
+    toolBlock(toolBtns.light, toolBtns.model),
+    toolBlock(toolBtns.fog, toolBtns.shelter),
+    toolBlock(toolBtns.text, toolBtns.arrow, toolBtns.checkpoint),
   );
+  toolbar.appendChild(toolbar2d);
 
   // THE FORMATIONS WORKSPACE'S DOCK: Primitives - each a new guide where the
   // view is looking, Blender's Add menu - then, with a solid guide selected,
   // shapes added to its stack (Shift+A in the view), and generating every
   // rock whose recipe or guide has changed in one go.
-  const formationsDock = el("div", "ed-row ed-tools ed-ws-dock");
+  const formationsDock = el("div", "ed-toolhead-set ed-ws-dock");
   formationsDock.setAttribute("role", "group");
-  formationsDock.setAttribute("aria-label", "Formation tools");
+  formationsDock.setAttribute("aria-label", "Formation tool settings");
   bar.appendChild(formationsDock);
   const primitiveButtons = SHAPE_KINDS.map(({ label, kind }) => {
-    const b = button(`+ ${label}`, () => addPrimitive(kind));
+    const b = toolize(button("", () => addPrimitive(kind)), `Add ${label.toLowerCase()}`, kind === "box" ? "addBox" : "addCylinder");
     b.title = `Add a new guide, a ${label.toLowerCase()}, where the view is looking: a background rock of its own, behind nothing, colliding with nothing, generated in its Formation panel (Shift+A in the view with nothing selected)`;
     return b;
   });
-  const stackGroup = toolGroup("Add to selected guide");
+  const stackGroup = toolGroup("Add to guide");
   const shapeButtons = SHAPE_KINDS.map(({ label, kind }) => {
     const b = button(`+ ${label}`, () => {
       const f = activeSolidFormation();
@@ -4713,7 +4806,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return b;
   });
   const generateStaleBtn = button("Generate", () => generateStale());
-  generateStaleBtn.classList.add("ed-ws-wide");
   generateStaleBtn.title =
     "Generate every rock in the level that is not generated yet or whose guide or recipe has changed since (the iteration look; Bake stays per rock)";
   // COMBINING GUIDES (Blender's boolean, applied): with a solid guide
@@ -4722,23 +4814,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // picked guide becomes an entry of the selected guide's stack in that mode,
   // carried into its frame, and leaves the level, with the decorations tied
   // to it; one undo step.
-  const combineGroup = toolGroup("Combine with other guides");
   const combineBtns = new Map<StackMode, HTMLButtonElement>();
-  for (const [op, label, tip] of [
-    ["add", "Union", "Pick other guides to merge into this one"],
-    ["subtract", "Subtract", "Pick other guides to cut out of this one"],
-    ["intersect", "Intersect", "Pick other guides to keep only what this one shares with them"],
+  for (const [op, label, icon, tip] of [
+    ["add", "Union", "union", "Pick other guides to merge into this one"],
+    ["subtract", "Subtract", "subtract", "Pick other guides to cut out of this one"],
+    ["intersect", "Intersect", "intersect", "Pick other guides to keep only what this one shares with them"],
   ] as const) {
-    const b = button(label, () => startCombine(op));
+    const b = toolize(button("", () => startCombine(op)), label, icon);
     b.title = `${tip}: click them in the view or the list, then Enter (Esc cancels). The picked guides leave the level.`;
     combineBtns.set(op, b);
   }
-  const combineSeg = el("div", "ed-seg ed-ws-wide");
-  combineSeg.append(...combineBtns.values());
-  const combineHint = el("div", "ed-hint ed-ws-hint");
+  const combineHint = el("span", "ed-hint ed-toolhead-hint");
   const combineApply = button("Apply", () => applyCombine());
   const combineCancel = button("Cancel", () => cancelCombine());
-  formationsDock.append(toolGroup("Primitives"), ...primitiveButtons, stackGroup, ...shapeButtons, combineGroup, combineSeg, combineHint, combineApply, combineCancel, toolGroup("Generate"), generateStaleBtn);
+  // Formations' toolbar: Select (which also ends combining), the new guides,
+  // and - with a solid guide selected - the three ways of combining others
+  // into it. While sculpting, the sculpt's own tools instead (`ed-sculpting`).
+  const formSelectBtn = toolize(button("", () => cancelCombine()), "Select", "select");
+  formSelectBtn.dataset["shortcut"] = "Esc";
+  formSelectBtn.title = "Click a guide or a rock to select it; Tab swaps the selection's guide and rock";
+  const combineBlock = toolBlock(...combineBtns.values());
+  const toolbarFormations = toolSet("Formation tools", toolBlock(formSelectBtn), toolBlock(...primitiveButtons), combineBlock);
+  toolbar.appendChild(toolbarFormations);
 
   let combine: { op: StackMode; target: number; picks: number[] } | null = null;
   let combineRev = 0;
@@ -4847,7 +4944,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const rocksChk = checkbox("Rocks", showRocks, (v) => setGlobalFormationView("rocks", v));
   rocksChk.title = "Draw every generated rock (clears the per-formation choices)";
   const formationViewBtns = new Map<FormationView, HTMLButtonElement>();
-  const viewSeg = el("div", "ed-seg ed-ws-wide");
+  const viewSeg = el("div", "ed-seg");
   for (const [v, label, tip] of [
     ["guide", "Guide", "Show the selected formation's guide and hide its rock (Tab swaps)"],
     ["rock", "Rock", "Show the selected formation's generated rock and hide its guide (Tab swaps)"],
@@ -4858,8 +4955,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     formationViewBtns.set(v, b);
     viewSeg.appendChild(b);
   }
-  const viewHint = el("div", "ed-hint ed-ws-hint");
-  viewHint.textContent = "Select a formation to switch it between guide and rock.";
+  const viewHint = el("span", "ed-hint ed-toolhead-hint");
+  viewHint.textContent = "no formation";
   // SCULPT (plans/sculpt-guides.md): the selected solid guide shaped with
   // Draw, Grab and Cut; Ctrl+Tab enters and leaves. While it is on, the dock
   // is the mode's alone (`ed-sculpting` in studio.css).
@@ -4867,9 +4964,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const f = activeSolidFormation();
     if (f) enterSculpt(f);
   });
-  sculptBtn.classList.add("ed-ws-wide");
   sculptBtn.title = "Sculpt the selected guide (Ctrl+Tab): Draw (D), Grab (G), Cut (C). Applies its stack into one mesh first.";
-  formationsDock.append(toolGroup("Show"), guidesChk, rocksChk, toolGroup("Selected"), viewSeg, sculptBtn, viewHint);
+  // Formations' tool settings: the selection's guide or rock and its Sculpt,
+  // shapes added to the selected guide and a combine under way; at the far
+  // end what is drawn, then Generate.
+  formationsDock.append(
+    toolGroup("Selected"),
+    viewSeg,
+    viewHint,
+    sculptBtn,
+    stackGroup,
+    ...shapeButtons,
+    combineHint,
+    combineApply,
+    combineCancel,
+    toolheadSpacer(),
+    toolGroup("Show"),
+    guidesChk,
+    rocksChk,
+    toolheadDivider(),
+    generateStaleBtn,
+  );
   if (scene3d && visuals) {
     const vis = visuals;
     sculptCtl = new SculptController({
@@ -4893,6 +5008,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ui: { el, button, checkbox, toolGroup },
     });
     formationsDock.appendChild(sculptCtl.dock);
+    sculptCtl.toolBlock.classList.add("ed-sculpt-tools");
+    toolbarFormations.appendChild(sculptCtl.toolBlock);
   }
   // Sculpt mode on a formation's guide, from the dock, the panel or Ctrl+Tab.
   function enterSculpt(item: EdItem): void {
@@ -4946,50 +5063,73 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // THE DECORATIONS WORKSPACE'S DOCK: the palette - pick a kind, click any
   // generated rock - and growing every decoration that is out of date.
-  const decorationsDock = el("div", "ed-row ed-tools ed-ws-dock");
+  const decorationsDock = el("div", "ed-toolhead-set ed-ws-dock");
   decorationsDock.setAttribute("role", "group");
-  decorationsDock.setAttribute("aria-label", "Decoration palette");
+  decorationsDock.setAttribute("aria-label", "Decoration tool settings");
   bar.appendChild(decorationsDock);
+  const DECORATION_ICONS: Record<Exclude<DecorationKind, "material">, ToolIconName> = {
+    moss: "moss",
+    ivy: "ivy",
+    fern: "fern",
+    vine: "hangingVine",
+    mushroom: "mushrooms",
+    orbs: "orbs",
+    glow: "glowFlora",
+  };
   const paletteButtons = new Map<DecorationKind, HTMLButtonElement>();
   for (const kind of Object.keys(DECORATION_LABELS) as DecorationKind[]) {
     // A material layer is the Texturing workspace's.
     if (kind === "material") continue;
-    const b = button(DECORATION_LABELS[kind], () => {
-      decorations.arm(kind);
-      refreshWorkspaceDock();
-    });
+    const b = toolize(
+      button("", () => {
+        decorations.arm(kind);
+        refreshWorkspaceDock();
+      }),
+      DECORATION_LABELS[kind],
+      DECORATION_ICONS[kind],
+    );
     b.title = PAINTED_DECORATIONS.includes(kind)
       ? `Drag on a generated rock to paint ${DECORATION_LABELS[kind].toLowerCase()} onto it and right-drag to erase (the ring under the pointer is the brush); Enter grows it, Enter again stops, Esc throws away the strokes since the last Enter`
       : `Click a generated rock to place ${DECORATION_LABELS[kind].toLowerCase()}; stays armed for the next click (Enter, Esc or a right-click stops)`;
     paletteButtons.set(kind, b);
   }
   const growStaleBtn = button("Grow", () => growStale());
-  growStaleBtn.classList.add("ed-ws-wide");
   growStaleBtn.title = "Grow every decoration that is not grown yet or whose settings, paint or rock have changed since";
-  // Select: the dock's own tool whenever no kind is armed - a click on what
-  // grew (moss, ivy, a fern...) selects that decoration, not its rock's body
-  // first. Picking it disarms the palette, as Esc does.
-  const decoSelectBtn = button("Select", () => {
-    decorations.end();
-    refreshWorkspaceDock();
-  });
-  decoSelectBtn.classList.add("ed-ws-wide");
-  decoSelectBtn.title = "Click a decoration (moss, ivy, a fern...) to select it; a click on bare rock selects the rock (Esc)";
+  // Select: the workspace's own tool whenever no kind is armed - a click on
+  // what grew (moss, ivy, a fern...) selects that decoration, not its rock's
+  // body first. Picking it disarms the palette, as Esc does.
+  const decoSelectBtn = toolize(
+    button("", () => {
+      decorations.end();
+      refreshWorkspaceDock();
+    }),
+    "Select",
+    "select",
+  );
+  decoSelectBtn.dataset["shortcut"] = "Esc";
+  decoSelectBtn.title = "Click a decoration (moss, ivy, a fern...) to select it; a click on bare rock selects the rock";
   // The palette brush's own settings, shown while moss or ivy is armed: it
   // selects nothing, so they cannot live in a decoration's panel. Painting or
   // erasing is the button's (left / right), not a setting.
-  const brushRadiusRow = el("label", "ed-inline ed-ws-wide ed-brush-radius");
+  const brushRadiusRow = el("label", "ed-inline ed-brush-radius");
   brushRadiusRow.title = "The brush's radius on the rock, metres";
   brushRadiusRow.appendChild(document.createTextNode("Radius m"));
   const brushRadiusInput = Object.assign(document.createElement("input"), { type: "number", className: "ed-num", step: "0.05", min: "0.02" });
   brushRadiusInput.addEventListener("input", () => decorations.setBrushRadius(Number(brushRadiusInput.value)));
   brushRadiusRow.appendChild(brushRadiusInput);
-  const brushHint = el("div", "ed-hint ed-ws-hint");
-  brushHint.textContent = "Drag on a rock to paint, right-drag to erase. Enter grows what you painted (again to stop); Esc throws away the strokes since the last Enter.";
+  const brushHint = el("span", "ed-hint ed-toolhead-hint");
+  brushHint.textContent = "Drag to paint, right-drag to erase · Enter grows it · Esc drops the strokes since";
   const brushControls = [brushRadiusRow, brushHint];
-  decorationsDock.append(decoSelectBtn, toolGroup("Paint"), paletteButtons.get("moss")!, paletteButtons.get("ivy")!, ...brushControls, toolGroup("Place"));
-  for (const [kind, b] of paletteButtons) if (!PAINTED_DECORATIONS.includes(kind)) decorationsDock.appendChild(b);
-  decorationsDock.append(toolGroup("Grow"), growStaleBtn);
+  // Decorations' toolbar: Select, the two that are painted on, and the ones
+  // placed with a click.
+  const toolbarDecorations = toolSet(
+    "Decoration tools",
+    toolBlock(decoSelectBtn),
+    toolBlock(...[...paletteButtons].filter(([k]) => PAINTED_DECORATIONS.includes(k)).map(([, b]) => b)),
+    toolBlock(...[...paletteButtons].filter(([k]) => !PAINTED_DECORATIONS.includes(k)).map(([, b]) => b)),
+  );
+  toolbar.appendChild(toolbarDecorations);
+  decorationsDock.append(...brushControls, toolheadSpacer());
   // The collision outlines over the rocks, for reference while dressing
   // them: drawn as 2D draws them, never picked (a click goes to the rock).
   const collisionChk = checkbox("Collision", showCollisionOutlines, (v) => {
@@ -4997,64 +5137,85 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     writeViewSetting("collision", v);
   });
   collisionChk.title = "Draw the collision outlines over the rocks, for reference (they are edited in 2D)";
-  decorationsDock.append(toolGroup("Show"), collisionChk);
+  decorationsDock.append(toolGroup("Show"), collisionChk, toolheadDivider(), growStaleBtn);
 
   // THE TEXTURING WORKSPACE'S DOCK (docs/formations.md "Material layers"):
   // the material library - pick a material, drag on any generated rock - the
   // brush, and baking the patches that are out of date for the game. The
   // palette is the library's files (`assets-src/materials`), read again while
   // the workspace is open (`MaterialMasks.watchLibrary`).
-  const texturingDock = el("div", "ed-row ed-tools ed-ws-dock");
+  const texturingDock = el("div", "ed-toolhead-set ed-ws-dock");
   texturingDock.setAttribute("role", "group");
-  texturingDock.setAttribute("aria-label", "Material palette");
+  texturingDock.setAttribute("aria-label", "Texturing tool settings");
   bar.appendChild(texturingDock);
-  const texSelectBtn = button("Select", () => {
-    decorations.end();
-    refreshWorkspaceDock();
-  });
-  texSelectBtn.classList.add("ed-ws-wide");
-  texSelectBtn.title = "Click a painted patch to select it; a click on bare rock selects the rock (Esc)";
-  // The palette's buttons sit in the dock's grid as its own children would.
-  const materialPalette = el("div", "");
-  materialPalette.style.display = "contents";
-  const materialButtons = new Map<string, HTMLButtonElement>();
-  const noMaterials = el("div", "ed-hint ed-ws-hint");
-  noMaterials.textContent = "No materials yet: a material is a Blender file in assets-src/materials, its Surface a Principled BSDF.";
-  function rebuildMaterialPalette(): void {
-    materialPalette.replaceChildren();
-    materialButtons.clear();
-    for (const name of materialMasks.materials) {
-      const b = button(materialLabel(name), () => {
-        decorations.arm("material", name);
-        refreshWorkspaceDock();
-      });
-      b.title = `Drag on a generated rock to paint ${materialLabel(name).toLowerCase()} onto it and right-drag to erase; Enter bakes it for the game, Enter again stops, Esc throws away the strokes since the last Enter (assets-src/materials/${name}.blend)`;
-      materialButtons.set(name, b);
-      materialPalette.appendChild(b);
-    }
-    noMaterials.style.display = materialButtons.size ? "none" : "";
+  const texSelectBtn = toolize(
+    button("", () => {
+      decorations.end();
+      refreshWorkspaceDock();
+    }),
+    "Select",
+    "select",
+  );
+  texSelectBtn.dataset["shortcut"] = "Esc";
+  texSelectBtn.title = "Click a painted patch to select it; a click on bare rock selects the rock";
+  // PAINT, Blender's texture-paint brush: the material it lays is the tool's
+  // setting (the header's Material), not a tool of its own, since the library
+  // is whatever files `assets-src/materials` holds.
+  const texPaintBtn = toolize(button("", () => armMaterial(materialSel.value)), "Paint", "paint");
+  texPaintBtn.title =
+    "Drag on a generated rock to paint the Material onto it and right-drag to erase; Enter bakes it for the game, Enter again stops, Esc throws away the strokes since the last Enter";
+  const toolbarTexturing = toolSet("Texturing tools", toolBlock(texSelectBtn), toolBlock(texPaintBtn));
+  toolbar.appendChild(toolbarTexturing);
+  const materialSel = document.createElement("select");
+  materialSel.className = "ed-select";
+  materialSel.title = "The material Paint lays: a Blender file in assets-src/materials, its Surface a Principled BSDF. Picking one picks up Paint.";
+  materialSel.addEventListener("change", () => armMaterial(materialSel.value));
+  const materialWrap = labelWrap("Material", materialSel);
+  function armMaterial(name: string): void {
+    if (!name) return;
+    decorations.arm("material", name);
     refreshWorkspaceDock();
   }
-  const texRadiusRow = el("label", "ed-inline ed-ws-wide ed-brush-radius");
+  const noMaterials = el("span", "ed-hint ed-toolhead-hint");
+  noMaterials.textContent = "No materials yet: add a Blender file to assets-src/materials";
+  function rebuildMaterialPalette(): void {
+    const was = materialSel.value;
+    materialSel.replaceChildren();
+    for (const name of materialMasks.materials) {
+      const o = document.createElement("option");
+      o.value = name;
+      o.textContent = materialLabel(name);
+      materialSel.appendChild(o);
+    }
+    if (materialMasks.materials.includes(was)) materialSel.value = was;
+    const any = materialMasks.materials.length > 0;
+    materialWrap.style.display = any ? "" : "none";
+    noMaterials.style.display = any ? "none" : "";
+    texPaintBtn.disabled = !any;
+    refreshWorkspaceDock();
+  }
+  const texRadiusRow = el("label", "ed-inline ed-brush-radius");
   texRadiusRow.title = "The brush's radius on the rock, metres";
   texRadiusRow.appendChild(document.createTextNode("Radius m"));
   const texRadiusInput = Object.assign(document.createElement("input"), { type: "number", className: "ed-num", step: "0.05", min: "0.02" });
   texRadiusInput.addEventListener("input", () => decorations.setBrushRadius(Number(texRadiusInput.value)));
   texRadiusRow.appendChild(texRadiusInput);
-  const texHint = el("div", "ed-hint ed-ws-hint");
-  texHint.textContent = "Drag on a rock to paint, right-drag to erase. Enter bakes what you painted for the game (again to stop); Esc throws away the strokes since the last Enter.";
+  const texHint = el("span", "ed-hint ed-toolhead-hint");
+  texHint.textContent = "Drag to paint, right-drag to erase · Enter bakes it · Esc drops the strokes since";
   const texBrushControls = [texRadiusRow, texHint];
   const bakeStaleBtn = button("Bake", () => growStale(true));
-  bakeStaleBtn.classList.add("ed-ws-wide");
   bakeStaleBtn.title = "Bake every painted material that is not baked yet, or whose paint, material or rock has changed since";
   const texCollisionChk = checkbox("Collision", showCollisionOutlines, (v) => {
     showCollisionOutlines = v;
     writeViewSetting("collision", v);
   });
   texCollisionChk.title = collisionChk.title;
-  texturingDock.append(texSelectBtn, toolGroup("Materials"), materialPalette, noMaterials, ...texBrushControls, toolGroup("Bake"), bakeStaleBtn, toolGroup("Show"), texCollisionChk);
+  // Texturing's tool settings: Paint's material and brush; at the far end what
+  // is drawn, then Bake.
+  texturingDock.append(materialWrap, noMaterials, ...texBrushControls, toolheadSpacer(), toolGroup("Show"), texCollisionChk, toolheadDivider(), bakeStaleBtn);
   // Filled when the library is first read (after the editor is up).
   noMaterials.style.display = "none";
+  materialWrap.style.display = "none";
 
   // What the two 3D docks offer right now: which shapes can be added, how
   // many rocks and decorations are out of date, which kind is armed. Called
@@ -5063,10 +5224,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function refreshWorkspaceDock(): void {
     const solid = activeSolidFormation();
     // The stack's own buttons only while there is a stack to add to.
-    for (const b of [stackGroup, ...shapeButtons, combineGroup, combineSeg]) b.style.display = solid ? "" : "none";
-    // Sculpt: offered with a solid guide selected; while on, the dock is its.
+    for (const b of [stackGroup, ...shapeButtons, combineBlock]) b.style.display = solid ? "" : "none";
+    // Sculpt: offered with a solid guide selected; while on, the tool settings
+    // and the toolbar are its.
     sculptBtn.style.display = solid && sculptCtl ? "" : "none";
     formationsDock.classList.toggle("ed-sculpting", !!sculptCtl?.active);
+    toolbarFormations.classList.toggle("ed-sculpting", !!sculptCtl?.active);
     if (sculptCtl?.active) sculptCtl.refreshDock();
     // Combining belongs to the guide it was started on: selecting anything
     // else ends it.
@@ -5078,6 +5241,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       b.classList.toggle("active", combine?.op === op);
       b.setAttribute("aria-pressed", String(combine?.op === op));
     }
+    formSelectBtn.classList.toggle("active", !combine);
+    formSelectBtn.setAttribute("aria-pressed", String(!combine));
     const picked = combine?.picks.length ?? 0;
     combineHint.textContent = combine
       ? picked
@@ -5109,6 +5274,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A rock not generated has nothing to show but its guide.
       b.disabled = !formationSel.length || (v !== "guide" && !formationSel.some((f) => f.formation?.built));
     }
+    // With no formation selected there is nothing for Guide / Rock / Both to
+    // act on, so the run says so rather than offering three dead buttons.
+    viewSeg.style.display = formationSel.length ? "" : "none";
     viewHint.style.display = formationSel.length ? "none" : "";
     const armed = decorations.anyRock ? decorations.placing!.kind : null;
     for (const [kind, b] of paletteButtons) {
@@ -5122,10 +5290,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (document.activeElement !== brushRadiusInput) brushRadiusInput.value = String(decorations.brushRadius);
     // The Texturing dock's: which material is armed, and its brush.
     const armedMaterial = armed === "material" ? (decorations.placing!.material ?? null) : null;
-    for (const [name, b] of materialButtons) {
-      b.classList.toggle("active", name === armedMaterial);
-      b.setAttribute("aria-pressed", String(name === armedMaterial));
-    }
+    texPaintBtn.classList.toggle("active", armedMaterial !== null);
+    texPaintBtn.setAttribute("aria-pressed", String(armedMaterial !== null));
+    if (armedMaterial !== null && materialSel.value !== armedMaterial) materialSel.value = armedMaterial;
     texSelectBtn.classList.toggle("active", armedMaterial === null);
     texSelectBtn.setAttribute("aria-pressed", String(armedMaterial === null));
     for (const c of texBrushControls) c.style.display = armedMaterial !== null ? "" : "none";
@@ -5133,6 +5300,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Arming, the brush and their ends all rebuild the inspector; a drag in
     // progress owns the cursor until it lets go.
     if (!drag) applyToolCursor();
+    // Combining's block, or the sculpt's, came or went.
+    fitToolbar();
   }
   // The formations in the level that are not generated, or are stale, and
   // have no build of their recipe on its way.
@@ -5376,13 +5545,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
     mushroomButton.style.display = tools.includes("glow") ? "" : "none";
-    // The headings are the scene layer's groups; another layer's handful of
-    // tools reads without them.
-    for (const h of toolGroups) h.style.display = tools.includes("rect") && activeLayer === "scene" ? "" : "none";
+    refreshBlocks(toolbar2d);
+    fitToolbar();
     // The same gesture draws two different things: a camera path is a route the
     // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
     // along, stroked out to its width. The button says which.
-    toolBtns.path.textContent = activeLayer === "scene" ? "Curve" : "Path";
+    if (activeLayer === "scene") setToolName(toolBtns.path, "Curve", "curve");
+    else setToolName(toolBtns.path, "Camera path", "path");
     toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
     if (!tools.includes(tool)) setTool("select");
   }
@@ -5611,13 +5780,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     viewCube?.setCubeShown(!HEAD_ON_ONLY[ws]);
     viewSwing++;
     refreshOrbitBtn();
-    // The dock: the drawing tools and layers are 2D's; each 3D workspace has
-    // its own.
+    // The toolbar and the tool settings are the workspace's own; the layers
+    // are 2D's.
     toolRow.style.display = ws === "2d" ? "" : "none";
     layerList.style.display = ws === "2d" ? "" : "none";
     formationsDock.style.display = ws === "formations" ? "" : "none";
     decorationsDock.style.display = ws === "decorations" ? "" : "none";
     texturingDock.style.display = ws === "texturing" ? "" : "none";
+    toolbar2d.style.display = ws === "2d" ? "" : "none";
+    toolbarFormations.style.display = ws === "formations" ? "" : "none";
+    toolbarDecorations.style.display = ws === "decorations" ? "" : "none";
+    toolbarTexturing.style.display = ws === "texturing" ? "" : "none";
+    fitToolbar();
     for (const [w, b] of workspaceTabBtns) {
       b.classList.toggle("active", w === ws);
       b.setAttribute("aria-selected", String(w === ws));
@@ -5644,7 +5818,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // explicitly instead of pinning both over the entire viewport.
   const paneSwitcher = el("div", "ed-pane-switcher");
   const paneButtons = new Map<string, HTMLButtonElement>();
-  for (const [label, pane] of [["Tools", "tools"], ["Scene", "scene"]]) {
+  for (const [label, pane] of [["Scene", "scene"]]) {
     const toggle = button(label!, () => {
       const opening = !root.classList.contains(`ed-${pane}-open`);
       for (const [key, control] of paneButtons) {
@@ -5668,17 +5842,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // and the nodes with no outline at all - a light, the Sun, a plain group -
   // are a faint ring or nothing.
   //
-  // The LEFT dock is the workspace's alone: its tools, its layers, its
-  // brushes.
+  // The workspace's tools are its toolbar and tool settings, over the
+  // viewport.
   const outliner = el("div", "ed-outliner");
   // The layers first - the type layers (2D's), then the data layers - over
   // the tree and its search: what is shown and locked is set before what is
   // picked (Tris, 2026-11-26).
   scenePane.append(layerList, dataLayerList, outliner);
-  const leftDock = el("aside", "ed-left-dock");
-  leftDock.setAttribute("aria-label", "Workspace tools");
-  leftDock.append(bar);
-  root.appendChild(leftDock);
+  // The workspace's tool settings across the viewport's top, and its toolbar
+  // down the viewport's left edge (there is no left dock since 2026-11-26).
+  root.append(bar, toolbar);
   const outlinerHead = el("div", "ed-outliner-head");
   const outlinerTitle = el("span", "ed-outliner-title");
   const outlinerBody = el("div", "ed-outliner-list");
@@ -5921,9 +6094,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         e.stopPropagation();
         renameNodeInline(n, label);
       });
-      const group = el("span", "ed-out-group");
-      group.textContent = n.grouped ? "⊞" : "";
-      group.title = n.grouped ? "Grouped: a click on the canvas selects this first (Ctrl+Shift+G ungroups)" : "";
+      // The group mark is its toggle: lit on a grouped node, drawn dim under
+      // the pointer on one that is not, a click flipping it as the Node
+      // section's box does.
+      const group = el("span", `ed-out-group${n.grouped ? " on" : ""}`);
+      group.textContent = "⊞";
+      group.title = n.grouped
+        ? "Grouped: a click on the canvas selects this first (click or Ctrl+Shift+G ungroups)"
+        : "Group: a click on the canvas will select this first (Ctrl+G groups the selection)";
+      group.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        beginAction();
+        n.grouped = !n.grouped;
+        markDirty();
+        rebuildInspector();
+      });
       const add = el("span", "ed-out-add");
       add.textContent = "+";
       add.title = "Add a node under this one";
@@ -5943,8 +6129,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         e.preventDefault();
         setBodiesHidden([n.id], !hiddenBodies.has(n.id));
       });
+      // The padlock: amber on a node locked itself, dim but shut on one a
+      // node above it locks, and shown only under the pointer otherwise, so
+      // a tree of several hundred rows is not a column of open padlocks.
+      const above = n.locked ? null : lockedBy(n.id);
+      const lock = document.createElement("button");
+      lock.className = "ed-eye ed-lock ed-out-eye ed-out-lock";
+      lock.innerHTML = lockIcon(n.locked || above !== null);
+      lock.classList.toggle("on", n.locked);
+      lock.classList.toggle("inherited", above !== null);
+      lock.title = n.locked
+        ? "Locked: not picked on the canvas, nor anything under it; the tree still selects it (click or Ctrl+Shift+L unlocks)"
+        : above
+          ? `Locked with ${above.name}; click to lock this node itself too`
+          : "Lock: the canvas will not pick this node or anything under it (Ctrl+L locks the selection)";
+      lock.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        setNodesLocked([n.id], !n.locked);
+      });
       row.classList.toggle("hidden", hidden || n.disabled);
-      row.append(twist, mark, dim, label, group, add, eye);
+      row.append(twist, mark, dim, label, group, add, eye, lock);
       row.addEventListener("mousedown", (e) => {
         if (e.button !== 0) return;
         e.stopPropagation();
@@ -6271,7 +6476,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ? ` · ${rootDraft.from ? "branch" : "root"}: ${rootDraft.verts.length} ` +
           `${rootDraft.verts.length === 1 ? "node" : "nodes"} · drag to pull handles` +
           (rootDraft.verts.length >= 2 ? " · Enter to grow it" : "")
-        : "";
+        : cutDraft
+          ? " · cut: click where it ends (Alt keeps one body) · Esc cancels"
+          : tool === "cut"
+            ? " · cut: click where it starts"
+            : "";
     const named = prefabMode ? `prefab ${prefabName ?? "(unnamed)"}` : (currentName ?? "(unsaved)");
     title.textContent = `${named}${state} · ${things.length} object${things.length === 1 ? "" : "s"}${extra}${draft}${notice ? ` · ${notice}` : ""}`;
   }
@@ -6301,7 +6510,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
     if (t !== "poly" && t !== "path") cancelPolyDraft();
     if (t !== "root") cancelRootDraft();
+    if (t !== "cut") cancelCutDraft();
+    const was = tool;
     tool = t;
+    // The title bar says what the knife wants next.
+    if (was === "cut" || t === "cut") updateTitle();
     for (const [k, b] of Object.entries(toolBtns)) {
       b.classList.toggle("active", k === t && !(t === "glow" && placingMushroom));
       b.setAttribute("aria-pressed", String(k === t && !(t === "glow" && placingMushroom)));
@@ -8392,6 +8605,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (selectionNodes().some((id) => !model.tree.nodes.get(id)?.body)) {
       const b = button("New body", () => newBodyFromSelection());
       b.title = "Put these under a new static body, each where it stands: one compound body";
+      row.appendChild(b);
+    }
+    if (selectedJoinBodies().length >= 2) {
+      const b = button("Join", () => joinSelection());
+      b.title =
+        "Fold these bodies into the first one selected, keeping its settings (Ctrl+J): pieces of the same surface that overlap or share an edge become one outline";
       row.appendChild(b);
     }
     {
@@ -10770,6 +10989,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     groupRow.appendChild(box);
     describe(groupRow, "A click on the canvas selects this first; a second click goes inside (Ctrl+G, Ctrl+Shift+G). Changes nothing in the level but what a click picks.");
     g.appendChild(groupRow);
+    const lockRow = fieldRow("locked");
+    const lockBox = document.createElement("input");
+    lockBox.type = "checkbox";
+    const above = lockedBy(id);
+    lockBox.checked = n.locked || above !== null;
+    lockBox.disabled = above !== null;
+    lockBox.addEventListener("change", () => setNodesLocked([id], lockBox.checked));
+    lockRow.appendChild(lockBox);
+    describe(
+      lockRow,
+      above
+        ? `Locked with ${above.name}, above it. Unlock that to pick this on the canvas again.`
+        : "The canvas does not pick this or anything under it (Ctrl+L, Ctrl+Shift+L); the scene tree still selects it. Changes nothing in the level but what a click picks.",
+    );
+    g.appendChild(lockRow);
     if (model.dataLayers.length) {
       const layersRow = fieldRow("layers", "div");
       const inherited = new Set(ancestors(model.tree, id).flatMap((a) => a.layers));
@@ -11156,6 +11390,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     expandedBodies.add(body.id);
     markDirty();
     setBodySelection(body.id);
+  }
+
+  // The bodies a Join folds together, in the order they were selected: the
+  // bodies picked as such, else the bodies of the objects picked.
+  function selectedJoinBodies(): string[] {
+    const ids = selectedBodyIds.size ? [...selectedBodyIds] : selectedBodies().map((i) => i.unit);
+    return [...new Set(ids)].filter((id) => model.tree.nodes.get(id)?.body);
+  }
+
+  // JOIN (Ctrl+J, editor/splitJoin.ts): the first body selected takes in the
+  // rest, its settings kept, and pieces of the same surface fuse. One undo
+  // step; a refusal (a chain that would end on one body, an area left in two
+  // pieces) changes nothing and says why.
+  function joinSelection(): void {
+    const ids = selectedJoinBodies();
+    if (ids.length < 2) {
+      showToast("Select two or more bodies to join", "warn");
+      return;
+    }
+    beginAction();
+    const r = joinBodies(model, ids);
+    if (typeof r === "string") {
+      replaceModel(history.pop()!);
+      showToast(r, "warn");
+      return;
+    }
+    const name = model.tree.nodes.get(r.body)?.name ?? "the body";
+    const fused = r.fused ? `, ${r.fused} ${r.fused === 1 ? "piece" : "pieces"} fused` : "";
+    const kinds = r.otherKinds.length ? `; ${r.otherKinds.join(", ")} took ${name}'s kind and settings` : "";
+    expandedBodies.add(r.body);
+    markDirty();
+    setBodySelection(r.body);
+    showToast(`Joined ${ids.length} bodies into ${name}${fused}${kinds}`);
   }
 
   // GROUP (Ctrl+G) and UNGROUP (Ctrl+Shift+G): a node's `grouped` flag, which
@@ -11629,6 +11896,81 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function cancelPolyDraft(): void {
     if (!polyDraft) return;
     polyDraft = null;
+    updateTitle();
+  }
+
+  // THE KNIFE (the Cut tool, editor/splitJoin.ts). What it may cut: the
+  // polygons and boxes a click could pick, and with anything selected only
+  // what is in the selection, so a cut through a stack of overlapping walls
+  // cuts the one being worked on.
+  function cutTargets(): EdItem[] {
+    const items = pickableItems().filter(cuttable);
+    const sel = selectedNodeIds();
+    if (!sel.size) return items;
+    return items.filter((i) => sel.has(i.node) || sel.has(i.unit) || ancestors(model.tree, i.node).some((a) => sel.has(a.id)));
+  }
+
+  // Where a knife's end lands: on a corner of something it may cut when the
+  // pointer is within a few pixels of one (corner to corner is the exact
+  // diagonal), else on the grid as every other draw tool's points do.
+  function cutPoint(scr: Vec2): { at: Vec2; corner: boolean } {
+    let best: Vec2 | null = null;
+    let bestD = CUT_SNAP_PX;
+    for (const i of cutTargets()) {
+      for (const v of worldVertices(i)) {
+        const d = canvasScreen(v).distanceTo(scr);
+        if (d < bestD) {
+          bestD = d;
+          best = v;
+        }
+      }
+    }
+    return best ? { at: best, corner: true } : { at: snapVec(canvasWorld(scr)), corner: false };
+  }
+
+  function cancelCutDraft(): void {
+    if (!cutDraft) return;
+    cutDraft = null;
+    updateTitle();
+  }
+
+  // What the knife from its first click to the pointer would make, for the
+  // preview: the pieces, the line, and whether the end is on a corner.
+  function cutDraftView(): { from: Vec2; to: Vec2; pieces: Vec2[][]; corner: boolean } | null {
+    if (!cutDraft || tool !== "cut") return null;
+    const end = cutPoint(lastPointerScreen ?? canvasScreen(cutDraft.from));
+    return { from: cutDraft.from, to: end.at, pieces: planCut(cutTargets(), cutDraft.from, end.at).flatMap((p) => p.pieces), corner: end.corner };
+  }
+
+  // The second click: cut, and part what no longer touches into bodies of
+  // its own unless Alt is held. One undo step. A line that crosses nothing
+  // edge to edge keeps its first point, so the end can be clicked again.
+  function commitCut(to: Vec2, keepTogether: boolean): void {
+    if (!cutDraft) return;
+    const plan = planCut(cutTargets(), cutDraft.from, to);
+    if (!plan.length) {
+      showToast("A cut has to cross a polygon or box from edge to edge", "warn");
+      return;
+    }
+    beginAction();
+    const r = applyCut(model, plan, !keepTogether);
+    if (typeof r === "string") {
+      replaceModel(history.pop()!);
+      showToast(r, "warn");
+      return;
+    }
+    cutDraft = null;
+    for (const id of r.bodies) expandedBodies.add(id);
+    markDirty();
+    setBodiesSelection(r.bodies);
+    const held = r.held.map((id) => model.tree.nodes.get(id)?.name ?? id);
+    showToast(
+      keepTogether
+        ? `Cut ${plan.length === 1 ? "one shape" : `${plan.length} shapes`}, the pieces kept in one body`
+        : r.made.length
+          ? `Cut into ${r.bodies.length} bodies${held.length ? `; ${held.join(", ")} still held together by a piece across the cut` : ""}`
+          : `Cut, but ${held.join(", ")} ${held.length === 1 ? "is" : "are"} still held together by a piece across the cut`,
+    );
     updateTitle();
   }
 
@@ -12987,7 +13329,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const turned = inScene();
     // With +Root armed the selection's handles are not drawn (see the frame
     // loop) and so are not grabbed: a press on a root starts a branch there.
-    if (tool !== "root") {
+    // The knife's the same: a press on a corner is where the cut starts.
+    if (tool !== "root" && tool !== "cut") {
       // 1. Handles of the current selection.
       const h = pickHandle(scr, e.altKey, e.shiftKey);
       if (h === "consumed") return; // handled outright; no drag, selection intact
@@ -12999,6 +13342,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // What this press draws: the armed tool at any angle, its preview drawn
     // with the rest of the overlay on the gameplay plane.
     const drawTool = tool;
+    // 1a. The knife: two clicks, the second cutting (Alt: into one body).
+    if (drawTool === "cut") {
+      const p = cutPoint(scr).at;
+      if (!cutDraft) {
+        cutDraft = { from: p };
+        updateTitle();
+      } else commitCut(p, e.altKey);
+      e.preventDefault();
+      return;
+    }
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
     if (drawTool === "poly" || drawTool === "path" || drawTool === "shelter") {
@@ -13033,7 +13386,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       if (!rootDraft) {
         const slop = canvasWorld(scr.add(new Vec2(ROOT_PICK_PX, 0))).distanceTo(world);
-        const from = rootAt(model, world, slop, (i) => visibleLayers.has(i.layer) && !lockedLayers.has(i.layer));
+        const from = rootAt(model, world, slop, (i) => visibleLayers.has(i.layer) && !lockedLayers.has(i.layer) && !itemLocked(i));
         rootDraft = from
           ? {
               verts: [from.point],
@@ -13685,7 +14038,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const band = CHAIN_HIT_PX / (camera.zoom * PIXELS_PER_METER);
     let best: EdChain | null = null;
     let bestD = band;
+    const locked = lockedLinks().chains;
     for (const c of model.chains) {
+      if (locked.has(c.id)) continue;
       const d = distanceToChain(model, c, world);
       if (d <= bestD) {
         bestD = d;
@@ -13727,7 +14082,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const floor = SMALL_MARK_PICK_PX * worldLine();
     let best: { vine: EdVine; index: number; fruit: Vec2 } | null = null;
     let bestD = Infinity;
+    const locked = lockedLinks().vines;
     for (const v of model.vines) {
+      if (locked.has(v.id)) continue;
       const path = v.starberry ? vineRestPath(model, v) : null;
       if (!path || !v.starberry) continue;
       for (const [index, berry] of restStarberries(path, v.starberry).entries()) {
@@ -13748,7 +14105,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const band = CHAIN_HIT_PX / (camera.zoom * PIXELS_PER_METER);
     let best: EdVine | null = null;
     let bestD = band;
+    const locked = lockedLinks().vines;
     for (const v of model.vines) {
+      if (locked.has(v.id)) continue;
       let d = distanceToVine(model, v, world);
       // A berry vine is picked by its berries too, which hang off the line.
       const path = v.starberry ? vineRestPath(model, v) : null;
@@ -14494,6 +14853,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       else if (mode === "test") stopTest();
       else if (polyDraft) cancelPolyDraft();
       else if (rootDraft) cancelRootDraft();
+      else if (cutDraft) cancelCutDraft();
       // A tied chain being strung out is dropped whole: its knots are not in
       // the model until the chain ends on a body.
       else if (drag?.mode === "chainDraw") {
@@ -14609,6 +14969,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // body" instead (plans/node-tree.md).
           if (e.shiftKey) ungroupSelection();
           else groupSelection();
+          break;
+        case "KeyL":
+          // Ctrl+L locks the selection, Ctrl+Shift+L unlocks it (Godot's
+          // pair). The selection is the node as picked: an object picked out
+          // of a body locks that object, a body the whole body.
+          setNodesLocked(selectedNodeIds(), !e.shiftKey);
+          break;
+        case "KeyJ":
+          // Ctrl+J joins the selected bodies into the first (Blender's Join).
+          if (mode === "edit") joinSelection();
           break;
         // Ctrl+C and Ctrl+V are NOT here. They are `copy` and `paste`
         // listeners on the document, because those are the only events that
@@ -15048,7 +15418,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // While +Root is armed the selection keeps its inspector but loses its
         // handles: a press anywhere on a root starts a branch there, so no
         // corner, midpoint or knob may be drawn as if it would be grabbed.
-        tool === "root" ? NO_IDS : selectedIds,
+        tool === "root" || tool === "cut" ? NO_IDS : selectedIds,
         marqueeBand(),
         shownLayers(),
         polyDraft ? { ...polyDraft, cursor: pointerWorld() } : null,
@@ -15060,7 +15430,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // its fills to outlines so the geometry stays visible through them.
         overlayLayers(),
         tool === "root" ? NO_NODE_IDS : selectedBodyIds,
-        tool === "root" ? NO_IDS : selectedVerts,
+        tool === "root" || tool === "cut" ? NO_IDS : selectedVerts,
         currentSettleGhosts(),
         wrapDraftView(),
         routeSel?.bodyId === soleBodyId() ? routeSel.nodes : NO_NODES,
@@ -15100,6 +15470,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             }
           : null,
         workspace === "formations" ? formationGuideView : null,
+        cutDraftView(),
       );
     }
     requestAnimationFrame(frame);
@@ -15297,9 +15668,6 @@ function injectStyles(): void {
   .ed-root { position: fixed; inset: 0; pointer-events: none; color: #cbccc6;
     font-family: monospace; font-size: 13px; }
   .ed-root button, .ed-root select, .ed-root input, .ed-inspector { pointer-events: auto; }
-  .ed-bar { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column;
-    gap: 6px; background: rgba(31,36,48,0.92); border: 1px solid #313244; padding: 8px;
-    border-radius: 2px; }
   .ed-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .ed-btn { background: #2a2f3d; color: #cbccc6; border: 1px solid #3c445c;
     padding: 3px 8px; font-family: monospace; font-size: 13px; cursor: pointer;
@@ -15451,7 +15819,10 @@ function injectStyles(): void {
      the eye at the right edge. Indented a character per level. */
   .ed-out-type { width: 2ch; flex: none; text-align: center; color: #6b7280; }
   .ed-out-dim { width: 2.5ch; flex: none; color: #4b5263; }
-  .ed-out-group { width: 2ch; flex: none; text-align: center; color: #65bddb; }
+  .ed-out-group { width: 2ch; flex: none; text-align: center; color: transparent; }
+  .ed-out-group.on { color: #65bddb; }
+  .ed-out-row:hover .ed-out-group:not(.on) { color: #4b5263; }
+  .ed-out-group:hover { color: #cbccc6 !important; }
   .ed-out-add { width: 2ch; flex: none; text-align: center; color: transparent; }
   .ed-out-row:hover .ed-out-add { color: #6b7280; }
   .ed-out-add:hover { color: #cbccc6 !important; }
