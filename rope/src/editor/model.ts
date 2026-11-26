@@ -3794,7 +3794,9 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   if (item.object === "model") return `model ${item.modelRef.name || "(none)"}`;
   if (item.object === "decoration" && item.decoration) {
     const d = item.decoration;
-    return `${d.kind} ${d.id}${d.lost ? " (lost)" : ""}`;
+    // A material layer by its material (`dirt material-x1y2z`).
+    const what = d.kind === "material" ? String(d.settings?.["material"] ?? d.kind) : d.kind;
+    return `${what} ${d.id}${d.lost ? " (lost)" : ""}`;
   }
   // A formation by its generator, and by its id when a decoration names it.
   if (item.object === "formation" && item.formation) {

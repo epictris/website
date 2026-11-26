@@ -18,7 +18,7 @@ import { formationServedFile } from "../formation/bundle";
 import { isPainted } from "../formation/decoration";
 import { gltfLoader, trackPending } from "./assets";
 import { prepareSlateGeometry } from "./formationSlate";
-import { loadExportFile, decodedFile } from "./sceneDressing";
+import { loadExportFile, decodedFile, forgetFiles } from "./sceneDressing";
 
 export { autoTier, chosenTierOf as chosenTier } from "../formation/tiers";
 
@@ -108,6 +108,19 @@ function loadGeometryFile(file: string): Promise<THREE.Object3D | null> {
   );
   geometry.set(file, p);
   return p;
+}
+
+// Forget every file of the store entry `hash` this page has loaded, so what
+// is drawn next is read again. A rock rebuilt under the same hash (a Generate
+// of one built by an older generator, or a bake adding its tiers) has new
+// files at the old addresses: until 2026-11-26 the page kept drawing the old
+// mesh, which for a rock from before the paint UV meant its material and
+// texture layers had nothing to be drawn through until a reload.
+export function forgetFormationFiles(hash: string): void {
+  const under = (file: string): boolean => file.includes(`/${hash}/`);
+  for (const file of [...geometry.keys()]) if (under(file)) geometry.delete(file);
+  for (const file of [...decodedGeometry.keys()]) if (under(file)) decodedGeometry.delete(file);
+  forgetFiles(under);
 }
 
 export function loadFormationFile(f: FormationFile): Promise<THREE.Object3D | null> {

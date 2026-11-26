@@ -10,7 +10,7 @@
 // `vis` is the Visuals workspace's pose, once it has one: its target (three's
 // frame, y up), yaw, pitch and half height (metres) - the field of view is
 // the level's lens, so it is not carried. `ws` names the workspace (2d,
-// formations or decorations: editor/workspaces.ts), `lens` the lens when it is
+// formations, decorations or texturing: editor/workspaces.ts), `lens` the lens when it is
 // orthographic.
 //
 // Per tab, where the level last open (prefs.ts) is per browser: two tabs on

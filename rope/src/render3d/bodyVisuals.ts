@@ -77,7 +77,8 @@ import { decodedFile, loadExportFile, loadModelFile, mountExport, noShadowBehind
 import { modelFile } from "./models";
 import { decodedFormationFile, decorationDelta, formationFile, loadFormationFile } from "./formations";
 import { exposePaintUv, layered, paintLayerTexture, type PaintLayer } from "./paintLayers";
-import { decorationFile, decorationLayerFile, isTextureLayer } from "../formation/decoration";
+import { decorationFile, decorationLayerFile, isMaterialLayer, isTextureLayer } from "../formation/decoration";
+import { materialPaintLayer } from "./materialLayers";
 
 // The floor an authored colour's brightness is lifted to before it tints a
 // generated surface. A belt's `color` was authored for a flat 2D renderer, where
@@ -573,11 +574,15 @@ export class BodyVisual {
     holder.visible = this.modelsShown;
     this.modelHolders.push(holder);
     const solid = data.objects.some(isCollisionObject);
-    // Its TEXTURE LAYERS (paintLayers.ts): the grown texture-only mosses on
-    // it, in the body's order, worn by the rock's own materials.
-    const layers = data.objects
-      .filter((o): o is DecorationObjectData => isDecorationObject(o) && o.formation === f.id && !!o.built && isTextureLayer(o))
-      .map((o) => ({ texture: paintLayerTexture(decorationLayerFile(o.built!.hash)), tag: o }));
+    // Its TEXTURE LAYERS (paintLayers.ts), worn by the rock's own materials:
+    // its material layers first (materialLayers.ts), then the grown
+    // texture-only mosses over them, each in the body's order. Dirt under
+    // moss however they were painted.
+    const mine = data.objects.filter((o): o is DecorationObjectData => isDecorationObject(o) && o.formation === f.id && isTextureLayer(o));
+    const layers: PaintLayer[] = [
+      ...mine.filter(isMaterialLayer).flatMap((o) => materialPaintLayer(o) ?? []),
+      ...mine.filter((o) => !isMaterialLayer(o) && !!o.built).map((o) => ({ texture: paintLayerTexture(decorationLayerFile(o.built!.hash)), tag: o })),
+    ];
     const land = (loaded: THREE.Object3D | null, late: boolean): void => {
       if (!loaded || this.disposed) return;
       const node = mountExport(loaded);

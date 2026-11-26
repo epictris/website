@@ -20,7 +20,9 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PIXELS_PER_METER, PX } from "../src/engine/units";
-import { decorationRequest, isPainted } from "../src/formation/decoration";
+import { decorationRequest, isMaterialLayer, isPainted, materialOf } from "../src/formation/decoration";
+import { materialLibraryFile } from "../src/formation/materialLayer";
+import { sha256Bytes } from "../src/formation/sha256";
 import { formationHash } from "../src/formation/recipe";
 import type { FormationMeta } from "../src/formation/store";
 import { scaleLevelData, type PaintStamp, type RawLevelData } from "../src/level/levelFormat";
@@ -96,7 +98,15 @@ const decorations = bodies.flatMap((b) => b.objects.flatMap((o) => (o.type === "
 await pool(decorations, slots, async ({ b, o }) => {
   const host = b.formation!.built!.hash;
   const strokes = paint[o.id];
-  const request = decorationRequest({ ...o, onRock: o.anchor }, host, strokes, data.camera?.focalLength);
+  // A material layer's material, as its library file is now.
+  const libraryFile = isMaterialLayer(o) ? join(ROOT, materialLibraryFile(materialOf(o))) : null;
+  const library = libraryFile && existsSync(libraryFile) ? sha256Bytes(new Uint8Array(readFileSync(libraryFile))) : null;
+  const request = decorationRequest({ ...o, onRock: o.anchor }, host, strokes, data.camera?.focalLength, library);
+  if (!request) {
+    failed++;
+    console.log(`${TAG} SKIPPED ${o.id} on ${b.name ?? b.formation!.id}: no library material "${materialOf(o)}"`);
+    return;
+  }
   const file = join(scratch, `level-${level}-${o.id}.json`);
   writeFileSync(file, JSON.stringify(request));
   const r = await run("decoration-build.ts", [file]);
@@ -113,11 +123,11 @@ await pool(decorations, slots, async ({ b, o }) => {
     save();
     return;
   }
-  const built = JSON.parse(line.slice("DECORATION_BUILT ".length)) as { hash: string; landed: { p: [number, number, number]; n: [number, number, number] } | null };
+  const built = JSON.parse(line.slice("DECORATION_BUILT ".length)) as { hash: string; landed: { p: [number, number, number]; n: [number, number, number] } | null; maps?: string };
   const at = isPainted(o.kind) ? o.anchor : (built.landed ?? o.anchor);
   const i = b.objects.indexOf(o);
   const { lost: _lost, ...rest } = o;
-  b.objects[i] = { ...rest, onRock: at, built: { hash: built.hash, host, at } };
+  b.objects[i] = { ...rest, onRock: at, built: { hash: built.hash, host, at, ...(built.maps ? { maps: built.maps } : {}) } };
   console.log(`${TAG} ${o.id} on ${b.name ?? b.formation!.id}`);
   save();
 });

@@ -14,10 +14,12 @@
 //   to the right and at the bottom in the level) lands where the outline is,
 //   the right way up, in the level's frame - the sign error a week can go into.
 //   Builds in Blender (a few seconds) into a scratch store; `--no-blender`
-//   skips it.
+//   skips it;
+// - a MATERIAL LAYER of constants bakes into the rock's paint UV as those
+//   constants, channel by channel (with the build above).
 
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -25,9 +27,12 @@ import { PIXELS_PER_METER, PX } from "../src/engine/units";
 import { Vec2 } from "../src/engine/vec2";
 import { fitSection, isSimple } from "../src/formation/fit";
 import { formationHash } from "../src/formation/recipe";
-import { sha256Hex } from "../src/formation/sha256";
+import { sha256Bytes, sha256Hex } from "../src/formation/sha256";
 import type { FormationMeta } from "../src/formation/store";
-import { isCollisionObject, scaleLevelData, type DecorationObjectData, type FormationData, type LevelData, type RawLevelData } from "../src/level/levelFormat";
+import { isCollisionObject, scaleLevelData, type DecorationObjectData, type FormationData, type LevelData, type PaintStamp, type RawLevelData } from "../src/level/levelFormat";
+import { MaterialMask, MASK_SIDE, rasterizePaintUv, type PaintUvMesh } from "../src/formation/materialMask";
+import { decorationRequest } from "../src/formation/decoration";
+import { readPaintUvMeshes } from "./paintUvMesh";
 import { decorationDelta } from "../src/render3d/formations";
 import { alignCollisionToGuide, collisionMatchesGuide, formationItemOf, guideFromCollision } from "../src/editor/formationEdit";
 import { modelFromDisk, modelToDisk } from "../src/editor/model";
@@ -36,6 +41,7 @@ import { PaintCursor } from "../src/editor/paintCursor";
 import { isGroup, moveEntry, setMode, stackOf, treeOf } from "../src/formation/solidStack";
 import type { SolidNode } from "../src/level/levelFormat";
 import * as THREE from "three";
+import sharp from "sharp";
 import { NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import { MeshoptDecoder } from "meshoptimizer";
@@ -278,6 +284,58 @@ const level: LevelData = {
   const root = new THREE.Vector3(...at.p).applyMatrix4(delta);
   const up = new THREE.Vector3(...at.p).add(new THREE.Vector3(0, 1, 0)).applyMatrix4(delta);
   check("a turn and a size are drawn about the root", root.distanceTo(new THREE.Vector3(...at.p)) < 1e-9 && Math.abs(up.distanceTo(root) - 2) < 1e-9, `root ${root.toArray()}, up ${up.toArray()}`);
+  // A material layer's build names its baked material (`built.maps`), which
+  // the disk's field list must carry as it carries the rest.
+  const layerDec: DecorationObjectData = { type: "decoration", id: "material-t", kind: "material", formation: "f1", anchor: at, settings: { material: "dirt" }, built: { hash: "h", host: "f", at, maps: "m" } };
+  const layerDisk = scaleLevelData({ ...level, bodies: [{ ...level.bodies[0]!, objects: [layerDec] }] }, PIXELS_PER_METER) as RawLevelData;
+  const layerBack = scaleLevelData(layerDisk, PX).bodies[0]!.objects[0] as DecorationObjectData;
+  check("a material layer's baked material crosses the disk", layerBack.built?.maps === "m" && layerBack.settings?.["material"] === "dirt", JSON.stringify(layerBack.built));
+}
+
+// 4d. A MATERIAL LAYER's mask (formation/materialMask.ts), on a unit square
+// laid over the whole map in two triangles (its paint UV its own x and y):
+// every texel is a point on the square at the texel's centre, a stroke lays
+// paint around its point and nowhere a face turned away from it, and a stroke
+// list that does not run on from the last (undone, thrown away by Esc) is
+// composited again from nothing rather than on top.
+{
+  const side = 64;
+  const square: PaintUvMesh = {
+    positions: Float32Array.from([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
+    uvs: Float32Array.from([0, 0, 1, 0, 1, 1, 0, 1]),
+    index: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+  };
+  const texels = rasterizePaintUv([square], side);
+  let placed = true;
+  for (let i = 0; i < texels.points.count; i++) {
+    const k = texels.texel[i]!;
+    const x = (k % side) + 0.5;
+    const y = Math.floor(k / side) + 0.5;
+    if (Math.abs(texels.points.points[i * 3]! - x / side) > 1e-6 || Math.abs(texels.points.points[i * 3 + 1]! - y / side) > 1e-6) placed = false;
+  }
+  check("every texel of a fully unwrapped square is its point on the square", texels.points.count === side * side && placed, `${texels.points.count} of ${side * side} texels, placed ${placed}`);
+  const front: PaintStamp = { p: [0.25, 0.25, 0], n: [0, 0, 1], r: 0.1, s: 1 };
+  const mask = new MaterialMask(texels);
+  mask.update([front]);
+  const px = mask.write(new Uint8Array(side * side));
+  const at = (u: number, v: number): number => px[Math.floor(v * side) * side + Math.floor(u * side)]!;
+  check("a stroke paints its point and not across the map", at(0.25, 0.25) > 200 && at(0.75, 0.75) === 0, `at the stroke ${at(0.25, 0.25)}, far ${at(0.75, 0.75)}`);
+  const behind = new MaterialMask(texels);
+  behind.update([{ ...front, n: [0, 0, -1] }]);
+  check("a stroke laid from behind the face paints nothing on it", behind.write(new Uint8Array(side * side)).every((v) => v === 0));
+  const erased: PaintStamp = { ...front, s: -1 };
+  const after = at(0.25, 0.25);
+  mask.update([front, erased]);
+  const wiped = mask.write(new Uint8Array(side * side))[Math.floor(0.25 * side) * side + Math.floor(0.25 * side)]!;
+  const again = new MaterialMask(texels);
+  again.update([{ ...front, p: [0.75, 0.75, 0] }]);
+  const redo = new MaterialMask(texels);
+  redo.update([front]);
+  redo.update([{ ...front, p: [0.75, 0.75, 0] }]);
+  const a = again.write(new Uint8Array(side * side));
+  const b = redo.write(new Uint8Array(side * side));
+  check("an eraser takes the paint away", after > 200 && wiped < 30, `${after} then ${wiped}`);
+  check("strokes that do not run on from the last start the mask over", a.every((v, i) => v === b[i]), "the old stroke's paint was kept");
 }
 
 // 5. Coordinates, through the real build.
@@ -349,6 +407,89 @@ if (!process.argv.includes("--no-blender")) {
         }
       }
       check("the rock carries its paint UV, inside the map and packed", !!uv && inside && uvArea > 0.3 && uvArea <= 1.0001, `TEXCOORD_0 ${uv ? "present" : "MISSING"}, inside ${inside}, UV area ${uvArea.toFixed(3)}`);
+
+      // A MATERIAL LAYER (material_layer.py): a Principled material whose
+      // every channel is a constant (material_layer_fixture.py) bakes into
+      // the paint UV as exactly those constants, each in its own map and
+      // channel, on every texel (the fill carries them past the islands);
+      // its normal is the flat tangent normal.
+      const library = join(store, "const.blend");
+      const fixture = spawnSync(
+        process.env["BLENDER_PATH"] ?? "blender",
+        ["-b", "--factory-startup", "--python-exit-code", "1", "--python", join(import.meta.dirname, "..", "tools", "blender", "material_layer_fixture.py"), "--", library],
+        { encoding: "utf8", timeout: 30_000 },
+      );
+      const bake = spawnSync("bun", ["run", join(import.meta.dirname, "material-layer-build.ts"), hash, "Const", "--store", store, "--library", library, "--side", "256"], { encoding: "utf8", timeout: 60_000 });
+      const built = /MATERIAL_LAYER_BUILT (.*)/.exec(bake.stdout)?.[1];
+      check("a material layer bakes", fixture.status === 0 && bake.status === 0 && !!built, (fixture.stderr + bake.stdout + bake.stderr).split("\n").slice(-6).join("\n        "));
+      if (built) {
+        const dir = join(store, (JSON.parse(built) as { hash: string }).hash);
+        // [map, channel, expected 0..255]: sRGB 0.5; roughness 0.4, metallic
+        // 1, height 0.75 (the AOV); the flat normal (0.5, 0.5, 1).
+        const expect: [string, number, number][] = [
+          ["color.png", 0, 127.5], ["color.png", 1, 127.5], ["color.png", 2, 127.5],
+          ["surface.png", 0, 102], ["surface.png", 1, 255], ["surface.png", 2, 191.25],
+          ["normal.png", 0, 127.5], ["normal.png", 1, 127.5], ["normal.png", 2, 255],
+        ];
+        // The normal is exact but for a few texels where the paint UV's
+        // tangent frame is ill defined (sliver triangles): 0.04% of them 2
+        // or 3 levels off on the fitted L (2026-11-26).
+        const off: string[] = [];
+        for (const [file, channel, want] of expect) {
+          const { data, info } = await sharp(join(dir, file)).raw().toBuffer({ resolveWithObject: true });
+          let worst = 0;
+          let stray = 0;
+          for (let i = channel; i < data.length; i += info.channels) {
+            const d = Math.abs(data[i]! - want);
+            worst = Math.max(worst, d);
+            if (d > 1.5) stray++;
+          }
+          const normal = file === "normal.png";
+          const share = stray / (data.length / info.channels);
+          if (info.width !== 256 || (normal ? worst > 3.5 || share > 0.001 : stray > 0)) {
+            off.push(`${file}[${channel}] ${info.width}px, ${(100 * share).toFixed(3)}% of texels off from ${want}, by up to ${worst}`);
+          }
+        }
+        check("a constant material bakes as its constants, channel by channel, on every texel", off.length === 0, off.join("; "));
+
+        // A MATERIAL LAYER's build (decoration-build.ts): the material
+        // baked, and the mask of one stroke on the L's front face, painted
+        // within the stroke's reach of its point on the rock and nowhere
+        // else (every painted texel's point, rasterised as the build
+        // rasterises it), and naming the material's maps.
+        const materials = join(store, "materials");
+        mkdirSync(materials, { recursive: true });
+        copyFileSync(library, join(materials, "const.blend"));
+        const stroke: PaintStamp = { p: [0.4, -1.2, 0.6], n: [0, 0, 1], r: 0.3, s: 1 };
+        const layerRequest = decorationRequest(
+          { kind: "material", settings: { material: "const" }, anchor: { p: stroke.p, n: stroke.n } },
+          hash,
+          [stroke],
+          undefined,
+          sha256Bytes(new Uint8Array(readFileSync(library))),
+        )!;
+        const requestFile = join(store, "material-request.json");
+        writeFileSync(requestFile, JSON.stringify(layerRequest));
+        const grow = spawnSync("bun", ["run", join(import.meta.dirname, "decoration-build.ts"), requestFile, "--store", store, "--materials", materials], { encoding: "utf8", timeout: 60_000 });
+        const grown = /DECORATION_BUILT (.*)/.exec(grow.stdout)?.[1];
+        const result = grown ? (JSON.parse(grown) as { hash: string; maps?: string }) : null;
+        check("a material layer builds its mask and names its material", !!result?.maps && existsSync(join(store, result.hash, "mask.png")) && existsSync(join(store, result.maps, "color.png")), (grow.stdout + grow.stderr).split("\n").slice(-6).join("\n        "));
+        if (result) {
+          const texels = rasterizePaintUv(await readPaintUvMeshes(join(store, hash, "geometry.glb")), MASK_SIDE);
+          const { data } = await sharp(join(store, result.hash, "mask.png")).raw().toBuffer({ resolveWithObject: true });
+          const channels = data.length / (MASK_SIDE * MASK_SIDE);
+          let painted = 0;
+          let stray = 0;
+          const pts = texels.points.points;
+          for (let i = 0; i < texels.points.count; i++) {
+            if (data[texels.texel[i]! * channels]! === 0) continue;
+            painted++;
+            const d = Math.hypot(pts[i * 3]! - stroke.p[0], pts[i * 3 + 1]! - stroke.p[1], pts[i * 3 + 2]! - stroke.p[2]);
+            if (d > stroke.r + 0.01) stray++;
+          }
+          check("a material layer's mask is painted where its stroke reaches and nowhere else", painted > 1000 && stray === 0, `${painted} texels painted, ${stray} beyond the stroke's reach`);
+        }
+      }
     }
   } finally {
     rmSync(store, { recursive: true, force: true });

@@ -1,5 +1,8 @@
 # Dirt paint
 
+**Superseded on 2026-11-26 by material layers** ([docs/formations.md](../docs/formations.md#material-layers)): dirt is now a Blender material (`assets-src/materials/dirt.blend`, a Principled BSDF) painted in the editor's Texturing workspace, not a numpy generator and a decoration kind of its own.
+Steps 1 and 2 below are not to be built; "The look" still describes the target for `dirt.blend`, and its rules (show the actual render, two rejected looks means ask) still hold.
+
 Requested by Tris on 2026-11-25: "I also want a dirt painting mode that works in the same way".
 "The same way" is the moss work of that day, all uncommitted and unplayed when this was written:
 

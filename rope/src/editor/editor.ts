@@ -210,6 +210,9 @@ import {
 } from "./model";
 import { pickTagOf } from "../render3d/bodyVisuals";
 import { paintLayerAt } from "../render3d/paintLayers";
+import { setMaterialLayerSource } from "../render3d/materialLayers";
+import { MaterialMasks } from "./materialMasks";
+import { materialLabel } from "../formation/materialLayer";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { FormationJobs, mountJobsPanel } from "./formationJobs";
 import { addShapeToGuide, applyJobResult, buildFormationSection, createBackdrop, guideCentre, requestFormationBuild, SHAPE_KINDS, type FormationHost } from "./formationPanel";
@@ -222,7 +225,7 @@ import { appendEntry, type StackMode } from "../formation/solidStack";
 import { guideColor, guideCss } from "./guideColors";
 import { CUBE_FACES, ViewCube, type CubeFace } from "./viewCube";
 import { headOn } from "./visuals/viewControls";
-import { DECORATION_LABELS, DecorationController, type SurfaceHit } from "./decorationPanel";
+import { DECORATION_LABELS, DecorationController, decorationLabel, type SurfaceHit } from "./decorationPanel";
 import { newPrimitive, nodeAt, replaceAt, scaleTree, scaleTreeAxes, type PrimitiveKind } from "../formation/solidTree";
 import { PAINTED_DECORATIONS, scaleLevelData, type DecorationKind, type PaintStamp, type RawLevelData, type SolidNode, type SolidPrim } from "../level/levelFormat";
 import { PAINT_API } from "../formation/store";
@@ -347,6 +350,7 @@ import {
   HEAD_ON_ONLY,
   inWorkspace,
   parseWorkspace,
+  paintsRocks,
   PRIMARY_SECTIONS,
   readWorkspace,
   sectionShown,
@@ -769,16 +773,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // resolved by the one path, and a turned view is simply `orbited`.
   let visuals: VisualsWorkspace | null = null;
   // THE SPACEMOUSE (editor/ndof.ts, docs/editor.md "SpaceMouse"): read once a
-  // frame and flown through the pose (`VisualsWorkspace.ndof`). Its right side
-  // button (spacenavd's 1; the left is 0, unbound) presses Escape: a real
-  // keydown dispatched where the focus is, so it reaches every Escape handler
-  // a key would - a draft, a transform, a picker, a menu.
-  const NDOF_ESCAPE_BUTTON = 1;
+  // frame and flown through the pose (`VisualsWorkspace.ndof`). Its side
+  // buttons are keys (2026-11-26): the left (spacenavd's 0) Escape, the right
+  // (1) Enter, each a keydown and keyup dispatched where the focus is, so it
+  // reaches every handler the key would - a draft, a transform, a picker, a
+  // menu, the paint brush's confirm and cancel.
+  const NDOF_KEYS: Record<number, { key: string; code: string; keyCode: number }> = {
+    0: { key: "Escape", code: "Escape", keyCode: 27 },
+    1: { key: "Enter", code: "Enter", keyCode: 13 },
+  };
   const ndof = new NdofInput((button) => {
-    if (button !== NDOF_ESCAPE_BUTTON) return;
+    const k = NDOF_KEYS[button];
+    if (!k) return;
     const target = document.activeElement ?? document.body;
     for (const type of ["keydown", "keyup"] as const) {
-      target.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
+      target.dispatchEvent(new KeyboardEvent(type, { ...k, bubbles: true, cancelable: true }));
     }
   });
   let ndofLast = -1;
@@ -1383,10 +1392,30 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   });
   const solidView = scene3d ? new SolidGuideView(() => {}) : null;
   if (solidView) scene3d!.editorLayer.add(solidView.group);
+  // MATERIAL LAYERS drawn live (materialMasks.ts): the library, the bakes
+  // onto each rock and each patch's mask as it is painted. What the scene
+  // draws for one changing builds the scene again (its key holds it,
+  // `sceneKeyOf`).
+  const materialMasks = new MaterialMasks(
+    () => model,
+    formationJobs,
+    () => {
+      sceneRev = -1;
+    },
+    () => {
+      rebuildMaterialPalette();
+      rebuildInspector();
+    },
+  );
+  if (scene3d) setMaterialLayerSource((o) => materialMasks.draw(o));
+  void materialMasks.refreshLibrary();
   // The decorations' gestures, and the strokes being painted.
   const decorations = new DecorationController({
     model: () => model,
     jobs: formationJobs,
+    library: (material) => materialMasks.libraryOf(material),
+    materials: () => materialMasks.materials,
+    drawsLive: (d) => materialMasks.drawsLive(d),
     beginAction: () => beginAction(),
     markDirty: () => markDirty(),
     rebuildInspector: () => rebuildInspector(),
@@ -1403,7 +1432,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The palette's placing (`decorations.anyRock`) lands on whichever generated
   // rock is under the pointer.
   function decorationHit(scr: Vec2): SurfaceHit | null {
-    if (workspace !== "decorations" || !visuals) return null;
+    if (!paintsRocks(workspace) || !visuals) return null;
     const target = decorations.target(model.items.filter((i) => selectedIds.has(i.id)));
     const any = target === null && decorations.anyRock;
     if (target === null && !any) return null;
@@ -1436,18 +1465,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     sculpt: (item) => enterSculpt(item),
     sculpting: () => sculptCtl?.itemId ?? null,
   };
+  formationJobs.onFailed((job) => materialMasks.onJob(job));
   formationJobs.onDone((job) => {
     const regenerated = applyJobResult(model, job);
     if (regenerated.length) {
       markDirty();
       rebuildInspector();
-      // Their decorations follow the new rocks (`afterRegenerate`).
-      for (const f of regenerated) decorations.afterRegenerate(f);
+      // Their decorations follow the new rocks (`afterRegenerate`), and the
+      // material layers' masks are made over them again.
+      for (const f of regenerated) {
+        decorations.afterRegenerate(f);
+        if (f.formation?.built) materialMasks.forgetRock(f.formation.built.hash);
+      }
     }
     if (decorations.applyResult(job)) {
       markDirty();
       rebuildInspector();
     }
+    materialMasks.onJob(job);
     // An asset accepted into the library: `+ Model` offers it now, and its
     // meta is the new export's.
     if (job.kind === "asset" && job.result?.model) {
@@ -1808,7 +1843,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // stay out of `inWs` and a click passes through them to the rock.
   let shownCache: { rev: number; hidden: number; ws: Workspace; collision: boolean; model: EdModel } | null = null;
   const referenceOutline = (i: EdItem): boolean =>
-    workspace === "decorations" && showCollisionOutlines && i.layer === "scene" && i.object === "collision" && !model.bodies3d.has(i.bodyId);
+    paintsRocks(workspace) && showCollisionOutlines && i.layer === "scene" && i.object === "collision" && !model.bodies3d.has(i.bodyId);
   function shownModel(): EdModel {
     if (
       shownCache &&
@@ -3345,8 +3380,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       };
       // A decoration draws what it grew; where it stands now is moved in
       // place (`Scene3D.moveDecorations`), and its strokes are not here.
+      // A material layer draws what the editor has for it now
+      // (materialMasks.ts): its bake and its live mask.
       const decor = (o: SceneObjectData): SceneObjectData | unknown =>
-        o.type === "decoration" ? { type: o.type, id: o.id, kind: o.kind, formation: o.formation, built: o.built } : o;
+        o.type === "decoration"
+          ? { type: o.type, id: o.id, kind: o.kind, formation: o.formation, built: o.built, ...(o.kind === "material" ? { live: materialMasks.drawKey(o) } : {}) }
+          : o;
       if (!restsAsAuthored) {
         return { ...b, objects: b.objects.map(decor), ...(b.formation ? { formation: drawn(b.formation, false) } : {}) };
       }
@@ -4487,13 +4526,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   bar.appendChild(decorationsDock);
   const paletteButtons = new Map<DecorationKind, HTMLButtonElement>();
   for (const kind of Object.keys(DECORATION_LABELS) as DecorationKind[]) {
+    // A material layer is the Texturing workspace's.
+    if (kind === "material") continue;
     const b = button(DECORATION_LABELS[kind], () => {
       decorations.arm(kind);
       refreshWorkspaceDock();
     });
     b.title = PAINTED_DECORATIONS.includes(kind)
-      ? `Drag on a generated rock to paint ${DECORATION_LABELS[kind].toLowerCase()} onto it (the ring under the pointer is the brush); right-click grows it, right-click again stops`
-      : `Click a generated rock to place ${DECORATION_LABELS[kind].toLowerCase()}; stays armed for the next click (right-click or Esc stops)`;
+      ? `Drag on a generated rock to paint ${DECORATION_LABELS[kind].toLowerCase()} onto it and right-drag to erase (the ring under the pointer is the brush); Enter grows it, Enter again stops, Esc throws away the strokes since the last Enter`
+      : `Click a generated rock to place ${DECORATION_LABELS[kind].toLowerCase()}; stays armed for the next click (Enter, Esc or a right-click stops)`;
     paletteButtons.set(kind, b);
   }
   const growStaleBtn = button("Grow", () => growStale());
@@ -4503,23 +4544,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // grew (moss, ivy, a fern...) selects that decoration, not its rock's body
   // first. Picking it disarms the palette, as Esc does.
   const decoSelectBtn = button("Select", () => {
-    decorations.cancel();
+    decorations.end();
     refreshWorkspaceDock();
   });
   decoSelectBtn.classList.add("ed-ws-wide");
   decoSelectBtn.title = "Click a decoration (moss, ivy, a fern...) to select it; a click on bare rock selects the rock (Esc)";
   // The palette brush's own settings, shown while moss or ivy is armed: it
-  // selects nothing, so they cannot live in a decoration's panel.
-  const brushPaintBtn = button("Paint", () => {
-    decorations.setBrushErases(false);
-    refreshWorkspaceDock();
-  });
-  brushPaintBtn.title = "Lay paint where you drag";
-  const brushEraseBtn = button("Erase", () => {
-    decorations.setBrushErases(true);
-    refreshWorkspaceDock();
-  });
-  brushEraseBtn.title = "Take paint away where you drag";
+  // selects nothing, so they cannot live in a decoration's panel. Painting or
+  // erasing is the button's (left / right), not a setting.
   const brushRadiusRow = el("label", "ed-inline ed-ws-wide ed-brush-radius");
   brushRadiusRow.title = "The brush's radius on the rock, metres";
   brushRadiusRow.appendChild(document.createTextNode("Radius m"));
@@ -4527,10 +4559,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   brushRadiusInput.addEventListener("input", () => decorations.setBrushRadius(Number(brushRadiusInput.value)));
   brushRadiusRow.appendChild(brushRadiusInput);
   const brushHint = el("div", "ed-hint ed-ws-hint");
-  brushHint.textContent = "Drag on a rock to paint. Right-click grows what you painted; right-click again to stop.";
-  const brushSeg = el("div", "ed-seg ed-ws-wide");
-  brushSeg.append(brushPaintBtn, brushEraseBtn);
-  const brushControls = [brushSeg, brushRadiusRow, brushHint];
+  brushHint.textContent = "Drag on a rock to paint, right-drag to erase. Enter grows what you painted (again to stop); Esc throws away the strokes since the last Enter.";
+  const brushControls = [brushRadiusRow, brushHint];
   decorationsDock.append(decoSelectBtn, toolGroup("Paint"), paletteButtons.get("moss")!, paletteButtons.get("ivy")!, ...brushControls, toolGroup("Place"));
   for (const [kind, b] of paletteButtons) if (!PAINTED_DECORATIONS.includes(kind)) decorationsDock.appendChild(b);
   decorationsDock.append(toolGroup("Grow"), growStaleBtn);
@@ -4542,6 +4572,63 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   });
   collisionChk.title = "Draw the collision outlines over the rocks, for reference (they are edited in 2D)";
   decorationsDock.append(toolGroup("Show"), collisionChk);
+
+  // THE TEXTURING WORKSPACE'S DOCK (docs/formations.md "Material layers"):
+  // the material library - pick a material, drag on any generated rock - the
+  // brush, and baking the patches that are out of date for the game. The
+  // palette is the library's files (`assets-src/materials`), read again while
+  // the workspace is open (`MaterialMasks.watchLibrary`).
+  const texturingDock = el("div", "ed-row ed-tools ed-ws-dock");
+  texturingDock.setAttribute("role", "group");
+  texturingDock.setAttribute("aria-label", "Material palette");
+  bar.appendChild(texturingDock);
+  const texSelectBtn = button("Select", () => {
+    decorations.end();
+    refreshWorkspaceDock();
+  });
+  texSelectBtn.classList.add("ed-ws-wide");
+  texSelectBtn.title = "Click a painted patch to select it; a click on bare rock selects the rock (Esc)";
+  // The palette's buttons sit in the dock's grid as its own children would.
+  const materialPalette = el("div", "");
+  materialPalette.style.display = "contents";
+  const materialButtons = new Map<string, HTMLButtonElement>();
+  const noMaterials = el("div", "ed-hint ed-ws-hint");
+  noMaterials.textContent = "No materials yet: a material is a Blender file in assets-src/materials, its Surface a Principled BSDF.";
+  function rebuildMaterialPalette(): void {
+    materialPalette.replaceChildren();
+    materialButtons.clear();
+    for (const name of materialMasks.materials) {
+      const b = button(materialLabel(name), () => {
+        decorations.arm("material", name);
+        refreshWorkspaceDock();
+      });
+      b.title = `Drag on a generated rock to paint ${materialLabel(name).toLowerCase()} onto it and right-drag to erase; Enter bakes it for the game, Enter again stops, Esc throws away the strokes since the last Enter (assets-src/materials/${name}.blend)`;
+      materialButtons.set(name, b);
+      materialPalette.appendChild(b);
+    }
+    noMaterials.style.display = materialButtons.size ? "none" : "";
+    refreshWorkspaceDock();
+  }
+  const texRadiusRow = el("label", "ed-inline ed-ws-wide ed-brush-radius");
+  texRadiusRow.title = "The brush's radius on the rock, metres";
+  texRadiusRow.appendChild(document.createTextNode("Radius m"));
+  const texRadiusInput = Object.assign(document.createElement("input"), { type: "number", className: "ed-num", step: "0.05", min: "0.02" });
+  texRadiusInput.addEventListener("input", () => decorations.setBrushRadius(Number(texRadiusInput.value)));
+  texRadiusRow.appendChild(texRadiusInput);
+  const texHint = el("div", "ed-hint ed-ws-hint");
+  texHint.textContent = "Drag on a rock to paint, right-drag to erase. Enter bakes what you painted for the game (again to stop); Esc throws away the strokes since the last Enter.";
+  const texBrushControls = [texRadiusRow, texHint];
+  const bakeStaleBtn = button("Bake", () => growStale(true));
+  bakeStaleBtn.classList.add("ed-ws-wide");
+  bakeStaleBtn.title = "Bake every painted material that is not baked yet, or whose paint, material or rock has changed since";
+  const texCollisionChk = checkbox("Collision", showCollisionOutlines, (v) => {
+    showCollisionOutlines = v;
+    writeViewSetting("collision", v);
+  });
+  texCollisionChk.title = collisionChk.title;
+  texturingDock.append(texSelectBtn, toolGroup("Materials"), materialPalette, noMaterials, ...texBrushControls, toolGroup("Bake"), bakeStaleBtn, toolGroup("Show"), texCollisionChk);
+  // Filled when the library is first read (after the editor is up).
+  noMaterials.style.display = "none";
 
   // What the two 3D docks offer right now: which shapes can be added, how
   // many rocks and decorations are out of date, which kind is armed. Called
@@ -4579,10 +4666,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     generateStaleBtn.textContent = rocks ? `Generate ${rocks} out of date` : "All rocks up to date";
     generateStaleBtn.disabled = !rocks;
     generateStaleBtn.classList.toggle("ed-attention", rocks > 0);
-    const grown = staleDecorations().length;
+    const grown = staleDecorations(false).length;
     growStaleBtn.textContent = grown ? `Grow ${grown} out of date` : "All decorations grown";
     growStaleBtn.disabled = !grown;
     growStaleBtn.classList.toggle("ed-attention", grown > 0);
+    const baked = staleDecorations(true).length;
+    bakeStaleBtn.textContent = baked ? `Bake ${baked} out of date` : "All materials baked";
+    bakeStaleBtn.disabled = !baked;
+    bakeStaleBtn.classList.toggle("ed-attention", baked > 0);
     // The selection's guide / rock view.
     const formationSel = selectedFormations();
     const view = formationSel[0] ? viewOf(formationSel[0]) : null;
@@ -4602,12 +4693,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     decoSelectBtn.setAttribute("aria-pressed", String(armed === null));
     const brushOn = armed !== null && PAINTED_DECORATIONS.includes(armed);
     for (const c of brushControls) c.style.display = brushOn ? "" : "none";
-    const erases = decorations.brushErases;
-    brushPaintBtn.classList.toggle("active", !erases);
-    brushPaintBtn.setAttribute("aria-pressed", String(!erases));
-    brushEraseBtn.classList.toggle("active", erases);
-    brushEraseBtn.setAttribute("aria-pressed", String(erases));
     if (document.activeElement !== brushRadiusInput) brushRadiusInput.value = String(decorations.brushRadius);
+    // The Texturing dock's: which material is armed, and its brush.
+    const armedMaterial = armed === "material" ? (decorations.placing!.material ?? null) : null;
+    for (const [name, b] of materialButtons) {
+      b.classList.toggle("active", name === armedMaterial);
+      b.setAttribute("aria-pressed", String(name === armedMaterial));
+    }
+    texSelectBtn.classList.toggle("active", armedMaterial === null);
+    texSelectBtn.setAttribute("aria-pressed", String(armedMaterial === null));
+    for (const c of texBrushControls) c.style.display = armedMaterial !== null ? "" : "none";
+    if (document.activeElement !== texRadiusInput) texRadiusInput.value = String(decorations.brushRadius);
     // Arming, the brush and their ends all rebuild the inspector; a drag in
     // progress owns the cursor until it lets go.
     if (!drag) applyToolCursor();
@@ -4628,9 +4724,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   // The decorations that are not grown, or are stale, on a rock that is
   // generated, with no growth of theirs on its way.
-  function staleDecorations(): EdItem[] {
+  // `materials`: the material layers (the Texturing workspace's), or every
+  // other decoration (the Decorations workspace's).
+  function staleDecorations(materials: boolean): EdItem[] {
     return model.items.filter((i) => {
       if (i.object !== "decoration" || !i.decoration || i.decoration.lost || !decorations.stale(i)) return false;
+      if ((i.decoration.kind === "material") !== materials) return false;
       // A painted one with no paint yet has nothing to grow.
       if (isPainted(i.decoration.kind) && !i.decoration.strokes?.length) return false;
       const r = decorations.request(i);
@@ -4639,8 +4738,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return !(job && (job.state === "queued" || job.state === "running"));
     });
   }
-  function growStale(): void {
-    for (const d of staleDecorations()) decorations.grow(d);
+  function growStale(materials = false): void {
+    for (const d of staleDecorations(materials)) decorations.grow(d);
     refreshWorkspaceDock();
   }
 
@@ -4924,7 +5023,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // An asset is a rock: the Assets tab is Formations'. The decoration
     // palette and brush are Decorations'.
     if (ws !== "formations" && assetMode) openAssets(false);
-    if (ws !== "decorations") decorations.cancel();
+    // The brush is the workspace's: leaving it ends it.
+    decorations.end();
+    // The library is read again while Texturing is open: a material saved
+    // in Blender shows on the rocks.
+    materialMasks.watchLibrary(ws === "texturing");
     // A grab in progress is placed where it is; combining is Formations'.
     if (grab) endTransform(true);
     if (ws !== "formations") cancelCombine();
@@ -4965,6 +5068,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     layerList.style.display = ws === "2d" ? "" : "none";
     formationsDock.style.display = ws === "formations" ? "" : "none";
     decorationsDock.style.display = ws === "decorations" ? "" : "none";
+    texturingDock.style.display = ws === "texturing" ? "" : "none";
     if (assetsRow) assetsRow.style.display = ws === "formations" ? "" : "none";
     for (const [w, b] of workspaceTabBtns) {
       b.classList.toggle("active", w === ws);
@@ -7936,6 +8040,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // What grows on its rock (the Decorations workspace's).
     const rock = members.find((m) => m.object === "formation");
     if (workspace === "decorations" && rock) decorations.buildList(section(g, "body/Decorations", "Decorations"), rock);
+    if (workspace === "texturing" && rock) decorations.buildList(section(g, "body/Materials", "Materials"), rock, true);
     // The buttons are not properties: they stay in view under the sections.
     appendGroupSection(g, title);
     appendActions(g);
@@ -9668,6 +9773,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addTransformFields(transform, groupNum(transform, items), items);
     if (items.length === 1 && workspace === "formations") buildFormationSection(formationHost, section(g, "formation/Formation", "Formation"), first.bodyId);
     if (items.length === 1 && workspace === "decorations") decorations.buildList(section(g, "formation/Decorations", "Decorations"), first);
+    if (items.length === 1 && workspace === "texturing") decorations.buildList(section(g, "formation/Materials", "Materials"), first, true);
     addGroupSection(g, title);
     addActionsRow(g);
     inspector.appendChild(g);
@@ -9680,11 +9786,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const first = items[0]!;
     const dec = first.decoration!;
     const title = heading(
-      items.length === 1 ? `${DECORATION_LABELS[dec.kind]} ${dec.id}` : `${items.length} decorations selected`,
-      "Grown on its formation's rock by the decoration add-ons (moss, ivy, foliage) and tied to the formation's guide, so it follows the rock through a regenerate. A placed one is grown once and dragged along the rock; a painted one is grown again whenever its paint or its rock changes.",
+      items.length === 1 ? `${decorationLabel(dec)} ${dec.id}` : `${items.length} decorations selected`,
+      dec.kind === "material"
+        ? "A material from the library (assets-src/materials, a Blender Principled BSDF) baked onto its formation's rock and laid on where it is painted. Its strokes are tied to the formation's guide, so it follows the rock through a regenerate, and it is baked again whenever its paint, its material or its rock changes."
+        : "Grown on its formation's rock by the decoration add-ons (moss, ivy, foliage) and tied to the formation's guide, so it follows the rock through a regenerate. A placed one is grown once and dragged along the rock; a painted one is grown again whenever its paint or its rock changes.",
     );
     g.appendChild(title);
-    if (items.length === 1) decorations.buildGroup(section(g, "decoration/Decoration", "Decoration"), first);
+    if (items.length === 1) decorations.buildGroup(section(g, "decoration/Decoration", dec.kind === "material" ? "Material layer" : "Decoration"), first);
     addGroupSection(g, title);
     addActionsRow(g);
     inspector.appendChild(g);
@@ -12402,11 +12510,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // navigation, on the pose: middle drag orbits, Shift + middle or right drag
     // pans, the wheel dollies. Without WebGL there is no pose, and the middle
     // and right buttons pan the 2D camera as they always did.
-    // A right press while a kind is armed or a brush is on may be a click,
-    // which grows the paint or, with nothing to grow, ends the tool
-    // (`decorations.apply`), or the start of a pan, as ever: told apart when
-    // it is let go.
-    brushRightPress = e.button === 2 && decorations.busy ? pointerScreen(e) : null;
+    // The paint brush's eraser (since 2026-11-26): a right press on the rock
+    // the brush paints erases where it drags. Anywhere else the right button
+    // pans, as ever.
+    if (e.button === 2 && visuals?.active && decorations.brush && decorations.press(decorationHit(pointerScreen(e)), model.items.filter((i) => selectedIds.has(i.id)), true)) {
+      rebuildInspector();
+      e.preventDefault();
+      return;
+    }
+    // A right press while a placed kind is armed may be a click, which ends
+    // it (`decorations.apply`), or the start of a pan, as ever: told apart
+    // when it is let go.
+    brushRightPress = e.button === 2 && decorations.rightClickEnds ? pointerScreen(e) : null;
     if (visuals?.active && (e.button === 1 || e.button === 2)) {
       // A swing to a cube face in flight gives way to the hand.
       viewSwing++;
@@ -12673,7 +12788,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // workspace edits, and a second click to drill into the body was a click
     // nobody meant (2026-11-25). A press still pans until it is let go, as
     // any unselected thing's does; Shift and Alt keep their usual meaning.
-    if (workspace === "decorations" && hit?.object === "decoration" && !selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
+    if (paintsRocks(workspace) && hit?.object === "decoration" && !selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
       drag = {
         mode: "panPick",
         lastScreen: scr,
@@ -13794,8 +13909,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A sculpt stroke ends with the left button (a view drag with another
     // button may end meanwhile and leave the stroke going).
     if (e.button === 0) sculptCtl?.release();
-    // A right-click with the paint brush on (a press the pointer did not pan
-    // away from) grows the paint.
+    // A right-click with a placed kind armed (a press the pointer did not pan
+    // away from) ends it.
     if (e.button === 2 && brushRightPress) {
       const press = brushRightPress;
       brushRightPress = null;
@@ -13804,8 +13919,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         refreshWorkspaceDock();
       }
     }
-    if (decorations.dragging && e.button === 0) {
-      decorations.release();
+    // The decoration drag this button began: the left's paint or move, the
+    // right's erase.
+    if (decorations.release(e.button)) {
       rebuildInspector();
       return;
     }
@@ -13963,6 +14079,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Combining guides ends, leaving the guides as they were.
       else if (mode === "edit" && combine) cancelCombine();
       // Placing or painting a decoration ends before anything else does.
+      // Esc throws away the strokes since the last Enter (`decorations.cancel`).
       else if (mode === "edit" && decorations.busy) decorations.cancel();
       else if (mode === "test") stopTest();
       else if (polyDraft) cancelPolyDraft();
@@ -13986,6 +14103,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         clearRouteSel();
         rebuildInspector();
       } else setSelection([]);
+      return;
+    }
+    // Enter with a decoration armed or its brush on confirms it
+    // (`decorations.apply`: grows the paint, or with nothing to grow ends the
+    // tool). Before the focus checks below: the dock's Moss button keeps the
+    // focus after arming it, and a focused button's Enter would click it,
+    // disarming. Typing in a field still gets its own Enter too.
+    if ((e.code === "Enter" || e.code === "NumpadEnter") && mode === "edit" && decorations.busy && !(e.target instanceof HTMLTextAreaElement)) {
+      if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) e.preventDefault();
+      if (decorations.apply()) {
+        rebuildInspector();
+        refreshWorkspaceDock();
+      }
       return;
     }
     if (mode === "test") {
@@ -14079,8 +14209,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       e.preventDefault();
       return;
     }
-    // 1, 2, 3: the workspaces, in the tabs' order.
-    const wsKey = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
+    // 1, 2, 3, 4: the workspaces, in the tabs' order.
+    const wsKey = ["Digit1", "Digit2", "Digit3", "Digit4"].indexOf(e.code);
     if (wsKey >= 0 && !e.shiftKey && !e.altKey) {
       setWorkspace(WORKSPACES[wsKey]!);
       e.preventDefault();
@@ -14456,6 +14586,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           ]),
           guideHex,
         );
+        materialMasks.sync();
         decorations.syncPreview();
         // The one 3D view: the pose drives the scene's camera, and the 2D
         // camera is read off it (`cameraFromPose`) for everything sized or

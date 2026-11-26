@@ -1,7 +1,7 @@
 // Grow one decoration on one formation's rock into the store
 // (docs/formations.md, "Decorations").
 //
-//   bun run scripts/decoration-build.ts <request.json> [--force] [--store DIR]
+//   bun run scripts/decoration-build.ts <request.json> [--force] [--store DIR] [--materials DIR]
 //
 // The request: `{host, kind, seed?, settings?, lens?, at?, stamps?}`, `host`
 // the hash of the formation build it grows on (its `rock.blend` in the store),
@@ -27,9 +27,14 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { decorationHash, isTextureLayer, type DecorationRequest } from "../src/formation/decoration";
-import { FORMATION_HASH, ROCK_FILE } from "../src/formation/store";
+import { decorationHash, isMaterialLayer, isTextureLayer, materialOf, type DecorationRequest } from "../src/formation/decoration";
+import { MaterialMask, rasterizePaintUv, MASK_SIDE } from "../src/formation/materialMask";
+import { materialLibraryFile } from "../src/formation/materialLayer";
+import { sha256Bytes } from "../src/formation/sha256";
+import { FORMATION_HASH, GEOMETRY_FILE, ROCK_FILE } from "../src/formation/store";
+import sharp from "sharp";
 import { exportBlend, ROOT } from "./blendExport";
+import { readPaintUvMeshes } from "./paintUvMesh";
 
 const TAG = "[decoration]";
 const fail = (msg: string): never => {
@@ -47,13 +52,15 @@ const rock = join(store, request.host, ROCK_FILE);
 if (!existsSync(rock)) fail(`the store has no ${relative(ROOT, rock)}: generate the formation first`);
 const hash = decorationHash(request);
 const dir = join(store, hash);
-if (existsSync(join(dir, layer ? "layer.png" : "decoration.glb")) && !process.argv.includes("--force")) {
+const builtFile = isMaterialLayer(request) ? "mask.png" : layer ? "layer.png" : "decoration.glb";
+if (existsSync(join(dir, builtFile)) && !process.argv.includes("--force")) {
   console.log(`${TAG} ${hash.slice(0, 12)}: in the store`);
-  const kept = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { landed?: unknown };
-  console.log(`DECORATION_BUILT ${JSON.stringify({ hash, landed: kept.landed ?? null })}`);
+  const kept = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { landed?: unknown; maps?: string };
+  console.log(`DECORATION_BUILT ${JSON.stringify({ hash, landed: kept.landed ?? null, ...(kept.maps ? { maps: kept.maps } : {}) })}`);
   process.exit(0);
 }
 console.log(`${TAG} ${hash.slice(0, 12)}: ${request.kind} on ${request.host.slice(0, 12)}`);
+if (isMaterialLayer(request)) await buildMaterialLayer();
 console.log(`${TAG} step 1/2: prepare the host and the ${request.kind}`);
 const scratch = mkdtempSync(join(ROOT, ".cache", "decoration-"));
 const req = join(scratch, "request.json");
@@ -136,3 +143,47 @@ rmSync(scratch, { recursive: true, force: true });
 for (const w of meta.warnings) console.log(`${TAG} WARNING ${w}`);
 console.log(`${TAG} ${meta.nodes.length} objects, ${meta.nodes.reduce((t, n) => t + n.triangles, 0).toLocaleString()} triangles; prepare ${prepared.toFixed(1)}s, export ${exported.toFixed(1)}s`);
 console.log(`DECORATION_BUILT ${JSON.stringify({ hash, landed })}`);
+
+// A MATERIAL LAYER (docs/formations.md "Material layers"): its material baked
+// onto the rock if the store lacks it (scripts/material-layer-build.ts, shared
+// by every patch of that material on that rock), then its strokes as the mask
+// over it, computed as the editor computes it live (materialMask.ts) from the
+// rock's iteration mesh. No Blender for the mask.
+async function buildMaterialLayer(): Promise<never> {
+  const material = materialOf(request);
+  // `--materials DIR` reads the library from elsewhere (the tests').
+  const materialsAt = process.argv.indexOf("--materials");
+  const library = materialsAt === -1 ? join(ROOT, materialLibraryFile(material)) : join(process.argv[materialsAt + 1]!, `${material}.blend`);
+  if (!material || !existsSync(library)) fail(`no library material "${material}" (${relative(ROOT, library)})`);
+  const now = sha256Bytes(new Uint8Array(readFileSync(library)));
+  if (now !== request.library) fail(`${relative(ROOT, library)} has changed since this was asked for; ask again`);
+  const t0 = performance.now();
+  console.log(`${TAG} step 1/2: bake the ${material} material onto the rock`);
+  const bake = spawnSync("bun", ["run", join(ROOT, "scripts", "material-layer-build.ts"), request.host, material, "--store", store, "--library", library], { encoding: "utf8" });
+  const line = bake.status === 0 ? /MATERIAL_LAYER_BUILT (.*)/.exec(bake.stdout)?.[1] : undefined;
+  if (!line) console.error((bake.stdout + bake.stderr).split("\n").filter((l) => l.trim()).slice(-10).join("\n"));
+  const baked = line ?? fail(`the ${material} material did not bake onto the rock`);
+  const maps = (JSON.parse(baked) as { hash: string }).hash;
+  const t1 = performance.now();
+  console.log(`${TAG} step 2/2: paint the mask`);
+  const geometry = join(store, request.host, GEOMETRY_FILE);
+  const texels = rasterizePaintUv(await readPaintUvMeshes(geometry), MASK_SIDE);
+  if (!texels.points.count) fail("the rock has no paint UV: Generate it again to paint a material on it");
+  const mask = new MaterialMask(texels);
+  mask.update(request.stamps ?? []);
+  const px = mask.write(new Uint8Array(MASK_SIDE * MASK_SIDE));
+  const staging = join(store, `.${hash}.${process.pid}`);
+  rmSync(staging, { recursive: true, force: true });
+  mkdirSync(staging, { recursive: true });
+  await sharp(Buffer.from(px), { raw: { width: MASK_SIDE, height: MASK_SIDE, channels: 1 } }).png({ compressionLevel: 9 }).toFile(join(staging, "mask.png"));
+  const times = { bake: (t1 - t0) / 1000, mask: (performance.now() - t1) / 1000 };
+  writeFileSync(
+    join(staging, "meta.json"),
+    JSON.stringify({ hash, request, landed: null, maps, layer: { size: MASK_SIDE, texels: texels.points.count }, nodes: [], warnings: [], times, builtAt: new Date().toISOString() }, null, 2) + "\n",
+  );
+  rmSync(dir, { recursive: true, force: true });
+  renameSync(staging, dir);
+  console.log(`${TAG} mask ${MASK_SIDE}x${MASK_SIDE} over ${texels.points.count.toLocaleString()} texels, ${(request.stamps ?? []).length} strokes; bake ${times.bake.toFixed(1)}s, mask ${times.mask.toFixed(1)}s`);
+  console.log(`DECORATION_BUILT ${JSON.stringify({ hash, landed: null, maps })}`);
+  process.exit(0);
+}

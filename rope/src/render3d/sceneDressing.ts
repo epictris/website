@@ -256,6 +256,13 @@ export function seedDecodedFile(file: string, loaded: THREE.Object3D | null): vo
   files.set(file, Promise.resolve(loaded));
 }
 
+// Drop every cached file whose path `matches`, so the next load fetches it
+// again: a formation rebuilt under the same hash (`forgetFormationFiles`).
+export function forgetFiles(matches: (file: string) => boolean): void {
+  for (const file of [...files.keys()]) if (matches(file)) files.delete(file);
+  for (const file of [...decoded.keys()]) if (matches(file)) decoded.delete(file);
+}
+
 // Load one export of `scene_export.py` (a scene, a model, or a formation's
 // baked tier, `formations.ts`) and prepare its meshes for the game. `label`
 // names it in the log.

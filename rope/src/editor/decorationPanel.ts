@@ -10,7 +10,8 @@
 // strokes or its rock change.
 
 import * as THREE from "three";
-import { decorationHash, decorationRequest, isPainted } from "../formation/decoration";
+import { decorationHash, decorationRequest, isMaterialLayer, isPainted, materialOf } from "../formation/decoration";
+import { materialLabel } from "../formation/materialLayer";
 import { PAINTED_DECORATIONS, type DecorationAnchor, type DecorationKind, type PaintStamp } from "../level/levelFormat";
 import { showToast } from "../render/toast";
 import { anchorAt, formationMatrix, markPos, projectOnRock, reproject, reprojectStrokes, rockOf, toFormation, v3 } from "./decorations";
@@ -31,8 +32,15 @@ export const DECORATION_LABELS: Record<DecorationKind, string> = {
   mushroom: "Mushrooms",
   orbs: "Pendant orbs",
   glow: "Glow flora",
+  material: "Material",
 };
-const KINDS = Object.keys(DECORATION_LABELS) as DecorationKind[];
+// What a decoration is called: its kind, or a material layer's material.
+export function decorationLabel(d: { kind: DecorationKind; settings?: Record<string, unknown> }): string {
+  return d.kind === "material" ? materialLabel(String(d.settings?.["material"] ?? "") || "material") : DECORATION_LABELS[d.kind];
+}
+// What a formation's list offers to add: a material layer is the Texturing
+// workspace's palette's.
+const KINDS = (Object.keys(DECORATION_LABELS) as DecorationKind[]).filter((k) => k !== "material");
 // The coverage a painted decoration grows where it reaches: its own
 // `threshold` setting, or the grower's default.
 const thresholdOf = (d: EdItem): number => Number(d.decoration?.settings?.["threshold"] ?? DEFAULT_THRESHOLD);
@@ -48,6 +56,14 @@ export interface DecorationHost {
   select(ids: number[]): void;
   // The level's focal length, mm, for the growth's detail budget.
   lens(): number | undefined;
+  // A library material's file's sha256 (`/api/materials`), or null while the
+  // library is not known or has no such material.
+  library(material: string): string | null;
+  // The library's material names, for a material layer's panel.
+  materials(): readonly string[];
+  // Whether a material layer is drawn live on its rock as it is painted
+  // (src/editor/materialMasks.ts): then the coverage dots are not drawn.
+  drawsLive(d: EdItem): boolean;
 }
 
 // A hit on the scene in the Visuals workspace: the item it names (the
@@ -73,13 +89,16 @@ export class DecorationController {
   // A kind waiting for its first click on a formation's rock: the one whose
   // list armed it, or (null, the Decorations workspace's palette) any rock
   // that is generated.
-  placing: { kind: DecorationKind; formationId: number | null } | null = null;
-  // The painted decoration the brush is on, and how it paints. `palette`: the
+  // A material layer's palette entry names its material.
+  placing: { kind: DecorationKind; formationId: number | null; material?: string } | null = null;
+  // The painted decoration the brush is on, and how big it is. `palette`: the
   // palette's brush, a workspace tool that never touches the selection (it
   // paints whichever rock it is pressed on); otherwise the selected
   // decoration's own (its panel's Paint), which ends when the selection moves.
-  painting: { itemId: number; radius: number; erase: boolean; palette?: boolean } | null = null;
-  private drag: { mode: "move" | "paint"; itemId: number; last: THREE.Vector3 | null } | null = null;
+  // Whether a stroke paints or erases is the button's, not the brush's: the
+  // left paints, the right erases (2026-11-26; before, a Paint / Erase toggle).
+  painting: { itemId: number; radius: number; palette?: boolean } | null = null;
+  private drag: { mode: "move" | "paint"; itemId: number; last: THREE.Vector3 | null; erase?: boolean } | null = null;
   // What the paint covers, drawn over the rock while the brush is on.
   readonly preview = new THREE.Group();
   // What the preview was last built for; null means stale, build again. Not
@@ -99,8 +118,12 @@ export class DecorationController {
   // The brush's radius, metres: kept between brushes, so the cursor of an
   // armed kind is the brush its first press paints with.
   private radius = BRUSH_RADIUS;
-  // Whether the palette's brush erases.
-  private erasing = false;
+  // What the paint was at the last Enter (`apply`), or when the brush came on,
+  // for Esc (`cancel`) to put back: each patch touched since, by item id, as it
+  // was (its item, kept whole for one a stroke absorbed out of the level, and
+  // its strokes then), or null for one made since. Only the strokes are put
+  // back, so a growth that landed meanwhile is kept.
+  private readonly before = new Map<number, { item: EdItem; strokes: PaintStamp[] } | null>();
   // What the palette's brush has painted since it was armed: a right-click
   // grows them all.
   private readonly session = new Set<number>();
@@ -142,13 +165,14 @@ export class DecorationController {
   }
 
   // Arm a kind for the next click on any generated rock (the Decorations
-  // workspace's palette). Clicking the armed kind again disarms it.
-  arm(kind: DecorationKind): void {
-    if (this.placing?.kind === kind && this.placing.formationId === null) {
-      this.cancel();
+  // workspace's palette; the Texturing workspace's, a material). Clicking the
+  // armed one again disarms it.
+  arm(kind: DecorationKind, material?: string): void {
+    if (this.placing?.kind === kind && this.placing.formationId === null && this.placing.material === material) {
+      this.end();
       return;
     }
-    this.placing = { kind, formationId: null };
+    this.placing = { kind, formationId: null, ...(material ? { material } : {}) };
     this.painting = null;
     this.previewKey = null;
     this.syncPreview();
@@ -166,7 +190,8 @@ export class DecorationController {
     const f = this.formationOf(d);
     const host = f?.formation?.built?.hash;
     if (!d.decoration || !host) return null;
-    return decorationRequest(d.decoration, host, d.decoration.strokes, this.host.lens());
+    const library = isMaterialLayer(d.decoration) ? this.host.library(materialOf(d.decoration)) : null;
+    return decorationRequest(d.decoration, host, d.decoration.strokes, this.host.lens(), library);
   }
 
   // Whether what is drawn is not what the decoration now asks for. A placed
@@ -180,20 +205,25 @@ export class DecorationController {
       return !r || decorationHash(r) !== dec.built.hash;
     }
     const r = decorationRequest({ ...dec, onRock: dec.built.at }, dec.built.host, undefined, this.host.lens());
-    return decorationHash(r) !== dec.built.hash;
+    return !r || decorationHash(r) !== dec.built.hash;
   }
 
   grow(d: EdItem): void {
     const r = this.request(d);
     if (!r) {
-      showToast("Generate the formation first: a decoration grows on its rock.", "warn");
+      showToast(
+        d.decoration && isMaterialLayer(d.decoration) && this.formationOf(d)?.formation?.built
+          ? `There is no material "${materialOf(d.decoration)}" in assets-src/materials.`
+          : "Generate the formation first: a decoration grows on its rock.",
+        "warn",
+      );
       return;
     }
     if (isPainted(r.kind) && !(r.stamps ?? []).some((s) => s.s > 0)) return;
     void fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "decoration", request: r, label: `${DECORATION_LABELS[r.kind]} ${d.decoration!.id}` }),
+      body: JSON.stringify({ kind: "decoration", request: r, label: `${decorationLabel(d.decoration!)} ${d.decoration!.id}` }),
     })
       .then((res) => res.json() as Promise<{ id?: string; error?: string }>)
       .then((b) => (b.id ? this.host.rebuildInspector() : showToast(b.error ?? "the job runner refused the growth", "warn")));
@@ -207,7 +237,10 @@ export class DecorationController {
       if (d.object !== "decoration" || !d.decoration) continue;
       const r = this.request(d);
       if (!r || decorationHash(r) !== job.hash || d.decoration.built?.hash === job.hash) continue;
-      d.decoration = { ...d.decoration, built: { hash: job.hash, host: r.host, at: r.at ?? d.decoration.onRock ?? d.decoration.anchor } };
+      d.decoration = {
+        ...d.decoration,
+        built: { hash: job.hash, host: r.host, at: r.at ?? d.decoration.onRock ?? d.decoration.anchor, ...(job.result?.maps ? { maps: job.result.maps } : {}) },
+      };
       changed = true;
     }
     return changed;
@@ -253,9 +286,8 @@ export class DecorationController {
 
   // --- gestures ---------------------------------------------------------------
 
-  // A press in the Visuals workspace. True when it was a decoration's.
-  // Whether a placing or painting mode is on (Esc, or a press off the rock,
-  // ends it).
+  // Whether a placing or painting mode is on (Enter, Esc, or a press off the
+  // rock, ends it).
   get busy(): boolean {
     return this.placing !== null || this.painting !== null;
   }
@@ -269,23 +301,27 @@ export class DecorationController {
   // drawn over the rock and a click on the rock still painting.
   followSelection(selected: readonly EdItem[], selectedBodies: ReadonlySet<number>): void {
     if (this.painting && !this.painting.palette) {
-      if (selected.length !== 1 || selected[0]!.id !== this.painting.itemId) this.cancel();
+      if (selected.length !== 1 || selected[0]!.id !== this.painting.itemId) this.end();
       return;
     }
     // The palette's placing is the workspace's tool, not the selection's: it
     // stays armed until Esc, its button or a press off every rock.
     if (this.placing && this.placing.formationId !== null) {
       const f = this.item(this.placing.formationId);
-      if (!f || !(selectedBodies.has(f.bodyId) || selected.some((i) => i.bodyId === f.bodyId))) this.cancel();
+      if (!f || !(selectedBodies.has(f.bodyId) || selected.some((i) => i.bodyId === f.bodyId))) this.end();
     }
   }
 
-  // Out of placing and painting, the panel saying so.
-  cancel(): void {
+  // Out of placing and painting, the panel saying so, the paint left as it is
+  // (grown or not): Done, Select, a press off the rock, the selection or the
+  // workspace moving on.
+  end(): void {
     if (!this.busy) return;
     this.placing = null;
     this.painting = null;
+    this.drag = null;
     this.session.clear();
+    this.before.clear();
     for (const c of this.fields.values()) c.field.dispose();
     this.fields.clear();
     this.previewKey = null;
@@ -293,7 +329,50 @@ export class DecorationController {
     this.host.rebuildInspector();
   }
 
-  press(hit: SurfaceHit | null, selected: readonly EdItem[]): boolean {
+  // Esc: the strokes since the last Enter (or since the brush came on) are
+  // thrown away, in one undo step, and the brush ends (2026-11-26, Tris:
+  // "enter to confirm, esc to cancel"). A patch made since goes, one a stroke
+  // absorbed comes back, and every other has its strokes put back.
+  cancel(): void {
+    if (!this.busy) return;
+    if (this.before.size) {
+      this.host.beginAction();
+      const model = this.host.model();
+      let dropped = false;
+      for (const [id, was] of this.before) {
+        const now = this.item(id);
+        if (!was) {
+          if (now) {
+            model.items.splice(model.items.indexOf(now), 1);
+            dropped = true;
+          }
+        } else if (now) {
+          now.decoration = { ...now.decoration!, strokes: was.strokes };
+        } else {
+          const back: EdItem = { ...was.item, decoration: { ...was.item.decoration!, strokes: was.strokes } };
+          const members = bodyMembers(model.items, back.bodyId);
+          model.items.splice(members.length ? model.items.lastIndexOf(members.at(-1)!) + 1 : model.items.length, 0, back);
+        }
+      }
+      this.host.markDirty();
+      // The panel's brush paints the selected decoration, which may have been
+      // the one made since.
+      if (dropped && this.painting && !this.painting.palette) this.host.select([]);
+    }
+    this.end();
+  }
+
+  // A patch about to change: how it is now, unless the checkpoint has it.
+  private touch(d: EdItem): void {
+    if (!this.before.has(d.id)) this.before.set(d.id, { item: d, strokes: d.decoration?.strokes ?? [] });
+  }
+
+  // A press in the Visuals workspace, `erase` for the right button. True when
+  // it was a decoration's. The right button is the paint brush's eraser on
+  // the rock it paints, and nothing else: off the rock, or with no brush, it
+  // navigates as it always has.
+  press(hit: SurfaceHit | null, selected: readonly EdItem[], erase = false): boolean {
+    if (erase && !this.brush) return false;
     // A press OFF the rock leaves placing or painting and is then an ordinary
     // click (it selects what it lands on), as a click away from a tool is in
     // any editor. Swallowing it instead left the editor unable to select
@@ -302,10 +381,11 @@ export class DecorationController {
       const palette = this.placing.formationId === null;
       const f = this.item(this.placing.formationId ?? hit?.itemId ?? -1);
       if (!hit || !f || hit.itemId !== f.id || !this.isRock(f.id)) {
-        this.cancel();
+        if (!erase) this.end();
         return false;
       }
       const kind = this.placing.kind;
+      const material = this.placing.material;
       // The palette's brush: the press is a stroke on this rock's own paint
       // of the kind, started here the first time. It stays armed, and
       // selects nothing (since 2026-11-25: selecting the new moss put its
@@ -313,27 +393,39 @@ export class DecorationController {
       if (palette && isPainted(kind)) {
         // The patch under the brush, or the rock's own; the stroke takes in
         // any other it reaches (`stroke`).
-        const existing = this.patchesUnder(f, kind, this.stampAt(f, hit, this.radius, this.erasing))[0] ?? this.paintedOn(f, kind);
+        const existing = this.patchesUnder(f, kind, this.stampAt(f, hit, this.radius, erase), undefined, material)[0] ?? this.paintedOn(f, kind, material);
         // An eraser on a rock with none of this paint has nothing to do.
-        if (!existing && this.erasing) return true;
-        if (existing) this.host.beginAction();
-        const d = existing ?? this.place(f, kind, hit, false);
-        if (!this.session.size) showToast(`Painting ${DECORATION_LABELS[kind].toLowerCase()}: right-click to grow it, right-click again to stop.`);
+        if (!existing && erase) return true;
+        if (existing) {
+          this.touch(existing);
+          this.host.beginAction();
+        }
+        const d = existing ?? this.place(f, kind, hit, false, material);
+        if (!existing) this.before.set(d.id, null);
+        if (!this.session.size) {
+          showToast(
+            material
+              ? `Painting ${materialLabel(material).toLowerCase()}: drag to paint, right-drag to erase; Enter bakes it for the game, Esc throws the strokes away.`
+              : `Painting ${DECORATION_LABELS[kind].toLowerCase()}: drag to paint, right-drag to erase; Enter grows it, Esc throws the strokes away.`,
+          );
+        }
         this.session.add(d.id);
-        this.painting = { itemId: d.id, radius: this.radius, erase: this.erasing, palette: true };
-        this.drag = { mode: "paint", itemId: d.id, last: null };
+        this.painting = { itemId: d.id, radius: this.radius, palette: true };
+        this.drag = { mode: "paint", itemId: d.id, last: null, erase };
         this.stroke(d, hit);
         return true;
       }
       // A placed kind from the palette stays armed, so a row of ferns is a
       // row of clicks, and selects nothing; one from a rock's own list is
       // selected, and a painted one goes to its brush, the press its first
-      // stroke.
+      // stroke (an eraser has nothing to take away before then).
+      if (erase) return true;
       if (!palette) this.placing = null;
       const item = this.place(f, kind, hit, !palette);
       if (isPainted(kind)) {
-        this.painting = { itemId: item.id, radius: this.radius, erase: false };
-        this.drag = { mode: "paint", itemId: item.id, last: null };
+        this.before.set(item.id, null);
+        this.painting = { itemId: item.id, radius: this.radius };
+        this.drag = { mode: "paint", itemId: item.id, last: null, erase: false };
         this.stroke(item, hit);
       } else this.grow(item);
       return true;
@@ -341,11 +433,12 @@ export class DecorationController {
     if (this.painting) {
       const d = this.item(this.painting.itemId);
       if (!d || !hit) {
-        this.cancel();
+        if (!erase) this.end();
         return false;
       }
+      this.touch(d);
       this.host.beginAction();
-      this.drag = { mode: "paint", itemId: d.id, last: null };
+      this.drag = { mode: "paint", itemId: d.id, last: null, erase };
       this.stroke(d, hit);
       return true;
     }
@@ -371,23 +464,35 @@ export class DecorationController {
     else this.stroke(d, hit);
   }
 
-  // The left button let go: the stroke ends, and nothing grows yet. A
-  // painted decoration grows on a right-click (`apply`), so several strokes,
-  // with the view moved between them, wait on one growth rather than each on
-  // its own.
-  release(): void {
+  // A button let go: the drag it began ends (the left's paint or move, the
+  // right's erase), and nothing grows yet. A painted decoration grows on Enter
+  // (`apply`), so several strokes, with the view moved between them, wait on
+  // one growth rather than each on its own. True when it was the drag's.
+  release(button: number): boolean {
+    const g = this.drag;
+    if (!g || (button === 2) !== !!g.erase) return false;
     this.drag = null;
+    return true;
   }
 
-  // A right-click while a kind is armed or a brush is on: "done". It grows
-  // what was painted, if that is not grown or asked for as it stands, and
-  // the brush stays on; with nothing left to grow it ends the brush or the
-  // placing, back to Select (2026-11-25). Asked for, not grown: a growth takes
-  // a while to land and the paint reads as stale until it does, so judging by
-  // `stale` alone, the second right-click asked for the same growth again
-  // rather than ending the brush. True when the click was the brush's.
+  // Whether a right-click (a right press let go where it was pressed) ends
+  // what is armed: a placed kind's, which has no eraser (a fern: placing
+  // ends). The paint brush's right button is its eraser instead.
+  get rightClickEnds(): boolean {
+    return this.placing !== null && !isPainted(this.placing.kind);
+  }
+
+  // Enter while a kind is armed or a brush is on: "confirm". The strokes so
+  // far are kept (Esc no longer throws them away), and it grows what was
+  // painted, if that is not grown or asked for as it stands, and the brush
+  // stays on; with nothing left to grow it ends the brush or the placing, back
+  // to Select (2026-11-25, a right-click until 2026-11-26). Asked for, not
+  // grown: a growth takes a while to land and the paint reads as stale until
+  // it does, so judging by `stale` alone, the second Enter asked for the same
+  // growth again rather than ending the brush. True when it was the brush's.
   apply(): boolean {
     if (!this.busy) return false;
+    this.before.clear();
     const ids = [...this.session, ...(this.painting && !this.painting.palette ? [this.painting.itemId] : [])];
     let grew = 0;
     for (const id of ids) {
@@ -400,31 +505,37 @@ export class DecorationController {
       this.grow(d);
       grew++;
     }
-    if (!grew) this.cancel();
+    if (!grew) this.end();
     return true;
   }
 
   // The rock's own paint of a kind, for the palette's brush: the last one
   // made, unless it could not follow its rock.
-  private paintedOn(f: EdItem, kind: DecorationKind): EdItem | null {
-    return this.patchesOn(f, kind).at(-1) ?? null;
+  private paintedOn(f: EdItem, kind: DecorationKind, material?: string): EdItem | null {
+    return this.patchesOn(f, kind, material).at(-1) ?? null;
   }
 
-  // The PATCHES of a kind on a rock: its painted decorations of that kind,
-  // but one that could not follow its rock.
-  private patchesOn(f: EdItem, kind: DecorationKind): EdItem[] {
+  // The PATCHES of a kind on a rock: its painted decorations of that kind
+  // (and of a material layer, that material), but one that could not follow
+  // its rock.
+  private patchesOn(f: EdItem, kind: DecorationKind, material?: string): EdItem[] {
     return bodyMembers(this.host.model().items, f.bodyId).filter(
-      (i) => i.object === "decoration" && i.decoration?.kind === kind && i.decoration.formation === f.formation?.id && !i.decoration.lost,
+      (i) =>
+        i.object === "decoration" &&
+        i.decoration?.kind === kind &&
+        i.decoration.formation === f.formation?.id &&
+        !i.decoration.lost &&
+        (kind !== "material" || materialOf(i.decoration) === material),
     );
   }
 
   // The patches of a kind on a rock whose paint a stamp would reach (their
   // coverage, as the dots draw it: `PaintCoverage.touches`), but `except`.
   // Nothing until the rock has loaded.
-  private patchesUnder(f: EdItem, kind: DecorationKind, stamp: PaintStamp, except?: number): EdItem[] {
+  private patchesUnder(f: EdItem, kind: DecorationKind, stamp: PaintStamp, except?: number, material?: string): EdItem[] {
     const rock = rockOf(f, () => {});
     if (!rock) return [];
-    return this.patchesOn(f, kind).filter((d) => d.id !== except && this.fieldOf(d, rock).touches(stamp));
+    return this.patchesOn(f, kind, material).filter((d) => d.id !== except && this.fieldOf(d, rock).touches(stamp));
   }
 
   // Each patch's coverage on its rock, kept while its strokes are only
@@ -450,6 +561,8 @@ export class DecorationController {
   // level, in the stroke's own undo step.
   private absorb(into: EdItem, from: EdItem): void {
     const model = this.host.model();
+    this.touch(into);
+    this.touch(from);
     into.decoration = { ...into.decoration!, strokes: [...(into.decoration!.strokes ?? []), ...(from.decoration!.strokes ?? [])] };
     const at = model.items.indexOf(from);
     if (at >= 0) model.items.splice(at, 1);
@@ -466,8 +579,9 @@ export class DecorationController {
     return { p: v3(local.p), n: v3(local.n.normalize()), r: radius, s: erase ? -1 : 1 };
   }
 
-  // A new decoration of `kind` on `f` where `hit` is, selected when `select`.
-  private place(f: EdItem, kind: DecorationKind, hit: SurfaceHit, select: boolean): EdItem {
+  // A new decoration of `kind` on `f` where `hit` is, selected when `select`;
+  // a material layer of `material`.
+  private place(f: EdItem, kind: DecorationKind, hit: SurfaceHit, select: boolean, material?: string): EdItem {
     const local = toFormation(f, hit.point, hit.normal);
     const anchor = anchorAt(f, local.p) ?? { p: v3(local.p), n: v3(local.n) };
     const rock = rockOf(f, () => {});
@@ -484,6 +598,7 @@ export class DecorationController {
       onRock,
       seed: Math.floor(Math.random() * 100000),
       ...(isPainted(kind) ? { strokes: [] } : {}),
+      ...(kind === "material" && material ? { settings: { material } } : {}),
     };
     this.host.beginAction();
     const item: EdItem = {
@@ -588,13 +703,14 @@ export class DecorationController {
   private stroke(d: EdItem, hit: SurfaceHit): void {
     const f = this.formationOf(d);
     const brush = this.painting;
-    if (!f || !d.decoration || !brush) return;
-    const stamp = this.stampAt(f, hit, brush.radius, brush.erase);
-    const at = new THREE.Vector3(...stamp.p);
     const g = this.drag;
+    if (!f || !d.decoration || !brush) return;
+    const stamp = this.stampAt(f, hit, brush.radius, !!g?.erase);
+    const at = new THREE.Vector3(...stamp.p);
     if (g?.last && g.last.distanceTo(at) < brush.radius / 3) return;
     if (g) g.last = at;
-    for (const other of this.patchesUnder(f, d.decoration.kind, stamp, d.id)) this.absorb(d, other);
+    const material = isMaterialLayer(d.decoration) ? materialOf(d.decoration) : undefined;
+    for (const other of this.patchesUnder(f, d.decoration.kind, stamp, d.id, material)) this.absorb(d, other);
     d.decoration = { ...d.decoration!, strokes: [...(d.decoration!.strokes ?? []), stamp] };
     this.host.markDirty();
   }
@@ -615,11 +731,13 @@ export class DecorationController {
       this.preview.matrixAutoUpdate = false;
       this.preview.matrix.copy(formationMatrix(f));
     }
-    const key = f && rock ? JSON.stringify([f.formation?.built?.hash, strokes.length, d!.id, threshold]) : "";
+    // A material layer drawn live on its rock shows itself: no dots.
+    const live = !!d && this.host.drawsLive(d);
+    const key = f && rock && !live ? JSON.stringify([f.formation?.built?.hash, strokes.length, d!.id, threshold]) : "";
     if (key === this.previewKey) return;
     this.previewKey = key;
     this.preview.clear();
-    if (!f || !rock || !d) {
+    if (!f || !rock || !d || live) {
       this.dropCoverage();
       return;
     }
@@ -650,21 +768,21 @@ export class DecorationController {
     if (this.drag) return painted;
     const f = this.hovered ? this.item(this.hovered.itemId) : null;
     if (!f) return painted;
-    return f.id === (painted && this.formationOf(painted)?.id) ? painted : this.paintedOn(f, kind);
+    return f.id === (painted && this.formationOf(painted)?.id) ? painted : this.paintedOn(f, kind, this.placing?.material);
   }
 
   // --- the brush's cursor ----------------------------------------------------
 
   // The brush a press would paint with now: the one that is on, or the one an
-  // armed painted kind starts.
+  // armed painted kind starts; erasing while a right drag is.
   get brush(): { radius: number; erase: boolean } | null {
-    if (this.painting) return this.painting;
-    if (this.placing && isPainted(this.placing.kind)) return { radius: this.radius, erase: this.placing.formationId === null && this.erasing };
+    const erase = this.drag?.mode === "paint" && !!this.drag.erase;
+    if (this.painting) return { radius: this.painting.radius, erase };
+    if (this.placing && isPainted(this.placing.kind)) return { radius: this.radius, erase };
     return null;
   }
 
-  // The palette brush's settings, for the dock: its radius (metres) and
-  // whether it erases.
+  // The palette brush's radius, metres, for the dock.
   get brushRadius(): number {
     return this.radius;
   }
@@ -672,13 +790,6 @@ export class DecorationController {
     if (!(v > 0)) return;
     this.radius = v;
     if (this.painting) this.painting.radius = v;
-  }
-  get brushErases(): boolean {
-    return this.erasing;
-  }
-  setBrushErases(v: boolean): void {
-    this.erasing = v;
-    if (this.painting?.palette) this.painting.erase = v;
   }
 
   // The pointer moved (null: off the canvas, or off every rock a press here
@@ -708,8 +819,8 @@ export class DecorationController {
     return b ? `${b.radius} ${b.erase}` : "";
   }
 
-  // Once a frame: the brush ended, or changed with no pointer move (Esc, the
-  // panel's Erase, its radius), and the formation's frame, which a 3D body's
+  // Once a frame: the brush ended, or changed with no pointer move (Esc, a
+  // right drag starting or ending, its radius), and the formation's frame, which a 3D body's
   // depth and tilt move with no pointer move either.
   private syncCursor(): void {
     if (this.brushKey() !== this.cursorKey) this.drawCursor();
@@ -724,20 +835,29 @@ export class DecorationController {
 
   // --- panels -----------------------------------------------------------------
 
-  // The decorations on a formation, in its section.
-  buildList(parent: HTMLElement, f: EdItem): void {
-    const items = bodyMembers(this.host.model().items, f.bodyId).filter((i) => i.object === "decoration" && i.decoration?.formation === f.formation?.id);
+  // The decorations on a formation, in its section: its growths, or with
+  // `materials` (the Texturing workspace's) its material layers, which the
+  // palette paints.
+  buildList(parent: HTMLElement, f: EdItem, materials = false): void {
+    const items = bodyMembers(this.host.model().items, f.bodyId).filter(
+      (i) => i.object === "decoration" && i.decoration?.formation === f.formation?.id && (i.decoration?.kind === "material") === materials,
+    );
     const list = div("ed-solid-tree");
     for (const d of items) {
       const dec = d.decoration!;
       const job = dec.built ? null : this.request(d) ? this.host.jobs.latest(decorationHash(this.request(d)!)) : null;
-      const state = dec.lost ? "LOST" : !dec.built ? (job && job.state !== "done" ? job.state : "not grown") : this.stale(d) ? "stale" : "";
-      const row = div("ed-solid-row", `${DECORATION_LABELS[dec.kind]} ${dec.id}${state ? ` (${state})` : ""}`);
+      const unbuilt = materials ? "not baked" : "not grown";
+      const state = dec.lost ? "LOST" : !dec.built ? (job && job.state !== "done" ? job.state : unbuilt) : this.stale(d) ? "stale" : "";
+      const row = div("ed-solid-row", `${decorationLabel(dec)} ${dec.id}${state ? ` (${state})` : ""}`);
       row.classList.toggle("ed-stale", !!dec.lost);
       row.addEventListener("click", () => this.host.select([d.id]));
       list.appendChild(row);
     }
     if (items.length) parent.appendChild(list);
+    if (materials) {
+      if (!items.length) parent.appendChild(div("ed-hint", "No material painted on this rock. Pick one on the left and drag on the rock."));
+      return;
+    }
     const adds = div("ed-row");
     for (const kind of KINDS) {
       adds.appendChild(button(`+ ${DECORATION_LABELS[kind]}`, () => {
@@ -762,10 +882,14 @@ export class DecorationController {
       const r = this.request(d);
       const job = r ? this.host.jobs.latest(decorationHash(r)) : null;
       const running = job && (job.state === "queued" || job.state === "running");
+      const material = isMaterialLayer(now);
       status.textContent = [
         now.lost ? "LOST: it could not follow its rock's last change. Drag it back onto the rock, or delete it." : "",
-        !now.built ? "Not grown yet." : this.stale(d) ? "Stale: its settings or paint have changed. Grow it again." : "Grown.",
-        running ? `Growing: ${Math.round((job.progress ?? 0) * 100)}% ${job.step ?? ""}` : job?.state === "failed" ? `The last growth failed: ${job.error?.split("\n").pop() ?? ""}` : "",
+        material && !r ? `There is no material "${materialOf(now)}" in assets-src/materials.` : "",
+        material
+          ? !now.built ? "Not baked for the game yet (Enter, or Bake)." : this.stale(d) ? "Stale: its paint, its material or its rock has changed. Bake it again." : "Baked."
+          : !now.built ? "Not grown yet." : this.stale(d) ? "Stale: its settings or paint have changed. Grow it again." : "Grown.",
+        running ? `${material ? "Baking" : "Growing"}: ${Math.round((job.progress ?? 0) * 100)}% ${job.step ?? ""}` : job?.state === "failed" ? `The last ${material ? "bake" : "growth"} failed: ${job.error?.split("\n").pop() ?? ""}` : "",
       ].filter(Boolean).join(" ");
       status.classList.toggle("ed-stale", !!now.lost || this.stale(d));
     };
@@ -773,16 +897,34 @@ export class DecorationController {
     status.addEventListener("refresh", refresh);
     parent.appendChild(status);
 
-    const seedRow = fieldRow("seed");
-    const seed = Object.assign(document.createElement("input"), { type: "number", className: "ed-num", step: "1", value: String(dec.seed ?? 0) });
-    seed.addEventListener("change", () => {
-      this.host.beginAction();
-      d.decoration = { ...d.decoration!, seed: Math.round(Number(seed.value) || 0) };
-      this.host.markDirty();
-      refresh();
-    });
-    seedRow.appendChild(seed);
-    parent.appendChild(seedRow);
+    // A material layer is its material, any of the library's: a change keeps
+    // the strokes and lays the other material there. It has no seed.
+    if (isMaterialLayer(dec)) {
+      const row = fieldRow("material");
+      const select = Object.assign(document.createElement("select"), { className: "ed-select" });
+      const names = [...new Set([...this.host.materials(), materialOf(dec)])].filter(Boolean);
+      for (const name of names) select.appendChild(Object.assign(document.createElement("option"), { value: name, textContent: materialLabel(name) }));
+      select.value = materialOf(dec);
+      select.addEventListener("change", () => {
+        this.host.beginAction();
+        d.decoration = { ...d.decoration!, settings: { ...d.decoration!.settings, material: select.value } };
+        this.host.markDirty();
+        this.host.rebuildInspector();
+      });
+      row.appendChild(select);
+      parent.appendChild(row);
+    } else {
+      const seedRow = fieldRow("seed");
+      const seed = Object.assign(document.createElement("input"), { type: "number", className: "ed-num", step: "1", value: String(dec.seed ?? 0) });
+      seed.addEventListener("change", () => {
+        this.host.beginAction();
+        d.decoration = { ...d.decoration!, seed: Math.round(Number(seed.value) || 0) };
+        this.host.markDirty();
+        refresh();
+      });
+      seedRow.appendChild(seed);
+      parent.appendChild(seedRow);
+    }
 
     // The add-on's own settings: the fields its Blender panel shows for this
     // kind (decorationSettings.ts). A change marks the decoration stale; Grow
@@ -804,25 +946,19 @@ export class DecorationController {
     });
 
     const actions = div("ed-row");
-    growButton = button(dec.built ? "Grow again" : "Grow", () => this.grow(d));
+    const verb = isMaterialLayer(dec) ? "Bake" : "Grow";
+    growButton = button(dec.built ? `${verb} again` : verb, () => this.grow(d));
     growButton.classList.toggle("ed-attention", this.stale(d));
     actions.appendChild(growButton);
     if (isPainted(dec.kind)) {
       const on = this.painting?.itemId === d.id;
       actions.append(
-        button(on && !this.painting!.erase ? "Painting…" : "Paint", () => {
-          this.painting = { itemId: d.id, radius: this.radius, erase: false };
+        button(on ? "Painting…" : "Paint", () => {
+          this.painting = { itemId: d.id, radius: this.radius };
           this.host.rebuildInspector();
-        }, "Drag on the rock to paint, as many strokes as you like; right-click to grow it, right-click again to stop."),
-        button(on && this.painting!.erase ? "Erasing…" : "Erase", () => {
-          this.painting = { itemId: d.id, radius: this.radius, erase: true };
-          this.host.rebuildInspector();
-        }),
+        }, "Drag on the rock to paint and right-drag to erase, as many strokes as you like; Enter grows it (again to stop), Esc throws away the strokes since the last Enter."),
       );
-      if (on) actions.appendChild(button("Done", () => {
-        this.painting = null;
-        this.host.rebuildInspector();
-      }));
+      if (on) actions.appendChild(button("Done", () => this.end(), "Stop painting, keeping the strokes as they are, grown or not."));
     }
     parent.appendChild(actions);
     if (this.painting?.itemId === d.id) {

@@ -16,6 +16,7 @@ export class FormationJobs {
   readonly jobs = new Map<string, JobState>();
   private readonly listeners = new Set<() => void>();
   private readonly doneListeners = new Set<(job: JobState) => void>();
+  private readonly failedListeners = new Set<(job: JobState) => void>();
   private source: EventSource | null = null;
   // This tab's name to the server, so a hold it set is let go when it closes.
   readonly client = `ed-${Math.random().toString(36).slice(2, 10)}`;
@@ -39,6 +40,8 @@ export class FormationJobs {
         const was = this.jobs.get(e.job.id);
         this.jobs.set(e.job.id, e.job);
         if (was?.state !== e.job.state) changed.push(e.job);
+        // A failure as it happens (not one the snapshot replays on load).
+        if (was?.state !== "failed" && e.job.state === "failed") for (const l of this.failedListeners) l(e.job);
       }
       for (const j of changed) {
         if (j.state === "done") {
@@ -57,6 +60,11 @@ export class FormationJobs {
 
   onDone(l: (job: JobState) => void): void {
     this.doneListeners.add(l);
+  }
+
+  // A job that fails while this page watches.
+  onFailed(l: (job: JobState) => void): void {
+    this.failedListeners.add(l);
   }
 
   async ask(kind: JobKind, formation: FormationData, label: string): Promise<string | null> {
@@ -129,7 +137,7 @@ export function jobRow(job: JobState, jobs: FormationJobs): HTMLElement {
   top.className = "ed-job-top";
   const name = document.createElement("span");
   name.className = "ed-job-name";
-  const verb = { geometry: "Generate", bake: "Bake", asset: "Accept", decoration: "Grow" }[job.kind];
+  const verb = job.verb ?? { geometry: "Generate", bake: "Bake", asset: "Accept", decoration: "Grow", material: "Bake material" }[job.kind];
   name.textContent = `${verb} ${job.label}`;
   const state = document.createElement("span");
   state.className = "ed-job-state";

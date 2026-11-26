@@ -1011,16 +1011,23 @@ export interface DecorationObjectData extends ObjectPlacement {
   // takes its default.
   settings?: DecorationSettings;
   // What is drawn: the store's hash, the formation build it grew on, and where
-  // it was grown (a placed one is drawn moved from there to `onRock`).
-  built?: { hash: string; host: string; at: DecorationAnchor };
+  // it was grown (a placed one is drawn moved from there to `onRock`). A
+  // material layer's also names the baked library material its mask lays on
+  // the rock (`maps`: scripts/material-layer-build.ts's hash).
+  built?: { hash: string; host: string; at: DecorationAnchor; maps?: string };
 }
 
-export type DecorationKind = "moss" | "ivy" | "fern" | "vine" | "mushroom" | "orbs" | "glow";
+// `material` is a MATERIAL LAYER (docs/formations.md "Material layers"): a
+// library material, a Principled BSDF authored in Blender
+// (`assets-src/materials/<settings.material>.blend`), baked into its rock's
+// paint UV and laid on where its strokes are. Painted in the Texturing
+// workspace; it grows no mesh.
+export type DecorationKind = "moss" | "ivy" | "fern" | "vine" | "mushroom" | "orbs" | "glow" | "material";
 // A decoration's add-on settings by property name (the editor's fields are
 // src/level/decorationSchema.json): numbers, switches, options, and colours
 // as their three or four linear components.
 export type DecorationSettings = Record<string, number | boolean | string | number[]>;
-export const PAINTED_DECORATIONS: readonly DecorationKind[] = ["moss", "ivy"];
+export const PAINTED_DECORATIONS: readonly DecorationKind[] = ["moss", "ivy", "material"];
 
 export interface DecorationAnchor {
   p: [number, number, number];
@@ -3643,7 +3650,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.lost ? { lost: true } : {}),
       ...(o.seed !== undefined ? { seed: o.seed } : {}),
       ...(o.settings ? { settings: { ...o.settings } } : {}),
-      ...(o.built ? { built: { hash: o.built.hash, host: o.built.host, at: anchor(o.built.at) } } : {}),
+      ...(o.built ? { built: { hash: o.built.hash, host: o.built.host, at: anchor(o.built.at), ...(o.built.maps ? { maps: o.built.maps } : {}) } } : {}),
     };
   }
   // Every kind is above. A retired geometry object never reaches here:

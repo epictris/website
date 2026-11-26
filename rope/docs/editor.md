@@ -9,7 +9,7 @@ stable id per body) and manipulates it with the mouse: pan (**middle**-button dr
 right button, or a **left** drag on anything not selected), wheel-zoom about the cursor,
 click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
-The editor is arranged as three **workspaces**, one per workflow - 2D, Formations and Decorations ([below](#workspaces-2d-formations-decorations)).
+The editor is arranged as four **workspaces**, one per workflow - 2D, Formations, Decorations and Texturing ([below](#workspaces-2d-formations-decorations-texturing)).
 The editor authors what the game simulates and lights; what a level LOOKS like is its Blender scene ([blender-scenes](blender-scenes.md)), and a collision shape is drawn in 3D only by its own **debug geometry** ([below](#debug-geometry)).
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
@@ -416,24 +416,25 @@ The **Sounds** button beside the file controls opens the menu that assigns sound
 It is not part of any level: what it writes is `src/audio/soundBank.json` and the sound library, and a change is heard straight away in ▶ Test and in a game open in another tab.
 See [sound](sound.md#the-sounds-menu).
 
-## Workspaces: 2D, Formations, Decorations
+## Workspaces: 2D, Formations, Decorations, Texturing
 
-Since 2026-11-23 the editor is three workspaces, tabs in the middle of the command bar (**1**, **2**, **3**), as Blender's Layout / Modeling / Texture Paint tabs are.
+Since 2026-11-23 the editor is workspaces, tabs in the middle of the command bar (**1**, **2**, **3**, and **4** for Texturing since 2026-11-26), as Blender's Layout / Modeling / Texture Paint tabs are.
 Tris asked for it because one editor offering everything at once was too busy: each workflow should have its own UI readily to hand and nothing else's in the way.
 The policy is one module, `src/editor/workspaces.ts`; the editor asks it.
 
-| | 2D | Formations | Decorations |
-|---|---|---|---|
-| View | the gameplay plane head on, locked | free 3D | free 3D |
-| Dock | the draw tools grouped (Collision, Gameplay, Scene), `kind`, the root widths, the layers | Level / Assets, Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision |
-| Drawn and picked | everything on the plane, all layers; not 3D bodies or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations |
-| Inspector | everything but the Formation and Decorations sections | Level, Environment, 3D camera, a body's Transform and Formation | Level, Environment, 3D camera, a rock's Decorations, a decoration's panel |
+| | 2D | Formations | Decorations | Texturing |
+|---|---|---|---|---|
+| View | the gameplay plane head on, locked | free 3D | free 3D | free 3D |
+| Dock | the draw tools grouped (Collision, Gameplay, Scene), `kind`, the root widths, the layers | Level / Assets, Backdrop, Add shape, Generate N out of date, Show Guides / Rocks, the selection's Guide / Rock / Both (Tab), Sculpt (Ctrl+Tab; the dock is Sculpt's while it is on) | the palette (Paint: moss, ivy; Place: the rest), Grow N out of date, Show Collision | the material library (a button a material), Bake N out of date, Show Collision |
+| Drawn and picked | everything on the plane, all layers; not 3D bodies or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations but material layers | the scene layer's formations and their material layers |
+| Inspector | everything but the Formation, Decorations and Materials sections | Level, Environment, 3D camera, a body's Transform and Formation | Level, Environment, 3D camera, a rock's Decorations, a decoration's panel | Level, Environment, 3D camera, a rock's Materials, a material layer's panel |
 
 **What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), what a click or a band picks (`pickableItems`), and what the outliner lists ("Rocks" in the 3D workspaces, numbered as the level numbers its bodies, so a body is the same number in all three).
 Chains, vines, berries and the spawn marker are the plane's and are picked in 2D only; the solid guides are drawn and picked in Formations only, where in the others they were wireframe in front of the rock.
 The scene itself is drawn whole in every workspace: the rocks are the reference 2D is drawn against, and the collision outlines are a formation's guide.
 Switching drops from the selection whatever the new workspace does not hold, as hiding a layer does: it could be neither seen nor clicked, but a nudge, a field or a Delete would still reach it.
-The draw tools are 2D's (`setTool` refuses one elsewhere, so their keys arm nothing), the Assets tab is Formations' (leaving it closes the asset and brings the level back), and the decoration palette and brush end when Decorations is left.
+The draw tools are 2D's (`setTool` refuses one elsewhere, so their keys arm nothing), the Assets tab is Formations' (leaving it closes the asset and brings the level back), and the brush ends whenever the workspace changes.
+Texturing is painting a rock with materials from the library, live: [formations](formations.md#material-layers).
 
 **The inspector** is filtered by section key (`sectionShown`, applied by `pruneEmptySections`), so a rock's panel in Formations is its recipe rather than its bounce, friction and mover first.
 The section a workspace's work is done in (`PRIMARY_SECTIONS`: Formation, Decorations, a decoration's own) starts open until the author closes it, remembered as opened sections are (`setDefaultOpen` in `panelUi.ts`).
@@ -492,9 +493,9 @@ A typed amount is applied with the grid snap off (`applyTransform`), since the h
 It is three's own move-centre handle (`XYZ`) drawn as a box (`reshapeHandle` in `gizmo.ts`); the uniform-scale box that held the centre until then is gone, and a model's one-number scale follows any one axis box.
 
 **The palette** (`DecorationController.arm`) arms a kind for the next click on any generated rock; before, a decoration was started from a button in one rock's panel and landed on that rock only.
-A kind stays armed and selects nothing it makes (since 2026-11-25): a row of ferns is a row of clicks, and moss or ivy is a brush that paints whichever rock it is pressed on and grows on a right-click, its Paint / Erase and radius under the palette ([formations](formations.md#decorations)).
+A kind stays armed and selects nothing it makes (since 2026-11-25): a row of ferns is a row of clicks, and moss or ivy is a brush that paints whichever rock it is pressed on (a right drag erases) and grows on Enter, its radius under the palette ([formations](formations.md#decorations)).
 While a painted kind is armed or its brush is on, the brush's ring and footprint follow the pointer over the rock.
-Esc, its button again, **Select**, a press off every rock, or a right-click with nothing left to grow disarms it.
+Esc (which also throws away the strokes since the last Enter), its button again, **Select**, a press off every rock, or Enter with nothing left to grow disarms it; a placed kind is disarmed by a right-click too.
 **Select**, the dock's tool whenever nothing is armed, picks what grew: a click on moss, ivy or a fern selects that decoration, not its rock's body first.
 
 **Collision** (Decorations' dock, Show, 2026-11-23): the collision outlines drawn over the rocks, as 2D draws them, for reference while dressing; never picked, so a click still lands on the rock (`referenceOutline` in `shownModel`, outside `inWorkspace`).
@@ -509,12 +510,12 @@ The workspace is remembered by the browser (`rope.editor.workspace`) and written
 ## The 3D view (since 2026-11-22)
 
 The editor has one view: a free 3D camera, navigated as 3D editors are, with the overlay drawn through it at any angle ([plans/editor-ux-pass.md](../plans/editor-ux-pass.md)).
-The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and **Assets** (in the Formations workspace's dock) say what is being edited rather than how it is seen, and the 2D workspace locks this view head on ([Workspaces](#workspaces-2d-formations-decorations)).
+The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and **Assets** (in the Formations workspace's dock) say what is being edited rather than how it is seen, and the 2D workspace locks this view head on ([Workspaces](#workspaces-2d-formations-decorations-texturing)).
 
 | Gesture or key | Does |
 |---|---|
 | middle drag | orbit about the view's target (in 2D, pan) |
-| Shift + middle drag, right drag | pan |
+| Shift + middle drag, right drag | pan (but a right drag on the rock with the paint brush on erases) |
 | wheel | dolly toward what is under the pointer |
 | left drag on empty space | the selection band, at any angle |
 | left drag on something not selected | pan (selected first, moved second, as ever) |
@@ -581,8 +582,8 @@ It is a camera flying through the scene, not an orbit about a point: the cap mov
 | twist anticlockwise / clockwise (from above) | turn right / left about the world's up | Ortho: orbit about the target; 2D: nothing |
 | tilt back / forward | look down / up, on over the poles into an upside-down view | Ortho: orbit about the target, over the poles too; 2D: nothing |
 | roll | nothing (a level view has no roll) | nothing |
-| right side button | Escape, as the key (a keydown and keyup dispatched where the focus is) | the same |
-| left side button | nothing yet | nothing yet |
+| left side button | Escape, as the key (a keydown and keyup dispatched where the focus is) | the same |
+| right side button | Enter, as the key, the same way (since 2026-11-26; until then the right button was Escape and the left did nothing) | the same |
 
 The turns are the cap moving the scene, not the camera: Tris found the camera-like senses (twist anticlockwise turns left, tilt back looks up) inverted on the first play, 2026-11-25.
 

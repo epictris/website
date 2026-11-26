@@ -18,7 +18,7 @@ import { guideBounds, guideMesh, requestMeshes, storeMesh, type SolidSel } from 
 import { formationHash, generatorsFor, isStale, newFormationId, resolvedParams, variantOf, visibleFields, FORMATION_SCHEMA } from "../formation/recipe";
 import { metaFile, type FormationMeta } from "../formation/store";
 import type { FormationGenerator, SolidVariant } from "../level/levelFormat";
-import { autoTier } from "../render3d/formations";
+import { autoTier, forgetFormationFiles } from "../render3d/formations";
 import { alignCollisionToGuide, applyFit, collisionMatchesGuide, enclosingItem, formationItemOf, guideFromCollision, previewFit } from "./formationEdit";
 import type { FormationJobs, JobState } from "./formationJobs";
 import { bodyFrameOf, bodyLead, bodyMembers, formationItem, modelFromDisk, newBodyId, type EdFormation, type EdItem, type EdModel } from "./model";
@@ -69,15 +69,19 @@ export function applyJobResult(model: EdModel, job: JobState): EdItem[] {
   const r = job.result;
   if (!r || (job.kind !== "geometry" && job.kind !== "bake")) return [];
   const changed: EdItem[] = [];
+  let rebuilt = false;
   for (const item of model.items) {
     const f = item.formation;
     if (item.object !== "formation" || !f || formationHash(f) !== r.hash) continue;
     const same = f.built?.hash === r.hash && f.built.tiers.length === r.tiers.length && f.built.generatorHash === r.generatorHash;
     if (same) continue;
+    // Built again under the hash it was drawn from: its files are new.
+    if (f.built?.hash === r.hash) rebuilt = true;
     item.formation = { ...f, built: { hash: r.hash, front: r.front, generatorHash: r.generatorHash, recipeVersion: r.recipeVersion, tiers: r.tiers } };
     changed.push(item);
   }
   if (changed.length) forgetFormationMeta(r.hash);
+  if (rebuilt) forgetFormationFiles(r.hash);
   return changed;
 }
 

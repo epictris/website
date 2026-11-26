@@ -13,6 +13,10 @@
 //                                         the same card); released when its
 //                                         event stream closes
 //   GET    /api/formations/fingerprint    the generators' code fingerprint now
+//   GET    /api/materials                 the material library: {materials:
+//                                         [{name, library}]} (a library file's
+//                                         sha256, which a material layer's
+//                                         request names)
 //
 // A job is the build script (`scripts/formation-build.ts`) run as a child,
 // keyed by the hash it will produce: asking for one that is queued or running
@@ -31,6 +35,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Plugin } from "vite";
 import { canonical, formationHash } from "../formation/recipe";
 import { decorationHash, type DecorationRequest } from "../formation/decoration";
+import { MATERIAL_LAYER_FILES, MATERIAL_LIBRARY_DIR, MATERIAL_NAME, MATERIALS_API, materialLayerHash, materialLibraryFile, type MaterialLayerRequest, type MaterialLibraryEntry } from "../formation/materialLayer";
 import { sha256Hex } from "../formation/sha256";
 import { decodeMeshBin, type StoredMesh } from "../formation/meshBin";
 import { FORMATION_HASH, FORMATION_STORE, GEOMETRY_FILE, MESHES, MESHES_API, META_FILE, PAINT_API, ROCK_FILE, tierFileName, type FormationMeta } from "../formation/store";
@@ -45,7 +50,10 @@ export const FORMATION_ASSETS_API = "/api/formation-assets";
 // (scripts/formation-asset.ts): its key is the asset's name, not a hash.
 // "decoration" grows one decoration on a formation's rock
 // (scripts/decoration-build.ts): its key is the request's hash.
-export type JobKind = "geometry" | "bake" | "asset" | "decoration";
+// "material" bakes one library material onto one rock
+// (scripts/material-layer-build.ts), what the editor lays a material layer's
+// live mask over while it is painted: its key is `materialLayerHash`.
+export type JobKind = "geometry" | "bake" | "asset" | "decoration" | "material";
 export type JobStateName = "queued" | "running" | "done" | "failed" | "cancelled";
 
 // What a finished job hands the editor: a level's `formation.built`.
@@ -59,6 +67,8 @@ export interface JobResult {
   warnings: string[];
   // An asset job's: the library model it exported.
   model?: string;
+  // A material layer's: its baked material (`built.maps`).
+  maps?: string;
 }
 
 export interface JobState {
@@ -66,6 +76,9 @@ export interface JobState {
   kind: JobKind;
   hash: string;
   label: string;
+  // What the jobs list calls it, where its kind does not say (a material
+  // layer's decoration job is a bake, not a growth).
+  verb?: string;
   state: JobStateName;
   // 0..1 where the build says how far it is.
   progress?: number;
@@ -87,7 +100,9 @@ const GEOMETRY_SLOTS = 3;
 // Finished jobs kept for the panel.
 const KEEP_FINISHED = 40;
 
-const STORE_FILES = /^(geometry\.glb|meta\.json|tier-\d+\.glb|decoration\.glb|layer\.png)$/;
+// A material layer's mask, and its material's maps
+// (scripts/material-layer-build.ts), are the last four.
+const STORE_FILES = /^(geometry\.glb|meta\.json|tier-\d+\.glb|decoration\.glb|layer\.png|mask\.png|color\.png|surface\.png|normal\.png)$/;
 
 export function formationService(): Plugin {
   return {
@@ -226,6 +241,14 @@ export function formationService(): Plugin {
         );
       });
 
+      // The material library (docs/formations.md "Material layers"): each
+      // file's name and the sha256 of its bytes, read afresh every time, so
+      // a material saved in Blender is a new library at the next ask.
+      server.middlewares.use(MATERIALS_API, (req, res, next) => {
+        if (req.method !== "GET") return next();
+        json(res, 200, { materials: materialLibrary(root) });
+      });
+
       server.middlewares.use("/api/formations/fingerprint", (req, res, next) => {
         if (req.method !== "GET") return next();
         runner.fingerprint().then(
@@ -241,7 +264,14 @@ export function formationService(): Plugin {
         if (req.method === "POST" && path === "") {
           return readJson(req).then(
             (body) => {
-              const b = body as { kind?: JobKind; formation?: FormationData; label?: string; asset?: string; request?: DecorationRequest };
+              const b = body as { kind?: JobKind; formation?: FormationData; label?: string; asset?: string; request?: DecorationRequest; material?: MaterialLayerRequest };
+              if (b.kind === "material") {
+                const m = b.material;
+                if (!m?.host || !FORMATION_HASH.test(m.host) || !MATERIAL_NAME.test(m.material ?? "") || !m.library) {
+                  return json(res, 400, { error: "a material job is {kind: material, material: {host, material, library}}" });
+                }
+                return json(res, 200, { id: runner.askMaterial(m, b.label ?? m.material).id });
+              }
               if (b.kind === "decoration") {
                 if (!b.request?.host || !b.request.kind) return json(res, 400, { error: "a decoration job is {kind: decoration, request: {host, kind, ...}}" });
                 return json(res, 200, { id: runner.askDecoration(b.request, b.label ?? b.request.kind).id });
@@ -325,8 +355,24 @@ interface Job {
   // decoration's, which is its `request`.
   formation: FormationData | null;
   request?: DecorationRequest;
+  // A material bake's.
+  material?: MaterialLayerRequest;
   child?: ChildProcess;
   output: string;
+}
+
+function fileSha(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+// The library's materials, by name, with each file's sha256.
+function materialLibrary(root: string): MaterialLibraryEntry[] {
+  const dir = join(root, MATERIAL_LIBRARY_DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".blend") && MATERIAL_NAME.test(f.slice(0, -6)))
+    .sort()
+    .map((f) => ({ name: f.slice(0, -6), library: fileSha(join(dir, f)) }));
 }
 
 // The `<tag> step i/n: label (note)` lines of the build and the exporter, as
@@ -397,7 +443,7 @@ class JobRunner {
       if (j.state.hash === hash && (j.state.state === "queued" || j.state.state === "running")) return j.state;
     }
     const id = `j${Date.now().toString(36)}${(this.next++).toString(36)}`;
-    const state: JobState = { id, kind: "decoration", hash, label, state: "queued", log: "", queuedAt: Date.now() };
+    const state: JobState = { id, kind: "decoration", hash, label, ...(request.kind === "material" ? { verb: "Bake" } : {}), state: "queued", log: "", queuedAt: Date.now() };
     const job: Job = { state, formation: null, request, output: "" };
     this.jobs.set(id, job);
     const done = this.result(hash, "decoration");
@@ -413,15 +459,56 @@ class JobRunner {
     return state;
   }
 
+  // Bake a library material onto a rock, or join the bake on its way, or
+  // answer at once from the store. A library file that has changed since the
+  // editor last listed it fails at once: the editor lists it again.
+  askMaterial(m: MaterialLayerRequest, label: string): JobState {
+    const request: MaterialLayerRequest = { host: m.host, material: m.material.toLowerCase(), library: m.library };
+    const hash = materialLayerHash(request);
+    for (const j of this.jobs.values()) {
+      if (j.state.hash === hash && (j.state.state === "queued" || j.state.state === "running")) return j.state;
+    }
+    const id = `j${Date.now().toString(36)}${(this.next++).toString(36)}`;
+    const state: JobState = { id, kind: "material", hash, label, state: "queued", log: "", queuedAt: Date.now() };
+    const job: Job = { state, formation: null, material: request, output: "" };
+    this.jobs.set(id, job);
+    const done = this.result(hash, "material");
+    const file = join(this.root, materialLibraryFile(request.material));
+    if (done) {
+      state.state = "done";
+      state.progress = 1;
+      state.step = "in the store";
+      state.result = done;
+      state.endedAt = Date.now();
+    } else if (!existsSync(file) || fileSha(file) !== request.library) {
+      state.state = "failed";
+      state.error = existsSync(file) ? `${materialLibraryFile(request.material)} has changed since it was listed` : `no library material ${materialLibraryFile(request.material)}`;
+      state.endedAt = Date.now();
+    }
+    this.publish(job);
+    this.pump();
+    return state;
+  }
+
   private result(hash: string, kind: JobKind): JobResult | null {
     // An asset is accepted afresh every time it is asked: nothing answers
     // for it in advance.
     if (kind === "asset") return null;
+    const none = { hash, front: 0, generatorHash: "", recipeVersion: 0, tiers: [], warnings: [] };
+    if (kind === "material") return MATERIAL_LAYER_FILES.every((f) => existsSync(join(this.store, hash, f))) ? { ...none, maps: hash } : null;
     if (kind === "decoration") {
+      // A material layer's mask, which names the material it lays
+      // (decoration-build.ts).
+      if (existsSync(join(this.store, hash, "mask.png"))) {
+        try {
+          const meta = JSON.parse(readFileSync(join(this.store, hash, META_FILE), "utf8")) as { maps?: string };
+          return meta.maps ? { ...none, maps: meta.maps } : null;
+        } catch {
+          return null;
+        }
+      }
       // A grown mesh, or a texture layer's map (decoration-build.ts).
-      return existsSync(join(this.store, hash, "decoration.glb")) || existsSync(join(this.store, hash, "layer.png"))
-        ? { hash, front: 0, generatorHash: "", recipeVersion: 0, tiers: [], warnings: [] }
-        : null;
+      return existsSync(join(this.store, hash, "decoration.glb")) || existsSync(join(this.store, hash, "layer.png")) ? none : null;
     }
     const dir = join(this.store, hash);
     const have = [GEOMETRY_FILE, META_FILE, ROCK_FILE].every((f) => existsSync(join(dir, f)));
@@ -575,6 +662,8 @@ class JobRunner {
       const request = join(dir, `${s.id}.json`);
       writeFileSync(request, JSON.stringify(job.request));
       argv = [join(this.root, "scripts", "decoration-build.ts"), request];
+    } else if (s.kind === "material") {
+      argv = [join(this.root, "scripts", "material-layer-build.ts"), job.material!.host, job.material!.material];
     } else {
       const recipe = join(dir, `${s.id}.json`);
       const { generator, variant, params, guide } = job.formation!;
