@@ -194,3 +194,28 @@ The loading-screen doc records that compiling every program up front took nothin
 This is the cost that precompile does remove, and since 2026-09-14 `Scene3D.prewarm` removes it under the loading screen (see [loading-screen](loading-screen.md)): every material's program, one stand-in per shadow-pass variant, every texture, every geometry.
 The stand-ins are the part worth knowing: the shadow pass wears three's own depth and distance materials, reconfigured per caster (side flipped, the caster's map and alpha test carried over) and keyed per object (instancing, instance colour) - and `fog` is in every program's key whether the material uses it or not, so the stand-ins compile with the scene's fog off, as the shadow pass does.
 Verified with `--probe all` over 1697f and 2177f: 13 programs and 55 textures after the prewarm, `pending` 0, and nothing fresh on any frame of either replay - where the lazy runs had compiled two shadow variants on frame 1, the chain's on the first throw and the lantern's on sight.
+
+### A program is keyed by its TARGET too (2026-11-27)
+
+A DevTools trace of BALL (15 s, 144 Hz) showed five mid-play compiles after the prewarm: four inside the ball's reflection probe (`captureReflection` → `getProgramInfoLog`, 3-10 ms of main thread, then 52, 83 and 53 ms GPU-process tasks and 9-13 dropped frames each) and one inside the shadow pass.
+Two separate gaps, both measured in the live page with `linkProgram` patched over CDP (see below), never in theory.
+
+The probe. three keys a program by the target it is drawn into as well as by its material: into the canvas, or a target flagged as three's XR target (the frame and the pool's mirror, see [render3d](render3d.md)), a material is tone mapped and sRGB encoded in the shader; into a plain linear target (the probe's HalfFloat cube, the shadow maps) it is neither, which is a second program.
+The prewarm compiled every material for the frame only, so each one the probe can see - a minecart, a lantern, a sleeper, the moss - compiled its probe variant the first time it came within `PROBE_FAR` of the ball.
+`prewarm` now runs `compilePass` once per kind of target: the frame (`null`) and `reflectionProbe.target`; `disposeRetired` does the same for a swapped-in level.
+
+The shadow pass, three faults in the stand-ins at once, none of which any check could see:
+
+- They were compiled for the canvas (tone mapped), and the shadow pass draws into a plain target.
+- They were built with `RGBADepthPacking`; three 0.185 builds its shadow `MeshDepthMaterial()` with the default packing, which is part of the key.
+- They were disposed straight after compiling, and three deletes a program when the last material using it goes: the burst of 12 `deleteProgram` calls right after every prewarm was them.
+
+So the stand-ins never held a single program, and the shadow pass had only what `drawEverythingOnce` happened to compile.
+That is not enough on its own: a caster with no alpha test is drawn with three's ONE shared depth material, re-dressed per caster, and three picks a new program for it only when something on its own list of checks changes - the map's UV channel is not on it.
+Which program a caster is drawn with therefore depends on the order of the casters before it, and a new camera (new casters in the sun's fitted shadow camera) can ask for one no earlier frame did.
+The case found: the `minecart-no-left-wheels` decoration, whose map reads `uv1`, drawn double-sided.
+The stand-ins are now one per caster and material, dressed with every field `getDepthMaterial` copies, of the caster's own class (instanced, skinned), compiled into a plain target, and kept until the next prewarm.
+
+How it was checked, A/B in two worktrees on the same machine (HEAD vs the fix, headless Chromium on the RTX 4070 via ANGLE, `?level=BALL`): `linkProgram`/`deleteProgram` patched before load, then after the prewarm (1) `captureReflection` at 260 grid points 3 m apart over the level, all six faces each, (2) the game camera moved over 119 positions across the level for one frame each, so the sun's fitted shadow camera meets every caster, (3) three hook throws.
+HEAD linked 11 programs after its prewarm (10 probe variants, the hopper's shadow variant); the fix linked none, iron ball and glass, at 68 → 83 programs and the same prewarm time (~820 ms).
+`--probe all` could not have seen either gap: it replays the frames a session played, and the probe's and shadow pass's programs are not any material's `currentProgram` when it looks.

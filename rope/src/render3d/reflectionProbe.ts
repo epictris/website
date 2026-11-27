@@ -96,6 +96,14 @@ export class ReflectionProbe {
     this.camera = new THREE.CubeCamera(0.01, PROBE_FAR, this.cube);
   }
 
+  // What the probe draws into. three keys a program by its target as well as
+  // by its material: into a plain linear target like this one a material is
+  // drawn without tone mapping or sRGB encoding, which is a program apart
+  // from the one it wears in the frame (see `Scene3D.prewarm`).
+  get target(): THREE.WebGLRenderTarget {
+    return this.cube;
+  }
+
   // Draw the scene from `at` (three's frame). `near` is the radius inside
   // which nothing should be seen - the ball's own, so the floor it rests on is
   // still in the picture. Returns the mipmapped cube to wear through

@@ -317,6 +317,9 @@ export class Scene3D {
   // Where every frame is drawn before the canvas gets it (see frameTarget.ts).
   private readonly frame: FrameTarget;
   private reflectionOn = true;
+  // The last `prewarm`'s shadow-pass stand-ins, kept for what they hold: the
+  // programs of every caster's shadow variant (see `shadowVariants`).
+  private shadowStandIns: THREE.Material[] = [];
   private shadowsOn = true;
 
   constructor(canvas: HTMLCanvasElement, opts: Scene3DOptions = {}) {
@@ -730,13 +733,26 @@ export class Scene3D {
   //   drawn inside the frustum. `compile()` over the scene compiles every
   //   material on every object, visible or not, and `compileAsync()` waits for
   //   the driver, in parallel where it can.
+  // - ...ONCE PER KIND OF TARGET it is drawn into, because three keys a program
+  //   by the target as well as the material (`compilePass`). The frame, the
+  //   pool's mirror and the canvas are one kind - flagged as three's XR target,
+  //   tone mapped and sRGB encoded in the shader (frameTarget.ts) - and the
+  //   ball's probe and the shadow maps are the other: plain linear targets,
+  //   drawn into without either. So every material the probe can see has a
+  //   second program, compiled here against the probe's own cube. Without it
+  //   each one was compiled the first time it came within `PROBE_FAR` of the
+  //   ball: a minecart rolling past, a lantern on the way, each a ~10 ms frame
+  //   and a 50-80 ms GPU-process stall (trace 2026-11-27, four in 15 s).
   // - The SHADOW PASS wears its own materials: one depth material for spot and
   //   directional lights and one distance material for point lights, which it
   //   reconfigures per caster (side, map, alpha test) and keys per object
   //   (instancing). Each caster variant is therefore a program of its own,
   //   compiled the first time such a caster is inside a shadow camera - the
   //   chain, the first time it is thrown near a lamp. `shadowVariants` builds
-  //   one stand-in per variant and compiles them against this scene's lights.
+  //   one stand-in per variant and compiles them against this scene's lights,
+  //   into a plain target as a shadow map is: compiled for the frame instead,
+  //   and with a depth packing three no longer uses, they were programs no
+  //   shadow pass ever asked for.
   // - A TEXTURE is uploaded, and its mip chain generated, the first time a
   //   material sampling it is drawn. `initTexture` over every texture the
   //   scene's materials and the water shader sample does it now.
@@ -750,12 +766,12 @@ export class Scene3D {
   // is the check that nothing is left: over a whole replay after this has run,
   // the program and texture counts must not move.
   //
-  // The link check at the end is the diagnostic half. three reads the link
-  // status in `onFirstUse`, from `WebGLProgram.getUniforms()`, so neither
-  // `compile()` nor `compileAsync()` reports a failed program; asking each one
-  // for its uniforms is what turns the failure into the `console.error` of
-  // `installShaderErrorReporting`, and the answer is cached for the frame that
-  // asks next.
+  // The link check closing each `compilePass` is the diagnostic half. three
+  // reads the link status in `onFirstUse`, from `WebGLProgram.getUniforms()`,
+  // so neither `compile()` nor `compileAsync()` reports a failed program;
+  // asking each one for its uniforms is what turns the failure into the
+  // `console.error` of `installShaderErrorReporting`, and the answer is cached
+  // for the frame that asks next.
   async prewarm(
     level: Scene3DLevel,
     camera: Camera,
@@ -774,20 +790,28 @@ export class Scene3D {
     // environment, size the shadow maps.
     this.render(level, camera, 1, NO_ORBIT, null, shards);
 
-    const materials = this.renderer.compile(this.scene, this.camera);
-    await this.renderer.compileAsync(this.scene, this.camera);
+    // The frame's programs, then the probe's (see above).
+    await this.compilePass(this.scene, null);
+    await this.compilePass(this.scene, this.reflectionProbe.target);
 
     const variants = this.shadowVariants();
     // The shadow pass compiles against an EMPTY scene, so no fog - and fog is
-    // part of a program's key whether or not its material uses it.
+    // part of a program's key whether or not its material uses it. Into a
+    // plain target, as a shadow map is.
     const fog = this.scene.fog;
     this.scene.fog = null;
+    const shadowTarget = new THREE.WebGLRenderTarget(1, 1);
     try {
-      await this.renderer.compileAsync(variants.scene, this.camera, this.scene);
+      await this.compilePass(variants.scene, shadowTarget, this.scene);
     } finally {
       this.scene.fog = fog;
-      variants.dispose();
+      shadowTarget.dispose();
     }
+    // Kept until the next prewarm, as what holds their programs (see
+    // `shadowVariants`); the last level's let go only now, so a variant both
+    // levels use is never deleted and linked again.
+    for (const material of this.shadowStandIns) material.dispose();
+    this.shadowStandIns = variants.materials;
 
     for (const texture of this.sampledTextures()) this.renderer.initTexture(texture);
 
@@ -798,14 +822,6 @@ export class Scene3D {
     this.slimeLayer.prewarming = false;
     this.slimeLayer.clear();
 
-    for (const material of materials) {
-      // `WebGLProperties.get` is typed as an opaque bag; what is in it for a
-      // material is the program three built for it.
-      const props = this.renderer.properties.get(material) as {
-        currentProgram?: { getUniforms(): unknown };
-      };
-      props.currentProgram?.getUniforms();
-    }
     return {
       ms: performance.now() - t0,
       programs: this.renderer.info.programs?.length ?? 0,
@@ -813,22 +829,75 @@ export class Scene3D {
     };
   }
 
-  // One stand-in per shadow-pass program the scene can ask for, mirroring how
-  // `WebGLShadowMap.getDepthMaterial` dresses its material for a caster: the
-  // side flipped (a PCF map is drawn from the back faces), the caster's map and
-  // alpha map carried over for the alpha test, and the object's own instancing
-  // reflected in the stand-in's class. Distinct variants only; the program
-  // cache would fold the rest anyway.
+  // Compile every material in `scene` as a pass drawing into `target` would
+  // (null: the canvas, and so the frame, see frameTarget.ts), against the
+  // lights of `lightsFrom`, wait for the driver, and check each link.
   //
-  // Real geometries are shared so the attribute set matches (a prop with a
-  // second UV set is a different program from an extrusion). The one caster
-  // that cannot be found in the scene is the one the sim spawns mid-play - the
+  // three reads the target from the renderer, not from an argument: whether
+  // there is one, and whether it is flagged as an XR target, decide the
+  // program's tone mapping and output encoding, which are part of its key.
+  // Only the synchronous `compile()` reads it, so the target is put back
+  // before the wait.
+  private async compilePass(
+    scene: THREE.Scene,
+    target: THREE.WebGLRenderTarget | null,
+    lightsFrom: THREE.Scene | null = null,
+  ): Promise<void> {
+    const renderer = this.renderer;
+    const previous = renderer.getRenderTarget();
+    let materials: Set<THREE.Material>;
+    let ready: Promise<unknown>;
+    renderer.setRenderTarget(target);
+    try {
+      materials = renderer.compile(scene, this.camera, lightsFrom);
+      // Finds every program `compile` just built, and waits for them.
+      ready = renderer.compileAsync(scene, this.camera, lightsFrom);
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
+    await ready;
+    for (const material of materials) {
+      // `WebGLProperties.get` is typed as an opaque bag; what is in it for a
+      // material is the program three last built for it - this pass's.
+      const props = renderer.properties.get(material) as {
+        currentProgram?: { getUniforms(): unknown };
+      };
+      props.currentProgram?.getUniforms();
+    }
+  }
+
+  // One stand-in per caster the shadow pass can draw, dressed exactly as
+  // `WebGLShadowMap.getDepthMaterial` dresses its material for that caster:
+  // every field it copies that reaches a program (not the wireframe ones,
+  // which change how a mesh is drawn, not with what), copied here, so the
+  // stand-in's program is the one that caster asks for. Not a key of our own
+  // for "the same variant": the program cache folds equal programs itself,
+  // and a hand-made key misses whatever it forgets - it forgot the map's UV
+  // channel, and a prop whose map reads its second UV set (the minecart
+  // decoration) linked its shadow program mid-play.
+  //
+  // WHY THE REAL SHADOW PASS IS NOT ENOUGH. For a caster with no alpha test,
+  // three draws every caster with ONE shared depth material, re-dressed per
+  // caster, and picks a new program for it only when something on its own list
+  // of checks changes - which the map's UV channel is not on. So which program
+  // a caster is drawn with depends on what was drawn before it, and a new
+  // camera (a new set of casters in the sun's fitted shadow camera, in a new
+  // order) can ask for one no earlier frame did. `drawEverythingOnce` sees one
+  // order; these see every caster's own.
+  //
+  // Real geometries are shared, and the stand-in is the caster's own class,
+  // so the attributes, instancing and skinning match. The one caster that
+  // cannot be found in the scene is the one the sim spawns mid-play - the
   // hook, a sandbox rock - drawn as an extrusion wearing the spawned-body
   // surface (see `BodyVisual`); a box has the same attributes as an extrusion.
-  private shadowVariants(): { scene: THREE.Scene; dispose(): void } {
+  //
+  // The returned materials HOLD the programs: three deletes a program when
+  // the last material using it is disposed, so stand-ins disposed straight
+  // after compiling (as they were until 2026-11-27) kept only the variants a
+  // real draw happened to share.
+  private shadowVariants(): { scene: THREE.Scene; materials: THREE.Material[] } {
     const scene = new THREE.Scene();
-    const owned: THREE.Material[] = [];
-    const spawnedGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const materials: THREE.Material[] = [];
     let depth = false;
     let distance = false;
     this.scene.traverse((o) => {
@@ -837,67 +906,81 @@ export class Scene3D {
       if ((light as THREE.PointLight).isPointLight) distance = true;
       else depth = true;
     });
-    const dispose = (): void => {
-      for (const m of owned) m.dispose();
-      spawnedGeometry.dispose();
-    };
-    if (!depth && !distance) return { scene, dispose };
+    if (!depth && !distance) return { scene, materials };
 
+    // As `WebGLShadowMap`: a PCF map is drawn from the back faces, a VSM map
+    // from the material's own side.
+    const vsm = this.renderer.shadowMap.type === THREE.VSMShadowMap;
     const flipped: Record<number, THREE.Side> = {
       [THREE.FrontSide]: THREE.BackSide,
       [THREE.BackSide]: THREE.FrontSide,
       [THREE.DoubleSide]: THREE.DoubleSide,
     };
-    const seen = new Set<string>();
-    const add = (object: THREE.Mesh, material: THREE.Material): void => {
-      const bag = material as unknown as {
+    // A stand-in of the caster's own class, wearing `material`.
+    const proxy = (object: THREE.Mesh, material: THREE.Material): THREE.Mesh => {
+      const instanced = object as THREE.InstancedMesh;
+      if (instanced.isInstancedMesh) {
+        const mesh = new THREE.InstancedMesh(object.geometry, material, 1);
+        if (instanced.instanceColor) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(3), 3);
+        if (instanced.morphTexture) mesh.morphTexture = instanced.morphTexture;
+        return mesh;
+      }
+      if ((object as THREE.SkinnedMesh).isSkinnedMesh) return new THREE.SkinnedMesh(object.geometry, material);
+      return new THREE.Mesh(object.geometry, material);
+    };
+    // Three's shared materials and its per-caster clones (alpha test, clipping,
+    // displacement) are the same classes made the same way, so one stand-in
+    // covers both.
+    const dress = (
+      shadow: THREE.MeshDepthMaterial | THREE.MeshDistanceMaterial,
+      material: THREE.Material,
+    ): THREE.Material => {
+      const m = material as THREE.Material & {
         map?: THREE.Texture | null;
         alphaMap?: THREE.Texture | null;
-        alphaTest: number;
-        alphaToCoverage: boolean;
-        shadowSide: THREE.Side | null;
-        side: THREE.Side;
+        displacementMap?: THREE.Texture | null;
+        displacementScale?: number;
+        displacementBias?: number;
       };
-      const instanced = (object as THREE.InstancedMesh).isInstancedMesh === true;
-      const coloured = instanced && (object as THREE.InstancedMesh).instanceColor !== null;
-      const side = bag.shadowSide ?? flipped[bag.side] ?? bag.side;
-      const alphaTest = bag.alphaToCoverage ? 0.5 : bag.alphaTest;
-      const attributes = Object.keys(object.geometry.attributes).sort().join(",");
-      const key = [instanced, coloured, side, !!bag.map, !!bag.alphaMap, alphaTest > 0, attributes].join("|");
-      if (seen.has(key)) return;
-      seen.add(key);
-      const standIn = (shadowMaterial: THREE.MeshDepthMaterial | THREE.MeshDistanceMaterial): void => {
-        shadowMaterial.side = side;
-        shadowMaterial.map = bag.map ?? null;
-        shadowMaterial.alphaMap = bag.alphaMap ?? null;
-        shadowMaterial.alphaTest = alphaTest;
-        owned.push(shadowMaterial);
-        const mesh = instanced
-          ? new THREE.InstancedMesh(object.geometry, shadowMaterial, 1)
-          : new THREE.Mesh(object.geometry, shadowMaterial);
-        if (coloured) {
-          (mesh as THREE.InstancedMesh).instanceColor = new THREE.InstancedBufferAttribute(
-            new Float32Array(3),
-            3,
-          );
-        }
-        mesh.castShadow = object.castShadow;
-        mesh.receiveShadow = object.receiveShadow;
-        scene.add(mesh);
-      };
-      if (depth) standIn(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
-      if (distance) standIn(new THREE.MeshDistanceMaterial());
+      shadow.visible = m.visible;
+      shadow.side = m.shadowSide ?? (vsm ? m.side : flipped[m.side]!);
+      shadow.alphaMap = m.alphaMap ?? null;
+      shadow.alphaTest = m.alphaToCoverage ? 0.5 : m.alphaTest;
+      shadow.map = m.map ?? null;
+      shadow.clipShadows = m.clipShadows;
+      shadow.clippingPlanes = m.clippingPlanes;
+      shadow.clipIntersection = m.clipIntersection;
+      shadow.displacementMap = m.displacementMap ?? null;
+      shadow.displacementScale = m.displacementScale ?? 1;
+      shadow.displacementBias = m.displacementBias ?? 0;
+      materials.push(shadow);
+      return shadow;
+    };
+    // Made as `WebGLShadowMap` makes its own: three 0.185 builds a plain
+    // `MeshDepthMaterial()`, whose default packing is part of the key (the
+    // stand-ins asked for RGBA packing, from an older three, and so matched
+    // no shadow draw at all).
+    const add = (object: THREE.Mesh, material: THREE.Material): void => {
+      if (depth) {
+        const custom = object.customDepthMaterial;
+        scene.add(proxy(object, custom ?? dress(new THREE.MeshDepthMaterial(), material)));
+      }
+      if (distance) {
+        const custom = object.customDistanceMaterial;
+        scene.add(proxy(object, custom ?? dress(new THREE.MeshDistanceMaterial(), material)));
+      }
     };
     this.scene.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh || !mesh.castShadow || !mesh.material) return;
       for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) add(mesh, m);
     });
-    const spawned = new THREE.Mesh(spawnedGeometry, surfaceOf({}));
+    // Compiling reads the box's attribute set and uploads nothing, so the box
+    // has nothing on the GPU to dispose.
+    const spawned = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), surfaceOf({}));
     spawned.castShadow = true;
-    spawned.receiveShadow = true;
     add(spawned, spawned.material);
-    return { scene, dispose };
+    return { scene, materials };
   }
 
   // Every texture a played frame could bind: the map slots of every material on
@@ -1602,19 +1685,22 @@ export class Scene3D {
   // the ball's probe, the pool's mirror - so each program that frame used has
   // a user in the new level already. What it did not draw (off screen, a
   // piece hidden behind G) is given one by compiling the whole scene first,
-  // against the frame target the view is drawn into, which is what the
-  // programs are keyed by. When the new level is the old one built again,
-  // every program is found compiled and this links nothing; a genuinely new
-  // one is linked here, a frame early, rather than at its first sight.
+  // against each kind of target it is drawn into - the frame and the ball's
+  // probe - which is what the programs are keyed by (see `prewarm`). When the
+  // new level is the old one built again, every program is found compiled and
+  // this links nothing; a genuinely new one is linked here, a frame early,
+  // rather than at its first sight.
   //
   // A body's model or formation is in by now whenever its file has been
   // decoded before (`BodyVisual` mounts a decoded file on the spot), and a file
   // still on its way is one no earlier level wore, so it has no programs here
   // to keep.
   private disposeRetired(frame: THREE.WebGLRenderTarget): void {
-    this.renderer.setRenderTarget(frame);
     try {
-      this.renderer.compile(this.scene, this.camera);
+      for (const target of [frame, this.reflectionProbe.target]) {
+        this.renderer.setRenderTarget(target);
+        this.renderer.compile(this.scene, this.camera);
+      }
     } finally {
       this.renderer.setRenderTarget(null);
     }
@@ -1781,6 +1867,8 @@ export class Scene3D {
     this.depthOfField.dispose();
     this.lightShafts.dispose();
     this.frame.dispose();
+    for (const material of this.shadowStandIns) material.dispose();
+    this.shadowStandIns = [];
     this.renderer.dispose();
   }
 }

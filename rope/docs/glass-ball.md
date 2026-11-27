@@ -111,6 +111,10 @@ Cost: +0.1-0.2 ms of GPU a frame at 4K on the RTX 4070 SUPER against the solid b
 Only that stretch is cut: the first version dropped every link whose middle was near the centre, and the links wound round the ball lie on its surface, nearer the centre than the loop is, so the whole coil vanished (session-277f).
 `render3d` "glass chain" holds both.
 
+**Known red (found 2026-11-27, not investigated).** `cli render3d` fails "glass chain: ...and none past the loop reaches deeper than its inner edge": the deepest laid link's inner end is 104.23 mm from the centre against the 115.00 mm edge, about 10.8 mm too deep.
+It fails identically on main at b13850c, so it predates the shader prewarm work it was found beside; the other 226 cases pass.
+Not yet known whether `stopAtLoop` or the link walk (`walkChain`) changed under the case, or the case's own geometry went stale: `CHAIN_LINK_LEN` (36.96 mm) and the chain walk were last reworked in ff8189d and dfe7be7 (2026-11-12), the first suspects to bisect.
+
 **Tried and replaced: the coated thin-walled shell** (Tris asked for it, then "actually switch back to the solid version", the same day): the wall taken as no thickness, two blended draws, the frame multiplied by what both walls pass and the light added. A blend can only see the pixel straight behind, so nothing bent: no rim band, no minified middle.
 **Rejected before that: the hollow shell** (the first look): "a blue bubble", lost against the cave.
 
