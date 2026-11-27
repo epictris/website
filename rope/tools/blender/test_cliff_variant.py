@@ -96,4 +96,20 @@ with tempfile.TemporaryDirectory(prefix='cliff-variant-test-') as folder:
         pass
     else:
         raise AssertionError('Unknown variant was silently accepted')
+    # Boulder controls survive Blender editing, worker preparation and reload.
+    rock['formation_recipe'] = json.dumps(dict(recipe, variant='boulder'))
+    params.load(rock)
+    rock.formation_params.surface_slab_width = 2.25
+    rock.formation_params.surface_slab_length = 3.5
+    rock.formation_params.weathering = .75
+    rock.formation_params.fracture_density = 1.5
+    assert params.changed(rock)
+    asked = core.recipe_for(rock)
+    worker.prepare(asked, folder)
+    built = json.loads((folder/'recipe.json').read_text())
+    for key, value in {'slabWidth': 2.25, 'slabLength': 3.5, 'weathering': .75, 'fractureDensity': 1.5}.items():
+        assert built['params'][key] == value
+    rock['formation_recipe'] = json.dumps(built)
+    params.load(rock)
+    assert not params.changed(rock)
 print('SOLID_VARIANTS_OK: Boulder/Cliff/Wall/Stones/Faceted UI, legacy compatibility, named recipes, unchanged geometry', flush=True)

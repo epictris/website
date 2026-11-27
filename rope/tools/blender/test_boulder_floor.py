@@ -17,8 +17,10 @@ HERE = Path(__file__).parent
 sys.path[:0] = [str(HERE), str(HERE / 'boulders')]
 from formations import solidfit, worker
 
-for seed, size, opening, thickness in ((31, 1., False, 1.), (105, .65, False, 1.),
-                                      (31, 1., True, 1.), (34, 1., False, .15)):
+for seed, size, opening, thickness, controls in (
+        (31, 1., False, 1., {}), (105, .65, False, 1., {}),
+        (31, 1., True, 1., {}), (34, 1., False, .15, {}),
+        (31, 1., True, 1., {'slabWidth': 2., 'slabLength': 3., 'weathering': 1., 'fractureDensity': 1.5})):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.mesh.primitive_cube_add()
     guide = bpy.context.object
@@ -37,7 +39,7 @@ for seed, size, opening, thickness in ((31, 1., False, 1.), (105, .65, False, 1.
     recipe = {'generator': 'solid', 'variant': 'boulder',
               'guide': {'verts': [list(v.co) for v in guide.data.vertices],
                         'faces': [list(p.vertices) for p in guide.data.polygons]},
-              'params': {'seed': seed, 'stoneSize': size}}
+              'params': {'seed': seed, 'stoneSize': size, **controls}}
     with tempfile.TemporaryDirectory(prefix='boulder-floor-') as folder:
         worker.prepare(recipe, Path(folder))
         sys.argv = ['assemble.py', '--', folder]
@@ -46,6 +48,8 @@ for seed, size, opening, thickness in ((31, 1., False, 1.), (105, .65, False, 1.
         # and open seams after the union, remesh and facet dissolve.
         health = json.loads((Path(folder) / 'health.json').read_text())
         master = json.loads(bpy.data.objects['SceneryRock']['formation_recipe'])
+        for key, value in controls.items():
+            assert master['params'][key] == value
         assert 'export_creases' in master['surfaceFinish'], 'Slabs already own their surface finish'
         assert health['connected_components'] == 1, health
         assert health['nonmanifold_edges'] == health['boundary_edges'] == 0, health

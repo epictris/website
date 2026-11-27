@@ -182,6 +182,46 @@
           "default": 0.5
         },
         {
+          "key": "slabWidth",
+          "label": "Slab width",
+          "description": "Average slab width across the guide surface, in metres at Stone size 1; Stone size scales it",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.05,
+          "max": 20,
+          "default": 1.5
+        },
+        {
+          "key": "slabLength",
+          "label": "Slab length",
+          "description": "Average slab length along the guide surface, in metres at Stone size 1; Stone size scales it",
+          "type": "float",
+          "unit": "m",
+          "precision": 3,
+          "min": 0.05,
+          "max": 20,
+          "default": 2.1
+        },
+        {
+          "key": "weathering",
+          "label": "Weathering",
+          "description": "How irregular each slab's corners and long edges are",
+          "type": "float",
+          "min": 0,
+          "max": 1,
+          "default": 0.38
+        },
+        {
+          "key": "fractureDensity",
+          "label": "Fractures",
+          "description": "Slab density multiplier: 1 keeps the standard spacing; higher adds more overlapping slabs without changing their size",
+          "type": "float",
+          "min": 0.25,
+          "max": 4,
+          "default": 1.0
+        },
+        {
           "key": "jointAspect",
           "label": "Joint length",
           "description": "Primary fracture length along local Z, relative to stone width",
@@ -264,7 +304,11 @@
           "hidden": [
             "bulgeSize",
             "edgeRadius",
-            "mergeAngle"
+            "fractureDensity",
+            "mergeAngle",
+            "slabLength",
+            "slabWidth",
+            "weathering"
           ],
           "labels": {}
         },
@@ -276,8 +320,12 @@
             "bulgeSize",
             "curveTurn",
             "edgeRadius",
+            "fractureDensity",
             "knub",
-            "mergeAngle"
+            "mergeAngle",
+            "slabLength",
+            "slabWidth",
+            "weathering"
           ],
           "labels": {
             "jointAspect": "Slab height / width"
@@ -291,10 +339,14 @@
             "bulgeSize",
             "curveTurn",
             "edgeRadius",
+            "fractureDensity",
             "jointAspect",
             "knub",
             "mergeAngle",
-            "surfaceRelief"
+            "slabLength",
+            "slabWidth",
+            "surfaceRelief",
+            "weathering"
           ],
           "labels": {}
         },
@@ -304,8 +356,12 @@
           "description": "The guide rounded and cut into a few dozen broad planes: simple geometry for background rocks",
           "hidden": [
             "curveTurn",
+            "fractureDensity",
             "jointAspect",
-            "knub"
+            "knub",
+            "slabLength",
+            "slabWidth",
+            "weathering"
           ],
           "labels": {
             "stoneSize": "Facet size",

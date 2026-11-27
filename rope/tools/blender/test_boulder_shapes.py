@@ -40,8 +40,41 @@ guide.data.update()
 p = solidfit.resolved({'jointed': False, 'seed': 31})
 first, report = surface_slabs.geometry(guide, p)
 assert first == surface_slabs.geometry(guide, p)[0]
+# Old recipes retain the approved geometry when the new controls are absent.
+controls = {'slabWidth', 'slabLength', 'weathering', 'fractureDensity'}
+assert first == surface_slabs.geometry(guide, {k: v for k, v in p.items() if k not in controls})[0]
 assert report['slabs'] > 20
 samples = surface_slabs.placements(guide, 1., 31)
+
+def tangent_extents(rock):
+    return np.median([np.ptp((np.array(part['vertices'])-part['surface_point']) @
+                             surface_slabs.frame(np.array(part['surface_normal'])).T, axis=0)[[0, 2]]
+                      for part in rock['parts'][1:]], axis=0)
+
+base_width, base_length = tangent_extents(first)
+for key, value, axis in (('slabWidth', 3., 0), ('slabLength', 4.2, 1)):
+    altered, changed_report = surface_slabs.geometry(guide, dict(p, **{key: value}))
+    assert changed_report == report, 'Slab dimensions must not change fracture density'
+    assert tangent_extents(altered)[axis] > 1.5*(base_width, base_length)[axis]
+    for part in altered['parts'][1:]:
+        assert_no_crossings(part)
+for weathering in (0., 1.):
+    altered, changed_report = surface_slabs.geometry(guide, dict(p, weathering=weathering))
+    assert changed_report == report and altered != first
+    for original, part in zip(first['parts'][1:], altered['parts'][1:]):
+        assert original['surface_point'] == part['surface_point']
+        assert_no_crossings(part)
+low = surface_slabs.geometry(guide, dict(p, fractureDensity=.5))[1]['slabs']
+high = surface_slabs.geometry(guide, dict(p, fractureDensity=2.))[1]['slabs']
+assert low < report['slabs'] < high, (low, report, high)
+for key, value in (('slabWidth', 0), ('slabLength', float('nan')),
+                   ('weathering', 1.1), ('fractureDensity', -1)):
+    try:
+        surface_slabs.geometry(guide, dict(p, **{key: value}))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f'Invalid {key} was accepted')
 floors, ratios = [], []
 for part, (_, point, normal) in zip(first['parts'][1:], samples):
     assert_no_crossings(part)

@@ -26,7 +26,7 @@ def frame(normal):
     return np.array([np.cross(along, normal), -normal, along])
 
 
-def placements(solid, size, seed):
+def placements(solid, size, seed, density=1.):
     """Area samples spaced in each surface's tangent frame, in asset metres."""
     solid.data.calc_loop_triangles()
     triangles = list(solid.data.loop_triangles)
@@ -34,7 +34,8 @@ def placements(solid, size, seed):
     if not len(areas) or areas.sum() <= 0:
         raise ValueError('Boulder guide has no surface')
     rng = np.random.default_rng(seed)
-    count = max(64, math.ceil(round(float(areas.sum())/(size*size), 8)*70))
+    count = max(64, math.ceil(round(float(areas.sum())/(size*size), 8)*70*density))
+    spacing = size / math.sqrt(density)
     ids = rng.choice(len(triangles), count, p=areas/areas.sum())
     co = np.array([v.co[:] for v in solid.data.vertices])
     corners = co[np.array([triangles[i].vertices[:] for i in ids])]
@@ -46,10 +47,10 @@ def placements(solid, size, seed):
     neighbours = list(itertools.product((-1, 0, 1), repeat=3))
     for identity, (point, normal) in enumerate(zip(points, normals)):
         basis = frame(normal)
-        cell = np.floor(point/(1.15*size)).astype(int)
+        cell = np.floor(point/(1.15*spacing)).astype(int)
         nearby = (j for offset in neighbours for j in bins.get(tuple(cell+offset), ()))
         if any(normal@chosen[j][2] > .35 and
-               np.linalg.norm(((point-chosen[j][1])@basis.T)/(np.array([.75, .75, 1.15])*size)) < 1
+               np.linalg.norm(((point-chosen[j][1])@basis.T)/(np.array([.75, .75, 1.15])*spacing)) < 1
                for j in nearby):
             continue
         bins.setdefault(tuple(cell), []).append(len(chosen))
@@ -61,21 +62,29 @@ def geometry(solid, parameters):
     size = float(parameters['stoneSize'])
     relief = float(parameters['surfaceRelief'])
     seed = int(parameters['seed'])
+    width_scale = float(parameters.get('slabWidth', 1.5)) / 1.5
+    length_scale = float(parameters.get('slabLength', 2.1)) / 2.1
+    weathering = float(parameters.get('weathering', .38))
+    density = float(parameters.get('fractureDensity', 1.))
     if not math.isfinite(size) or size <= 0 or not math.isfinite(relief) or relief < 0:
         raise ValueError('Boulder size must be positive and relief finite and nonnegative')
+    if not all(math.isfinite(v) and v > 0 for v in (width_scale, length_scale, density)):
+        raise ValueError('Slab width, length and fracture density must be finite and positive')
+    if not math.isfinite(weathering) or not 0 <= weathering <= 1:
+        raise ValueError('Weathering must be between 0 and 1')
     parts = [dict(name='Boulder backing', material=0,
                   vertices=[list(v.co) for v in solid.data.vertices],
                   faces=[list(p.vertices) for p in solid.data.polygons])]
-    samples = placements(solid, size, seed)
+    samples = placements(solid, size, seed, density)
     surface = sf._tree(solid)
     for identity, point, normal in samples:
         # Candidate identity owns its randomness before surface pruning.
         rng = np.random.default_rng(np.random.SeedSequence([seed, identity, 104729]))
-        width = size*rng.uniform(1.13, 1.87)
-        length = size*rng.uniform(1.4, 2.8)
+        width = size*rng.uniform(1.13, 1.87)*width_scale
+        length = size*rng.uniform(1.4, 2.8)*length_scale
         part = make_block(np.zeros(3), width, length, .5*size,
                           math.radians(rng.uniform(-28, 28)), rng, identity,
-                          np.eye(3), Mesh, weathering=.38,
+                          np.eye(3), Mesh, weathering=weathering,
                           min_end_separation=.25*size)
         coords = np.asarray(part['vertices'])
         # Present the primitive's broad broken end to the surface. Its raw

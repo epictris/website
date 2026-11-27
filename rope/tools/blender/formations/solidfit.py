@@ -159,7 +159,8 @@ UNFOLD_MAX, UNFOLD_KEEP = 60, 0.95
 #   rounded as it was before they existed (1.5 and 2 facets).
 PARAMS = {"seed": 0, "stoneSize": 1.0, "knub": KNUB, "curveTurn": 60.0, "surfaceRelief": 0.5,
           "jointed": True, "jointAspect": 2.8, "wall": False, "stones": False, "faceted": False,
-          "edgeRadius": 0.525, "mergeAngle": 8.0, "bulgeSize": 0.7}
+          "edgeRadius": 0.525, "mergeAngle": 8.0, "bulgeSize": 0.7,
+          "slabWidth": 1.5, "slabLength": 2.1, "weathering": .38, "fractureDensity": 1.0}
 
 
 def resolved(params):

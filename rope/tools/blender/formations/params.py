@@ -32,6 +32,8 @@ FIELDS = {
                  "faceBudget": "face_budget", "detail": "detail", "voxelCap": "voxel_cap",
                  "edgeBevelWidth": "edge_bevel"},
     "solid": {"seed": "seed", "stoneSize": "stone_size", "surfaceRelief": "surface_relief",
+              "slabWidth": "surface_slab_width", "slabLength": "surface_slab_length",
+              "weathering": "weathering", "fractureDensity": "fracture_density",
               "jointed": "jointed", "wall": "wall", "stones": "stones", "faceted": "faceted",
               "jointAspect": "joint_aspect", "knub": "knub", "curveTurn": "curve_turn",
               "edgeRadius": "edge_radius", "mergeAngle": "merge_angle", "bulgeSize": "bulge_size"},
@@ -44,6 +46,9 @@ HIDDEN = {"cliff": _FACETED_ONLY, "wall": {"knub", "curve_turn"} | _FACETED_ONLY
           "boulder": {"joint_aspect", "knub", "curve_turn"} | _FACETED_ONLY,
           "stones": {"knub", "curve_turn", "joint_aspect", "surface_relief"} | _FACETED_ONLY,
           "faceted": {"knub", "curve_turn", "joint_aspect"}}
+_BOULDER_ONLY = {"surface_slab_width", "surface_slab_length", "weathering", "fracture_density"}
+for _variant in ("cliff", "wall", "stones", "faceted"):
+    HIDDEN[_variant] = HIDDEN[_variant] | _BOULDER_ONLY
 # The label a solid field takes under a variant, by its field name.
 LABELS = {"wall": {"joint_aspect": "Slab height / width"},
           "faceted": {"stone_size": "Facet size", "surface_relief": "Bulge"}}
@@ -109,6 +114,15 @@ class FormationParams(bpy.types.PropertyGroup):
     stone_size: FloatProperty(name="Stone size", description="Every stone's physical size times this, "
                               "including its steps, bevels, curvature-split minimum and "
                               "small-fragment threshold", default=SOLID["stoneSize"], min=.25, max=4)
+    surface_slab_width: FloatProperty(name="Slab width", description="Average slab width across the guide surface, "
+                                      "in metres at Stone size 1; Stone size scales it",
+                                      default=SOLID["slabWidth"], min=.05, max=20, precision=3, subtype="DISTANCE")
+    surface_slab_length: FloatProperty(name="Slab length", description="Average slab length along the guide surface, "
+                                       "in metres at Stone size 1; Stone size scales it",
+                                       default=SOLID["slabLength"], min=.05, max=20, precision=3, subtype="DISTANCE")
+    fracture_density: FloatProperty(name="Fractures", description="Slab density multiplier: 1 keeps the standard "
+                                    "spacing; higher adds more overlapping slabs without changing their size",
+                                    default=SOLID["fractureDensity"], min=.25, max=4)
     knub: FloatProperty(name="Merge small", description="A stone under this share of its kind's median volume "
                         "is joined to its neighbour instead of standing as a knub", default=SOLID["knub"], min=0, max=1)
     surface_relief: FloatProperty(name="Surface relief", description="Depth of projecting cleavage planes and "

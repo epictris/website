@@ -82,7 +82,8 @@ GENERATORS = {
     # which `prepare` drops.
     "solid": {"seed": 0, "stoneSize": 1.0, "knub": 0.3, "curveTurn": 60.0, "surfaceRelief": 0.5,
               "jointed": True, "jointAspect": 2.8, "wall": False, "stones": False, "faceted": False,
-              "edgeRadius": 0.525, "mergeAngle": 8.0, "bulgeSize": 0.7},
+              "edgeRadius": 0.525, "mergeAngle": 8.0, "bulgeSize": 0.7,
+              "slabWidth": 1.5, "slabLength": 2.1, "weathering": .38, "fractureDensity": 1.0},
 }
 
 
