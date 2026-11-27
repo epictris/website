@@ -76,9 +76,26 @@ const LOOK_OBJECTS: ReadonlySet<string> = new Set(["light", "model", "decoration
 // suffix it to keep siblings apart), so it is not part of it; neither is the
 // format stamp.
 function simView(d: LevelData): unknown {
-  const { bodies, format: _f, tree: _t, ...rest } = fogView(d);
+  const { bodies, format: _f, tree: _t, tracks, ...rest } = fogView(d);
   return {
     ...rest,
+    // A track names its node as an identity, and its cart is a body: compared
+    // as the bodies are, without the ids, the label or the look.
+    ...(tracks
+      ? {
+          tracks: tracks.map(({ node: _n, cart, ...t }) => ({
+            ...t,
+            ...(cart
+              ? {
+                  cart: (({ name: _cn, node: _cnode, formation: _rock, ...b }) => ({
+                    ...b,
+                    objects: b.objects.filter((o) => !LOOK_OBJECTS.has(o.type)).map(({ node: _o, ...o }) => o),
+                  }))(cart),
+                }
+              : {}),
+          })),
+        }
+      : {}),
     bodies: bodies.filter(collides).map(({ name: _n, node: _node, formation: _rock, ...b }) => ({
       ...b,
       objects: b.objects.filter((o) => !LOOK_OBJECTS.has(o.type)).map((o) => {

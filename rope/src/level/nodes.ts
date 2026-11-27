@@ -36,6 +36,7 @@ import { scaleFormation, scaleNormalized, scaleObject } from "./levelFormat";
 import type {
   AnchorObjectData,
   CameraPathData,
+  TrackData,
   CameraRegionData,
   ChainData,
   CheckpointData,
@@ -182,6 +183,13 @@ export interface CameraPathNode extends NodeCommon, CameraPathData {
   type: "CameraPath2D";
 }
 
+// A minecart track (`TrackData`, docs/minecarts.md). Its one body child is the
+// cart the spawner builds every cart from, compiled into the track's `cart`
+// rather than into the level's bodies.
+export interface TrackNode extends NodeCommon, Omit<TrackData, "cart" | "node"> {
+  type: "Track2D";
+}
+
 export interface ShelterNode extends NodeCommon, ShelterData {
   type: "Shelter2D";
 }
@@ -292,6 +300,7 @@ export type LevelNode =
   | CheckpointNode
   | CameraRegionNode
   | CameraPathNode
+  | TrackNode
   | ShelterNode
   | FogRegionNode
   | NoteNode
@@ -311,6 +320,7 @@ export type NodeType = LevelNode["type"];
 export const NODE_TYPES: readonly NodeType[] = [
   "Node",
   "Node2D",
+  "Track2D",
   "StaticBody2D",
   "AnimatableBody2D",
   "RigidBody2D",
@@ -383,6 +393,7 @@ export const BODY_TYPES: ReadonlySet<NodeType> = new Set(["StaticBody2D", "Anima
 
 const NODE_2D_TYPES: ReadonlySet<NodeType> = new Set([
   "Node2D",
+  "Track2D",
   "StaticBody2D",
   "AnimatableBody2D",
   "RigidBody2D",
@@ -923,6 +934,33 @@ export function migrateToTree(data: LevelData, opts: MigrateOptions): LevelTree 
 
   for (const r of data.cameraRegions ?? []) nodes.push({ type: "CameraRegion2D", id: mint(), name: "CameraRegion", ...r });
   for (const p of data.cameraPaths ?? []) nodes.push({ type: "CameraPath2D", id: mint(), name: "CameraPath", ...p });
+  // A track, its cart a body node under it in the track's frame (the flat
+  // form holds it in the level's frame, as `compileLevel` wrote it), built
+  // after every body of the level as the compile builds a template's key.
+  (data.tracks ?? []).forEach((t, i) => {
+    const { cart, node: _n, ...rest } = t;
+    const track: TrackNode = { type: "Track2D", id: mint(), name: "Track", ...rest };
+    if (cart) {
+      const { kind: _k, name, x, y, rot, objects, node: _cn, space: _s, z: _z, tilt: _tl, formation: _f, ...props } = cart;
+      const local = relative2D({ x: t.x, y: t.y, rot: t.rot }, { x, y, rot });
+      const children = objects.flatMap((o) => objectNode(o, mint) ?? []);
+      uniqueChildNames(children);
+      const body = {
+        type: "RigidBody2D",
+        id: mint(),
+        name: name ?? "Cart",
+        ...(!Object.is(local.x, 0) ? { x: local.x } : {}),
+        ...(!Object.is(local.y, 0) ? { y: local.y } : {}),
+        ...(!Object.is(local.rot, 0) ? { rot: local.rot } : {}),
+        order: data.bodies.length + i,
+        ...props,
+        grouped: true,
+        ...(children.length ? { children } : {}),
+      } as BodyNode;
+      track.children = [defined(body)];
+    }
+    nodes.push(track);
+  });
   for (const s of data.shelters ?? []) nodes.push({ type: "Shelter2D", id: mint(), name: "Shelter", ...s });
   for (const f of data.fogRegions ?? []) nodes.push({ type: "FogRegion2D", id: mint(), name: "FogRegion", ...f });
   for (const n of data.notes ?? []) nodes.push({ type: "Note2D", id: mint(), name: "Note", ...n });
@@ -1361,6 +1399,13 @@ export function scaleGeometry(node: LevelNode, s: number, isRoot: boolean): void
     case "Vine":
       node.length *= s;
       break;
+    case "Track2D":
+      node.verts = node.verts.map((m) => ({ ...m, x: m.x * s, y: m.y * s, ...(m.inX !== undefined ? { inX: m.inX * s } : {}), ...(m.inY !== undefined ? { inY: m.inY * s } : {}), ...(m.outX !== undefined ? { outX: m.outX * s } : {}), ...(m.outY !== undefined ? { outY: m.outY * s } : {}) }));
+      if (node.wheelBase !== undefined) node.wheelBase *= s;
+      if (node.wheelRadius !== undefined) node.wheelRadius *= s;
+      if (node.exitRadius !== undefined) node.exitRadius *= s;
+      if (node.exitDepth !== undefined) node.exitDepth *= s;
+      break;
     default:
       break;
   }
@@ -1417,7 +1462,19 @@ interface Ctx {
 // decorations, models, lamps) is not compiled at all: the sim never reads it,
 // and the renderer, the editor and the tools read it from the tree
 // (`lookNodes`).
-export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabLibrary()): CompiledLevel {
+// `keepTrackCarts`: a track's cart template stays in the level's bodies as
+// well as becoming the track's `cart`, so the editor draws, picks and edits it
+// as the body it is (`toLevelData`). Never for the game: a template is not a
+// body of the level, and built as one it would stand at the start of its line.
+export interface CompileOptions {
+  keepTrackCarts?: boolean;
+}
+
+export function compileLevel(
+  source: LevelTree,
+  prefabs: PrefabLibrary = prefabLibrary(),
+  options: CompileOptions = {},
+): CompiledLevel {
   const tree = upgradeTree(source);
   const problems: string[] = [];
   let sun: SunNode | null = null;
@@ -1437,6 +1494,7 @@ export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabL
   let player: SpawnData | null = null;
   const cameraRegions: CameraRegionData[] = [];
   const cameraPaths: CameraPathData[] = [];
+  const tracks: TrackData[] = [];
   const shelters: ShelterData[] = [];
   const fogRegions: FogRegionData[] = [];
   const notes: NoteData[] = [];
@@ -1549,6 +1607,21 @@ export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabL
       case "CameraPath2D":
         cameraPaths.push(tag({ ...strip(n), ...here2 } as CameraPathData, n.id));
         return;
+      case "Track2D": {
+        // The cart is compiled as any body is, in the track's frame, and then
+        // taken OUT of the level's bodies into the track: it is a template
+        // the spawner builds from, never a body of its own (see `TrackData`).
+        const before = bodies.length;
+        for (const c of n.children ?? []) {
+          visit(c, childCtx({ world: here2, world3: compose3D(ctx.world3, frameOf(pose)), local: IDENTITY_2D, body: null }));
+        }
+        const carts = options.keepTrackCarts ? bodies.slice(before) : bodies.splice(before);
+        if (carts.length > 1) problems.push(`track ${n.id} holds ${carts.length} bodies; the first is its cart`);
+        const cart = carts[0]?.data;
+        if (cart && cart.kind !== "rigid") problems.push(`track ${n.id}'s cart is a ${cart.kind} body; built as rigid`);
+        tracks.push(tag({ ...strip(n), ...here2, node: n.id, ...(cart ? { cart: { ...cart, kind: "rigid" } } : {}) } as TrackData, n.id));
+        return;
+      }
       case "Shelter2D":
         shelters.push(tag({ ...strip(n), ...here2 } as ShelterData, n.id));
         return;
@@ -1606,6 +1679,7 @@ export function compileLevel(source: LevelTree, prefabs: PrefabLibrary = prefabL
     ...(tree.meta ? { meta: tree.meta } : {}),
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(cameraPaths.length ? { cameraPaths } : {}),
+    ...(tracks.length ? { tracks } : {}),
     ...(shelters.length ? { shelters } : {}),
     // Fog lives in the fog regions (format 4), so a level with none has none.
     ...(fogRegions.length ? { fogRegions } : {}),
@@ -1946,6 +2020,8 @@ export function scaleNode(n: LevelNode, factor: number, prefabs: PrefabLibrary =
       return { ...c, ...(scaleVia({ cameraRegions: [s as unknown as CameraRegionData] }, factor).cameraRegions?.[0] ?? scalePose(s, factor)) } as LevelNode;
     case "CameraPath2D":
       return { ...c, ...(scaleVia({ cameraPaths: [s as unknown as CameraPathData] }, factor).cameraPaths?.[0] ?? scalePose(s, factor)) } as LevelNode;
+    case "Track2D":
+      return { ...c, ...(scaleVia({ tracks: [s as unknown as TrackData] }, factor).tracks?.[0] ?? scalePose(s, factor)) } as LevelNode;
     case "Shelter2D":
       return { ...c, ...(scaleVia({ shelters: [s as unknown as ShelterData] }, factor).shelters?.[0] ?? scalePose(s, factor)) } as LevelNode;
     case "FogRegion2D":

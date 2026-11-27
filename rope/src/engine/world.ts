@@ -42,6 +42,7 @@ import { PhaseTrace } from "./phaseTrace";
 import { PhysTrace } from "./physTrace";
 import { TieSolver, type IslandUnit } from "./ties";
 import { contactBounce } from "./bounce";
+import { applyTrackImpulse, trackResponse, type TrackMount } from "./track";
 
 // Broadphase candidate order: the owner's position in `World.bodies`, then the
 // shape's mount order within the owner. This is exactly the order the full
@@ -984,6 +985,13 @@ export class World {
         // A tied body is integrated by its island (`TieSolver.step`, below),
         // substep by substep with the rows that hold it, never here.
         if (body.tied) continue;
+        if (body.track !== null) {
+          // A track body moves along its line and nowhere else: gravity's
+          // share along it, and the pose written from the new arc length
+          // (`TrackMount.integrate`).
+          body.track.integrate(body, GRAVITY, dt);
+          continue;
+        }
         if (body.pivot) {
           // A pivot body turns on a fixed bearing: no gravity step, no
           // translation. The velocity is ZEROED rather than trusted to stay
@@ -1041,7 +1049,17 @@ export class World {
     }
     PhaseTrace.mark("shape-settle", this);
     this.resolveDynamicCollisions(dt);
+    this.absorbTracks();
     this.notifyAreas();
+  }
+
+  // Fold whatever the frame's solve and push-outs did to a track body back
+  // onto its line (`TrackMount.absorb`). Called at the close of `integrate`,
+  // and by the level after any later phase that may move one (the chain phase).
+  absorbTracks(): void {
+    for (const body of this.bodies) {
+      if (body instanceof RigidBody2D && body.track !== null && !body.removed) body.track.absorb(body);
+    }
   }
 
   // The tied chains' frame: every island of them, substepped against its own
@@ -1381,8 +1399,9 @@ export class World {
     // anything else - an overlap it is in is the contact solver's to resolve in
     // rotation. Reporting no pushes is also the honest answer for the callers
     // that read them (the chain phase's blocked-length lease): the geometry did
-    // not move this body, so nothing was refused in translation.
-    if (body.pivot) return pushedOutOf;
+    // not move this body, so nothing was refused in translation. A track body
+    // is the same: its line holds it, and it meets no scenery (`MASK_CART`).
+    if (body.pivot || body.track !== null) return pushedOutOf;
     for (let pass = 0; pass < iterations; pass++) {
       const [a, b] = this.gatherDepenetration(body, accept);
       if (!a) return pushedOutOf;
@@ -1493,7 +1512,7 @@ export class World {
     const pushedOutOf: PushOut[] = [];
     if (body.removed || !body.hasShape()) return pushedOutOf;
     if (World.isAsleep(body)) return pushedOutOf;
-    if (body.pivot) return pushedOutOf;
+    if (body.pivot || body.track !== null) return pushedOutOf;
     for (let pass = 0; pass < passes; pass++) {
       const [a] = this.gatherDepenetration(body, (other) => other instanceof StaticBody2D);
       if (!a) break;
@@ -2018,12 +2037,19 @@ export class World {
 
       const rAxN = rA.cross(c.normal);
       const rBxN = rB.cross(c.normal);
-      const invEffN = invMassA + invMassB + rAxN * rAxN * invIA + rBxN * rBxN * invIB;
-      if (invEffN <= 1e-9) continue;
+      let invEffN = invMassA + invMassB + rAxN * rAxN * invIA + rBxN * rBxN * invIB;
       const tangent = new Vec2(-c.normal.y, c.normal.x);
       const rAxT = rA.cross(tangent);
       const rBxT = rB.cross(tangent);
-      const invEffT = invMassA + invMassB + rAxT * rAxT * invIA + rBxT * rBxT * invIB;
+      let invEffT = invMassA + invMassB + rAxT * rAxT * invIA + rBxT * rBxT * invIB;
+      // A track body yields along its line only (`engine/track.ts`); every
+      // other pair keeps the arithmetic above, bit for bit.
+      if (c.a.track !== null || (bRigid !== null && bRigid.track !== null)) {
+        invEffN =
+          sideResponse(c.a, rA, c.normal, invMassA, invIA) + sideResponse(bRigid, rB, c.normal, invMassB, invIB);
+        invEffT = sideResponse(c.a, rA, tangent, invMassA, invIA) + sideResponse(bRigid, rB, tangent, invMassB, invIB);
+      }
+      if (invEffN <= 1e-9) continue;
 
       // Restitution, captured once from the PAIR-relative approach at the point -
       // both bodies' `velocityAtPoint`, not `a`'s alone - and never re-derived
@@ -2317,6 +2343,22 @@ export class World {
       const was = before.get(body.id);
       if (!was) continue;
       const applied = ContactAudit.applied.get(body.id) ?? { p: Vec2.ZERO, l: 0 };
+      if (body.track !== null) {
+        // A track body answers in its one freedom: the generalised momentum
+        // change `M dv` against the generalised impulse `T . P + kappa L`
+        // (`engine/track.ts`); the rest of `P` and `L` is the rail's.
+        const t = body.track;
+        const dv = t.speedOf(body.linearVelocity, body.angularVelocity) - t.speedOf(was.v, was.w);
+        const owed = t.tangent.dot(applied.p) + t.kappa * applied.l;
+        const tol = 1e-9 + 1e-9 * (applied.p.length() + Math.abs(applied.l));
+        if (Math.abs(t.genMass * dv - owed) > tol) {
+          ContactAudit.violations.push(
+            `body#${body.buildIndex} ${body.name || body.constructor.name}: ` +
+              `${Math.abs(t.genMass * dv - owed).toExponential(3)} N·s along its track with no impulse behind it`,
+          );
+        }
+        continue;
+      }
       const dp = body.linearVelocity.sub(was.v).mul(body.mass);
       const dl = (body.angularVelocity - was.w) * body.inertia;
       // Scaled by what was actually applied: these are float sums over up to
@@ -2502,15 +2544,27 @@ export class World {
       // body it gives way like a static: the free body takes the whole push.
       // Split by inverse mass, the ball resting on a 2.6 kg slat pushed the
       // slat 2.6 mm into its bridge every frame for the island to haul back.
-      const invMassA = deepest.a.tied && bRigid && !bRigid.tied ? 0 : deepest.a.inverseMass;
-      const invMassB = bRigid ? (bRigid.tied && !deepest.a.tied ? 0 : bRigid.inverseMass) : 0;
+      let invMassA = deepest.a.tied && bRigid && !bRigid.tied ? 0 : deepest.a.inverseMass;
+      let invMassB = bRigid ? (bRigid.tied && !deepest.a.tied ? 0 : bRigid.inverseMass) : 0;
+      // A track body gives way along its line only, by the share its line
+      // lets it (`trackResponse` at its origin); `absorbTracks` puts it back on
+      // the line after.
+      const trackA = deepest.a.track;
+      const trackB = bRigid !== null ? bRigid.track : null;
+      if (trackA !== null && invMassA > 0) invMassA = trackResponse(trackA, Vec2.ZERO, deepest.normal);
+      if (trackB !== null && invMassB > 0) invMassB = trackResponse(trackB, Vec2.ZERO, deepest.normal);
       const total = invMassA + invMassB;
       // A speculative contact is not overlapping, so there is nothing to push
       // out of - pushing along a negative depth would drag the pair together.
       if (total <= 0 || deepest.depth <= 0) continue;
-      const push = deepest.normal.mul(deepest.depth / total);
-      deepest.a.globalPosition = deepest.a.globalPosition.add(push.mul(invMassA));
-      if (bRigid) bRigid.globalPosition = bRigid.globalPosition.sub(push.mul(invMassB));
+      const lambda = deepest.depth / total;
+      const push = deepest.normal.mul(lambda);
+      if (trackA !== null) {
+        deepest.a.globalPosition = deepest.a.globalPosition.add(trackShift(trackA, deepest.normal, lambda));
+      } else deepest.a.globalPosition = deepest.a.globalPosition.add(push.mul(invMassA));
+      if (bRigid && trackB !== null) {
+        bRigid.globalPosition = bRigid.globalPosition.add(trackShift(trackB, deepest.normal.neg(), lambda));
+      } else if (bRigid) bRigid.globalPosition = bRigid.globalPosition.sub(push.mul(invMassB));
     }
   }
 
@@ -3367,14 +3421,39 @@ function clamp(v: number, lo: number, hi: number): number {
 // construction, which is the whole point of the pair solver: it is what conserves
 // momentum, and what makes a body landing on another knock it round rather than
 // stop it.
+// A positional push of `lambda` along `n` at a track body's origin, as the
+// displacement along its line it makes: `T (T . n) lambda / M`.
+function trackShift(mount: TrackMount, n: Vec2, lambda: number): Vec2 {
+  if (mount.genMass <= 0) return Vec2.ZERO;
+  return mount.tangent.mul((mount.tangent.dot(n) * lambda) / mount.genMass);
+}
+
+// One side of a pair's effective inverse mass along unit `n` at arm `r`: a
+// track body's from its line (`trackResponse`), any other body's from the mass
+// and inertia terms the site read for it. A static side is zero.
+export function sideResponse(body: RigidBody2D | null, r: Vec2, n: Vec2, invM: number, invI: number): number {
+  if (body === null) return 0;
+  if (body.track !== null) return trackResponse(body.track, r, n);
+  const rxn = r.cross(n);
+  return invM + rxn * rxn * invI;
+}
+
 function applyPairImpulse(s: SolverContact, impulse: Vec2): void {
   const { c } = s;
-  c.a.linearVelocity = c.a.linearVelocity.add(impulse.mul(c.a.inverseMass));
-  c.a.angularVelocity += s.rA.cross(impulse) * s.invIA;
+  // A track body moves along its line only (`engine/track.ts`).
+  if (c.a.track !== null) applyTrackImpulse(c.a.track, c.a, impulse, s.rA);
+  else {
+    c.a.linearVelocity = c.a.linearVelocity.add(impulse.mul(c.a.inverseMass));
+    c.a.angularVelocity += s.rA.cross(impulse) * s.invIA;
+  }
   if (ContactAudit.enabled) {
     ContactAudit.record(c.a, impulse, s.rA.cross(impulse) * (s.invIA > 0 ? 1 : 0));
   }
   if (!s.bRigid) return; // a static `b` has infinite mass: nothing to write
+  if (s.bRigid.track !== null) {
+    applyTrackImpulse(s.bRigid.track, s.bRigid, impulse.neg(), s.rB);
+    return;
+  }
   s.bRigid.linearVelocity = s.bRigid.linearVelocity.sub(impulse.mul(s.bRigid.inverseMass));
   s.bRigid.angularVelocity -= s.rB.cross(impulse) * s.invIB;
   if (ContactAudit.enabled) {

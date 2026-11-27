@@ -58,6 +58,7 @@ import {
 import { PlantUnit } from "./plantRows";
 import { buildCameraRules, type CameraHang, type CameraRule } from "../render/cameraController";
 import type { SparkEvent } from "./sparkEvents";
+import { buildTracks, type MineTrack, type TrackExit } from "./tracks";
 import type { HookSoundEvent } from "./soundEvents";
 import {
   BreakTracker,
@@ -193,6 +194,12 @@ export class BallLevel {
   // `level/breakable.ts`). Cleared at the top of every `physicsProcess`, so a
   // headless replay that never drains it accumulates nothing.
   breakEvents: BreakEvent[] = [];
+  // Render-only, the same rule again: the minecarts that left the end of
+  // their track this frame, for the renderer to carry on round the bend out
+  // of the play plane (see `level/tracks.ts`).
+  trackExits: TrackExit[] = [];
+  // The level's minecart tracks, their spawners and their carts.
+  tracks: MineTrack[] = [];
   // ...and the SIM's side of the same feature, which is the part that is not
   // render-only: what each breakable body has taken so far, and the per-pair
   // accounting that decides when a load is a fresh hit.
@@ -558,6 +565,9 @@ export class BallLevel {
     // mid-play (see `guardBreakables`).
     guardBreakables(this.sceneChains, this.vines, this.tieChains);
     for (const vine of this.vines) this.bodies.push(...vine.allLinks);
+    // The minecart tracks last of the bodies, so no level body's build index
+    // moves, with the carts their clocks have already sent out.
+    this.tracks = buildTracks(this.world, data.tracks ?? [], this.bodies, this.ball, this.ball.radius);
     // A hook that strikes a link threads onto the whole vine (see
     // `lib/vineClamp.ts`), and the level is what knows which vine a link is.
     // Never a berry vine's: its cord is no target, and a berry is bitten like
@@ -1321,6 +1331,7 @@ export class BallLevel {
     this.sparkEventIndex.clear();
     this.soundEvents.length = 0;
     this.breakEvents.length = 0;
+    this.trackExits.length = 0;
     this.shatterEvents.length = 0;
     this.ballPushes.length = 0;
     this.ballSparkSpin = null;
@@ -1375,6 +1386,17 @@ export class BallLevel {
     // nothing.
     for (const belt of this.belts) {
       if (belt.running) this.world.wakeTouching(belt);
+    }
+    // The minecarts: those off the end leave (the chain let go of them first),
+    // the clocks send out what they owe, and each cart's drive and grip are
+    // solved, before the world steps and its contacts and the chain answer
+    // the speed the grip gave it (see `level/tracks.ts`). A cart wakes what
+    // it meets, as a mover does.
+    for (const track of this.tracks) {
+      track.step(this.frame, delta, this.ball, this.ball.radius, this.trackExits, (body) => {
+        if (this.ball.anchoredTo === body) this.ball.releaseChain();
+      });
+      for (const cart of track.carts) this.world.wakeTouching(cart.body);
     }
     // A cuff riding a belt is carried to where this frame has it, beside the
     // movers and BEFORE anything regenerates the chain's path: the continuous
@@ -1551,6 +1573,10 @@ export class BallLevel {
     }
     this.endWasFixed = endFixed;
     this.settleChainStrain(delta);
+    // The chain phase may have moved a cart; it goes back onto its line, and
+    // a cart whose wheels are sliding grinds its sparks where it ends up.
+    this.world.absorbTracks();
+    for (const track of this.tracks) track.report(this.sparkEvents);
     // A dangling tip wound all the way onto the rim is stowed there (see
     // `BallPlayer.stowIfWoundIn`). After the phase, on its final length, and
     // before the drape reads a chain whose end has moved onto the ball.

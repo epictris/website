@@ -26,6 +26,7 @@ export type ToolIconName =
   | "model"
   | "fog"
   | "shelter"
+  | "track"
   | "text"
   | "arrow"
   | "checkpoint"
@@ -83,6 +84,10 @@ const ICONS: Record<ToolIconName, string> = {
   fog: '<path d="M3 8c3-2 6 2 9 0s6-2 9 0M3 16c3-2 6 2 9 0s6-2 9 0"/><path class="ac" d="M5 12c2.5-1.6 5 1.6 7 0s4.5-1.6 7 0"/>',
   // A cave's front wall: the arch, and the sun it hides the cave from.
   shelter: '<path d="M3 20.5V13a9 9 0 0 1 18 0v7.5M3 20.5h18"/><path stroke-dasharray="1.8 1.8" d="M7.5 20.5V14a4.5 4.5 0 0 1 9 0v6.5"/><circle class="acf" cx="19" cy="4.5" r="2" stroke="none"/>',
+  // A minecart on its rails: the rail and its sleepers, the cart's hopper and
+  // its two wheels in the accent.
+  track:
+    '<path d="M2.5 19.5h19M5 19.5v2M10 19.5v2M15 19.5v2M20 19.5v2"/><path stroke-linejoin="round" d="M5 8.5h14l-1.5 7.5h-11z"/><g class="acf" stroke="none"><circle cx="8.5" cy="17" r="2"/><circle cx="15.5" cy="17" r="2"/></g>',
   text: '<path d="M5.5 5.5h13M12 5.5v13M9 18.5h6"/><path class="ac" d="M5.5 5.5v2M18.5 5.5v2"/>',
   arrow: '<path d="M5 19 18 6"/><path class="ac" stroke-linejoin="round" d="M10.5 5.5H18.5v8"/>',
   checkpoint: '<path d="M6.5 21V3.5"/><path class="acf" stroke-linejoin="round" d="M6.5 4h11l-2.5 4 2.5 4h-11z"/>',

@@ -131,6 +131,7 @@ Bodies and the solver
 - [water](docs/water.md) - the drag law, traction loss, the painted 3D water (every piece of an area) and the fall.
 - [pivot-and-spring-bodies](docs/pivot-and-spring-bodies.md) - pivots, authored bearings with torsion springs, spring mounts, spawn at rest.
 - [movers](docs/movers.md) - scripted pendulums, rotors and routed platforms, with keys and the contact-speed bar.
+- [minecarts](docs/minecarts.md) - powered carts on a track (a rigid body with one freedom), the wheels' grip and slip, the spawner's fixed beat, the exit round a bend out of the plane.
 - [sleep](docs/sleep.md) - the displacement-window rest rule, what wakes a body, settle at build.
 
 Tooling

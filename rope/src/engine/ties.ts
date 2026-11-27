@@ -59,6 +59,7 @@ import {
 import type { ContactConstraint } from "./world";
 import { SolverStats } from "./solverStats";
 import { contactBounce, RESTITUTION_THRESHOLD } from "./bounce";
+import { applyTrackImpulse, trackResponse } from "./track";
 
 // --- softness ---------------------------------------------------------------
 // Catto's soft constraint (GDC 2011; Box2D's `b2MakeSoft`): a row driven as a
@@ -237,8 +238,9 @@ export class TieSegment implements IslandRow {
     const rb = pb.sub(B.globalPosition);
     const raxn = ra.cross(n);
     const rbxn = rb.cross(n);
-    const w =
-      invMassOf(A) + invMassOf(B) + raxn * raxn * invInertiaOf(A) + rbxn * rbxn * invInertiaOf(B);
+    const w = hasTrack(A, B)
+      ? rowSide(A, ra, n) + rowSide(B, rb, n)
+      : invMassOf(A) + invMassOf(B) + raxn * raxn * invInertiaOf(A) + rbxn * rbxn * invInertiaOf(B);
     if (w <= 0) return;
     // The constraint as the quantity that must stay non-negative - the SLACK,
     // `L - |d|` - and its rate, which is minus the rate the segment lengthens
@@ -404,8 +406,28 @@ function spinSlipOf(body: RigidBody2D, r: Vec2, tangent: Vec2): number {
 // Apply `impulse` at arm `r` to a body (a static takes nothing).
 export function applyAt(body: PhysicsBody2D, impulse: Vec2, r: Vec2): void {
   if (!(body instanceof RigidBody2D)) return;
+  if (body.track !== null) {
+    applyTrackImpulse(body.track, body, impulse, r);
+    return;
+  }
   body.linearVelocity = body.linearVelocity.add(impulse.mul(body.inverseMass));
   body.angularVelocity += r.cross(impulse) * invInertiaOf(body);
+}
+
+// Is either side of a row a track body (`engine/track.ts`)? The rows keep
+// their own arithmetic for every other pair, bit for bit.
+export function hasTrack(a: PhysicsBody2D, b: PhysicsBody2D): boolean {
+  return (a instanceof RigidBody2D && a.track !== null) || (b instanceof RigidBody2D && b.track !== null);
+}
+
+// One side of a row's effective inverse mass along unit `n` at arm `r`, as
+// the rows read a body (`invMassOf`, `invInertiaOf`), a track body from its
+// line.
+export function rowSide(body: PhysicsBody2D, r: Vec2, n: Vec2): number {
+  if (!(body instanceof RigidBody2D)) return 0;
+  if (body.track !== null) return trackResponse(body.track, r, n);
+  const rxn = r.cross(n);
+  return invMassOf(body) + rxn * rxn * invInertiaOf(body);
 }
 
 // Is this body one an island integrates, if a unit holds it: any rigid body.
@@ -1033,6 +1055,12 @@ export class TieSolver {
     for (let s = 0; s < k; s++) {
       for (let i = 0; i < bodies.length; i++) {
         const body = bodies[i]!;
+        if (body.track !== null) {
+          // A track body takes gravity's share along its line
+          // (`TrackMount.accelerate`), and moves along it below.
+          body.track.accelerate(body, gravity, h);
+          continue;
+        }
         if (body.pivot) {
           // A pivot turns on its bearing and nothing translates it, stepped
           // as `World.integrate` steps it (see there): the linear velocity an
@@ -1080,6 +1108,10 @@ export class TieSolver {
         if (row.live) solveContact(row, h, row.hard ? RIGID : contactSoft, !row.hard);
       }      for (let i = 0; i < bodies.length; i++) {
         const body = bodies[i]!;
+        if (body.track !== null) {
+          body.track.advance(body, h);
+          continue;
+        }
         // A `continuous` body (the ball, its hook) is swept against the
         // scenery as the world sweeps it when free, so no substep carries it
         // across a face its contacts had not reached (see `World.recollide`).
@@ -1234,7 +1266,9 @@ function solveContact(r: ContactRow, h: number, soft: Softness, useBias: boolean
   if (r.friction > 0) {
     const raxt = ra.cross(tg);
     const rbxt = rb.cross(tg);
-    const invEffT = invMa + invMb + raxt * raxt * invIa + rbxt * rbxt * invIb;
+    const invEffT = hasTrack(A, B)
+      ? rowSide(A, ra, tg) + rowSide(B, rb, tg)
+      : invMa + invMb + raxt * raxt * invIa + rbxt * rbxt * invIb;
     if (invEffT > 1e-9) {
       // The slip at the rim, less the share of a kinematic spin the chain
       // phase refused last frame (`spinDriveShare`, 1 unless the unwind said
@@ -1284,7 +1318,9 @@ function solveContact(r: ContactRow, h: number, soft: Softness, useBias: boolean
   // Non-penetration.
   const raxn = ra.cross(n);
   const rbxn = rb.cross(n);
-  const invEffN = invMa + invMb + raxn * raxn * invIa + rbxn * rbxn * invIb;
+  const invEffN = hasTrack(A, B)
+    ? rowSide(A, ra, n) + rowSide(B, rb, n)
+    : invMa + invMb + raxn * raxn * invIa + rbxn * rbxn * invIb;
   if (invEffN <= 1e-9) return;
   const s = pa.sub(pb).dot(n) + r.s0;
   const vn = A.velocityAtPoint(pa).sub(B.velocityAtPoint(pb)).dot(n);
@@ -1343,7 +1379,9 @@ function applyRestitution(r: ContactRow): boolean {
   const raxn = ra.cross(n);
   const rbxn = rb.cross(n);
   const invEffN =
-    invMassOf(A) + invMassOf(B) + raxn * raxn * invInertiaOf(A) + rbxn * rbxn * invInertiaOf(B);
+    hasTrack(A, B)
+      ? rowSide(A, ra, n) + rowSide(B, rb, n)
+      : invMassOf(A) + invMassOf(B) + raxn * raxn * invInertiaOf(A) + rbxn * rbxn * invInertiaOf(B);
   if (invEffN <= 1e-9) return false;
   const vn = A.velocityAtPoint(pa).sub(B.velocityAtPoint(pb)).dot(n);
   const inc = launching

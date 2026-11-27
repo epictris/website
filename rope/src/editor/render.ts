@@ -55,7 +55,7 @@ import {
 import { cubicAt, pointAtArcLength, tangentAtArcLength } from "../lib/path";
 import { isRootItem, rootIndex, rootWidthAt } from "./rootEditing";
 import { curveLine, strokeCurve } from "../lib/stroke";
-import { pathNodesOf } from "../lib/path";
+import { flattenPath, pathNodesOf } from "../lib/path";
 import {
   DEFAULT_ROOT_COLOR,
   moveModeCloses,
@@ -1295,6 +1295,79 @@ function drawCameraPath(
   }
 }
 
+// A minecart track (docs/minecarts.md): the line the carts ride, flattened as
+// the game flattens it (`level/tracks.ts`), with the way they travel in
+// arrows, a bar where they are sent from and a hooked arrow where they turn
+// out of the plane. Strokes only, for the reason a camera path's are.
+function drawTrack(ctx: CanvasRenderingContext2D, item: EdItem, worldLine: number, selected: boolean): void {
+  if (item.shape.kind !== "path") return;
+  const world = flattenPath(pathNodesOf(trackVerts(item)), 0.1).map((p) => toWorld(item, p));
+  if (world.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(world[0]!.x, world[0]!.y);
+  for (const w of world.slice(1)) ctx.lineTo(w.x, w.y);
+  if (selected) {
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 6;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = item.color;
+  ctx.lineWidth = worldLine * 3;
+  ctx.stroke();
+
+  let carried = PATH_ARROW_SPACING / 2;
+  for (let i = 0; i + 1 < world.length; i++) {
+    const a = world[i]!;
+    const b = world[i + 1]!;
+    const len = a.distanceTo(b);
+    if (len < 1e-9) continue;
+    const dir = b.sub(a).div(len);
+    ctx.fillStyle = item.color;
+    for (let d = carried; d < len; d += PATH_ARROW_SPACING) drawPathArrow(ctx, a.add(dir.mul(d)), dir);
+    carried = ((carried - len) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
+  }
+
+  // The start: a bar across the line, where carts are sent from.
+  const s0 = world[0]!;
+  const d0 = world[1]!.sub(s0).normalized();
+  const n0 = new Vec2(-d0.y, d0.x).mul(worldLine * 12);
+  ctx.beginPath();
+  ctx.moveTo(s0.x - n0.x, s0.y - n0.y);
+  ctx.lineTo(s0.x + n0.x, s0.y + n0.y);
+  ctx.strokeStyle = item.color;
+  ctx.lineWidth = worldLine * 3;
+  ctx.stroke();
+  // The end: the turn out of the plane, a short hook bent away from the line.
+  const e = world[world.length - 1]!;
+  const de = e.sub(world[world.length - 2]!).normalized();
+  const ne = new Vec2(-de.y, de.x);
+  const r = worldLine * 10;
+  // Sampled as a polyline: the overlay's context is the projected one
+  // (`projectedCanvas.ts`), which carries lines and arcs but no curves.
+  const c = e.add(de.mul(r));
+  const tip = c.sub(ne.mul(r));
+  ctx.beginPath();
+  ctx.moveTo(e.x, e.y);
+  for (let k = 1; k <= 8; k++) {
+    const t = k / 8;
+    const p = e.mul((1 - t) * (1 - t)).add(c.mul(2 * t * (1 - t))).add(tip.mul(t * t));
+    ctx.lineTo(p.x, p.y);
+  }
+  ctx.setLineDash([3 * PX, 3 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// A track item's nodes as the format writes them, in the item's frame.
+function trackVerts(item: EdItem): { x: number; y: number; inX?: number; inY?: number; outX?: number; outY?: number }[] {
+  if (item.shape.kind !== "path") return [];
+  const shape = item.shape;
+  return shape.verts.map((v, j) => {
+    const h = shape.handles[j];
+    return { x: v.x, y: v.y, inX: h?.in.x ?? 0, inY: h?.in.y ?? 0, outX: h?.out.x ?? 0, outY: h?.out.y ?? 0 };
+  });
+}
+
 // A filled triangle centred at `at`, pointing along the unit vector `dir`.
 function drawPathArrow(ctx: CanvasRenderingContext2D, at: Vec2, dir: Vec2): void {
   const side = new Vec2(-dir.y, dir.x).mul(PATH_ARROW_LENGTH * 0.4);
@@ -1935,7 +2008,7 @@ export function drawEditor(
   // A polygon being clicked out: the vertices placed so far plus where the
   // pointer is, so the outline is visible while it is being drawn rather than
   // only once it closes.
-  polyDraft: { kind: "poly" | "path" | "shelter"; verts: readonly Vec2[]; cursor: Vec2 } | null = null,
+  polyDraft: { kind: "poly" | "path" | "shelter" | "track"; verts: readonly Vec2[]; cursor: Vec2 } | null = null,
   // Chains carry their own selection (see `selectedChainIds` in editor.ts).
   selectedChainIds: ReadonlySet<number> = new Set<number>(),
   // A chain being strung out: where it started and the knots it has been tied
@@ -2491,6 +2564,10 @@ export function drawEditor(
   // And over a 3D scene ("outline") there is none: the scene IS the shelter's
   // light, and this canvas is a transparent sheet over it, where a multiply
   // has nothing beneath it to darken and would paint the slate on instead.
+  // Minecart tracks, over the geometry their rails are drawn on.
+  if (visibleLayers.has("scene")) {
+    for (const t of model.items) if (t.object === "track") drawTrack(ctx, t, worldLine, selectedIds.has(t.id));
+  }
   const shelterItems = visibleLayers.has("scene") ? model.items.filter((i) => i.object === "shelter") : [];
   const env = environmentOfModel(model);
   const sun =
@@ -2701,7 +2778,7 @@ export function drawEditor(
   // obvious which edge is still being aimed and which are committed.
   if (polyDraft && polyDraft.verts.length) {
     const v = polyDraft.verts;
-    const open = polyDraft.kind === "path";
+    const open = polyDraft.kind === "path" || polyDraft.kind === "track";
     // The draft is drawn in the warning colour exactly when the loop it would
     // close is not a shape. Concave is not that - a dented outline is a shape
     // and is what the tool is for - so this fires only on a loop that crosses

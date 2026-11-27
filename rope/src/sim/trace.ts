@@ -255,6 +255,12 @@ export interface ChainDigest {
   braced?: number;
 }
 
+export interface CartDigest {
+  s: number;
+  wheelSpeed: number;
+  slip: number;
+}
+
 export interface WorldDigest {
   frame: number;
   bodies: BodyDigest[];
@@ -279,6 +285,13 @@ export interface WorldDigest {
   // every Normal run after it), present on one alone is a different ball, and
   // broken in one run only is a different run.
   shattered?: boolean;
+  // THE MINECARTS (docs/minecarts.md), every track's in build order: each
+  // cart's arc length along its line, its wheels' spin and their slip. Their
+  // bodies are digested as every body is; these are the state the bodies do
+  // not carry. Written only on a level with tracks, under `finished`'s rule:
+  // absent on both sides compares equal, present on one alone is a different
+  // scene, and a cart sent out on one side only is a count that differs.
+  carts?: CartDigest[];
   // The SCENE CHAINS, in build order: what each one measured at the end of the
   // frame. Absent on a level with none, and - unlike `finished` - absent on one
   // side is "not recorded" rather than a different scene, since every bundle
@@ -496,6 +509,12 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
   // Only for a glass ball, so an iron run digests exactly what it always did
   // (see `WorldDigest.shattered`).
   if (level.ball.glass) digest.shattered = level.shatteredFrame !== null;
+  // Only on a level with tracks (see `WorldDigest.carts`).
+  if (level.tracks.length > 0) {
+    digest.carts = level.tracks.flatMap((t) =>
+      t.carts.map((c) => ({ s: c.mount.s, wheelSpeed: c.wheelSpeed, slip: c.slip })),
+    );
+  }
   return digest;
 }
 
@@ -689,6 +708,22 @@ export function worldDigestDeltas(
     compareIdentity(out, "shattered", Number(recorded.shattered), Number(replayed.shattered));
   } else if ((recorded.shattered === undefined) !== (replayed.shattered === undefined)) {
     out.push({ name: "shattered", recorded: null, replayed: null, delta: Infinity });
+  }
+  // The minecarts, under `finished`'s rule (see `WorldDigest.carts`).
+  if (recorded.carts !== undefined && replayed.carts !== undefined) {
+    if (recorded.carts.length !== replayed.carts.length) {
+      out.push({ name: "carts", recorded: recorded.carts.length, replayed: replayed.carts.length, delta: Infinity });
+    } else {
+      for (let i = 0; i < recorded.carts.length; i++) {
+        const o = recorded.carts[i]!;
+        const r = replayed.carts[i]!;
+        compareNumber(out, `cart#${i}.s`, o.s, r.s, tolerance);
+        compareNumber(out, `cart#${i}.wheelSpeed`, o.wheelSpeed, r.wheelSpeed, tolerance);
+        compareNumber(out, `cart#${i}.slip`, o.slip, r.slip, tolerance);
+      }
+    }
+  } else if ((recorded.carts === undefined) !== (replayed.carts === undefined)) {
+    out.push({ name: "carts", recorded: null, replayed: null, delta: Infinity });
   }
   // Scene chains, where both runs digested them. The count is a property of
   // the level and differs only between different levels.
@@ -2089,6 +2124,28 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   const b = level.ball;
   const frame = level.frame;
   out.push(...checkBreakables(frame, level.world, b.anchoredTo));
+
+  // MINECARTS (docs/minecarts.md): every cart stands exactly where its arc
+  // length puts it, with a velocity on its line, at the end of every frame -
+  // the claim the whole mounting rests on, so a solver site that moved a cart
+  // without going through its line is caught on the frame it did - and its
+  // state is finite.
+  for (const track of level.tracks) {
+    for (const c of track.carts) {
+      const o = c.mount.offLine(c.body);
+      const worst = Math.max(o.position, o.rotation, o.velocity);
+      if (!(worst <= 1e-9)) {
+        out.push({
+          frame,
+          kind: "cart-off-line",
+          detail: `cart#${c.body.buildIndex} ${o.position.toExponential(2)} m, ${o.rotation.toExponential(2)} rad, ${o.velocity.toExponential(2)} m/s off its line`,
+        });
+      }
+      if (!Number.isFinite(c.mount.s) || !Number.isFinite(c.wheelSpeed) || !Number.isFinite(c.slip)) {
+        out.push({ frame, kind: "cart-nan", detail: `cart#${c.body.buildIndex} non-finite state` });
+      }
+    }
+  }
 
   // BERRY VINES (`level/starberry.ts`): every stalk body finite, no stalk
   // stretched past its berry's reach, the chain never on anything of the

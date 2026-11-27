@@ -2669,6 +2669,11 @@ export class Rope {
     // tied body reaches the island as an impulse (`BallLevel`'s chain phase);
     // a scene chain's does not yet, which is the plan's second stage.
     if (body instanceof RigidBody2D && body.tied) return null;
+    // A cart on its track (`engine/track.ts`) is the same to a positional
+    // solve: the chain's pull reaches it at velocity level, through the
+    // ball's row (`BallChainRow`), along its line; a positional share split
+    // by its whole mass would be a move the line then refuses.
+    if (body instanceof RigidBody2D && body.track !== null) return null;
     if (body instanceof RigidBody2D) {
       // A PIVOT body cannot translate, and the solve is told so in its own
       // vocabulary: infinite mass. `1 / mass` reads 0, so the linear share of

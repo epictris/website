@@ -258,7 +258,41 @@ export const NEW_FOG: EdFog = { falloff: null, amount: 0.3, color: "#2a5075" };
 // rather than authoring furniture: a fog region (`FogRegion2D`, its fog in
 // `fog`) and a cave's front wall (`Shelter2D`, its fields in `shelter`). Never
 // in a body.
-export type EdObject = "collision" | "light" | "anchor" | "model" | "formation" | "decoration" | "fog" | "shelter";
+//
+// `track` is a minecart track (`Track2D`, docs/minecarts.md): an open curve
+// (its shape is a `path`, the line carts travel in node order) and the
+// spawner's fields in `track`. Never in a body; its cart template is a body
+// node under it, edited as any body is.
+export type EdObject = "collision" | "light" | "anchor" | "model" | "formation" | "decoration" | "fog" | "shelter" | "track";
+
+// A TRACK's spawner (`TrackData` less its line and its cart), metres and
+// seconds. null = the format's default (`DEFAULT_TRACK_*`).
+export interface EdTrack {
+  speed: number | null; // m/s
+  pull: number | null; // newtons
+  grip: number | null; // the wheels' static friction coefficient on the rail
+  interval: number | null; // seconds
+  max: number | null;
+  phase: number | null; // cycles
+  wheelBase: number | null; // metres
+  wheelRadius: number | null; // metres
+  exitRadius: number | null; // metres
+  exitDepth: number | null; // metres
+  exitTurn: "left" | "right" | null; // null = back the way the cart travelled
+}
+export const defaultTrack = (): EdTrack => ({
+  exitDepth: null,
+  exitTurn: null,
+  speed: null,
+  pull: null,
+  grip: null,
+  interval: null,
+  max: null,
+  phase: null,
+  wheelBase: null,
+  wheelRadius: null,
+  exitRadius: null,
+});
 
 // A DECORATION object's own fields, and a painted one's strokes. Replaced
 // whole on an edit, as a formation's are.
@@ -714,6 +748,8 @@ export interface EdItem {
   shelter: EdShelter;
   // Fog objects:
   fog: EdFog;
+  // Track objects (the spawner's fields; the line is the item's path shape):
+  track: EdTrack;
   // Anchor objects only: the id `ChainData` names this end by. It is PRESERVED
   // through a load and a save rather than minted fresh each time, so a level
   // that goes through the editor untouched comes back with the same ids it went
@@ -1130,6 +1166,8 @@ export const NOTE_OPACITY = 0.08;
 // apart from the camera's violet, and dark enough under its wash that the
 // wall reads as the part of the level kept out of the sun.
 export const SHELTER_COLOR = "#5f7fa8";
+// A minecart track's line: rail iron in lamplight.
+export const TRACK_COLOR = "#d08a3c";
 export const SHELTER_OPACITY = 0.18;
 export const FOG_REGION_COLOR = "#82cbd6";
 
@@ -1160,6 +1198,7 @@ export function newItemStyle(
   if (layer === "camera") return { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY };
   if (object === "shelter") return { color: SHELTER_COLOR, opacity: SHELTER_OPACITY };
   if (object === "fog") return { color: FOG_REGION_COLOR, opacity: 0.08 };
+  if (object === "track") return { color: TRACK_COLOR, opacity: 1 };
   if (layer === "notes") return { color: NOTE_COLOR, opacity: NOTE_OPACITY };
   if (object === "light") return { color: DEFAULT_LIGHT_COLOR, opacity: LIGHT_FILL_OPACITY };
   return { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY };
@@ -1369,6 +1408,7 @@ export function blankItem(layer: EdLayer, object: EdObject, node: string): EdIte
     note: defaultNote(),
     shelter: defaultShelter(),
     fog: defaultFog(),
+    track: defaultTrack(),
     modelRef: defaultModelRef(),
     formation: null,
     decoration: null,
@@ -1545,7 +1585,9 @@ export function modelFromTree(source: LevelTree): EdModel {
   // A format-3 tree is read as format 4 (`upgradeTree`): its environment block
   // as light nodes and a background, its fog on its regions.
   const tree = upgradeTree(source);
-  const compiled = compileLevel(tree);
+  // A track's cart is a body here as well as the track's template, so it is
+  // drawn, picked and edited as one (`CompileOptions.keepTrackCarts`).
+  const compiled = compileLevel(tree, prefabLibrary(), { keepTrackCarts: true });
   const data = compiled.data;
   const nodeOf = compiled.nodeOf;
 
@@ -1686,6 +1728,29 @@ export function modelFromTree(source: LevelTree): EdModel {
   for (const c of data.cameraPaths ?? []) {
     const node = nodeOf.get(c);
     if (node) add({ ...blankItem("camera", "collision", node), shape: pathShape(c), color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY, cam: { ...cameraOf(c), offset: Vec2.ZERO, lockX: null, lockY: null, keepInFrame: true } });
+  }
+  for (const t of data.tracks ?? []) {
+    const node = nodeOf.get(t);
+    if (node) {
+      add({
+        ...blankItem("scene", "track", node),
+        ...newItemStyle("scene", "track"),
+        shape: pathShape(t),
+        track: {
+          speed: t.speed ?? null,
+          pull: t.pull ?? null,
+          grip: t.grip ?? null,
+          interval: t.interval ?? null,
+          max: t.max ?? null,
+          phase: t.phase ?? null,
+          wheelBase: t.wheelBase ?? null,
+          wheelRadius: t.wheelRadius ?? null,
+          exitRadius: t.exitRadius ?? null,
+          exitDepth: t.exitDepth ?? null,
+          exitTurn: t.exitTurn ?? null,
+        },
+      });
+    }
   }
   for (const s of data.shelters ?? []) {
     const node = nodeOf.get(s);
@@ -1850,6 +1915,34 @@ export function relink(model: EdModel): void {
 // A camera path as the game reads it, in metres - what `toLevelData` writes
 // and what the inspector builds a rule from to show a node's EFFECTIVE value.
 // One mapping, so the two cannot disagree about what a key means.
+// A track's node fields past its placement: its line (the nodes and their
+// handles, no keys) and the spawner fields that were authored, each left out at
+// its default as a camera path's are.
+export function trackFields(i: EdItem): Record<string, unknown> {
+  const t = i.track;
+  return {
+    verts: pathNodes(i).map((n) => ({
+      x: n.p.x,
+      y: n.p.y,
+      ...(n.in.x !== 0 ? { inX: n.in.x } : {}),
+      ...(n.in.y !== 0 ? { inY: n.in.y } : {}),
+      ...(n.out.x !== 0 ? { outX: n.out.x } : {}),
+      ...(n.out.y !== 0 ? { outY: n.out.y } : {}),
+    })),
+    ...(t.speed !== null ? { speed: t.speed } : {}),
+    ...(t.pull !== null ? { pull: t.pull } : {}),
+    ...(t.grip !== null ? { grip: t.grip } : {}),
+    ...(t.interval !== null ? { interval: t.interval } : {}),
+    ...(t.max !== null ? { max: t.max } : {}),
+    ...(t.phase !== null ? { phase: t.phase } : {}),
+    ...(t.wheelBase !== null ? { wheelBase: t.wheelBase } : {}),
+    ...(t.wheelRadius !== null ? { wheelRadius: t.wheelRadius } : {}),
+    ...(t.exitRadius !== null ? { exitRadius: t.exitRadius } : {}),
+    ...(t.exitDepth !== null ? { exitDepth: t.exitDepth } : {}),
+    ...(t.exitTurn !== null ? { exitTurn: t.exitTurn } : {}),
+  };
+}
+
 export function pathDataOf(i: EdItem): CameraPathData {
   return {
     x: i.pos.x,
@@ -2215,7 +2308,7 @@ export function toTree(model: EdModel, keep?: (id: string) => boolean): LevelTre
       const own: Pose3D = n.local ?? {};
       const loaded = n.local !== null && sameWorld(composeWorld(parentFrame, pose3 ? own : { x: own.x, y: own.y, rot: own.rot }), world);
       const local: Pose3D = loaded ? own : relativeLocal(parentFrame, world);
-      const required = n.type === "Spawn2D" || n.type === "Checkpoint2D" || n.type.endsWith("Region2D") || n.type === "CameraPath2D" || n.type === "Shelter2D" || n.type === "Note2D";
+      const required = n.type === "Spawn2D" || n.type === "Checkpoint2D" || n.type.endsWith("Region2D") || n.type === "CameraPath2D" || n.type === "Track2D" || n.type === "Shelter2D" || n.type === "Note2D";
       const put = (k: "x" | "y" | "rot" | "z", v: number | undefined): void => {
         if (v === undefined) return;
         if (loaded ? true : v !== 0) out[k] = v;
@@ -2615,7 +2708,9 @@ export function nodeTypeOfItem(i: EdItem): NodeType {
                   ? "FogRegion2D"
                   : i.object === "shelter"
                     ? "Shelter2D"
-                    : "Decoration3D";
+                    : i.object === "track"
+                      ? "Track2D"
+                      : "Decoration3D";
     case "camera":
       return i.shape.kind === "path" ? "CameraPath2D" : "CameraRegion2D";
     case "notes":
@@ -2631,6 +2726,7 @@ export function defaultNameOf(i: EdItem): string {
   if (i.object === "formation") return "Formation";
   if (i.object === "fog") return "Fog";
   if (i.object === "shelter") return "Shelter";
+  if (i.object === "track") return "Track";
   if (i.object === "light") return "Light";
   if (i.object === "anchor") return "Anchor";
   const type = nodeTypeOfItem(i);
@@ -2926,6 +3022,8 @@ function itemFields(
       const { x: _x, y: _y, rot: _r, ...p } = pathDataOf(i);
       return p;
     }
+    case "Track2D":
+      return trackFields(i);
     case "Shelter2D": {
       const s = shelterDataOf(i);
       if (!s) return {};
@@ -2990,8 +3088,11 @@ export type SceneTag = SceneObjectData | FormationData;
 // when given, is filled with which item each written object came from, so a
 // 3D pick on one can be answered with its item (the look answers a pick with
 // its node's id, `pickTagOf`).
-export function toLevelData(model: EdModel, itemOf?: Map<SceneTag, number>): LevelData {
-  const compiled = compileLevel(toTree(model));
+// A track's cart template is kept among the bodies, so the editor's views
+// draw it where it stands on its line (`CompileOptions.keepTrackCarts`); the
+// flat disk form is the game's and leaves it out.
+export function toLevelData(model: EdModel, itemOf?: Map<SceneTag, number>, keepTrackCarts = true): LevelData {
+  const compiled = compileLevel(toTree(model), prefabLibrary(), { keepTrackCarts });
   if (itemOf) {
     const itemOfNode = new Map(model.items.map((i) => [i.node, i.id]));
     for (const [element, node] of compiled.nodeOf) {
@@ -3015,7 +3116,7 @@ export function modelToDisk(model: EdModel): LevelTree {
 // ...and as the flat level that file compiles to, in pixels: for a test that
 // reads a body or an object back.
 export function modelToFlatDisk(model: EdModel): LevelData {
-  const { tree: _tree, ...flat } = scaleNormalized(toLevelData(model), PIXELS_PER_METER);
+  const { tree: _tree, ...flat } = scaleNormalized(toLevelData(model, undefined, false), PIXELS_PER_METER);
   // The node references compilation adds are the editor's and the tools',
   // not the level's.
   return {
@@ -3893,6 +3994,7 @@ function bodyKindLabel(members: readonly EdItem[]): string {
   if (first.layer === "camera") return "camera";
   if (first.object === "shelter") return "shelter";
   if (first.object === "fog") return "fog";
+  if (first.object === "track") return "track";
   if (first.layer === "notes") return first.note.kind === "checkpoint" ? "checkpoint" : "note";
   return "decor";
 }
@@ -3930,6 +4032,7 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
   if (item.object === "shelter") return "shelter";
   if (item.object === "fog") return "fog";
+  if (item.object === "track") return "track";
   const form =
     item.shape.kind === "rect"
       ? `${n(item.shape.w)}×${n(item.shape.h)}`

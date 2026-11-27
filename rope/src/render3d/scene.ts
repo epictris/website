@@ -17,7 +17,9 @@
 import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import type { CollisionObject2D } from "../engine/body";
-import { VineLink } from "../engine/body";
+import { RigidBody2D, VineLink } from "../engine/body";
+import type { MineTrack, TrackExit } from "../level/tracks";
+import { CartLooks } from "./minecarts";
 import { BallHook } from "../classes/ballHook";
 import { BallPlayer } from "../classes/ballPlayer";
 import type { World } from "../engine/world";
@@ -76,6 +78,10 @@ import { updateWater, waterTextures } from "./water";
 import { WaterSplashes, type FoamSurface, type StillSurface } from "./stillWater";
 import { beltRenderTime } from "../render/beltTread";
 
+// The sim's fixed step (docs/physics-foundations.md): what a leaving
+// minecart's bend is timed by and its wheels are interpolated over.
+const SIM_STEP = 1 / 60;
+
 // What the 3D renderer needs of a level. Deliberately structural rather than
 // `Level | BallLevel`: the editor drives one of these from a model that is
 // neither, and a scene that names a concrete level class would have to grow a
@@ -100,6 +106,8 @@ export interface Scene3DLevel {
   // runs on (`beltRenderTime`). Absent = a host with no running sim (the
   // editor's preview), whose belts stand still.
   readonly frame?: number;
+  // The minecart tracks and their carts (`level/tracks.ts`). Absent = none.
+  readonly tracks?: readonly MineTrack[];
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
@@ -119,7 +127,10 @@ function drawnElsewhere(body: CollisionObject2D): boolean {
   return (
     body instanceof BallPlayer ||
     body instanceof BallHook ||
-    body instanceof VineLink
+    body instanceof VineLink ||
+    // A minecart is drawn as its track's template, and carried round the bend
+    // when it leaves (`CartLooks`).
+    (body instanceof RigidBody2D && body.track !== null)
   );
 }
 
@@ -490,6 +501,13 @@ export class Scene3D {
       if (slot === this.current) this.shardCollisionVersion++;
     };
     slot.root.add(slot.look.root);
+    // The minecarts, each drawn as its track's template (`CartLooks`).
+    slot.carts = new CartLooks(slot.root, level.visualSource.data.tree ?? [], {
+      rig: slot.lights,
+      shown: this.sceneShown,
+      debug: this.allDebugShown,
+      roots: this.rootsShown,
+    });
     // Then whatever else the world already holds - the avatar's debris, a
     // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(slot, body);
@@ -1038,6 +1056,13 @@ export class Scene3D {
   private readonly depthOf = (body: CollisionObject2D): number =>
     (this.current?.bodies.get(body) ?? this.current?.segments.get(body))?.depth ?? 0;
 
+  // The minecarts that left their lines on a step (`BallLevel.trackExits`),
+  // drained per step by the host as the sparks are, and the step's time for
+  // the carts already leaving.
+  ingestTrackExits(exits: readonly TrackExit[]): void {
+    this.current?.carts?.ingest(exits, SIM_STEP);
+  }
+
   private ensureBody(slot: LevelScene, body: CollisionObject2D): BodyVisual | null {
     const existing = slot.bodies.get(body);
     if (existing) return existing;
@@ -1452,6 +1477,7 @@ export class Scene3D {
     // Standing bodies built no engine body and have no pose to follow, but a
     // drawn-only conveyor still runs its tread.
     for (const visual of slot.standing) visual.sync(alpha, treadTime, level.world.contactPulses);
+    slot.carts?.sync(level, alpha, SIM_STEP);
     slot.look?.sync(alpha, level.world.contactPulses, (id) => slot.engineOf.get(id) ?? null);
 
     // The cuff is drawn at the depth of whatever it bit (`BodyVisual.depth`).

@@ -82,6 +82,7 @@ import {
   type TieSolver,
 } from "../engine/ties";
 import type { RopeRowTerm } from "../classes/rope";
+import type { TrackMount } from "../engine/track";
 import { localPlacement, worldPlacement, type BuiltBodies } from "./buildBodies";
 import {
   isAnchorObject,
@@ -495,7 +496,7 @@ export class RopeRow implements IslandRow, IslandUnit {
       const invM = invMassOf(t.body);
       const invI = invInertiaOf(t.body);
       if (t.body instanceof RigidBody2D) {
-        w += t.ma * t.ma * (invM + t.arm * t.arm * invI);
+        w += t.body.track !== null ? trackTermResponse(t, t.body.track) : t.ma * t.ma * (invM + t.arm * t.arm * invI);
         slackRate += t.ma * (t.dir.dot(t.body.linearVelocity) + t.arm * t.body.angularVelocity);
       } else {
         // A static that moves (a mover's anchor) carries the rope with it.
@@ -1360,7 +1361,12 @@ export class BallChainRow implements IslandRow, IslandUnit {
         }
         this.ballTerms.push(t);
       }
-      if (t.body instanceof RigidBody2D) w += t.ma * t.ma * (invMassOf(t.body) + t.arm * t.arm * invInertiaOf(t.body));
+      if (t.body instanceof RigidBody2D) {
+        w +=
+          t.body.track !== null
+            ? trackTermResponse(t, t.body.track)
+            : t.ma * t.ma * (invMassOf(t.body) + t.arm * t.arm * invInertiaOf(t.body));
+      }
     }
     slackRate += this.beadRate;
     this.w = w;
@@ -1597,6 +1603,10 @@ class PinRow {
   solve(a: PhysicsBody2D, pa: Vec2, b: PhysicsBody2D, pb: Vec2, load: number): void {
     // A steered ball's own turn is the aim's to pay (see `RopePins`).
     if (load <= 0 || (a instanceof RigidBody2D && a.kinematicRotation)) return;
+    // A cart's turn is its line's (`engine/track.ts`): the pin's friction
+    // has nothing on it to resist, and the chain's pull reaches it through
+    // the row's term.
+    if ((a instanceof RigidBody2D && a.track !== null) || (b instanceof RigidBody2D && b.track !== null)) return;
     const span = pb.sub(pa);
     const length = span.length();
     if (length < 1e-6) return;
@@ -1681,10 +1691,30 @@ class RopePins {
   }
 }
 
+// A term on a track body: the rope pulls along `dir` with lever arm `arm`
+// (`r x dir`), so per unit of the term's impulse the line takes
+// `T . dir + kappa arm` (`TrackMount.along` with the arm already crossed).
+function trackTermAlong(t: RopeRowTerm, mount: TrackMount): number {
+  return mount.tangent.dot(t.dir) + mount.kappa * t.arm;
+}
+
+// The term's share of a row's effective inverse mass on a track body.
+function trackTermResponse(t: RopeRowTerm, mount: TrackMount): number {
+  if (mount.genMass <= 0) return 0;
+  const a = t.ma * trackTermAlong(t, mount);
+  return (a * a) / mount.genMass;
+}
+
 // Impulse `j` along the rope, delivered to one path body through its term.
 function applyTerm(t: RopeRowTerm, j: number): void {
   const body = t.body;
   if (!(body instanceof RigidBody2D)) return;
+  if (body.track !== null) {
+    // Along the line only (`engine/track.ts`): the term's generalised force
+    // is `ma (T . dir + kappa arm)`.
+    body.track.push(body, j * t.ma * trackTermAlong(t, body.track));
+    return;
+  }
   body.linearVelocity = body.linearVelocity.add(t.dir.mul(j * t.ma * body.inverseMass));
   body.angularVelocity += j * t.ma * t.arm * invInertiaOf(body);
 }
@@ -1868,8 +1898,8 @@ function buildTie(c: ChainData, anchors: Map<number, AnchorSite>): TieChain | nu
   // sprung branch - so one is refused until it has a rig.
   for (const p of points) {
     const body = p.body;
-    if (body instanceof RigidBody2D && (body.pivot || body.spring !== null)) {
-      console.warn(`chain ${c.a}-${c.b}: tied to a pivot or spring body; not built`);
+    if (body instanceof RigidBody2D && (body.pivot || body.spring !== null || body.track !== null)) {
+      console.warn(`chain ${c.a}-${c.b}: tied to a pivot, spring or track body; not built`);
       return null;
     }
   }

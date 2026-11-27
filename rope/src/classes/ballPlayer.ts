@@ -16,6 +16,7 @@ import { circleShape, nearestShapeIndex, type Shape, type ShapeTransform } from 
 import { outwardDirection } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
 import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "../engine/world";
+import { trackResponse } from "../engine/track";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import { RopeClamp } from "../lib/rail";
@@ -498,8 +499,10 @@ export class BallPlayer extends RigidBody2D {
     const rB = best.point.sub(best.b.globalPosition);
     const rBxN = rB.cross(normal);
     const yieldN =
-      (bRigid ? bRigid.inverseMass : 0) +
-      (bRigid && !bRigid.kinematicRotation ? rBxN * rBxN * bRigid.inverseInertia : 0);
+      bRigid !== null && bRigid.track !== null
+        ? trackResponse(bRigid.track, rB, normal)
+        : (bRigid ? bRigid.inverseMass : 0) +
+          (bRigid && !bRigid.kinematicRotation ? rBxN * rBxN * bRigid.inverseInertia : 0);
     // Approach and departure are the PAIR's, as the solve measures them. Against
     // scenery that is the ball's own velocity, read exactly as it always was so
     // every recorded landing on a static stays bit-identical. Against anything
@@ -547,10 +550,12 @@ export class BallPlayer extends RigidBody2D {
     // solve paid.
     const rAxN = r.cross(normal);
     const invEffN =
-      this.inverseMass +
-      (bRigid ? bRigid.inverseMass : 0) +
-      rAxN * rAxN * (this.kinematicRotation ? 0 : this.inverseInertia) +
-      (bRigid && !bRigid.kinematicRotation ? rBxN * rBxN * bRigid.inverseInertia : 0);
+      bRigid !== null && bRigid.track !== null
+        ? this.inverseMass + rAxN * rAxN * (this.kinematicRotation ? 0 : this.inverseInertia) + yieldN
+        : this.inverseMass +
+          (bRigid ? bRigid.inverseMass : 0) +
+          rAxN * rAxN * (this.kinematicRotation ? 0 : this.inverseInertia) +
+          (bRigid && !bRigid.kinematicRotation ? rBxN * rBxN * bRigid.inverseInertia : 0);
     const surfaceBounce = contactBounce(
       approach,
       Math.max(this.restitution, best.b.restitution),

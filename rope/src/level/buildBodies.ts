@@ -988,6 +988,23 @@ export function buildLevelBodies(
   return { wrapBodies, bodies, movers, belts, rootUnits };
 }
 
+// One rigid body built from its data while the level runs - a minecart a
+// track's spawner sends out (`level/tracks.ts`). The same pieces, mass,
+// inertia and rails a body built at load gets, through the same calls, and
+// added to `world` by `buildOne` as every body is; no rest pose (a track body's
+// pose is its line's). Every cart a spawner builds from one template is built
+// from the same data, so every one weighs and turns exactly alike.
+export function buildRuntimeRigidBody(world: World, b: LevelBodyData): RigidBody2D {
+  if (b.kind !== "rigid") throw new Error(`a runtime body is rigid (this one is kind "${b.kind}")`);
+  const pieces = b.objects.flatMap((o, i) => (isCollisionObject(o) ? makePieces(b, o, i) : []));
+  if (pieces.length === 0) throw new Error("a runtime body needs collision pieces");
+  const built = buildOne(world, b, pieces, () => {}, () => {});
+  if (!(built instanceof RigidBody2D)) throw new Error("a rigid body's data built something else");
+  if (b.node) bodyNodePaths.set(built, b.node.path);
+  attachRails(built, pieces);
+  return built;
+}
+
 // --- bending roots -----------------------------------------------------------
 //
 // A root whose branches BEND (`RootBranchData.bends`, docs/roots.md "Bending

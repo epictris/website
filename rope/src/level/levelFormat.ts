@@ -2252,6 +2252,80 @@ export interface CameraPathData {
   priority?: number;
 }
 
+// A MINECART TRACK and its spawner (docs/minecarts.md): an authored curve that
+// powered carts ride from its first node to its last, and the clock that sends
+// them out. A `Track2D` node; its one body child is the cart, placed on the
+// track where it sits on the rails, which is what says how high it rides and
+// which way up it is - the spawner builds every cart from that body's data and
+// mounts it on the line (`engine/track.ts`), so the template is never itself in
+// the level.
+//
+// Spawns are on a FIXED clock, a slot every `interval` seconds from `phase`:
+// a slot whose cart cannot go (the cap is reached, or the start of the track
+// is not clear) is skipped, never delayed, so however a player holds a cart up
+// the carts after it go out on the same beat and the spacing recovers as the
+// held ones leave.
+export interface TrackData {
+  x: number;
+  y: number;
+  rot: number;
+  // Local-frame nodes, >= 2, in order = the direction carts travel. The camera
+  // path's node shape; keys are ignored.
+  verts: CameraPathVert[];
+  // Cruise speed, px/s on disk and m/s once scaled: what the drive holds the
+  // wheels' rims at. Default `DEFAULT_TRACK_SPEED`.
+  speed?: number;
+  // The most the drive can pull with at the rims, newtons. Past what the
+  // wheels' grip on the rail can pass on, the wheels slip and spark. Default
+  // `DEFAULT_TRACK_PULL_G` times the cart's weight.
+  pull?: number;
+  // The wheels' grip on this track's rail: the static friction coefficient
+  // the rolling wheels hold with (the sliding one keeps the steel pair's
+  // ratio to it). A cart climbs no slope steeper than `atan(grip)`, whatever
+  // its pull. A ratio, not a length. Default `WHEEL_STATIC_FRICTION` (0.35,
+  // steel on steel: 19 degrees).
+  grip?: number;
+  // Seconds between spawn slots. Default `DEFAULT_TRACK_INTERVAL`.
+  interval?: number;
+  // The most carts on the track at once. Default `DEFAULT_TRACK_MAX`.
+  max?: number;
+  // Where in a slot the clock starts, in cycles (0..1). Default 0.
+  phase?: number;
+  // Distance between the two wheelsets along the line, px on disk. Default
+  // `DEFAULT_TRACK_WHEEL_BASE`.
+  wheelBase?: number;
+  // The wheels' radius, px on disk (spin and slip are read at the rim).
+  // Default `DEFAULT_TRACK_WHEEL_RADIUS`.
+  wheelRadius?: number;
+  // The radius of the bend the drawn cart takes out of the play plane when it
+  // leaves the end of the line, px on disk. Render-only. Default
+  // `DEFAULT_TRACK_EXIT_RADIUS`.
+  exitRadius?: number;
+  // After the bend away from the camera the drawn cart runs `exitDepth` (px
+  // on disk) straight on into the depth, then takes a SECOND bend of the same
+  // radius to run sideways again, toward screen `exitTurn` - so it leaves
+  // behind the scenery at the side rather than shrinking into the background.
+  // Render-only. Defaults: no straight between the bends, and turning back
+  // the way the cart was travelling.
+  exitDepth?: number;
+  exitTurn?: "left" | "right";
+  // The cart: a rigid body, in the track's level frame as authored.
+  cart?: LevelBodyData;
+  // The `Track2D` node this was compiled from, so an exit names its track.
+  node?: string;
+}
+
+export const DEFAULT_TRACK_SPEED = 2;
+export const DEFAULT_TRACK_PULL_G = 0.5;
+export const DEFAULT_TRACK_INTERVAL = 6;
+export const DEFAULT_TRACK_MAX = 3;
+// The `minecart` model's at the half scale the level places it at
+// (`tools/blender/mineshaft/build_minecart.py`: axles 2.01 m apart, wheels
+// 0.405 m in radius).
+export const DEFAULT_TRACK_WHEEL_BASE = 1.0;
+export const DEFAULT_TRACK_WHEEL_RADIUS = 0.2;
+export const DEFAULT_TRACK_EXIT_RADIUS = 1.5;
+
 
 // A SHELTER: the FRONT WALL of an enclosed cave - the wall between the camera
 // and the play space, cut away so the player can be seen, put back for the
@@ -2733,6 +2807,8 @@ export interface LevelData {
   // Camera paths (see CameraPathData). Absent = the rule set is regions-only,
   // which is every level authored before this field.
   cameraPaths?: CameraPathData[];
+  // Minecart tracks and their spawners (see TrackData). Absent = none.
+  tracks?: TrackData[];
   // The volumes the sky does not reach (see ShelterData). Render-only. Absent
   // = none, and the whole level is under the sky the environment authors.
   shelters?: ShelterData[];
@@ -2902,6 +2978,7 @@ export interface RawLevelData {
   lights?: LegacyLightData[];
   cameraRegions?: CameraRegionData[];
   cameraPaths?: CameraPathData[];
+  tracks?: TrackData[];
   shelters?: ShelterData[];
   fogRegions?: FogRegionData[];
   notes?: NoteData[];
@@ -3940,6 +4017,11 @@ export function scaleNormalized(data: LevelData, factor: number): LevelData {
         ...(s.front !== undefined ? { front: s.front * factor } : {}),
       }),
     );
+  const tracks = data.tracks?.filter((t, i) => {
+    if (t.verts.length >= 2) return true;
+    console.warn(`[track] tracks[${i}] at (${t.x}, ${t.y}) has fewer than 2 verts; dropped.`);
+    return false;
+  }).map((t) => scaleTrack(t, factor));
   const fogRegions = data.fogRegions?.map((r): FogRegionData => ({
     x: r.x * factor, y: r.y * factor, rot: r.rot,
     shape: r.shape.kind === "circle"
@@ -3998,7 +4080,45 @@ export function scaleNormalized(data: LevelData, factor: number): LevelData {
       // pixels and scaled where it is read (`BallLevel.startArrival`).
       ...(data.player.arrival ? { arrival: data.player.arrival } : {}),
     },
-    bodies: data.bodies.map((b) => ({
+    bodies: data.bodies.map((b) => scaleBodyData(b, factor)),
+    ...(tracks ? { tracks } : {}),
+  };
+}
+
+// A track's line, its placement, its wheelbase, wheel radius and cruise speed
+// are lengths (a speed is px/s on disk); the pull is newtons, the interval
+// seconds, the phase cycles and the cap a count, and none of those scale.
+function scaleTrack(t: TrackData, factor: number): TrackData {
+  return {
+    x: t.x * factor,
+    y: t.y * factor,
+    rot: t.rot,
+    verts: t.verts.map((v) => ({
+      x: v.x * factor,
+      y: v.y * factor,
+      ...(v.inX !== undefined ? { inX: v.inX * factor } : {}),
+      ...(v.inY !== undefined ? { inY: v.inY * factor } : {}),
+      ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
+      ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
+    })),
+    ...(t.speed !== undefined ? { speed: t.speed * factor } : {}),
+    ...(t.pull !== undefined ? { pull: t.pull } : {}),
+    ...(t.grip !== undefined ? { grip: t.grip } : {}),
+    ...(t.interval !== undefined ? { interval: t.interval } : {}),
+    ...(t.max !== undefined ? { max: t.max } : {}),
+    ...(t.phase !== undefined ? { phase: t.phase } : {}),
+    ...(t.wheelBase !== undefined ? { wheelBase: t.wheelBase * factor } : {}),
+    ...(t.wheelRadius !== undefined ? { wheelRadius: t.wheelRadius * factor } : {}),
+    ...(t.exitRadius !== undefined ? { exitRadius: t.exitRadius * factor } : {}),
+    ...(t.exitDepth !== undefined ? { exitDepth: t.exitDepth * factor } : {}),
+    ...(t.exitTurn !== undefined ? { exitTurn: t.exitTurn } : {}),
+    ...(t.cart !== undefined ? { cart: scaleBodyData(t.cart, factor) } : {}),
+    ...(t.node !== undefined ? { node: t.node } : {}),
+  };
+}
+
+function scaleBodyData(b: LevelBodyData, factor: number): LevelBodyData {
+  return {
       kind: b.kind,
       // A name, not a length (see `LevelBodyData.name`).
       ...(b.name !== undefined ? { name: b.name } : {}),
@@ -4096,7 +4216,6 @@ export function scaleNormalized(data: LevelData, factor: number): LevelData {
       ...(b.moveAlign !== undefined ? { moveAlign: b.moveAlign } : {}),
       ...(b.formation !== undefined ? { formation: scaleFormation(b.formation, factor) } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
-    })),
   };
 }
 

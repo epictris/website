@@ -903,6 +903,9 @@ function stepLevel(frameInput: FrameInput, seeking: boolean): void {
     // Per step for the same reason: a break that happens on a caught-up step is
     // the only frame its event exists on (see `BallLevel.breakEvents`).
     debris.ingest(level.breakEvents);
+    // ...and the minecarts that left their lines on this step, which the
+    // scene carries on round the bend out of the plane.
+    scene3d?.ingestTrackExits(level.trackExits);
     // ...and the leaves and slime the cuff knocked loose on this step.
     leaves.ingest(level);
     slime.ingest(level, STEP);

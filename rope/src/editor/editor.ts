@@ -38,6 +38,7 @@ import { BallLevel } from "../level/ballLevel";
 // a threshold in newtons into one (see `addBreakFields`).
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallInputSource } from "../input/ballInput";
+import { WHEEL_STATIC_FRICTION } from "../level/tracks";
 import { BUTTON_BITS, InputTrace } from "../input/inputTrace";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
@@ -50,6 +51,13 @@ import {
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
   DEFAULT_SHELTER_FRONT,
+  DEFAULT_TRACK_EXIT_RADIUS,
+  DEFAULT_TRACK_INTERVAL,
+  DEFAULT_TRACK_MAX,
+  DEFAULT_TRACK_PULL_G,
+  DEFAULT_TRACK_SPEED,
+  DEFAULT_TRACK_WHEEL_BASE,
+  DEFAULT_TRACK_WHEEL_RADIUS,
   DEFAULT_FOG_FALLOFF,
   DEFAULT_PATH_REACTION,
   DEFAULT_PATH_SOFTNESS,
@@ -196,6 +204,7 @@ import {
   type EdVine,
   type EdBodyFrame,
   type EdItem,
+  type EdTrack,
   type EdLight,
   type EdShape,
   type EdLayer,
@@ -472,7 +481,10 @@ type Tool =
   // as a box (`FogRegion2D`), a cave's front wall clicked out as an outline
   // like +Poly's (`Shelter2D`).
   | "fog"
-  | "shelter";
+  | "shelter"
+  // A minecart track clicked out as a curve is, with a cart placed on it
+  // (`Track2D`, docs/minecarts.md).
+  | "track";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -500,6 +512,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
     "root",
     "fog",
     "shelter",
+    "track",
   ],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow", "checkpoint"],
@@ -1428,7 +1441,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // A run-of-clicks draft, and which tool is drafting it: `+Poly` closes into an
   // outline, `+Path` ends open as a camera path. One draft rather than two so
   // Esc, Enter, the title readout and the preview cannot drift apart per tool.
-  let polyDraft: { kind: "poly" | "path" | "shelter"; verts: Vec2[] } | null = null;
+  let polyDraft: { kind: "poly" | "path" | "shelter" | "track"; verts: Vec2[] } | null = null;
   // A knife being drawn (the Cut tool): where its first click landed.
   let cutDraft: { from: Vec2 } | null = null;
   // A ROOT being drawn (`+ Root`, docs/roots.md): its nodes so far in world
@@ -4920,6 +4933,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     glow: button("Glow", () => { placingMushroom = false; setTool("glow"); }),
     fog: button("Fog", () => setTool("fog")),
     shelter: button("Shelter", () => setTool("shelter")),
+    track: button("Track", () => setTool("track")),
   };
   const mushroomButton = toolize(button("", () => { placingMushroom = true; setTool("glow"); }), "Bouncy mushroom", "mushroom");
   mushroomButton.title = "Click to plant a glowing, bouncy mushroom. Its cap expands on impact. Adjust Bounce and Launch on its body.";
@@ -4947,6 +4961,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     glow: ["Glowing mushroom", "glow"],
     fog: ["Fog region", "fog"],
     shelter: ["Shelter", "shelter"],
+    track: ["Minecart track", "track"],
   };
   for (const [t, [name, icon]] of Object.entries(TOOL_FACES)) toolize(toolBtns[t as Tool], name, icon);
   toolBtns.select.title = "Click to select, drag anywhere to rubber-band; move what is selected with the gizmo, G or the arrows";
@@ -4962,6 +4977,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.path.title = PATH_TOOL_TITLE[activeLayer];
   toolBtns.fog.title =
     "Drag out a fog region: the air inside it thickens with distance from the camera by its own amount and colour, fading in from its edge over its falloff. Outside every region the view is clear, and overlapping regions do not add. A rect or a circle (its panel switches).";
+  toolBtns.track.title =
+    "Click out a minecart track along the rails, in the direction the carts travel (Enter or double-click finishes it, Esc drops it). A minecart is placed on its start as the cart every cart is built from; move it to set how high the carts ride. Carts are sent from the first node and turn out of the play plane at the last.";
   toolBtns.shelter.title =
     "Click out a shelter - the front wall of an enclosed cave, concave corners and all (Enter or click the first vertex to close, Esc to cancel). It is never drawn: it casts the sun's shadow alone, so the cave's rock faces and its inside go out of the sun while its air stays. The dotted outline is where the shadow lands on the play plane.";
   toolBtns.chain.title =
@@ -5073,6 +5090,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBlock(toolBtns.chain, toolBtns.vine, toolBtns.root, mushroomButton, toolBtns.glow),
     toolBlock(toolBtns.light, toolBtns.model),
     toolBlock(toolBtns.fog, toolBtns.shelter),
+    toolBlock(toolBtns.track),
     toolBlock(toolBtns.text, toolBtns.arrow, toolBtns.checkpoint),
   );
   toolbar.appendChild(toolbar2d);
@@ -6277,6 +6295,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     Checkpoint2D: "⚑",
     CameraRegion2D: "⬚",
     CameraPath2D: "⤳",
+    Track2D: "⛟",
     Shelter2D: "⌂",
     FogRegion2D: "≋",
     Note2D: "✎",
@@ -6716,7 +6735,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Bodies rather than items: a body is the unit the level is written in, and
     // the outliner counts the same thing the same way.
     // The scene's things, its volumes (fog, shelters) counted on their own.
-    const things = model.items.filter((i) => i.layer === "scene" && i.object !== "fog" && i.object !== "shelter");
+    const things = model.items.filter((i) => i.layer === "scene" && i.object !== "fog" && i.object !== "shelter" && i.object !== "track");
     const bodies = new Set(things.map((i) => i.unit)).size;
     const lights = model.items.filter((i) => i.object === "light").length;
     // The notes layer holds two different things (see `EdNote`), so it is
@@ -6730,6 +6749,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const extra =
       objects("shelter", "shelter", "shelters") +
       objects("fog", "fog region", "fog regions") +
+      objects("track", "track", "tracks") +
       ([
         ["camera", "cam", "cam"],
         ["notes", "note", "notes"],
@@ -6750,11 +6770,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (model.vines.length
         ? ` · ${model.vines.length} vine${model.vines.length === 1 ? "" : "s"}`
         : "");
+    const openDraft = polyDraft?.kind === "path" || polyDraft?.kind === "track";
     const draft = polyDraft
-      ? ` · ${polyDraft.kind === "path" ? "path" : "polygon"}: ${polyDraft.verts.length} ` +
+      ? ` · ${polyDraft.kind === "track" ? "track" : openDraft ? "path" : "polygon"}: ${polyDraft.verts.length} ` +
         `${polyDraft.verts.length === 1 ? "vertex" : "vertices"}` +
-        (polyDraft.verts.length >= (polyDraft.kind === "path" ? 2 : 3)
-          ? polyDraft.kind === "path"
+        (polyDraft.verts.length >= (openDraft ? 2 : 3)
+          ? openDraft
             ? " · Enter to finish"
             : " · Enter to close"
           : "")
@@ -6922,7 +6943,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // several shapes"), its overlap, push, drag and drawing reading every piece.
   // A fog region and a shelter are volumes the camera and the sky read as
   // fixed in the world (`WORLD_FIXED_TYPES`), so they are never part of one.
-  const canShareBody = (b: EdItem) => b.layer === "scene" && b.object !== "fog" && b.object !== "shelter";
+  // A track is a line in the world with its cart under it, never in a body.
+  const canShareBody = (b: EdItem) =>
+    b.layer === "scene" && b.object !== "fog" && b.object !== "shelter" && b.object !== "track";
 
   // An area is a region of space rather than a piece of stuff, so it is made of
   // nothing and carries no density. Every other kind does, `anchor` included:
@@ -7239,7 +7262,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       describe(g,
         "The object's position is wheel 0. Drag a square to move a wheel (click one to edit its r here), a round grip on a wheel's rim to size it, a run's midpoint to add a wheel there; Alt+click a square removes its wheel. Every wheel must touch the band. Speed is signed: positive runs the loop clockwise on screen, negative runs it back. A belt builds only on a static body that does not move.");
-    } else if (items.every((b) => b.shape.kind === "path" && b.layer === "scene")) {
+    } else if (items.every((b) => b.shape.kind === "path" && b.layer === "scene" && b.object !== "track")) {
       // A CURVE has one size and it is the width of the bar: the line itself is
       // edited on the canvas, node by node, exactly as a polygon's outline is.
       // A ROOT branch tapers (docs/roots.md), so its `width` is where it STARTS,
@@ -10446,6 +10469,179 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(group);
   }
 
+  // A minecart track (docs/minecarts.md): its line is edited on the canvas as
+  // a camera path's is, and its spawner here. Every field blank is the
+  // format's default, which a level keeps following until one is typed.
+  function buildTrackGroup(tracks: EdItem[]): void {
+    const group = el("div", "ed-group");
+    group.appendChild(
+      heading(
+        tracks.length === 1 ? `Track #${tracks[0]!.id}` : `${tracks.length} tracks selected`,
+        "A minecart track: carts are sent from its first node along the line to its last, where they turn out of the play plane and are gone. The body under it in the scene tree is the cart every cart is built from - placed on the line where it sits on the rails, which says how high a cart rides. Carts are powered: held by the ball or the chain, they stop and their wheels spin and spark.",
+      ),
+    );
+    let g = section(group, "track/Transform", "Transform");
+    addTransformFields(g, groupNum(g, tracks), tracks);
+    appendPathActions(g, tracks, "Reverse the direction carts travel - they start from the other end");
+
+    g = section(group, "track/Carts", "Carts");
+    const num = groupNum(g, tracks);
+    const field = (
+      label: string,
+      key: Exclude<keyof EdTrack, "exitTurn">,
+      toShown: number,
+      def: number,
+      step: number,
+      clamp: (v: number) => number,
+    ): void => {
+      num(
+        label,
+        (b) => (b.track[key] ?? NaN) * toShown,
+        (b, v) => (b.track[key] = clamp(v / toShown)),
+        step,
+        {
+          placeholder: String(Math.round(def * toShown * 1000) / 1000),
+          onEmpty: () => {
+            for (const b of tracks) b.track[key] = null;
+          },
+        },
+      );
+    };
+    field("speed", "speed", M2PX, DEFAULT_TRACK_SPEED, 10, (v) => Math.max(0, v));
+    field("interval", "interval", 1, DEFAULT_TRACK_INTERVAL, 0.5, (v) => Math.max(0.1, v));
+    field("max", "max", 1, DEFAULT_TRACK_MAX, 1, (v) => Math.max(0, Math.round(v)));
+    field("phase", "phase", 1, 0, 0.05, (v) => v - Math.floor(v));
+    describe(
+      g,
+      "speed: the cruise speed, px/s. interval: seconds between spawn slots; a slot whose cart cannot go (the cap is reached, or the start of the line is not clear) is skipped, never delayed, so held-up carts never change the spacing for good. max: the most carts on the track at once. phase: where in a slot the clock starts, 0..1 - two tracks a half apart alternate.",
+    );
+
+    g = section(group, "track/Drive", "Drive");
+    const drive = groupNum(g, tracks);
+    drive(
+      "pull",
+      (b) => b.track.pull ?? NaN,
+      (b, v) => (b.track.pull = Math.max(0, v)),
+      50,
+      {
+        placeholder: `${DEFAULT_TRACK_PULL_G} x weight`,
+        onEmpty: () => {
+          for (const b of tracks) b.track.pull = null;
+        },
+      },
+    );
+    drive(
+      "grip",
+      (b) => b.track.grip ?? NaN,
+      (b, v) => (b.track.grip = Math.max(0, v)),
+      0.05,
+      {
+        placeholder: String(WHEEL_STATIC_FRICTION),
+        onEmpty: () => {
+          for (const b of tracks) b.track.grip = null;
+        },
+      },
+    );
+    // What the grip buys, said as the angle an author draws the line at.
+    const climb = (): string => {
+      const angles = tracks.map((b) => (Math.atan(b.track.grip ?? WHEEL_STATIC_FRICTION) * 180) / Math.PI);
+      const lo = Math.min(...angles);
+      const hi = Math.max(...angles);
+      return lo === hi ? `${lo.toFixed(0)}°` : `${lo.toFixed(0)}-${hi.toFixed(0)}°`;
+    };
+    const climbRow = fieldRow("steepest climb");
+    const climbVal = document.createElement("span");
+    climbVal.textContent = climb();
+    climbRow.appendChild(climbVal);
+    g.appendChild(climbRow);
+    readouts.push({ el: climbVal, get: climb });
+    const wheel = (label: string, key: "wheelBase" | "wheelRadius" | "exitRadius", def: number): void => {
+      drive(
+        label,
+        (b) => (b.track[key] ?? NaN) * M2PX,
+        (b, v) => (b.track[key] = Math.max(1, v) * PX),
+        5,
+        {
+          placeholder: String(Math.round(def * M2PX)),
+          onEmpty: () => {
+            for (const b of tracks) b.track[key] = null;
+          },
+        },
+      );
+    };
+    wheel("wheel base", "wheelBase", DEFAULT_TRACK_WHEEL_BASE);
+    wheel("wheel radius", "wheelRadius", DEFAULT_TRACK_WHEEL_RADIUS);
+    describe(
+      g,
+      "pull: the most the motor pulls with at the rims, newtons; past what the wheels' grip on the rail can pass on, they slip and spark. grip: the wheels' friction on this track's rail (0.35 is steel on steel); a cart climbs no slope steeper than the angle shown, whatever its pull, and a held cart pushes with 0.7 x grip x its weight while its wheels spin. wheel base and wheel radius: px, the cart model's own.",
+    );
+
+    // The way out: drawn only, after the sim has let the cart go.
+    g = section(group, "track/Exit", "Exit");
+    const exitNum = groupNum(g, tracks);
+    exitNum(
+      "bend",
+      (b) => (b.track.exitRadius ?? NaN) * M2PX,
+      (b, v) => (b.track.exitRadius = Math.max(1, v) * PX),
+      10,
+      {
+        placeholder: String(Math.round(DEFAULT_TRACK_EXIT_RADIUS * M2PX)),
+        onEmpty: () => {
+          for (const b of tracks) b.track.exitRadius = null;
+        },
+      },
+    );
+    exitNum(
+      "depth",
+      (b) => (b.track.exitDepth ?? NaN) * M2PX,
+      (b, v) => (b.track.exitDepth = Math.max(0, v) * PX),
+      10,
+      {
+        placeholder: "0",
+        onEmpty: () => {
+          for (const b of tracks) b.track.exitDepth = null;
+        },
+      },
+    );
+    const turnRow = fieldRow("turn");
+    const turnSel = document.createElement("select");
+    turnSel.className = "ed-select";
+    for (const [value, label] of [
+      ["", "on (the way it was going)"],
+      ["left", "left"],
+      ["right", "right"],
+    ] as const) {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      turnSel.appendChild(o);
+    }
+    const turns = new Set(tracks.map((b) => b.track.exitTurn ?? ""));
+    if (turns.size > 1) {
+      const o = document.createElement("option");
+      o.value = "mixed";
+      o.textContent = "mixed";
+      o.disabled = true;
+      turnSel.appendChild(o);
+    }
+    turnSel.value = turns.size === 1 ? [...turns][0]! : "mixed";
+    turnSel.addEventListener("change", () => {
+      if (turnSel.value === "mixed") return;
+      beginAction();
+      for (const b of tracks) b.track.exitTurn = turnSel.value === "left" || turnSel.value === "right" ? turnSel.value : null;
+      markDirty();
+    });
+    turnRow.appendChild(turnSel);
+    g.appendChild(turnRow);
+    describe(
+      g,
+      "Past the end of the line the drawn cart turns away from the camera on a bend of this radius (px), runs depth (px) straight on into the rock, then turns again to run sideways - left, right, or on the way it was going - and is gone behind the scenery. Drawn only: the ball and the chain were let go at the end of the line.",
+    );
+
+    addActionsRow(group);
+    inspector.appendChild(group);
+  }
+
 
   // Three whole-path actions, because each is miserable to do node by node.
   function appendPathActions(g: HTMLElement, paths: EdItem[], reverseTitle: string): void {
@@ -11549,6 +11745,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       "campath",
       "shelter",
       "fog",
+      "track",
       "notes",
     ] as const;
     const panelOf = (b: EdItem): (typeof PANELS)[number] =>
@@ -11582,6 +11779,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       else if (k === "campath") buildCameraPathGroup(items);
       else if (k === "shelter") buildShelterGroup(items);
       else if (k === "fog") buildFogGroup(items);
+      else if (k === "track") buildTrackGroup(items);
       else if (k === "light") buildLightsGroup(items);
       else if (k === "anchor") buildAnchorsGroup(items);
       else if (k === "model") buildModelsGroup(items);
@@ -12299,6 +12497,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }, true);
 
   const POLY_CLOSE_PX = 10;
+  // The cart a fresh track is given, and how far along its first stretch it
+  // is placed (metres): clear of the start, where the spawner sends carts from.
+  const TRACK_CART_PREFAB = "minecart";
+  const TRACK_CART_START = 0.8;
 
   function cancelPolyDraft(): void {
     if (!polyDraft) return;
@@ -12401,6 +12603,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       commitPathDraft(draft.verts);
       return;
     }
+    if (draft.kind === "track") {
+      commitTrackDraft(draft.verts);
+      return;
+    }
     const pts = draft.verts;
     const drawn = pts.length >= 3 && isSimpleLoop(pts) ? normalizeWinding(pts) : convexHull(pts);
     if (drawn.length < 3) {
@@ -12458,6 +12664,71 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     setSelection([item.id]);
     markDirty();
     if (made) offerParentPick(made);
+  }
+
+  // The clicked points as a MINECART TRACK (docs/minecarts.md): a `Track2D`
+  // whose origin is the first node, its line as clicked, and a `minecart`
+  // placed on its first stretch as the cart every cart is built from - its
+  // model's wheels on the line, turned with the line - so a fresh track runs
+  // carts with no further step. Written into the level as a tree and read
+  // back, as a placed prefab is (`placePrefab`), so the cart comes in expanded.
+  function commitTrackDraft(pts: readonly Vec2[]): void {
+    const first = pts[0];
+    const next = pts.find((p) => first !== undefined && p.distanceTo(first) > 1e-6);
+    if (!first || !next) {
+      updateTitle();
+      return;
+    }
+    const local = pts.map((p) => p.sub(first));
+    const along = next.sub(first).normalized();
+    // Upright on the line whichever way it runs: turned with its slope, not
+    // with its direction, so a line drawn right to left does not put the cart
+    // upside down under it. Which way the cart travels is the line's alone.
+    const rot = (along.x < 0 ? along.neg() : along).angle();
+    const prefab = prefabLibrary()[TRACK_CART_PREFAB];
+    // How far above its model's ground the prefab's origin stands: the model
+    // node's own offset, so its wheels land on the line.
+    const model3d = prefab?.root.children?.find((c) => c.type === "Model3D") as { y?: number } | undefined;
+    const ride = (model3d?.y ?? 0) * PX;
+    const cartAt = along.mul(TRACK_CART_START).add(new Vec2(0, -ride).rotated(rot));
+    const tree = toTree(model);
+    const taken = new Set(model.tree.nodes.keys());
+    const trackId = newNodeId(taken);
+    taken.add(trackId);
+    const cartId = newNodeId(taken);
+    const names = new Set(model.tree.roots.map((r) => model.tree.nodes.get(r)?.name ?? ""));
+    let name = "Track";
+    for (let k = 2; names.has(name); k++) name = `Track${k}`;
+    tree.nodes.push({
+      type: "Track2D",
+      id: trackId,
+      name,
+      x: first.x,
+      y: first.y,
+      rot: 0,
+      verts: local.map((p) => ({ x: p.x, y: p.y })),
+      children: prefab
+        ? [
+            {
+              type: "Instance",
+              id: cartId,
+              name: "Cart",
+              grouped: true,
+              x: cartAt.x,
+              y: cartAt.y,
+              rot,
+              prefab: TRACK_CART_PREFAB,
+              order: nextOrder(model.tree),
+            },
+          ]
+        : [],
+    } as unknown as LevelNode);
+    beginAction();
+    reexpand(tree);
+    const item = model.items.find((i) => i.node === trackId);
+    if (item) setSelection([item.id]);
+    markDirty();
+    if (!prefab) showToast(`No ${TRACK_CART_PREFAB} prefab: put a body under the track to be its cart`, "warn");
   }
 
   // How close (in screen px) outside a root's bar a stroke may start and still
@@ -13774,19 +14045,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
-    if (drawTool === "poly" || drawTool === "path" || drawTool === "shelter") {
+    if (drawTool === "poly" || drawTool === "path" || drawTool === "shelter" || drawTool === "track") {
       const p = snapVec(world);
+      const open = drawTool === "path" || drawTool === "track";
       // A path is finished by Enter or a double-click, never by clicking back on
       // its first vertex: an open run may legitimately end where it started (a
       // loop of a level), and closing on it would make that unauthorable.
-      if (drawTool !== "path" && polyDraft && polyDraft.verts.length >= 3) {
+      if (!open && polyDraft && polyDraft.verts.length >= 3) {
         const first = canvasScreen(polyDraft.verts[0]!);
         if (scr.distanceTo(first) <= POLY_CLOSE_PX) {
           commitPolyDraft();
           return;
         }
       }
-      if (drawTool === "path" && e.detail >= 2 && polyDraft && polyDraft.verts.length >= 2) {
+      if (open && e.detail >= 2 && polyDraft && polyDraft.verts.length >= 2) {
         commitPolyDraft();
         return;
       }
@@ -15530,6 +15802,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // runs several steps must not drop the caught-up steps' events.
         testSparks.ingest(testLevel.sparkEvents);
         testDebris.ingest(testLevel.breakEvents);
+        scene3d?.ingestTrackExits(testLevel.trackExits);
         testLeaves.ingest(testLevel);
         testSlime.ingest(testLevel, STEP);
         testRetract.observe(testLevel, STEP);

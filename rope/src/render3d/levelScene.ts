@@ -23,6 +23,7 @@ import type { CollisionObject2D } from "../engine/body";
 import type { BallVisual } from "./ballVisual";
 import type { BodyVisual } from "./bodyVisuals";
 import type { TreeLook } from "./treeLook";
+import type { CartLooks } from "./minecarts";
 import { LightRig } from "./lights";
 import type { Scene3DLevel } from "./scene";
 import type { SceneLens } from "./space";
@@ -56,6 +57,9 @@ export class LevelScene {
   // The level's look, drawn from its node tree (treeLook.ts), and the engine
   // body each body node built, which carries the mushrooms on it.
   look: TreeLook | null = null;
+  // The minecarts (`CartLooks`): live carts drawn as their template, and the
+  // ones carried round the bend out of the plane after leaving their line.
+  carts: CartLooks | null = null;
   readonly engineOf = new Map<string, CollisionObject2D>();
   ballVisual: BallVisual | null = null;
   // The glass ball's glow on the world (see `Scene3D.setLevel`).
@@ -87,6 +91,8 @@ export class LevelScene {
     // Before the rig, which takes its lights back.
     this.look?.dispose();
     this.look = null;
+    this.carts?.dispose();
+    this.carts = null;
     this.engineOf.clear();
     this.ballVisual?.dispose();
     this.ballVisual = null;

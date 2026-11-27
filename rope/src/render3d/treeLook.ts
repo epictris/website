@@ -151,6 +151,15 @@ export class TreeLook {
       case "Decoration3D":
         // Drawn by its formation, which it is always the child of.
         return;
+      case "Track2D":
+        // A track's cart template is drawn only where it was built as a body
+        // (the editor's views, `CompileOptions.keepTrackCarts`): in the game
+        // it is no body of the level, and its carts draw themselves
+        // (`render3d/minecarts.ts`).
+        for (const c of n.children ?? []) {
+          if (this.opts.bodyFrame(c.id)) this.build(c, parent, up);
+        }
+        return;
       default:
         // The rest are volumes and marks in the plane: drawn by the 2D
         // overlay, the camera, the fog and the sky, not here.

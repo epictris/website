@@ -21,6 +21,8 @@ contains the overview floor, lights, camera, hook and extra display lantern only
 | --- | --- |
 | mine-rail-straight | 4 m straight; start at origin, along +X |
 | mine-rail-curve | 45° turn, 5 m centre radius; start at origin, along +X |
+| mine-rail-curve-90-left | 90° left turn, 2.5 m centre radius; start at origin along +X, exit (2.5, 2.5, 0) along +Y |
+| mine-rail-curve-90-right | 90° right turn, 2.5 m centre radius; start at origin along +X, exit (2.5, -2.5, 0) along -Y |
 | mine-rail-broken | 4 m damaged straight; offset rail fractures |
 | mine-ladder | Nine rungs, ground pivot |
 | mine-crate | Closed box, centre pivot |
@@ -49,6 +51,27 @@ They keep the kit file's sleeper assembly, its Repeat sleepers modifier set to
 the segment's length and spacing, and rebuild the rails with the kit's section,
 `rail_profile.py`, which `build.py` uses too; their edge wear is baked as
 `build.py` bakes it. Rebuild them after rebuilding the kit.
+
+Build and register the two quarter-circle tracks in the editor's **+ Model** library:
+
+```sh
+blender -b -noaudio --factory-startup --python-exit-code 1 --python rope/tools/blender/mineshaft/build_quarter_rails.py
+cd rope
+bun run model:export mine-rail-curve-90-left
+bun run model:export mine-rail-curve-90-right
+```
+
+Both use the existing rail section, 1.14 m gauge and 0.242 m rail-head height,
+with three of the kit's individual oak sleepers 1.3 m apart along the curve.
+Left/right is from a traveller entering along +X, looking down from +Z.
+The radius is 2.5 m in the source (1.5 m at the track prefabs' 0.6 scale,
+matching the cart's default `exitRadius`). The entry pivot is at ground
+height, and both files include start/end sockets with the exit heading.
+The curves lie on the horizontal ground plane and can be yawed into place
+using the model's `rotY` in the editor. Refresh the editor after exporting.
+Sources are `assets-src/models/mine-rail-curve-90-{left,right}.blend`;
+inspection renders are `assets-src/studies/mineshaft/mine-rail-curve-90-{left,right}-overview.png`.
+These are appearance assets; track motion and collision are authored separately.
 
 Build the standalone minecart and its two inspection renders:
 

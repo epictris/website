@@ -38,7 +38,8 @@
             }
           ]
         },
-        "impermeable": true
+        "impermeable": true,
+        "thickness": 60
       },
       {
         "type": "CollisionShape2D",

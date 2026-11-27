@@ -2290,6 +2290,9 @@ switch (cmd) {
   case "spring":
     void cmdSpring();
     break;
+  case "tracks":
+    void cmdTracks();
+    break;
   case "movers":
     void cmdMovers();
     break;
@@ -2817,6 +2820,25 @@ async function cmdSpring(): Promise<void> {
   }
   const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
   console.log(`[spring] ${results.length - failed}/${results.length} cases passed${x}`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Minecart cases (src/sim/trackCases.ts): the track mounting's closed forms
+// (cruise, the unpowered roll, the held cart's grip), the spawner's beat and
+// the exit at the end of the line (docs/minecarts.md).
+async function cmdTracks(): Promise<void> {
+  const { runTrackCases } = await import("../sim/trackCases");
+  const results = runTrackCases();
+  let failed = 0;
+  for (const r of results) {
+    const stale = r.passed && r.expectedFail;
+    const bad = stale || (!r.passed && !r.expectedFail);
+    const tag = stale ? "STALE" : r.expectedFail ? "XFAIL" : r.passed ? "PASS " : "FAIL ";
+    console.log(`  ${tag} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (bad) failed++;
+  }
+  console.log(`[tracks] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

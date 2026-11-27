@@ -6,6 +6,7 @@ import { wrapAngle } from "./mathf";
 import { computeWorldVertices, isExposedCorner, shapeExtents, shapeVertices } from "./shapes";
 import type { BeltLoop, RailCurve, Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
+import type { TrackMount } from "./track";
 
 // Collision CATEGORIES. Every piece of geometry belongs to one or more of them
 // (its `layer`) and collides with the ones it names (its `mask`); two pieces
@@ -32,6 +33,14 @@ export const LAYER_HOOK = 8;
 // exists as the asker's half of a mask test, which is what `wrappable` is (see
 // there): a piece that does not name it is one ropes pass straight through.
 export const LAYER_ROPE = 16;
+// A minecart (docs/minecarts.md). A cart's pieces are on this AND on
+// `LAYER_SCENERY`, so everything that meets scenery - the ball, the hook, a
+// chain's wrap - meets a cart, and their mask (`MASK_CART`) leaves out
+// `LAYER_SCENERY`, so the scenery and the rails under it are refused by the
+// cart's own half of the test: the track holds a cart up, nothing else does.
+// Carts meet each other through this bit, which is how a queue forms behind
+// a blocked one.
+export const LAYER_CART = 32;
 
 // Everything in the way: what `collisionMask: 1` meant before the avatar and
 // the hook had categories of their own, and the mask every query the avatar
@@ -40,6 +49,9 @@ export const MASK_SOLID = LAYER_SCENERY | LAYER_PLAYER | LAYER_HOOK;
 // Every category there is - the default a piece is born with, so a level that
 // authors nothing collides with everything exactly as it always has.
 export const MASK_ALL = MASK_SOLID | LAYER_ANCHOR | LAYER_ROPE;
+// What a cart's pieces meet: the avatar, the hook, the chain's path and other
+// carts, and no scenery (see `LAYER_CART`).
+export const MASK_CART = LAYER_PLAYER | LAYER_HOOK | LAYER_ROPE | LAYER_CART;
 
 // Does the vertex loop `verts` have an edge from `p` to `q`, either way round?
 // Pieces cut from one outline share the cut's two vertices exactly, up to the
@@ -1070,8 +1082,17 @@ export class RigidBody2D extends PhysicsBody2D {
   // cannonball are never scenery, and a vine link sleeps with its vine
   // (`stepVines`) rather than on its own.
   get canSleep(): boolean {
-    return true;
+    return this.track === null;
   }
+
+  // Track mounting (`engine/track.ts`, docs/minecarts.md): the body rides an
+  // authored curve with one freedom, its arc length, and its pose is written
+  // from that. Every solver site that sizes or applies an impulse asks
+  // `trackResponse`/`applyTrackImpulse` of a body that has one, and the world
+  // folds anything else that moved it back onto the line (`TrackMount.absorb`).
+  // A powered cart never rests, so a track body never sleeps. Null for every
+  // other body; recorded replays predate the field.
+  track: TrackMount | null = null;
 
   restartRestWindow(): void {
     this.stillFrames = 0;
@@ -1578,6 +1599,12 @@ export class RigidBody2D extends PhysicsBody2D {
   // Godot ApplyImpulse(impulse, position=offset from centre of mass).
   applyImpulse(impulse: Vec2, position: Vec2 = Vec2.ZERO): void {
     this.wake();
+    if (this.track !== null) {
+      // Along the line only (see `track`).
+      const along = this.track.along(impulse, position);
+      this.track.push(this, along);
+      return;
+    }
     this.linearVelocity = this.linearVelocity.add(impulse.mul(this.inverseMass));
     this.angularVelocity += this.inverseInertia * position.cross(impulse);
   }
