@@ -6,16 +6,19 @@ DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production
 `dist/editor.html` in `serve.ts`; the build emits both pages (`rollupOptions.input`). It
 edits an `EdModel` (positions in world **metres**, one
 stable id per body) and manipulates it with the mouse: pan (**middle**-button drag, or the
-right button, or a **left** drag on anything not selected), wheel-zoom about the cursor,
-click-select, drag a *selected* body to move it, corner/rotate/
+right button), orbit (**Alt + middle** drag), wheel-zoom about the cursor,
+click-select, a **left** drag anywhere to band-select, the gizmo (or G, or the arrows) to move what is selected, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
 The editor is arranged as four **workspaces**, one per workflow - 2D, Formations, Decorations and Texturing ([below](#workspaces-2d-formations-decorations-texturing)).
 The editor edits the level's **node tree** ([level-format](level-format.md#the-node-tree)), listed in the **scene tree** (the right dock), with groups, data layers and prefabs ([editor-model](editor-model.md), [prefabs](prefabs.md)).
 How the screen is laid out is [below](#authoring-interface).
 What a level LOOKS like is what its nodes carry - formations and the decorations grown on them ([formations](formations.md)), models of the library ([blender-models](blender-models.md)) - and a collision shape is drawn in 3D only by its own **debug geometry** ([below](#debug-geometry)).
-**Selected first, moved second.**
-A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
-The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
+**A left drag is always a band** (since 2026-11-27, Blender's Select Box).
+With the select tool, a left press is a click until the pointer leaves `CLICK_SLOP_PX`, and then it rubber-bands, wherever it started: on empty space, on something not selected, or on the selection itself.
+What is selected moves only by the gizmo, **G** or the arrow keys, never by a drag that may have meant to band, so geometry cannot be nudged out of place by a gesture that meant something else - the one editing mistake that leaves no trace on screen.
+What still grabs on a left press is what is plainly a grip: the selection's handles (corners, midpoints, rotate, radius, depth, belt wheels), the gizmo, the spawn marker (it has no gizmo), a vine's drag-out of a berry, and the Shift gestures on a selected light (drop on surface) or chain (wrap point).
+Until then the rule was **selected first, moved second**: a press on the selection dragged it and a press on anything else panned, so a band could only be started from empty space - and in a 3D view, with rock behind nearly everything, there was rarely any.
+The middle button pans and **Alt + middle** orbits, in every workspace ([The 3D view](#the-3d-view-since-2026-11-22)).
 **Cut**, in Select's block of the toolbar (it makes nothing, it works on what is there), is a knife: two clicks draw a line, every polygon or box it crosses edge to edge is cut, and what no longer touches becomes a body of its own, taking the anchors (with their chains and vines) on its side; **Join** (Ctrl+J) folds the selected bodies into the first, fusing pieces of the same surface ([editor-model](editor-model.md#split-and-join)).
 
 `+Poly` is the one draw tool that is a run of clicks rather than a drag, because an outline
@@ -75,7 +78,7 @@ A plain vine becomes a berry vine by its first berry, and goes back to plain (it
 A click on a vine that does not leave the click's slop only selects it.
 
 **Click a berry** to pick it out: it wears the selection, the 3D view's gizmo stands on it, and Delete removes it rather than the vine.
-Move it with the gizmo or by dragging the berry itself; its root on the vine stays put and the stalk follows.
+Move it with the gizmo (a drag from the berry bands, as anywhere); its root on the vine stays put and the stalk follows.
 The gizmo's scale sizes it (it is round, so either handle scales the whole berry).
 The picked berry shows a square at its root, which slides the root along the vine; the berry keeps its offset from it.
 **Alt-click** a berry removes it.
@@ -119,7 +122,7 @@ The file still saves, and the game refuses it as loudly as the build does.
 ## Picking corners out of a shape
 
 **Corners are selectable in their own right** (`selectedVerts` in `editor.ts`), which is a second level of selection nested inside the item one: a polygon is the item whose parts are separately editable, so once the shape itself is picked, a click, a rubber band, a Delete, a nudge and a drag can all just as well mean its corners.
-Click a corner to pick it out, **Shift+click** to add or drop one, and a **rubber band from empty space** catches every corner inside it (Shift unions).
+Click a corner to pick it out, **Shift+click** to add or drop one, and a **rubber band** (dragged from anywhere but a handle) catches every corner inside it (Shift unions).
 Picked corners draw as **filled** squares against the hollow ones, which is the same distinction the halo makes about a whole object: the selection orange means "an edit applies to this", and a hollow handle at every corner already means "you may drag me".
 **Delete** removes them, the **arrow keys** nudge them, and dragging any one of them moves the whole set - the grabbed corner follows the pointer and the rest ride along at a fixed offset from it, exactly as a group of bodies is dragged.
 **Esc**, or a click on empty space, drops the corner selection and leaves the shape selected; a second one drops the shape.
@@ -145,12 +148,13 @@ The vertex count carries how many corners are **picked** where any are (`4 (2 se
 The cut itself is drawn on the canvas as dim dashed lines inside the selected outline
 (`decomposeSeams`), because the pieces are what the physics is: the rope wraps the corners
 they share with the outline and refuses their seams.
-Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or out, and dragging any member moves the whole group (the grabbed body leads the snap; the rest keep their offsets).
-Dragging from empty space rubber-bands a **rectangle selection**, and the drag *direction* picks between the two CAD selection modes, as in Fusion 360 and AutoCAD: left→right is a **window** (only what the band fully encloses - every rotated corner inside, a circle by its extremes), right→left a **crossing** (anything it touches - a rotated box by SAT, a circle by its nearest point).
+Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or out, and the gizmo, G or the arrows move the whole set.
+A left drag from anywhere (but a handle) rubber-bands a **rectangle selection**, and the drag *direction* picks between the two CAD selection modes, as in Fusion 360 and AutoCAD: left→right is a **window** (only what the band fully encloses - every rotated corner inside, a circle by its extremes), right→left a **crossing** (anything it touches - a rotated box by SAT, a circle by its nearest point).
 The mode has to be legible while the drag is still live, and the box alone cannot show a direction, so the band draws **solid** for a window and **dashed** for a crossing - the CAD convention, so it reads the same way it does there.
 A drag with no horizontal travel counts as a window, so a degenerate one falls into the stricter mode.
-**Shift** unions the hits into the current selection instead of replacing it, and a click that never moves clears it.
-A band is dragged from EMPTY SPACE, which is what keeps it and the left-button pan apart: over nothing there is nothing to pan away from, and over a body there is nothing to band.
+**Shift** unions the hits into the current selection instead of replacing it.
+A press that never leaves the click's slop is a click: on something it picks that thing (the drill-in cycle, Shift and Alt as ever), on empty space it clears.
+Until 2026-11-27 a band could only start from EMPTY SPACE, because a left drag on a body panned or moved it ([above](#level-editor)).
 Resize handles only appear for a *single* selection, but the inspector is a **group panel** at
 any size: every property the selection has in common is shown and every edit applies to all of
 them (position and colour always; `rot°` when each body has a meaningful one, `w`/`h` or
@@ -429,7 +433,7 @@ Texturing is painting a rock with materials from the library, live: [formations]
 **The inspector** is filtered by section key (`sectionShown`, applied by `pruneEmptySections`), so a rock's panel in Formations is its recipe rather than its bounce, friction and mover first.
 The section a workspace's work is done in (`PRIMARY_SECTIONS`: Formation, Decorations, a decoration's own; and the panels that ARE their node - the spawn's, the Sun's, the Environment's, a fog region's Fog, a shelter's Wall) starts open until the author closes it, remembered as opened sections are (`setDefaultOpen` in `panelUi.ts`).
 
-**The 2D view is navigated as the others are** (since 2026-11-26; it was locked head on before): the middle drag orbits, Shift + middle or right drag pans, the wheel dollies toward what is under the pointer, and the view cube turns it.
+**The 2D view is navigated as the others are** (since 2026-11-26; it was locked head on before): the middle or right drag pans, Alt + middle orbits (since 2026-11-27; the middle drag orbited and Shift + middle panned before), the wheel dollies toward what is under the pointer, and the view cube turns it.
 Everything 2D draws and picks works at any angle, through the plane under the pointer ([below](#the-3d-view-since-2026-11-22)); **Align camera to plane** (top left, Numpad 1) faces the plane again, and is lit while the view is turned.
 **A switch never moves the camera**: every workspace keeps the camera's position and direction exactly (Tris, 2026-11-25).
 Until then each 3D workspace came back at the yaw, pitch and depth it was left at, which moved the camera on every switch between Formations and Decorations.
@@ -504,11 +508,10 @@ The Level and Visuals workspaces it replaced, and **W**, are gone; **Level** and
 
 | Gesture or key | Does |
 |---|---|
-| middle drag | orbit about the view's target (in 2D, pan) |
-| Shift + middle drag, right drag | pan (but a right drag on the rock with the paint brush on erases) |
+| middle drag, right drag | pan (but a right drag on the rock with the paint brush on erases) |
+| Alt + middle drag | orbit about the view's target |
 | wheel | dolly toward what is under the pointer |
-| left drag on empty space | the selection band, at any angle |
-| left drag on something not selected | pan (selected first, moved second, as ever) |
+| left drag, from anywhere but a handle or the gizmo | the selection band, at any angle (a click picks) |
 | **F**, Numpad . | frame the selection and orbit about it (a solid guide by its own 3D box) |
 | **Home** | frame everything |
 | **Numpad 1**, `Align camera to plane` | the gameplay plane head on, where the view is looking |
@@ -549,6 +552,9 @@ A `CameraOrbit` (`poseFromCamera`) is still clamped at 80 degrees, so the camera
 It is an authoring instrument, not a look: a perspective camera divides by depth, so a ledge 2 m behind the plane is drawn a little smaller and pulled toward the centre of the frame - which means two things that are exactly in line in the level do not look it, and two that look it are not.
 Orthographic removes the divide, so a metre is the same number of pixels at every depth and what is on screen IS the plan, which is what makes aligning off-plane geometry by eye possible at all.
 Both lenses are driven from the same visible height, so the gameplay plane is framed identically through either and the overlay, the handles and the picking are unchanged by the toggle (`cli render3d` asserts both halves: the plane matches the 2D renderer to a hundredth of a view pixel, and 20 m of depth moves a point by nothing).
+**The orthographic camera stands at least 200 m back** (`ORTHO_STANDOFF`, since 2026-11-27), whatever the zoom.
+It orbits about the same target in the same direction as the perspective one, but its distance is not in its picture, and its near plane is: at the perspective distance, which a close zoom brings down to 0.2 m, the near plane sliced flat through every rock between the eye and the target.
+Standing back draws all of it, and three's orthographic raycast starts at the eye, so it is picked too (a negative near would have drawn it and left it unclickable); `cli render3d`'s `orthographic: nothing in front of the target is clipped zoomed in` holds it.
 The two cameras both live on `Scene3D` for the life of the scene rather than one being rebuilt on the toggle, since the gizmo raycasts against whichever is current and wants something stable to be handed.
 A **▶ Test is always perspective**, whatever the toggle says: the point of a test is that the framing is the player's, and the player has no lens button.
 
@@ -604,7 +610,7 @@ A single selected object or body carries the standard **red/green/blue handles**
 
 **All three sets are on screen at once**, and there is no mode to pick between them.
 `TransformControls` is a modal control - one instance draws one mode - so this is three of them sharing one proxy, nested by size: the scale boxes inside, the move arrows through them, the rotation rings around the outside.
-A mode toggle is a thing to remember and to get wrong, and reaching for a ring and turning up a move arrow because the toolbar was left on `move` is an edit that looks like the level and is not it - the same mistake **selected first, moved second** exists to prevent on the plane.
+A mode toggle is a thing to remember and to get wrong, and reaching for a ring and turning up a move arrow because the toolbar was left on `move` is an edit that looks like the level and is not it - the same mistake a left drag that only ever bands exists to prevent on the plane.
 Nested, the answer to "what will this drag do" is whatever is drawn under the pointer.
 
 The sizes are read off the geometry three actually builds rather than chosen by eye: an axis handle sits at `0.5 x size` with a picker cone reaching `0.6`, and a rotation ring is drawn at `0.5` with a picker tube `0.1` thick, so `HANDLE_SIZE` puts the scale boxes at 0.056, the move arrows at 0.113 with their pickers stopping at 0.135, and the rings at 0.175 with their pickers starting at 0.14.

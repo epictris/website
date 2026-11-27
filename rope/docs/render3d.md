@@ -58,6 +58,8 @@ It exists so a host can hold a camera the 2D one cannot describe: the editor's V
 
 - The view is sized by **`halfHeight`**, the world metres from the frame's centre to its top edge at the target's depth, not by the camera's distance.
   It is the one number both lenses are sized by - the orthographic frustum is it, and the perspective camera stands `poseDistance(pose) = halfHeight / tan(fovY / 2)` back - so a single pose drives both to the bit, and a lens change reframes nothing and moves the camera, which is the rule a level's lens already follows.
+  The orthographic camera stands at least `ORTHO_STANDOFF` (200 m) back along the same direction (since 2026-11-27): its picture does not depend on the distance, but its near plane does, and at a close zoom's perspective distance it sliced off the rock in front of the target ([editor](editor.md#the-lens)).
+  The verbatim copy below carries the same rule.
 - **The split changed nothing.** `applyPose` keeps the written-out head-on branch, `poseDistance` is `cameraDistance`'s arithmetic operation for operation, and `cli render3d`'s `visuals:` case holds `syncCamera`, `applyPose(poseFromCamera(...))` and the workspace's `headOn` to a verbatim copy of the old `syncCamera` in every number of the camera (position, quaternion, up, near, far, projection and world matrices, frustum) at five placements, three orbits (one past the pitch clamp) and both lenses.
   A one-ulp change to the distance turns it red.
 - Under a pose, `Scene3D` places both cameras from it (the aspect still from the 2D camera's viewport), so `pick`, `unprojectToPlane` through `scene3d.camera` and the gizmo see the view that was drawn.

@@ -86,6 +86,12 @@ export function lensOf(data: LevelCameraData | undefined): SceneLens {
 // a fixed far plane would clip the gameplay plane itself once it did.
 export const CAMERA_FAR = 400;
 
+// How far back an orthographic camera stands at the least, in metres (see
+// `applyPose`): the most geometry it can show in front of its target. Half
+// the far floor, so as much again is drawn behind the target; the editor's
+// farthest view (`MAX_VIEW_DISTANCE`) is the same 200 m.
+export const ORTHO_STANDOFF = CAMERA_FAR / 2;
+
 // The frame is a fixed 16:9 (see render/viewport.ts), so the 3D camera's aspect
 // is a constant for the same reason the 2D camera's viewport is.
 export const VIEW_ASPECT = VIEW_WIDTH / VIEW_HEIGHT;
@@ -294,18 +300,28 @@ export function syncCamera(
 // Place `threeCam` at a pose. `aspect` is width over height of the viewport it
 // draws into, which a pose does not carry: it belongs to the canvas.
 //
-// The camera's PLACEMENT is the same arithmetic for both lenses - an orthographic
-// camera is dollied to exactly the distance the perspective one would be, so it
-// clips the same scene and orbits about the same point - and only the projection
-// differs.
+// The camera's PLACEMENT is the same arithmetic for both lenses - both orbit
+// about the target along the same direction - and only the projection and one
+// distance differ: an orthographic camera stands at least `ORTHO_STANDOFF`
+// back. Its picture does not depend on how far back it stands, but its near
+// plane does: at the perspective distance, which a close zoom brings to
+// `halfHeight / tan(fov/2)` (0.2 m at the editor's nearest), the near plane
+// sliced off every rock between the eye and the target (2026-11-27). Standing
+// it back puts all of that inside the frustum, and three's ortho raycast,
+// which starts at the eye, then picks it too - a negative near would draw it
+// and leave it unclickable. Blender's ortho viewport makes the same choice,
+// clipping about the view rather than from the eye.
 export function applyPose(threeCam: ViewCamera, pose: ViewPose, aspect: number): void {
   const x = pose.target.x;
   const y = pose.target.y;
   const z = pose.target.z;
-  const dist = poseDistance(pose);
+  const lensDist = poseDistance(pose);
+  const dist = threeCam instanceof THREE.OrthographicCamera ? Math.max(lensDist, ORTHO_STANDOFF) : lensDist;
   // Only ever pushed OUT, so every camera that fitted inside the old constant
-  // is drawn with exactly the depth range it always was.
-  threeCam.far = Math.max(CAMERA_FAR, dist + z + CAMERA_FAR / 2);
+  // is drawn with exactly the depth range it always was. The orthographic
+  // standoff is added on, so that camera reaches exactly as far behind its
+  // target as it did from the lens's distance (a perspective camera adds 0).
+  threeCam.far = Math.max(CAMERA_FAR, lensDist + z + CAMERA_FAR / 2) + (dist - lensDist);
   if (threeCam instanceof THREE.OrthographicCamera) {
     // The frustum IS the 2D renderer's transform, read off the same visible
     // height the dolly distance comes from: no divide, so this holds at every

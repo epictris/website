@@ -34,12 +34,12 @@ The canvas still receives every press; it is what the pointer is on in both work
 
 | Gesture | Does |
 |---|---|
-| middle drag | orbit about the pose's target, at the Level workspace's rate (`ORBIT_RADIANS_PER_PX`, 0.006 rad per pixel) |
-| Shift + middle drag, or right drag | pan: the target moves in the camera's right and up at its own depth, so what is at that depth under the pointer stays under it |
+| Alt + middle drag (a plain middle drag until 2026-11-27) | orbit about the pose's target, at the Level workspace's rate (`ORBIT_RADIANS_PER_PX`, 0.006 rad per pixel) |
+| middle drag, or right drag (Shift + middle until 2026-11-27) | pan: the target moves in the camera's right and up at its own depth, so what is at that depth under the pointer stays under it |
 | wheel | dolly toward the nearest model surface under the pointer, else the gameplay plane, never through it; the point aimed at stays under the pointer (`DOLLY_PER_WHEEL`, the Level wheel's step) |
 | **F** | frame the selection (what Delete and a nudge would act on), or the scene layer and the spawn when nothing is selected (`itemsBox`, `levelBox`) |
 | **Home**, `⟲ Reset view` | head on, framed as the 2D camera frames the plane |
-| left drag on empty space | nothing: there is no rubber band here (see Editing), and the status line says so |
+| left drag on empty space | nothing: there is no rubber band here (see Editing), and the status line says so (retired: today a left drag anywhere bands, [editor](editor.md#level-editor)) |
 
 A left drag never navigates in Visuals, unlike the Level workspace, where a left drag on anything unselected pans: the view is the middle and right buttons' here, and a left press is a click or a drag of what is selected.
 

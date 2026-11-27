@@ -554,20 +554,8 @@ const GAMEPLAY_PLANE = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
 type Drag =
   | { mode: "pan"; lastScreen: Vec2 }
-  // A press on something that is NOT selected yet: it pans, and selects only if
-  // the pointer never really moved. The level is the thing you are looking at
-  // most of the time, so dragging it about has to be the cheapest gesture there
-  // is - and moving geometry by accident, while reaching for the view, is the
-  // one editing mistake that is silent (it looks like the level, and the level
-  // is different). Selecting first and dragging second is what makes moving a
-  // body deliberate.
-  //
-  // In the Visuals workspace a left drag never navigates (the middle and right
-  // buttons do, Blender's way), so there the press is a click or nothing, and
-  // `still` is what the status line says if it is dragged anyway.
-  | { mode: "panPick"; lastScreen: Vec2; travel: number; pick: () => void; still?: string }
   // Navigating the Visuals workspace's free view (see `VisualsWorkspace`):
-  // middle drag orbits, Shift + middle or right drag pans.
+  // Alt + middle drag orbits, a middle or right drag pans.
   | { mode: "view" }
   // DROP ON SURFACE (Visuals, Shift-drag of a selected light): the light
   // follows the nearest model surface under the pointer. Written through the
@@ -585,33 +573,25 @@ type Drag =
   // button, and only while a scene is drawn: in the 2D view there is nothing to
   // orbit, so the button keeps panning there.
   | { mode: "orbit"; lastScreen: Vec2 }
-  // Rubber-band select. `additive` (shift) unions the hits into the existing
+  // Rubber-band select: EVERY left drag with the select tool that does not
+  // start on a handle, the gizmo or the spawn marker (Blender's Select Box,
+  // since 2026-11-27). `additive` (shift) unions the hits into the existing
   // selection instead of replacing it. `verts` is the shape whose VERTICES the
   // band catches instead of bodies: drawn while a polygon is being edited, a
   // band is asking about that shape's corners, which is the only thing on
   // screen it could sensibly mean once the shape itself is already picked.
-  | { mode: "marquee"; start: Vec2; current: Vec2; additive: boolean; verts: EdItem | null }
-  // The lead body follows the pointer (and the grid); the rest of the
-  // selection rides along at a fixed offset from it.
-  // `press` and `moved` are what keep a click apart from a drag on something
-  // already selected: until the pointer has really travelled, the gesture is
-  // still a click and `pick` is what it means (drilling into the body under it).
+  // The press is a click until the pointer leaves `CLICK_SLOP_PX` of `press`
+  // (`banding`), and `pick` is what that click means where it landed on
+  // something; a click on empty space (no `pick`) clears.
   | {
-      mode: "move";
-      lead: EdItem;
-      others: Array<{ body: EdItem; offset: Vec2 }>;
-      grab: Vec2;
+      mode: "marquee";
+      start: Vec2;
+      current: Vec2;
       press: Vec2;
-      moved: boolean;
+      banding: boolean;
+      additive: boolean;
+      verts: EdItem | null;
       pick?: () => void;
-      // The point that lands on the grid, as an offset from the lead's
-      // position (see `moveSnapPoint`). Fixed at the press: a move only
-      // translates, so the offset cannot change during the drag.
-      snapAt: Vec2;
-      // The plane the drag is resolved in, metres off the gameplay plane: the
-      // one the lead is drawn in (`guidePlaneZ`), so with the view turned the
-      // thing grabbed stays under the pointer. Head on it changes nothing.
-      planeZ: number;
     }
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
@@ -719,9 +699,6 @@ type Drag =
   // Sliding berry `index`'s root along its vine, by the handle the selected
   // berry shows there. The berry keeps its offset from the root.
   | { mode: "berryPosition"; vine: EdVine; index: number }
-  // Moving berry `index` itself, its root unmoved. `grab` is from the press to
-  // the berry, so the berry does not jump to the pointer.
-  | { mode: "berryMove"; vine: EdVine; index: number; grab: Vec2 }
   // A berry being dragged off a vine: the press was on the cord `along`
   // metres down it (`root`), and releasing past the click's slop grows a
   // berry where the pointer is. Nothing is written until then.
@@ -1467,7 +1444,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     tip: number;
     from: { item: RootItem; at: number } | null;
   } | null = null;
-  let dragMoved = false;
   let dragPushed = false; // history snapshot taken for the in-progress drag?
   let nudging = false; // arrow-key run in progress? (coalesces into one undo step)
 
@@ -4974,7 +4950,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     shelter: ["Shelter", "shelter"],
   };
   for (const [t, [name, icon]] of Object.entries(TOOL_FACES)) toolize(toolBtns[t as Tool], name, icon);
-  toolBtns.select.title = "Click to select, drag from empty space to rubber-band; a press on what is selected drags it";
+  toolBtns.select.title = "Click to select, drag anywhere to rubber-band; move what is selected with the gizmo, G or the arrows";
   // The path tool's tooltip is the active layer's (see `refreshToolButtons`):
   // the one gesture draws three different things.
   const PATH_TOOL_TITLE: Record<EdLayer, string> = {
@@ -6031,7 +6007,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // than as a button that usually does nothing.
     resetViewBtn = button("Align camera to plane", resetView);
     resetViewBtn.title =
-      "Face the gameplay plane head on (Numpad 1). Middle drag orbits, Shift + middle or right drag pans, the wheel dollies, F frames the selection, Home frames everything";
+      "Face the gameplay plane head on (Numpad 1). Middle or right drag pans, Alt + middle drag orbits, the wheel dollies, F frames the selection, Home frames everything";
     // The lens is the view cube's (top right of the viewport, `viewCube`).
     // THE GAME'S CAMERA, in the Visuals workspace: what a player sees where the
     // view is looking, through the level's lens at the zoom its camera regions
@@ -7460,10 +7436,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
 
       describe(g, region
-        ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. A camera region always stays convex."
+        ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. A camera region always stays convex."
         : collides
-          ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics."
-          : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward: the outline is taken whole, notch and all.");
+          ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics."
+          : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward: the outline is taken whole, notch and all.");
     }
   }
 
@@ -10186,7 +10162,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const transform = section(g, "campath/Transform", "Transform");
     describe(
       transform,
-      "Drag a node to move it, its round grips to shape the curve through it, an edge midpoint to insert one, Alt+click a node to remove it; click a node to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them), and Delete removes the picked nodes while the arrows nudge them.",
+      "Drag a node to move it, its round grips to shape the curve through it, an edge midpoint to insert one, Alt+click a node to remove it; click a node to pick it out (Shift adds, a rubber band catches several, Esc drops them), and Delete removes the picked nodes while the arrows nudge them.",
     );
     addTransformFields(transform, groupNum(transform, paths), paths);
     // The fields below fall into three sections but are written in the order
@@ -13696,15 +13672,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the middle and right buttons navigate wherever they are pressed, as in
     // any 3D editor (a hovered handle under the pointer swallowed the orbit).
     if (gizmo?.busy && e.button === 0) return;
-    // THE VISUALS WORKSPACE NAVIGATES BLENDER'S WAY: the middle button orbits,
-    // Shift + middle or the right button pans, and the left button is the
-    // level's alone. It is a modelling view rather than a plan, and the turn is
-    // the gesture made most there, so it is the unmodified one.
-    //
-    // Since the one 3D view (plans/editor-ux-pass.md) that is the editor's only
-    // navigation, on the pose: middle drag orbits, Shift + middle or right drag
-    // pans, the wheel dollies. Without WebGL there is no pose, and the middle
-    // and right buttons pan the 2D camera as they always did.
+    // NAVIGATION, in every workspace (since 2026-11-27): a middle or right
+    // drag pans, Alt + middle orbits, the wheel dollies, and the left button
+    // is the level's alone. Panning is how you get around a level and is the
+    // gesture made most, so it is the unmodified one; the turn is the rarer
+    // act and the one you come back from. (Until then the middle button
+    // orbited and Shift + middle panned, Blender's way.) Without WebGL there
+    // is no pose, and the middle and right buttons pan the 2D camera.
     // The paint brush's eraser (since 2026-11-26): a right press on the rock
     // the brush paints erases where it drags. Anywhere else the right button
     // pans, as ever.
@@ -13720,7 +13694,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (visuals?.active && (e.button === 1 || e.button === 2)) {
       // A swing to a cube face in flight gives way to the hand.
       viewSwing++;
-      visuals.beginView(e.button === 2 || e.shiftKey ? "pan" : "orbit", pointerScreen(e));
+      visuals.beginView(e.button === 1 && e.altKey ? "orbit" : "pan", pointerScreen(e));
       drag = { mode: "view" };
       canvas.style.cursor = "grabbing";
       e.preventDefault();
@@ -13778,7 +13752,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       e.preventDefault();
       return;
     }
-    dragMoved = false;
     dragPushed = false;
 
     // AT ANY ANGLE (the one 3D view, plans/editor-ux-pass.md): a ray answers
@@ -13786,7 +13759,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // against it (`canvasWorld`), and the overlay - handles, band, drafts - is
     // drawn through the view, with `worldToScreen` mapping through it too, so
     // every step below means turned what it means head on.
-    const turned = inScene();
     // With +Root armed the selection's handles are not drawn (see the frame
     // loop) and so are not grabbed: a press on a root starts a branch there.
     // The knife's the same: a press on a corner is where the cut starts.
@@ -13937,10 +13909,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
     }
+    // Everything below that is not an authoring grip of its own is a click or
+    // a band (see `marquee`): `pick` is what the press means if it never
+    // leaves the click's slop.
+    const band = (pick?: () => void): void => {
+      drag = {
+        mode: "marquee",
+        start: world,
+        current: world,
+        press: scr,
+        banding: false,
+        additive: e.shiftKey,
+        // While a polygon or a camera path is the selection, a band is asking
+        // about ITS corners: the shape is already picked, so its vertices are
+        // the only thing left on screen the band could sensibly mean. To band
+        // bodies again, clear the selection first - a click on empty space
+        // does that, dropping the vertex selection before the item one so
+        // there is a way back out in two clicks.
+        verts: vertexEditTarget(),
+        pick,
+      };
+    };
     // 3b. A berry, before the bodies: it hangs in front of whatever is behind
-    // it. A press picks it out (its gizmo moves it in the 3D view) and a drag
-    // moves it; Alt-click removes it. Not in the Visuals workspace, where the
-    // guides do not draw berries.
+    // it. A click picks it out (its gizmo moves it); Alt-click removes it.
     const berry = berryAt(world);
     if (berry) {
       if (e.altKey) {
@@ -13950,8 +13941,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         setVineSelection([berry.vine.id]);
         return;
       }
-      selectBerry(berry.vine, berry.index);
-      drag = { mode: "berryMove", vine: berry.vine, index: berry.index, grab: berry.fruit.sub(world) };
+      band(() => selectBerry(berry.vine, berry.index));
       return;
     }
     // 3c. A vine, before the items too: it is a line a few pixels wide drawn
@@ -13988,18 +13978,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // 3a. THE DECORATIONS WORKSPACE'S SELECT: a click on what grew selects
     // that decoration, not its rock's body first - what grows is what that
     // workspace edits, and a second click to drill into the body was a click
-    // nobody meant (2026-11-25). A press still pans until it is let go, as
-    // any unselected thing's does; Shift and Alt keep their usual meaning.
+    // nobody meant (2026-11-25). A drag bands, as anywhere; Shift and Alt
+    // keep their usual meaning.
     if (paintsRocks(workspace) && hit?.object === "decoration" && !selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
-      drag = {
-        mode: "panPick",
-        lastScreen: scr,
-        travel: 0,
-        pick: () => {
-          pickCycle = null;
-          setSelection([hit.id]);
-        },
-      };
+      band(() => {
+        pickCycle = null;
+        setSelection([hit.id]);
+      });
       return;
     }
     // 3b. DROP ON SURFACE: Shift-drag of the selected light, wherever it is in
@@ -14018,9 +14003,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return;
       }
     }
-    // The plane a drag of `it` is resolved in: the one it is drawn in, so with
-    // the view turned it stays under the pointer (see `move`'s `planeZ`).
-    const planeOf = (it: EdItem): number => (turned ? guidePlaneZ(it) : 0);
     if (hit) {
       // CLICK THE BODY, THEN CLICK INTO IT. A click on a body that is not the
       // one being edited selects the BODY - the thing with the transform, the
@@ -14037,58 +14019,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // and merged, exactly as they can in the tree. Falling through to the item
       // selection here would quietly swap what the panel is editing mid-gesture.
       if (e.shiftKey && !e.altKey && selectedBodyIds.size) {
-        toggleBodySelection(hit.unit);
-        drag = null;
+        band(() => toggleBodySelection(hit.unit));
         return;
       }
-      // SELECTED FIRST, MOVED SECOND. A press on something already selected
-      // drags it; a press on anything else pans and selects on release, so
-      // reaching for the view over a wall moves the view and not the wall.
-      // Geometry cannot be nudged out of place by a gesture that meant to look
-      // around, which is the one editing mistake that leaves no trace on screen.
+      // A DRAG IS A BAND, selected or not (Blender's Select Box, since
+      // 2026-11-27): what is selected moves by the gizmo, G or the arrows,
+      // never by a drag that may have meant to band. Before that a press on
+      // the selection dragged it and a press on anything else panned.
       if (selectedBodyIds.has(hit.unit)) {
-        // The whole body drags, since the body is what is selected - and a press
-        // that turns out to be a CLICK still drills into the object under it,
-        // which is the second half of "click the body, then click into it".
-        const members = bodyMembers(model.items, hit.unit);
-        const others = members
-          .filter((o) => o !== hit)
-          .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
-        const planeZ = planeOf(hit);
-        drag = {
-          mode: "move",
-          lead: hit,
-          others,
-          grab: hit.pos.sub(planeZ ? canvasWorld(scr, planeZ) : world),
-          press: scr,
-          moved: false,
-          pick: pickAt(world, scr),
-          snapAt: snapOutlineOf(members).sub(hit.pos),
-          planeZ,
-        };
+        // A click still drills into the object under it, the second half of
+        // "click the body, then click into it".
+        band(pickAt(world, scr));
         return;
       }
       if (selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
-        // An object picked out of a body drags with everything else selected. A
-        // click on it is the cycle's next step - which for a lone object is what
-        // it already is, and past that is how the thing underneath is reached. A
-        // multi-selection has no pick at all: a click that meant to grab it and
-        // did not travel must not silently collapse it to one object.
-        const others = selectedBodies()
-          .filter((o) => o !== hit)
-          .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
-        const planeZ = planeOf(hit);
-        drag = {
-          mode: "move",
-          lead: hit,
-          others,
-          grab: hit.pos.sub(planeZ ? canvasWorld(scr, planeZ) : world),
-          press: scr,
-          moved: false,
-          pick: selectedIds.size === 1 ? pickAt(world, scr) : undefined,
-          snapAt: moveSnapPoint([hit]).sub(hit.pos),
-          planeZ,
-        };
+        // A click on a picked object is the cycle's next step - which for a
+        // lone object is what it already is, and past that is how the thing
+        // underneath is reached. A multi-selection keeps itself: a click on
+        // one of its members must not silently collapse it to one object.
+        band(selectedIds.size === 1 ? pickAt(world, scr) : () => {});
         return;
       }
       // Not selected: what the press MEANS if it turns out to be a click.
@@ -14126,12 +14075,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         }
         cycle();
       };
-      drag = {
-        mode: "panPick",
-        lastScreen: scr,
-        travel: 0,
-        pick,
-      };
+      band(pick);
       return;
     }
     // 5. A chain under the pointer. Tested after the bodies, since a chain is
@@ -14145,15 +14089,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const chain = topmostChainAt(world);
     if (chain) {
       // Shift-drag on the chain that is already selected pulls a new WRAP POINT
-      // out of the span under the pointer (see `chainWrapOut`); a plain press
-      // selects, as on anything else.
+      // out of the span under the pointer (see `chainWrapOut`); a plain click
+      // selects and a drag bands, as on anything else.
       if (e.shiftKey && selectedChainIds.has(chain.id)) {
         const span = nearestChainSpan(model, chain, world);
         drag = { mode: "chainWrapOut", chain, index: span?.index ?? 0, cursor: world };
         return;
       }
-      setChainSelection([chain.id]);
-      drag = null;
+      band(() => setChainSelection([chain.id]));
       return;
     }
     // 6. Empty space: rubber-band select. A click that never moves deselects
@@ -14162,19 +14105,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // At any angle: the band is a rectangle on the gameplay plane between the
     // two points pressed and dragged to, drawn through the view like the rest
     // of the overlay, so what is dragged out is exactly what is caught.
-    drag = {
-          mode: "marquee",
-          start: world,
-          current: world,
-          additive: e.shiftKey,
-          // While a polygon or a camera path is the selection, a band drawn from
-          // empty space is asking about ITS corners: the shape is already picked,
-          // so its vertices are the only thing left on screen the band could
-          // sensibly mean. To band bodies again, clear the selection first - a
-          // click on empty space does that, dropping the vertex selection before
-          // the item one so there is a way back out in two clicks.
-          verts: vertexEditTarget(),
-        };
+    band();
   });
 
   // The world distance one screen pixel covers, which is what a screen-sized
@@ -14631,22 +14562,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
     }
     if (!drag) return;
-    // Resolved in the plane the dragged thing is drawn in (see `move`'s
+    // Resolved in the plane the dragged thing is drawn in (see `polyVertex`'s
     // `planeZ`); every other drag is on the gameplay plane.
-    const world = canvasWorld(
-      scr,
-      drag.mode === "move" ? drag.planeZ : drag.mode === "polyVertex" ? (drag.planeZ ?? 0) : 0,
-    );
-    dragMoved = true;
-
-    // A press on something selected is not a move until the pointer has left the
-    // click's slop, so a click that drills into a body cannot also nudge it by
-    // the pixel the hand shook by - and, since nothing is written before that,
-    // there is no undo step for the nudge that did not happen either.
-    if (drag.mode === "move" && !drag.moved) {
-      if (scr.distanceTo(drag.press) < CLICK_SLOP_PX) return;
-      drag.moved = true;
-    }
+    const world = canvasWorld(scr, drag.mode === "polyVertex" ? (drag.planeZ ?? 0) : 0);
 
     // Snapshot once, on the first movement of a model-mutating drag (pan and
     // marquee don't touch the model; draw already snapshotted at mousedown;
@@ -14655,7 +14573,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (
       !dragPushed &&
       drag.mode !== "pan" &&
-      drag.mode !== "panPick" &&
       drag.mode !== "orbit" &&
       drag.mode !== "view" &&
       // Begun through the gizmo's handlers, which take their own snapshot.
@@ -14678,31 +14595,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const d = scr.sub(drag.lastScreen);
         camera.position = camera.position.sub(d.div(scale));
         drag.lastScreen = scr;
-        break;
-      }
-      case "panPick": {
-        // Nothing happens at all until the pointer has really travelled: a click
-        // that jitters by a pixel is a click, and it must still select what it
-        // was aimed at rather than panning the level by a pixel instead.
-        const was = drag.travel;
-        drag.travel += scr.distanceTo(drag.lastScreen);
-        if (drag.still !== undefined) {
-          // The Visuals workspace: past the slop the press is no longer a
-          // click, and it does nothing - said once, as it crosses.
-          if (was < CLICK_SLOP_PX && drag.travel >= CLICK_SLOP_PX) flashNotice(drag.still);
-        } else if (drag.travel >= CLICK_SLOP_PX) {
-          if (visuals?.active) {
-            // The pose pans, grabbed where the press was (the view's own pan).
-            if (was < CLICK_SLOP_PX) visuals.beginView("pan", drag.lastScreen);
-            visuals.moveView(scr);
-            cameraFromPose();
-          } else {
-            const scale = camera.zoom * PIXELS_PER_METER;
-            camera.position = camera.position.sub(scr.sub(drag.lastScreen).div(scale));
-          }
-          canvas.style.cursor = "grabbing";
-        }
-        if (!visuals?.active || drag.travel < CLICK_SLOP_PX) drag.lastScreen = scr;
         break;
       }
       case "view":
@@ -14730,20 +14622,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         break;
       }
       case "marquee":
+        // A click until the pointer has really travelled, so a press that
+        // jitters by a pixel still means what it was aimed at.
+        if (!drag.banding && scr.distanceTo(drag.press) < CLICK_SLOP_PX) break;
+        drag.banding = true;
         drag.current = world;
         break;
-      case "move": {
-        // Snap the press's chosen corner (`snapAt`); the rest keep their
-        // relative offsets so a group's internal layout survives the move.
-        const lead = snapVec(world.add(drag.grab).add(drag.snapAt)).sub(drag.snapAt);
-        // Written as the translation it is, so a body dragged whole carries its
-        // frame and a piece dragged out of one does not (see `translateItems`).
-        // The others keep their offsets, which is the same delta by definition.
-        translateItems(model, [drag.lead, ...drag.others.map((o) => o.body)], lead.sub(drag.lead.pos));
-        markDirty();
-        refreshFields();
-        break;
-      }
       case "movePlayer":
         model.player.pos = snapVec(world.add(drag.grab));
         markDirty();
@@ -14996,15 +14880,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         refreshFields();
         break;
       }
-      case "berryMove": {
-        const path = vineRestPath(model, drag.vine);
-        if (!path || !drag.vine.starberry) break;
-        const root = pointAlong(path, drag.vine.starberry.along[drag.index]!);
-        placeBerry(drag.vine.starberry, drag.index, snapVec(world.add(drag.grab)).sub(root));
-        markDirty();
-        refreshFields();
-        break;
-      }
       case "berryDraw":
         drag.cursor = snapVec(world);
         break;
@@ -15116,7 +14991,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // 360 and AutoCAD. A drag with no horizontal travel counts as a window, so the
   // stricter mode is the one a degenerate drag falls into.
   function marqueeBand(): { min: Vec2; max: Vec2; window: boolean } | null {
-    if (!drag || drag.mode !== "marquee" || !dragMoved) return null;
+    if (!drag || drag.mode !== "marquee" || !drag.banding) return null;
     const { start, current } = drag;
     return {
       min: new Vec2(Math.min(start.x, current.x), Math.min(start.y, current.y)),
@@ -15150,11 +15025,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (mode !== "edit" || !drag) return;
-    // A press that panned nowhere was a click, and it means what a click on that
-    // item has always meant.
-    if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
-    if (drag.mode === "move" && !drag.moved) drag.pick?.();
-    if (drag.mode === "view" || drag.mode === "panPick") visuals?.endView();
+    if (drag.mode === "view") visuals?.endView();
     if (drag.mode === "surfaceDrop") {
       if (drag.handlers) drag.handlers.end("translate");
       else drag.pick();
@@ -15210,6 +15081,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           else roots.add(root);
         }
         setNodeSelection([...items], [...roots]);
+      } else if (drag.pick) {
+        // A press on something that never left the click's slop means what a
+        // click on that thing has always meant.
+        drag.pick();
       } else if (!drag.additive) {
         // A plain click on empty space clears - the VERTEX selection first, if
         // there is one, and the item selection only once there is not. Two
@@ -15238,7 +15113,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       detachVineEnd(drag.vine);
     }
     // The berry's own fields, rebuilt to where it was dropped.
-    if (drag.mode === "berryPosition" || drag.mode === "berryMove") rebuildInspector();
+    if (drag.mode === "berryPosition") rebuildInspector();
     if (drag.mode === "berryDraw") growDraggedBerry(drag);
     if (drag.mode === "chainDraw") {
       finishOrTieChainDraw(e.shiftKey);
@@ -15900,11 +15775,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         currentSettleGhosts(),
         wrapDraftView(),
         routeSel?.bodyId === soleBodyId() ? routeSel.nodes : NO_NODES,
-        !snapOn
-          ? null
-          : drag?.mode === "move" && drag.moved
-            ? drag.lead.pos.add(drag.snapAt)
-            : gizmoSnapPoint,
+        snapOn ? gizmoSnapPoint : null,
         {
           selected: (() => {
             const b = currentBerry();

@@ -81,8 +81,8 @@ export interface WorkspaceHost {
   canvasSize(): { width: number; height: number };
 }
 
-// Which navigation gesture the pointer is making: middle drag orbits, Shift +
-// middle or the right button pans.
+// Which navigation gesture the pointer is making: Alt + middle drag orbits, a
+// middle or right drag pans.
 export type ViewGesture = "orbit" | "pan";
 
 // Which guide a click means, from everything `Scene3D.pick` returned under the

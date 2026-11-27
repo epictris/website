@@ -39,6 +39,7 @@ import {
   MAX_ORBIT_PITCH,
   MAX_VIEW_PITCH,
   NO_ORBIT,
+  ORTHO_STANDOFF,
   poseDistance,
   poseFromCamera,
   type CameraOrbit,
@@ -631,6 +632,35 @@ function orthographicView(): CaseResult[] {
       detail: `ortho spread ${spread.toExponential(2)} px over 20 m of depth, perspective ${perspShift.toFixed(1)} px`,
     });
   }
+  // Zoomed in close, the pose's eye is only `halfHeight / tan(fov/2)` from
+  // its target - 1 m at a half-height of 0.58 m through the editor's 60 deg
+  // lens - so a near plane in front of the eye sliced off every rock nearer
+  // the viewer than that (2026-11-27). Through an orthographic lens the eye's
+  // distance is not in the picture at all, so nothing in front of the target
+  // may be clipped at any zoom, head on or turned.
+  for (const { name, yaw, pitch } of [
+    { name: "head on", yaw: 0, pitch: 0 },
+    { name: "turned", yaw: 0.6, pitch: 0.15 },
+  ]) {
+    const pose: ViewPose = { target: { x: 4, y: -2, z: 0 }, yaw, pitch, halfHeight: 0.3, fovYDeg: 60 };
+    const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+    applyPose(ortho, pose, VIEW_WIDTH / VIEW_HEIGHT);
+    ortho.updateMatrixWorld(true);
+    // Toward the viewer from the target, the way the eye looks back.
+    const toEye = ortho.position.clone().sub(new THREE.Vector3(pose.target.x, pose.target.y, pose.target.z)).normalize();
+    let worst = -Infinity;
+    // Ahead of the target (negative: behind it, out to where the lens's own
+    // distance always reached - the standoff must not cost the far side).
+    for (const ahead of [0.5, 2, 20, 150, -1, -50, -300]) {
+      const p = new THREE.Vector3(pose.target.x, pose.target.y, pose.target.z).addScaledVector(toEye, ahead);
+      worst = Math.max(worst, Math.abs(p.project(ortho).z));
+    }
+    out.push({
+      name: `orthographic: nothing in front of the target is clipped zoomed in (${name})`,
+      pass: worst <= 1,
+      detail: `eye ${ortho.position.distanceTo(new THREE.Vector3(pose.target.x, pose.target.y, pose.target.z)).toFixed(2)} m back, near ${ortho.near}, worst |ndc z| ${worst.toFixed(3)} from 150 m ahead to 300 m behind`,
+    });
+  }
   return out;
 }
 
@@ -648,9 +678,13 @@ function legacySyncCamera(
   const x = camera.position.x;
   const y = threeY(camera.position.y);
   const z = lens.zOffset;
-  const dist = cameraDistance(camera, lens.fovYDeg);
+  // The orthographic standoff (2026-11-27, see `applyPose`) is a deliberate
+  // change to where that camera stands, made here too: the claim this copy
+  // holds is that the pose split changed nothing, not that ortho never moves.
+  const lensDist = cameraDistance(camera, lens.fovYDeg);
+  const dist = threeCam instanceof THREE.OrthographicCamera ? Math.max(lensDist, ORTHO_STANDOFF) : lensDist;
   const aspect = camera.viewportWidth / camera.viewportHeight;
-  threeCam.far = Math.max(CAMERA_FAR, dist + z + CAMERA_FAR / 2);
+  threeCam.far = Math.max(CAMERA_FAR, lensDist + z + CAMERA_FAR / 2) + (dist - lensDist);
   if (threeCam instanceof THREE.OrthographicCamera) {
     const halfH = visibleHeightMetres(camera) / 2;
     const halfW = halfH * aspect;

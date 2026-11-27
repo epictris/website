@@ -2,8 +2,8 @@
 // arrangements of it, one per workflow, as Blender's Layout / Modeling /
 // Texture Paint tabs are. Each decides
 //
-// - how the view moves: 2D is locked head on to the gameplay plane (middle
-//   drag pans, the wheel zooms about the plane), the other two orbit freely;
+// - not how the view moves: every workspace navigates alike (middle drag
+//   pans, Alt + middle orbits, the wheel dollies; since 2026-11-27);
 // - what is offered in the left dock: 2D the drawing tools and the layers,
 //   Formations the guides and the generators, Decorations the decoration
 //   palette and the brush, Texturing the material library and the brush;
@@ -192,11 +192,11 @@ export const PRIMARY_SECTIONS: readonly string[] = [
 // what the active layer is for).
 export const EMPTY_HINTS: Record<Exclude<Workspace, "2d">, string> = {
   formations:
-    "Formations: click a rock or a guide to edit its recipe and Generate it. A body with collision and no rock offers a recipe to generate one from its outline. Primitives (or Shift+A) add a new guide where the view is looking; with a guide selected, Shift+A (or Add to selected guide) adds a shape to its stack. G, R and S grab, rotate and scale the selection (X / Y / Z hold an axis); the gizmo's centre box drags it in the view plane. Middle drag orbits, F frames the selection.",
+    "Formations: click a rock or a guide to edit its recipe and Generate it. A body with collision and no rock offers a recipe to generate one from its outline. Primitives (or Shift+A) add a new guide where the view is looking; with a guide selected, Shift+A (or Add to selected guide) adds a shape to its stack. G, R and S grab, rotate and scale the selection (X / Y / Z hold an axis); the gizmo's centre box drags it in the view plane. Alt + middle drag orbits, F frames the selection.",
   decorations:
-    "Decorations: pick a kind on the left and click a generated rock to place it (moss and ivy then paint: drag on the rock, it grows when you let go). Click a rock to list what grows on it, or a decoration to edit, move or repaint it. Middle drag orbits, F frames the selection.",
+    "Decorations: pick a kind on the left and click a generated rock to place it (moss and ivy then paint: drag on the rock, it grows when you let go). Click a rock to list what grows on it, or a decoration to edit, move or repaint it. Alt + middle drag orbits, F frames the selection.",
   texturing:
-    "Texturing: pick a material on the left and drag on a generated rock to paint it, right-drag to erase; Enter bakes what you painted for the game, Esc throws the strokes away. The materials are Blender files in assets-src/materials: save one in Blender and the rocks show it again. Click a painted patch to select it. Middle drag orbits, F frames the selection.",
+    "Texturing: pick a material on the left and drag on a generated rock to paint it, right-drag to erase; Enter bakes what you painted for the game, Esc throws the strokes away. The materials are Blender files in assets-src/materials: save one in Blender and the rocks show it again. Click a painted patch to select it. Alt + middle drag orbits, F frames the selection.",
 };
 
 // --- remembered per browser --------------------------------------------------
