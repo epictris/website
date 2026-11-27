@@ -113,3 +113,21 @@ export function wearMossMound(mat: THREE.Material): THREE.Material {
   mat.needsUpdate = true;
   return mat;
 }
+
+// A BLENDED moss sheet (glTF alphaMode BLEND + doubleSided: the formations'
+// `<rock>.moss`, soft-edged rather than printed) is drawn in one pass.
+//
+// three draws a transparent double-sided material twice, back faces then
+// front, and sets `needsUpdate` between the two draws so each re-derives its
+// program: on BALL that was ~0.5 ms of the main thread a frame (2026-11-27),
+// for 9 sheets. One pass draws the sheet's triangles in index order instead,
+// which differs only where the sheet folds over itself in view - 493 pixels
+// at the BALL spawn, up to 28 levels, at the time of the change.
+const BLENDED_MOSS = /\.moss(\.\d+)?$/;
+
+/** Draw a blended, double-sided moss material in one pass rather than three's two. Returns whether it applied. */
+export function drawMossInOnePass(mat: THREE.Material): boolean {
+  if (!BLENDED_MOSS.test(mat.name) || !mat.transparent || mat.side !== THREE.DoubleSide) return false;
+  mat.forceSinglePass = true;
+  return true;
+}

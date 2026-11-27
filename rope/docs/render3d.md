@@ -131,10 +131,12 @@ Two changes took it to about 4.8 ms, measured headless on the RTX 4070 SUPER at 
   `Scene3D.render` now updates the tree once, after every visual is posed, and turns `scene.matrixWorldAutoUpdate` off for the passes; a pass that moves an object updates that object itself, as `mirrorPool` already does for its water.
 
 What is left, per frame at the spawn: the view and its depth of field ~1.7 ms, the pool's mirror ~0.9 ms, the ball's probe ~0.8 ms, the sun's shadow map ~0.4 ms, the sim ~0.3 ms (about 2.4 ms a step with the chain out, so every second or third frame at 144 Hz carries it).
-Two of those carry three's program bookkeeping (`getProgram` / `getParameters`, ~0.5 ms each) rather than drawing:
+The probe also carries three's program bookkeeping (`getProgram` / `getParameters`, ~0.5 ms) rather than drawing: it draws into a linear half-float cube and the view into the tone-mapped sRGB frame target, so every material both draw swaps program twice a frame.
 
-- the probe draws into a linear half-float cube and the view into the tone-mapped sRGB frame target, so every material both draw swaps program twice a frame;
-- a blended double-sided material (the formations' moss is glTF `BLEND` + `doubleSided`) is drawn by three in two passes, back then front, with `needsUpdate` between them. `forceSinglePass` would remove it, but it is not exact: 493 pixels change at the BALL spawn, up to 28 levels, where the moss folds over itself.
+A blended double-sided material (the formations' moss is glTF `BLEND` + `doubleSided`) was drawn by three in two passes, back then front, with `needsUpdate` between them, another ~0.5 ms on BALL.
+Since 2026-11-27 a blended `.moss` material is drawn in one pass (`drawMossInOnePass`, mossMound.ts), frame 5.2 -> 4.4 ms under the profiler.
+It is not exact, but in the game's own frame (multisampled, through the depth of field) it is invisible: at the BALL spawn, clock pinned and probe frozen, 4283 pixels change by at most 1 level, along the far, blurred moss rims, against 71 pixels at 1 level for the same frame drawn twice.
+A plain render of the scene without depth of field or multisampling shows more (493 pixels, up to 28 levels, where the moss folds over itself), which is the difference the blur and the coverage then hide.
 
 ## The coordinate mapping
 

@@ -16,7 +16,7 @@ import { withDownload } from "./download";
 import { wearIvyLeaves } from "./ivyLeaves";
 import { isGlowFlora, reattachGlowFloraDepth, wearGlowFlora } from "./glowFlora";
 import { isPicture, joinDepthPrepass, joinPictureDepth } from "./depthPrepass";
-import { isPrintedMoss, wearMossMound } from "./mossMound";
+import { drawMossInOnePass, isPrintedMoss, wearMossMound } from "./mossMound";
 import { wearBackgroundLift } from "./backgroundLift";
 import { MODEL_ASSETS, modelFile } from "./models";
 
@@ -141,6 +141,7 @@ export function loadExportFile(file: string, bytes: number, label: string): Prom
         let foliageMeshes = 0;
         let mossMeshes = 0;
         let glowMeshes = 0;
+        const blendedMoss = new Set<THREE.Material>();
         // Taken after the walk, so the walk never meets a stand-in it has
         // just added (and casts it a shadow).
         const prepass: THREE.Mesh[] = [];
@@ -179,6 +180,8 @@ export function loadExportFile(file: string, bytes: number, label: string): Prom
             for (const m of mats) if (m.alphaTest > 0) wearMossMound(m);
             mossMeshes++;
           }
+          // A blended moss sheet is drawn in one pass, not three's two.
+          for (const m of mats) if (drawMossInOnePass(m)) blendedMoss.add(m);
           // Plants (the Blender foliage add-on's ferns, sprig bushes and
           // hanging vines) are leaves too, and wear one material, `Foliage`,
           // found by its name, which glTF and the optimiser keep: whatever
@@ -216,6 +219,7 @@ export function loadExportFile(file: string, bytes: number, label: string): Prom
         if (foliageMeshes > 0) console.log(`[render3d] ${label}: ${foliageMeshes} plant meshes cast and receive leaf shadows`);
         if (glowMeshes > 0) console.log(`[render3d] ${label}: ${glowMeshes} glow flora meshes glow and sway`);
         if (mossMeshes > 0) console.log(`[render3d] ${label}: ${mossMeshes} moss mounds cut and lipped by their print`);
+        if (blendedMoss.size > 0) console.log(`[render3d] ${label}: ${blendedMoss.size} blended moss materials drawn in one pass`);
         return gltf.scene as THREE.Object3D;
       })
       .catch((err: unknown) => {
