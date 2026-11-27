@@ -115,6 +115,27 @@ The picture is the same: with the clock pinned, every combination of the two dif
 At 1080p the saving is a smaller share because the fixed-size passes (the ball's probe, the shadow maps, the shafts) are a larger part of the frame there; they are the next thing a weaker GPU pays for.
 `cli render3d` holds the patches' shape (the `fill:` cases); the exactness and the timings are live-only, by the method in [debugging-rendering](debugging-rendering.md#costing-a-pass).
 
+## Main-thread cost
+
+By 2026-11-27 the frame was bound by the main thread rather than the GPU: Tris's trace on BALL ran under 100 fps at any resolution, and the frame callback took 9.8 ms against a GPU time of about 4 ms.
+Two changes took it to about 4.8 ms, measured headless on the RTX 4070 SUPER at the spawn by timing every `requestAnimationFrame` callback over a few seconds.
+
+- **A skinned mesh is bounded by its bones** (`render3d/skinnedBounds.ts`).
+  The sun's shadow fit (`sunShadow.ts`) asked three's `SkinnedMesh.computeBoundingBox` for every bending root every frame, and that skins every vertex on the CPU: 15 meshes of relief bark, 18 910 vertices, 3.7 ms a frame.
+  The bound is now a box per bone, gathered once, carried by the bone's skinning matrix each frame: 0.1 ms.
+  It encloses the exact one whenever the weights are non-negative and sum to one, and falls back to three's exact walk when they do not (or when the geometry has morph targets).
+  On BALL the fitted shadow camera came out identical to the exact walk's, field for field; the `sun shadows:` cases in `cli render3d` hold the containment, the fallback and a moved skeleton.
+- **The scene's matrices are updated once a frame** (`Scene3D.render`).
+  The frame walks the scene up to six times - the sun's fit, the pool's mirror, a face of the ball's probe, the view and the depth of field's overlay pass - and three recomposes every object's matrices on each walk.
+  With ~2200 objects that was about 1 ms.
+  `Scene3D.render` now updates the tree once, after every visual is posed, and turns `scene.matrixWorldAutoUpdate` off for the passes; a pass that moves an object updates that object itself, as `mirrorPool` already does for its water.
+
+What is left, per frame at the spawn: the view and its depth of field ~1.7 ms, the pool's mirror ~0.9 ms, the ball's probe ~0.8 ms, the sun's shadow map ~0.4 ms, the sim ~0.3 ms (about 2.4 ms a step with the chain out, so every second or third frame at 144 Hz carries it).
+Two of those carry three's program bookkeeping (`getProgram` / `getParameters`, ~0.5 ms each) rather than drawing:
+
+- the probe draws into a linear half-float cube and the view into the tone-mapped sRGB frame target, so every material both draw swaps program twice a frame;
+- a blended double-sided material (the formations' moss is glTF `BLEND` + `doubleSided`) is drawn by three in two passes, back then front, with `needsUpdate` between them. `forceSinglePass` would remove it, but it is not exact: 493 pixels change at the BALL spawn, up to 28 levels, where the moss folds over itself.
+
 ## The coordinate mapping
 
 Physics is x right, y **down**, rotation clockwise-positive.

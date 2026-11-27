@@ -1538,47 +1538,62 @@ export class Scene3D {
     // created, and it costs a traverse only while something is selected.
     this.syncHighlight();
     this.syncHidden();
-    this.env.follow(this.camera);
+    // ONE world-matrix update a frame, here, once every visual is posed. The
+    // frame walks this scene up to six times - the sun's fit, the pool's
+    // mirror, a face of the ball's probe, the view and its overlays - and three
+    // recomposes every object's matrices in each walk unless the caller says it
+    // has (`matrixWorldAutoUpdate`, three's own switch for exactly this):
+    // ~2200 objects five times over was ~1 ms of the frame (trace 2026-11-27).
+    // Nothing from here to the present moves an object; a pass that ever does
+    // updates what it moved itself.
+    this.scene.updateMatrixWorld();
+    this.scene.matrixWorldAutoUpdate = false;
+    let frame: THREE.WebGLRenderTarget;
+    try {
+      this.env.follow(this.camera);
 
-    // No level carries a baked probe field since the Blender scenes were
-    // retired (the field rode in a scene's file, bakedLighting.ts), so this
-    // only keeps the field's uniforms off.
-    useBakedLighting(this.scene, null,
-      this.shadowsOn && this.bakedContactShadows && level.ball && slot.ballVisual?.root.visible
-        ? { position: slot.ballVisual.root.position, radius: level.ball.radius } : undefined);
+      // No level carries a baked probe field since the Blender scenes were
+      // retired (the field rode in a scene's file, bakedLighting.ts), so this
+      // only keeps the field's uniforms off.
+      useBakedLighting(this.scene, null,
+        this.shadowsOn && this.bakedContactShadows && level.ball && slot.ballVisual?.root.visible
+          ? { position: slot.ballVisual.root.position, radius: level.ball.radius } : undefined);
 
-    // Inside the timer: the probe is six more draws of the scene, and the
-    // perf HUD should say what the frame costs, not what the main view does.
-    this.gpuTimer?.begin();
-    // The spots' lit air reads the scene's depth, so the frame keeps it only
-    // when a shaft is in view. Chosen before the reflection, because this is
-    // also where the shafts' glow lights are set for the frame.
-    const fog = this.env.shownFog();
-    const shafts = this.lightShafts.select(slot.lights.shafts(), this.camera, fog, this.env.regionAir());
-    // Before the ball's probe, so the pool the ball sees carries its mirror.
-    this.mirrorPool();
-    this.captureReflection(level);
-    // Depth of field reads the whole frame, which is the picture alone even
-    // in the editor's letterboxed ▶ Test (see frameTarget.ts).
-    const blurred = this.depthOfField.active && this.depthOfField.faces(this.camera);
-    const frame = this.frame.begin(rect, blurred || shafts);
-    // What the hollow glass ball copies what is behind it out of.
-    frameSource.target = frame;
-    const addShafts = (): void => {
-      const v = frame.viewport;
-      this.lightShafts.render(frame, this.camera, fog, clock, { x: v.x, y: v.y, w: v.z, h: v.w });
-    };
-    if (blurred) {
-      this.depthOfField.render(this.scene, this.camera, frame, shafts ? addShafts : undefined);
-    } else if (slot.ballVisual?.seesFrame) {
-      this.depthOfField.renderInTwo(this.scene, this.camera, frame, shafts ? addShafts : undefined);
-    } else {
-      this.renderer.setRenderTarget(frame);
-      this.renderer.render(this.scene, this.camera);
-      if (shafts) addShafts();
+      // Inside the timer: the probe is six more draws of the scene, and the
+      // perf HUD should say what the frame costs, not what the main view does.
+      this.gpuTimer?.begin();
+      // The spots' lit air reads the scene's depth, so the frame keeps it only
+      // when a shaft is in view. Chosen before the reflection, because this is
+      // also where the shafts' glow lights are set for the frame.
+      const fog = this.env.shownFog();
+      const shafts = this.lightShafts.select(slot.lights.shafts(), this.camera, fog, this.env.regionAir());
+      // Before the ball's probe, so the pool the ball sees carries its mirror.
+      this.mirrorPool();
+      this.captureReflection(level);
+      // Depth of field reads the whole frame, which is the picture alone even
+      // in the editor's letterboxed ▶ Test (see frameTarget.ts).
+      const blurred = this.depthOfField.active && this.depthOfField.faces(this.camera);
+      const target = (frame = this.frame.begin(rect, blurred || shafts));
+      // What the hollow glass ball copies what is behind it out of.
+      frameSource.target = target;
+      const addShafts = (): void => {
+        const v = target.viewport;
+        this.lightShafts.render(target, this.camera, fog, clock, { x: v.x, y: v.y, w: v.z, h: v.w });
+      };
+      if (blurred) {
+        this.depthOfField.render(this.scene, this.camera, target, shafts ? addShafts : undefined);
+      } else if (slot.ballVisual?.seesFrame) {
+        this.depthOfField.renderInTwo(this.scene, this.camera, target, shafts ? addShafts : undefined);
+      } else {
+        this.renderer.setRenderTarget(target);
+        this.renderer.render(this.scene, this.camera);
+        if (shafts) addShafts();
+      }
+      this.frame.present();
+      this.gpuTimer?.end();
+    } finally {
+      this.scene.matrixWorldAutoUpdate = true;
     }
-    this.frame.present();
-    this.gpuTimer?.end();
     if (this.retiring.length) this.disposeRetired(frame);
   }
 

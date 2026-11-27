@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { skinnedBoundingBox } from "./skinnedBounds";
 
 const EDGES = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
 const corners = () => Array.from({ length: 8 }, () => new THREE.Vector3());
@@ -24,7 +25,9 @@ export class SunShadowFit {
   private height = 30;
 
   fit(scene: THREE.Scene, camera: THREE.Camera, sun: THREE.DirectionalLight): void {
-    scene.updateMatrixWorld();
+    // As three's renderer does: a caller that has switched the scene's auto
+    // update off has updated it for the frame already (Scene3D.render).
+    if (scene.matrixWorldAutoUpdate) scene.updateMatrixWorld();
     camera.updateMatrixWorld();
     this.direction.subVectors(sun.position, sun.target.position).normalize();
     // Use exactly the same basis as the shadow camera, including its vertical
@@ -45,8 +48,12 @@ export class SunShadowFit {
       if (!materials.some(material => material.visible)) return;
       // Instanced and skinned bounds belong to the object, ordinary bounds to
       // its geometry. Recompute moving instances/bones; static geometry caches
-      // its local bounds and only the world transform changes each frame.
-      if (mesh instanceof THREE.InstancedMesh || mesh instanceof THREE.SkinnedMesh) {
+      // its local bounds and only the world transform changes each frame. A
+      // skinned mesh is bounded by its bones, never by skinning its vertices
+      // (skinnedBounds.ts: that walk was 3.7 ms of the frame).
+      if (mesh instanceof THREE.SkinnedMesh) {
+        skinnedBoundingBox(mesh, this.box);
+      } else if (mesh instanceof THREE.InstancedMesh) {
         mesh.computeBoundingBox();
         this.box.copy(mesh.boundingBox!);
       } else {
