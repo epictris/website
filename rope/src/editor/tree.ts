@@ -301,14 +301,9 @@ export function nextOrder(tree: EdTree): number {
 // group root on the path down to the node under the pointer: a group not
 // entered selects its root; an entered one passes the click on to the next
 // group root further down, and with none left the node under the pointer is
-// selected. Only group roots whose class is clickable in the workspace stop a
-// click; the rest pass it through.
-export function clickTarget(
-  tree: EdTree,
-  hit: string,
-  selected: ReadonlySet<string>,
-  clickable: (n: EdNode) => boolean,
-): string {
+// selected. Every group root stops a click, in every workspace (the
+// per-workspace classes were removed 2026-11-27).
+export function clickTarget(tree: EdTree, hit: string, selected: ReadonlySet<string>): string {
   const path = [...ancestors(tree, hit).reverse(), tree.nodes.get(hit)!].filter(Boolean);
   const entered = (root: EdNode): boolean => {
     for (const s of selected) if (s === root.id || isDescendant(tree, s, root.id)) return true;
@@ -316,16 +311,16 @@ export function clickTarget(
   };
   for (const n of path) {
     if (n.id === hit) break;
-    if (!n.grouped || !clickable(n)) continue;
+    if (!n.grouped) continue;
     if (!entered(n)) return n.id;
   }
   return hit;
 }
 
 // The outermost group root above (or at) a node, for a rubber band.
-export function outermostGroup(tree: EdTree, id: string, clickable: (n: EdNode) => boolean): string {
+export function outermostGroup(tree: EdTree, id: string): string {
   const path = [...ancestors(tree, id).reverse(), tree.nodes.get(id)!];
-  for (const n of path) if (n && n.grouped && clickable(n)) return n.id;
+  for (const n of path) if (n && n.grouped) return n.id;
   return id;
 }
 

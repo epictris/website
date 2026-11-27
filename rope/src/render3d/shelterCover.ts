@@ -87,6 +87,12 @@ function wallOf(s: ShelterData, material: THREE.Material): THREE.Mesh | null {
   mesh.castShadow = true;
   mesh.receiveShadow = false;
   mesh.raycast = () => {};
+  // Tagged with its shelter, as every drawn object is with what it came from
+  // (`pickTagOf`): never for a pick, which the no-op raycast above refuses,
+  // but so the editor's hide (H, the scene tree's eye) finds the wall. Hidden,
+  // it is not drawn, and three leaves an invisible caster out of the shadow
+  // pass, so its shadow goes with it.
+  mesh.userData["pickTag"] = s;
   return mesh;
 }
 

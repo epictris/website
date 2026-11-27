@@ -1,16 +1,19 @@
 """Original stylized minecart. Run from repo root with blender -b --python this_file [-- VARIANT].
 Metres, Z up, X travel; ground pivot; 1.14 m wheel tread gauge.
 Variants: none builds `minecart`; `no-left-wheels` builds `minecart-no-left-wheels`,
-the same cart with both wheels on its left (-X, seen from the side) gone, bare axle stubs left.
+the same cart with both wheels on its right (+X, seen from the side) gone, bare axle stubs left.
+The historical variant name is retained so existing level placements update.
 """
 import bpy, bmesh, math, sys
 from pathlib import Path
 from mathutils import Vector
 ROOT=Path(__file__).resolve().parents[3]
-# The hopper floor ends at X=+-1.08; each axle bearing (0.24 m long) sits
-# flush with that edge, so the axles are as far out as the base allows.
-AXLE_X=1.08-.12
-VARIANTS={'':(),'no-left-wheels':(-AXLE_X,)}
+# Align bearing outer faces with the lower base sill, rather than the inset
+# hopper floor. Wheel centres follow X; their 1.14 m tread gauge stays fixed.
+AXLE_X=2.25/2-.12
+BEARING_Y=.55-.18/2
+AXLE_LENGTH=1.54  # 8 cm extra exposed shaft at each end.
+VARIANTS={'':(),'no-left-wheels':(AXLE_X,)}
 VARIANT=sys.argv[sys.argv.index('--')+1] if '--' in sys.argv[:-1] else ''
 if VARIANT not in VARIANTS:raise SystemExit(f'unknown variant {VARIANT!r}; one of {sorted(v for v in VARIANTS if v)}')
 MISSING_WHEEL_X=VARIANTS[VARIANT]
@@ -19,7 +22,7 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.context.preferences.filepaths.save_version=0
 scene=bpy.context.scene
 kit=bpy.data.collections.new(NAME);scene.collection.children.link(kit)
-kit.asset_mark();kit.asset_data.description='Painterly iron minecart with two push handles; 1.14 m gauge, ground pivot, X travel.'+(' Left wheels missing.' if MISSING_WHEEL_X else '')
+kit.asset_mark();kit.asset_data.description='Painterly iron minecart with two push handles; 1.14 m gauge, ground pivot, X travel.'+(' Right (+X) wheels missing; historical asset name retained.' if MISSING_WHEEL_X else '')
 
 def mat(name,dark,light,metal=.45,rough=.72,scale=(3,3,3)):
     m=bpy.data.materials.new(name);m.use_nodes=True;m.diffuse_color=(*light,1)
@@ -146,8 +149,8 @@ for x in [-1,1]:
 # Open underneath: no chassis, so the axles show from the side. Each axle
 # bearing hangs straight from the hopper floor on a web and a bolted plate.
 for x in [-AXLE_X,AXLE_X]:
-    cylinder('Axle',(x,0,.405),.068,1.38,iron)
-    for y in [-.40,.40]:
+    cylinder('Axle',(x,0,.405),.068,AXLE_LENGTH,iron)
+    for y in [-BEARING_Y,BEARING_Y]:
         axle_box('Axle bearing',x,y,iron)
 join_since(before,'Hopper and chassis')
 # Four five-spoke railway wheels, with inside flanges. Treads rest at Z=0.

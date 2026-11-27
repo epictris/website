@@ -1,0 +1,124 @@
+{
+  "format": 4,
+  "root": {
+    "type": "StaticBody2D",
+    "id": "6w5apwzl",
+    "name": "StaticBody2D66",
+    "children": [
+      {
+        "type": "CollisionShape2D",
+        "id": "ysx3rl5x",
+        "name": "Poly",
+        "shape": {
+          "kind": "poly",
+          "verts": [
+            {
+              "x": 83.67359198048234,
+              "y": 33.56553233225874
+            },
+            {
+              "x": 83.67359198048234,
+              "y": 45.81492231317732
+            },
+            {
+              "x": 67.78366135909977,
+              "y": 91.36734130471744
+            },
+            {
+              "x": -44.594522674054815,
+              "y": 90.41035771245838
+            },
+            {
+              "x": -61.6331229789111,
+              "y": 44.28374856556232
+            },
+            {
+              "x": -61.25023308442081,
+              "y": 32.60854873999932
+            }
+          ]
+        },
+        "impermeable": true
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "j23imxj1",
+        "name": "Circle",
+        "x": 97.45469657862742,
+        "y": 28.690687958861716,
+        "rot": -2.617993877991493,
+        "shape": {
+          "kind": "circle",
+          "r": 3.65
+        },
+        "rail": true
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "w79brl7m",
+        "name": "Circle2",
+        "x": -74.5547925599908,
+        "y": 28.686738494985065,
+        "rot": -2.617993877991493,
+        "shape": {
+          "kind": "circle",
+          "r": 3.65
+        },
+        "rail": true
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "2e91xfd8",
+        "name": "Circle3",
+        "x": 55.175458727317626,
+        "y": 118.12910503561484,
+        "rot": -2.617993877991493,
+        "shape": {
+          "kind": "circle",
+          "r": 3.65
+        },
+        "rail": true
+      },
+      {
+        "type": "Model3D",
+        "id": "8wsn7eza",
+        "name": "Minecart",
+        "model": "minecart",
+        "x": 11.428571428571379,
+        "y": 124.13644451403019,
+        "scale": 0.5
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "i0cupwa6",
+        "name": "Circle4",
+        "x": -38.82091952227427,
+        "y": 104.16667335161947,
+        "rot": -2.617993877991493,
+        "shape": {
+          "kind": "circle",
+          "r": 3.65
+        },
+        "rail": true
+      },
+      {
+        "type": "CollisionShape2D",
+        "id": "ss7qou4z",
+        "name": "Circle5",
+        "x": 61.80387501701574,
+        "y": 104.30041341437928,
+        "rot": -2.617993877991493,
+        "shape": {
+          "kind": "circle",
+          "r": 3.65
+        },
+        "rail": true
+      }
+    ],
+    "grouped": true,
+    "color": "#555555",
+    "opacity": 0.5,
+    "friction": 1,
+    "order": 100
+  }
+}

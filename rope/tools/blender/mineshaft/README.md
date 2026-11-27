@@ -76,6 +76,12 @@ Wheels and handles remain separate named meshes; each wheel's local Y axis
 passes through its axle for animation. Collision is authored
 independently in the editor, as for the rest of the model library.
 
+Axle bearing outer faces meet the lower base rim at X=±1.125 m and Y=±0.55 m.
+Axle centres are X=±1.005 m, and the shafts span 1.54 m (8 cm longer per end).
+The `minecart-no-left-wheels` variant now omits the right (+X) pair of wheels;
+its historical model name is retained for existing placements. Build it with
+`build_minecart.py -- no-left-wheels` and export that model name as usual.
+
 Metres, Z up, -Y front. Rail centres are 1.14 m apart. Rail collections include
 `socket.start` and `socket.end` arrow empties; align a new segment's start to the
 previous end, including rotation. The curve endpoint is (3.535534, 1.464466, 0)
@@ -154,6 +160,35 @@ The packed sleeper paint map uses a per-sleeper phase and tint through
 Optional array presets use a 0.45 m straight / 0.49 m curved minimum. Independent sleeper assets have no spacing constraint.
 
 ## Independent placement assets and rock-style weathering
+
+`mine-rail-single-sleeper-a`, `mine-rail-single-sleeper-b`, and
+`mine-rail-single-sleeper-c` pair the three complete kit sleepers with intact
+1.3 m rails. Each has one sleeper at X=0.65 m, with 0.65 m of rail on either
+side of its centre, matching the missing-sleeper spans' gauge, height and sockets.
+Build all three with `blender -b -noaudio --factory-startup --python-exit-code 1
+--python rope/tools/blender/mineshaft/build_single_sleeper.py`, then export each
+from `rope` with `bun run model:export mine-rail-single-sleeper-a` (or `b`, `c`).
+Refresh the editor to select them through **+ Model**. Collision is separate.
+
+`mine-rail-missing-sleepers-a`, `mine-rail-missing-sleepers-b`, and
+`mine-rail-missing-sleepers-c` are 1.3 m tiling spans with exactly one missing
+sleeper position, centred at X=0.65 m. Both intact rails retain their chairs,
+clips and nails, with torn oak remnants beneath each chair. A has medium uneven
+splinters, B has shorter chunky stubs with an isolated longer shard, and C has
+longer fine splinters and deeper notches. Individual narrow splinters are
+randomly spaced along the sleeper's front/back width (rail travel), with open
+gaps exposing the metal chairs. Each edge of each rail has an independent
+distribution of positions, lengths and gaps; shards terminate under the chair
+rather than continuing through to the opposite edge.
+All retain the kit's gauge, rail height,
+start pivot and end socket. These are appearance models; collision is separate.
+
+Rebuild each with `blender -b -noaudio --factory-startup --python-exit-code 1
+--python rope/tools/blender/mineshaft/build_missing_sleepers.py -- a` (or `b`,
+`c`), then from `rope` run `bun run model:export mine-rail-missing-sleepers-a`
+(or `b`, `c`). Refresh the editor and select them through **+ Model**. The
+model list discovers local exports automatically. Overview and low-angle PNGs
+are written to `assets-src/studies/mineshaft/` alongside the other kit previews.
 
 Use `mine-sleeper-a.blend`, `mine-sleeper-b.blend`, or `mine-sleeper-c.blend`
 from `assets-src/models`. Each is one independent asset containing one wooden

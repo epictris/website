@@ -153,8 +153,7 @@ Selecting something outside G1 leaves it, and the next click inside selects G1 a
 - **The scene tree** ignores groups.
 - **Ctrl+G** groups the selection: one node is flagged, several are first put under a new group node (a `Node2D`, or a `Node3D` when all of them are 3D) standing on their centre.
   **Ctrl+Shift+G** ungroups, and the Group / Ungroup button and the Node section's `grouped` box do the same.
-- **Per workspace**, only a group root whose class is clickable there stops a click (`clickableIn`, `editor/workspaces.ts`); the rest pass it through.
-  2D stops at bodies, shapes, anchors, the plane's volumes, chains, vines and instances; Formations at bodies (since 2026-11-26: a body's Transform and Formation are this workspace's, and a click passed through it to the collision a guide is taken from), `Node3D`, `Formation3D`, `Model3D`, `Light3D` and instances; Decorations at decorations alone, so a click on a fern selects the fern though the body above it is grouped; Texturing at nothing, its work being the brush.
+- **Every workspace** follows the same rule: every grouped node stops a click, whatever its class (since 2026-11-27; until then each workspace stopped only at its own classes, `clickableIn`, so in Decorations a click on a fern selected the fern though the body above it was grouped).
 
 **And clicking again walks on down whatever else is under the pointer** (`pickAt`).
 Every rule the pick has - depth, containment, the active layer - can only ever name ONE winner, so an object nested inside or behind other outlines was unreachable with the mouse by construction: every point of it is also a point of the things drawn over it, and there is no pointer position that means it rather than them.

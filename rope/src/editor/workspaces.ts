@@ -8,13 +8,14 @@
 //   Formations the guides and the generators, Decorations the decoration
 //   palette and the brush, Texturing the material library and the brush;
 // - what is in the workspace at all: what the overlay draws and what a click
-//   or a band can pick (`inWorkspace`), what the outliner lists, and which
-//   inspector sections are shown (`sectionShown`) and open first.
+//   or a band can pick (`inWorkspace`), and which inspector sections are
+//   shown (`sectionShown`) and open first. The scene tree lists every node,
+//   and what a click on a grouped node stops at is the same, in every
+//   workspace.
 //
 // Nothing here touches the level: a workspace is how the author is working,
 // remembered by this browser (`readWorkspace`) and in the address bar.
 
-import type { NodeType } from "../level/nodes";
 import type { EdItem, EdLayer } from "./model";
 
 export type Workspace = "2d" | "formations" | "decorations" | "texturing";
@@ -44,7 +45,7 @@ export function workspaceLayers(ws: Workspace): readonly EdLayer[] | null {
 }
 
 // Whether an item is part of the workspace: drawn by the overlay, picked by a
-// click or a band, listed in the scene tree. `is3d` says whether it stands in
+// click or a band. `is3d` says whether it stands in
 // a 3D frame (`Node3D`, `Formation3D`: no collision, free to stand at a depth).
 //
 // - 2D: everything on the plane. A 3D body (a backdrop) is not, nor is a
@@ -113,51 +114,6 @@ const SHOWN: Record<Exclude<Workspace, "2d">, readonly string[]> = {
     "decoration/",
   ],
 };
-
-// WHAT A CLICK ON THE CANVAS STOPS AT, per workspace (plans/node-tree.md
-// "Workspaces"): a group root whose class is clickable here selects first; the
-// others pass the click through to what is under them. So in Decorations a
-// click on a fern selects the fern, though the body above it is grouped.
-const CLICKABLE: Record<Workspace, ReadonlySet<NodeType>> = {
-  "2d": new Set<NodeType>([
-    "Node2D",
-    "StaticBody2D",
-    "AnimatableBody2D",
-    "RigidBody2D",
-    "Area2D",
-    "CollisionShape2D",
-    "Anchor2D",
-    "Spawn2D",
-    "Checkpoint2D",
-    "CameraRegion2D",
-    "CameraPath2D",
-    "Shelter2D",
-    "FogRegion2D",
-    "Note2D",
-    "Chain",
-    "Vine",
-    "Instance",
-  ]),
-  // A body too: its Transform and Formation sections are this workspace's,
-  // and a second click goes into it, to the collision a guide is taken from.
-  formations: new Set<NodeType>([
-    "StaticBody2D",
-    "AnimatableBody2D",
-    "RigidBody2D",
-    "Area2D",
-    "Node3D",
-    "Formation3D",
-    "Model3D",
-    "Light3D",
-    "Instance",
-  ]),
-  decorations: new Set<NodeType>(["Decoration3D"]),
-  texturing: new Set<NodeType>([]),
-};
-
-export function clickableIn(ws: Workspace, type: NodeType): boolean {
-  return CLICKABLE[ws].has(type);
-}
 
 // A key matches an entry equal to it, or under it when the entry ends in "/".
 const matches = (key: string, entry: string): boolean => (entry.endsWith("/") ? key.startsWith(entry) : key === entry);

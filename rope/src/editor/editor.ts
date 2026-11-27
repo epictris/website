@@ -377,7 +377,6 @@ import {
   WORKSPACE_TITLES,
   WORKSPACES,
   workspaceLayers,
-  clickableIn,
   writeWorkspace,
   type Workspace,
 } from "./workspaces";
@@ -1168,11 +1167,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // THE WORKSPACE (editor/workspaces.ts, docs/editor.md "Workspaces"): 2D,
   // Formations or Decorations - how the view moves, what the dock offers,
-  // what is drawn, picked and listed, and which inspector sections show. The
+  // what is drawn and picked, and which inspector sections show. The
   // address bar's wins over the one this browser last used.
   let workspace: Workspace = parseWorkspace(new URLSearchParams(location.search).get("ws")) ?? readWorkspace();
   setDefaultOpen(PRIMARY_SECTIONS);
-  // Is an item part of the workspace (drawn, picked, listed)?
+  // Is an item part of the workspace (drawn, picked)?
   const inWs = (b: EdItem): boolean => inWorkspace(workspace, b, in3D(b));
   // Is an item in the scene rather than the plane: carried by no body, and a
   // rock or under a 3D frame (what a "3D body" was before the tree).
@@ -6302,22 +6301,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const listedChildren = (n: EdNode): string[] =>
     n.instance && !n.instance.editable ? n.children.filter((c) => model.tree.nodes.get(c)?.extra["inInstance"] !== n.id) : n.children;
 
-  // Is a node shown in the scene tree in this workspace: its own item is in
-  // the workspace, or something under it is.
-  function inTreeWorkspace(n: EdNode): boolean {
-    // An open prefab's tree is the prefab: its one root, not the level's
-    // spawn and light it is shown among.
-    if (prefabMode && isLevelFurniture(n)) return false;
-    if (workspace === "2d") return true;
-    // The level's light is what every workspace's rock is judged under.
-    if (n.type === "Sun" || n.type === "Environment") return true;
-    const item = n.item !== null ? itemOf(n.item) : null;
-    if (item && inWs(item)) return true;
-    return n.children.some((c) => {
-      const k = model.tree.nodes.get(c);
-      return !!k && inTreeWorkspace(k);
-    });
-  }
+  // Is a node shown in the scene tree. Every node is, in every workspace (the
+  // tree is the level, not the workspace's view of it; since 2026-11-27), but
+  // an open prefab's tree is the prefab: its one root, not the level's spawn
+  // and light it is shown among.
+  const listedInTree = (n: EdNode): boolean => !(prefabMode && isLevelFurniture(n));
 
   // Where a drag would drop: onto a row (under it) or between two (among its
   // siblings, before or after it).
@@ -6340,7 +6328,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (query) {
       const visit = (id: string): boolean => {
         const n = model.tree.nodes.get(id);
-        if (!n || !inTreeWorkspace(n)) return false;
+        if (!n || !listedInTree(n)) return false;
         let below = false;
         for (const c of listedChildren(n)) if (visit(c)) below = true;
         const hit = n.name.toLowerCase().includes(query) || shownType(n).toLowerCase().includes(query);
@@ -6351,7 +6339,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       for (const r of model.tree.roots) visit(r);
     }
     const addRow = (n: EdNode, depth: number): void => {
-      if (!inTreeWorkspace(n)) return;
+      if (!listedInTree(n)) return;
       if (query && !matched.has(n.id) && !onPath.has(n.id)) return;
       count++;
       const open = query ? onPath.has(n.id) : expandedBodies.has(n.id);
@@ -14063,7 +14051,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (e.shiftKey || e.altKey) {
           pickCycle = null;
           // Alt ignores groups: the thing under the pointer itself.
-          const target = sealedTarget(e.altKey ? hit.node : clickTarget(model.tree, hit.node, selectedNodeIds(), clickable));
+          const target = sealedTarget(e.altKey ? hit.node : clickTarget(model.tree, hit.node, selectedNodeIds()));
           const n = model.tree.nodes.get(target);
           if (e.shiftKey) {
             if (n?.item !== null && n?.item !== undefined && !selectedBodyIds.size) toggleSelection(n.item);
@@ -14388,9 +14376,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // root on the path down to what is under the pointer, a group not
       // entered (nothing in it selected) selects its root; an entered one
       // passes the click to the next group root down, and with none left the
-      // thing under the pointer is selected. Only group roots whose class is
-      // clickable in this workspace stop a click.
-      const targetOf = (hit: EdItem): string => sealedTarget(clickTarget(model.tree, hit.node, selectedNodeIds(), clickable));
+      // thing under the pointer is selected.
+      const targetOf = (hit: EdItem): string => sealedTarget(clickTarget(model.tree, hit.node, selectedNodeIds()));
       const selectedNow = (target: string): boolean => {
         const sel = selectedNodeIds();
         return sel.size === 1 && sel.has(target);
@@ -14408,10 +14395,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       pickCycle = { screen: scr, key, index };
     };
   }
-
-  // Is a node a group root a click stops at here: grouped, and of a class this
-  // workspace clicks (`clickableIn`)?
-  const clickable = (n: EdNode): boolean => n.grouped && clickableIn(workspace, shownType(n));
 
   // Select one node: an item's node selects the item, any other the node.
   function selectNode(id: string): void {
@@ -15076,7 +15059,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         for (const id of hits) {
           const it = itemOf(id);
           if (!it) continue;
-          const root = outermostGroup(model.tree, it.node, clickable);
+          const root = outermostGroup(model.tree, it.node);
           if (root === it.node) items.add(id);
           else roots.add(root);
         }

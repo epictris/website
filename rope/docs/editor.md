@@ -420,8 +420,9 @@ The policy is one module, `src/editor/workspaces.ts`; the editor asks it.
 | Drawn and picked | everything on the plane, all layers; not what stands in 3D (a rock or model with no body above it) or decorations | the scene layer's formations and the collision their guides are taken from; the solid guides | the scene layer's formations and decorations but material layers | the scene layer's formations and their material layers |
 | Inspector | everything but the Formation, Decorations and Materials sections | the spawn, Sun and Environment, a body's Transform and Formation | the spawn, Sun and Environment, a rock's Decorations, a decoration's panel | the spawn, Sun and Environment, a rock's Materials, a material layer's panel |
 
-**What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), what a click or a band picks (`pickableItems`), and what the scene tree lists (in the 3D workspaces, only the nodes in the workspace and those holding one, and the Sun and the Environment, which every rock is judged under).
-What a click on a grouped node stops at is the workspace's too (`clickableIn`, [editor-model](editor-model.md#groups)): in Decorations a click on a fern selects the fern, though the body above it is grouped.
+**What is in a workspace** is `inWorkspace`: it filters what the overlay draws (`shownModel`, `shownLayers`), and what a click or a band picks (`pickableItems`).
+The scene tree lists every node in every workspace (since 2026-11-27; until then the 3D workspaces listed only their own nodes, those holding one, and the Sun and the Environment).
+What a click on a grouped node stops at is the same in every workspace (since 2026-11-27, [editor-model](editor-model.md#groups)).
 Chains, vines, berries and the spawn marker are the plane's and are picked in 2D only; the solid guides are drawn and picked in Formations only, where in the others they were wireframe in front of the rock.
 The scene itself is drawn whole in every workspace: the rocks are the reference 2D is drawn against, and the collision outlines are a formation's guide.
 Switching drops from the selection whatever the new workspace does not hold, as hiding a layer does: it could be neither seen nor clicked, but a nudge, a field or a Delete would still reach it.

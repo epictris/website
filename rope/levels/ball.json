@@ -654,34 +654,6 @@
                 "y": -983.4412802939049
               },
               {
-                "x": 1839.229046310492,
-                "y": -1428.2782085003212
-              },
-              {
-                "x": 2003.0451215616488,
-                "y": -1495.1844036489479
-              },
-              {
-                "x": 2190.179333479183,
-                "y": -1506.4393742515197
-              },
-              {
-                "x": 2134.7345905131697,
-                "y": -1456.9054899128214
-              },
-              {
-                "x": 2114.243351314666,
-                "y": -1361.1676899342128
-              },
-              {
-                "x": 2169.510915623751,
-                "y": -1287.2933066630271
-              },
-              {
-                "x": 2218.713146572612,
-                "y": -1073.8049742019075
-              },
-              {
                 "x": 2198.9603884930466,
                 "y": -978.1020276902891
               },
@@ -1059,24 +1031,12 @@
                       "y": -983.4412802939049
                     },
                     {
-                      "x": 2006.175696102865,
-                      "y": -988.4412802939048
+                      "x": 2198.9603884930466,
+                      "y": -978.1020276902891
                     },
                     {
-                      "x": 2081.175696102865,
-                      "y": -1013.4412802939049
-                    },
-                    {
-                      "x": 2121.175696102865,
-                      "y": -1038.441280293905
-                    },
-                    {
-                      "x": 2186.1756961028655,
-                      "y": -1033.4412802939048
-                    },
-                    {
-                      "x": 2221.175696102865,
-                      "y": -783.4412802939048
+                      "x": 2247.519252105311,
+                      "y": -938.606463757203
                     },
                     {
                       "x": 2226.1756961028645,
@@ -1281,15 +1241,16 @@
                   ]
                 },
                 "piece": {
+                  "node": "2d7cuz1g",
                   "impermeable": true
                 }
               }
             ]
           },
           "built": {
-            "hash": "c442d1b78e9ae4b84956044aeb31f0acf99c83b62c74eda114c03384da585efa",
-            "front": 1.9717,
-            "generatorHash": "eb691068e0d93bdc1a92ca638f8f8f35fa3c5ac29076b331611d99f83934f966",
+            "hash": "9dadbbde129362f8124413f6cb3ec3a6256a8be3849de77db6d8b13dc7c07364",
+            "front": 2.0042,
+            "generatorHash": "be1555045d189f4ebdbd628abb8470fa9bdd159b4289544553eb676eab5c122c",
             "recipeVersion": 2,
             "tiers": []
           }
@@ -3072,52 +3033,44 @@
             "kind": "poly",
             "verts": [
               {
-                "x": -257.4698883346457,
-                "y": -127.9406281122764
+                "x": -99.61149862495304,
+                "y": 25.63560296490639
               },
               {
-                "x": -255.03677529375324,
-                "y": -665.1591046618977
+                "x": -14.349336393236456,
+                "y": -40.43228505638279
               },
               {
-                "x": 53.221107329235906,
-                "y": -669.2037948951732
+                "x": 32.49088944039045,
+                "y": -52.73283931143666
               },
               {
-                "x": 33.22110732923562,
-                "y": -494.20379489517325
+                "x": 26.256766394702424,
+                "y": -106.88438901418618
               },
               {
-                "x": 32.389997119449276,
-                "y": -380.4453862871565
+                "x": -0.5336311290673732,
+                "y": -147.52981258531452
               },
               {
-                "x": 4.510225079864938,
-                "y": -234.86875443118808
+                "x": 13.638079857494468,
+                "y": -185.18322306528515
               },
               {
-                "x": -7.599011936795819,
-                "y": -174.96132325590884
+                "x": 152.66942298464556,
+                "y": -185.11136852687412
               },
               {
-                "x": -2.9897749201353463,
-                "y": -112.39961462006605
+                "x": 213.96432239071004,
+                "y": -152.58773339605762
               },
               {
-                "x": 18.10507339056784,
-                "y": -113.69391269410691
+                "x": 215.85313304517229,
+                "y": -50.31621135446187
               },
               {
-                "x": 141.01022507986585,
-                "y": -74.90906161666135
-              },
-              {
-                "x": 154.0102250798654,
-                "y": -57.91334425511785
-              },
-              {
-                "x": 143.48556685587113,
-                "y": -30.19771207111699
+                "x": 204.91769971895053,
+                "y": -30.438614131114683
               },
               {
                 "x": 136.19936925886833,
@@ -3128,28 +3081,40 @@
                 "y": 34.15107582571686
               },
               {
-                "x": 116.19936925886805,
-                "y": 59.15107582571686
+                "x": 118.12955981493758,
+                "y": 70.37405411000162
               },
               {
                 "x": 76.1993692588689,
                 "y": 74.1510758257169
               },
               {
-                "x": 36.19936925886833,
-                "y": 39.15107582571693
+                "x": 32.890149634741306,
+                "y": 93.16489763955556
               },
               {
-                "x": -39.978030514426166,
-                "y": 25.012139897638797
+                "x": -5.764931726041311,
+                "y": 141.71930341991015
               },
               {
-                "x": -153.9664071223676,
-                "y": 46.1183814605862
+                "x": -11.71186732001388,
+                "y": 165.99650631008754
               },
               {
-                "x": -239.33674411118062,
-                "y": 134.69086910527022
+                "x": -48.88021478230229,
+                "y": 167.4828656707108
+              },
+              {
+                "x": -78.1193147859824,
+                "y": 137.75567845824722
+              },
+              {
+                "x": -91.65624846843947,
+                "y": 90.16348060570935
+              },
+              {
+                "x": -105.4395451572482,
+                "y": 53.68949863432757
               }
             ]
           },
@@ -3174,44 +3139,36 @@
                   "kind": "poly",
                   "verts": [
                     {
-                      "x": -257.4698883346457,
-                      "y": -127.9406281122764
+                      "x": -92.02204251854553,
+                      "y": 28.96453380778059
                     },
                     {
-                      "x": -255.03677529375324,
-                      "y": -665.1591046618977
+                      "x": 26.74467425994891,
+                      "y": -61.17603011865764
                     },
                     {
-                      "x": 53.221107329235906,
-                      "y": -669.2037948951732
+                      "x": 19.466368870932627,
+                      "y": -147.52981258531452
                     },
                     {
-                      "x": 33.22110732923562,
-                      "y": -494.20379489517325
+                      "x": 43.63807985749446,
+                      "y": -185.18322306528515
                     },
                     {
-                      "x": 32.389997119449276,
-                      "y": -380.4453862871565
+                      "x": 152.66942298464556,
+                      "y": -185.11136852687412
                     },
                     {
-                      "x": 4.510225079864938,
-                      "y": -234.86875443118808
+                      "x": 213.96432239071004,
+                      "y": -152.58773339605762
                     },
                     {
-                      "x": -2.9897749201353463,
-                      "y": -112.39961462006605
+                      "x": 215.85313304517229,
+                      "y": -50.31621135446187
                     },
                     {
-                      "x": 141.01022507986585,
-                      "y": -74.90906161666135
-                    },
-                    {
-                      "x": 154.0102250798654,
-                      "y": -57.91334425511785
-                    },
-                    {
-                      "x": 143.48556685587113,
-                      "y": -30.19771207111699
+                      "x": 204.91769971895053,
+                      "y": -30.438614131114683
                     },
                     {
                       "x": 136.19936925886833,
@@ -3222,28 +3179,36 @@
                       "y": 34.15107582571686
                     },
                     {
-                      "x": 116.19936925886805,
-                      "y": 59.15107582571686
+                      "x": 118.12955981493758,
+                      "y": 70.37405411000162
                     },
                     {
                       "x": 76.1993692588689,
                       "y": 74.1510758257169
                     },
                     {
-                      "x": 36.19936925886833,
-                      "y": 39.15107582571693
+                      "x": 32.890149634741306,
+                      "y": 93.16489763955556
                     },
                     {
-                      "x": -39.978030514426166,
-                      "y": 25.012139897638797
+                      "x": -5.764931726041311,
+                      "y": 141.71930341991015
                     },
                     {
-                      "x": -153.9664071223676,
-                      "y": 46.1183814605862
+                      "x": -11.71186732001388,
+                      "y": 165.99650631008754
                     },
                     {
-                      "x": -239.33674411118062,
-                      "y": 134.69086910527022
+                      "x": -48.88021478230229,
+                      "y": 167.4828656707108
+                    },
+                    {
+                      "x": -78.1193147859824,
+                      "y": 137.75567845824722
+                    },
+                    {
+                      "x": -105.19318215089655,
+                      "y": 42.5712827531715
                     }
                   ]
                 },
@@ -3255,8 +3220,8 @@
             ]
           },
           "built": {
-            "hash": "508ce93f812e7f45919dee7347e35756b9344d8e965bb09d543832c3cff74243",
-            "front": 1.9115,
+            "hash": "e8fe5e514cf3c9367eaab53059a4783c74667273f1dce1d469ec5d55bfb06817",
+            "front": 1.7114,
             "generatorHash": "be1555045d189f4ebdbd628abb8470fa9bdd159b4289544553eb676eab5c122c",
             "recipeVersion": 2,
             "tiers": []
@@ -3557,6 +3522,7 @@
           }
         }
       ],
+      "grouped": true,
       "color": "#0b0e16",
       "opacity": 1,
       "friction": 1,
@@ -3833,6 +3799,7 @@
           }
         }
       ],
+      "grouped": true,
       "color": "#0b0e16",
       "opacity": 1,
       "friction": 1,
@@ -3982,6 +3949,7 @@
           }
         }
       ],
+      "grouped": true,
       "color": "#0b0e16",
       "opacity": 1,
       "friction": 1,
@@ -7124,20 +7092,32 @@
                       "y": -2333.246375127407
                     },
                     {
-                      "x": 932.2546098253438,
-                      "y": -2417.7176235265265
+                      "x": 968.5863699686846,
+                      "y": -2379.876734301038
                     },
                     {
-                      "x": 925.1430127066,
-                      "y": -2462.070262752576
+                      "x": 952.6379043419992,
+                      "y": -2428.217713520283
                     },
                     {
-                      "x": 959.7759338165456,
-                      "y": -2613.844959046447
+                      "x": 951.7758809973703,
+                      "y": -2495.07304511673
                     },
                     {
-                      "x": 932.1376952875582,
-                      "y": -2715.709921127479
+                      "x": 1002.9572918583561,
+                      "y": -2551.4459594153964
+                    },
+                    {
+                      "x": 983.6597502380606,
+                      "y": -2586.6677385719922
+                    },
+                    {
+                      "x": 948.8932068631403,
+                      "y": -2607.1614525144028
+                    },
+                    {
+                      "x": 912.1447301126225,
+                      "y": -2695.947296931015
                     },
                     {
                       "x": 960.7251061705736,
@@ -7161,8 +7141,8 @@
             ]
           },
           "built": {
-            "hash": "bba283395bcb2c05f7434d6d60910dace87a8afaa2b95cb8fb343a2da8fb73cf",
-            "front": 1.6355,
+            "hash": "00c9986f0ae4890983c6c94d7f77e9ecad272c69b4e19531f54bd7e37438227a",
+            "front": 1.7819,
             "generatorHash": "be1555045d189f4ebdbd628abb8470fa9bdd159b4289544553eb676eab5c122c",
             "recipeVersion": 2,
             "tiers": []
@@ -8093,1043 +8073,12 @@
       "rot": -0.2617993877991493
     },
     {
-      "type": "StaticBody2D",
-      "id": "wqyf8fgj",
-      "name": "StaticBody2D26",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "ddgss3jw",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 56,
-      "x": 5398.396600710329,
-      "y": -795.0000000000011
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "p3df7wc6",
-      "name": "StaticBody2D27",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "rin4lxoj",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 57,
-      "x": 5504.999999999997,
-      "y": -800.0000000000016
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "mcap1760",
-      "name": "StaticBody2D28",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "jdkfbiws",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 58,
-      "x": 5615.000000000001,
-      "y": -800
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "aavy3hef",
-      "name": "StaticBody2D29",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "ifr8dg2d",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 59,
-      "x": 5401.686538424646,
-      "y": -795.0000000000015
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "cr7v9wvh",
-      "name": "StaticBody2D30",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "cjatkubi",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 60,
-      "x": 5398.396600710331,
-      "y": -794.9999999999995
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "6edk4x62",
-      "name": "StaticBody2D31",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "s1g2ijp3",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 61,
-      "x": 5075,
-      "y": -800
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "m9cedenc",
-      "name": "StaticBody2D32",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "yr877ljv",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 62,
-      "x": 5183.396600710329,
-      "y": -795.000000000003
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "f5ttl6kd",
-      "name": "StaticBody2D33",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "8e7doarw",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 63,
-      "x": 5289.999999999998,
-      "y": -800.0000000000034
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "jf952dkq",
-      "name": "StaticBody2D34",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "s0ampri2",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 64,
-      "x": 5186.686538424646,
-      "y": -795.0000000000033
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "ghm4dhfr",
-      "name": "StaticBody2D35",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "jcu41p1b",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 65,
-      "x": 5183.396600710332,
-      "y": -795.0000000000014
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "dep1xfl7",
-      "name": "StaticBody2D36",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "og5zn88a",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 66,
-      "x": 4968.396600710332,
-      "y": -795.0000000000014
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "x77lcgay",
-      "name": "StaticBody2D37",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "cf2wqdvc",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.00000000000016,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 67,
-      "x": 4971.6865384246485,
-      "y": -795.0000000000019
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "pcr13q12",
-      "name": "StaticBody2D38",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "fqx9zu6e",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 68,
-      "x": 4968.396600710335,
-      "y": -794.9999999999998
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "obm60nao",
-      "name": "StaticBody2D39",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "pv8gu2fu",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 69,
-      "x": 6043.396600710325,
-      "y": -795.0000000000014
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "4fns54vl",
-      "name": "StaticBody2D40",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "ywrxqu3w",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 70,
-      "x": 6149.999999999994,
-      "y": -800.0000000000018
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "nn27d35l",
-      "name": "StaticBody2D41",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "9pl1a91j",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 71,
-      "x": 6259.999999999997,
-      "y": -800.0000000000002
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "eis1oszh",
-      "name": "StaticBody2D42",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "hxzpkn5j",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 72,
-      "x": 6046.686538424642,
-      "y": -795.0000000000017
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "sd4274e5",
-      "name": "StaticBody2D43",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "p8hxi95v",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 73,
-      "x": 6043.396600710328,
-      "y": -794.9999999999998
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "ssk0yq32",
-      "name": "StaticBody2D44",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "xgr47g75",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 74,
-      "x": 5719.999999999996,
-      "y": -800.0000000000002
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "7yl68amx",
-      "name": "StaticBody2D45",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "xnkvj3vr",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -4.999999999999982,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 75,
-      "x": 5828.396600710326,
-      "y": -795.0000000000032
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "337nsapm",
-      "name": "StaticBody2D46",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "td8ikt6c",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 76,
-      "x": 5934.9999999999945,
-      "y": -800.0000000000035
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "ynlftb1j",
-      "name": "StaticBody2D47",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "b3hup8j1",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -4.999999999999982,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 77,
-      "x": 5831.686538424643,
-      "y": -795.0000000000035
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "amgoi44y",
-      "name": "StaticBody2D48",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "8kj3s0gc",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 78,
-      "x": 5828.396600710328,
-      "y": -795.0000000000015
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "ey71t3zd",
-      "name": "StaticBody2D49",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "fxucinr5",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 79,
-      "x": 5613.396600710329,
-      "y": -795.0000000000015
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "r8yxdj4h",
-      "name": "StaticBody2D50",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "7j62mijr",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 80,
-      "x": 5616.686538424646,
-      "y": -795.000000000002
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "a6z2bfi3",
-      "name": "StaticBody2D51",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "81xe13l7",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 81,
-      "x": 4968.396600710329,
-      "y": -795.0000000000015
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "rk1ghp10",
-      "name": "StaticBody2D52",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "ir1qgx3a",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.00000000000016,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 82,
-      "x": 4971.686538424646,
-      "y": -795.0000000000019
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "nm2e14n2",
-      "name": "StaticBody2D53",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "s6gt3cod",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 83,
-      "x": 4645,
-      "y": -800.0000000000003
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "r5choze0",
-      "name": "StaticBody2D54",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "pu9rnm52",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 84,
-      "x": 4753.39660071033,
-      "y": -795.0000000000033
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "cmeo5bqw",
-      "name": "StaticBody2D55",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "9npr92b1",
-          "name": "Rect",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 85,
-      "x": 4859.999999999999,
-      "y": -800.0000000000038
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "bot0i56o",
-      "name": "StaticBody2D56",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "6pkc2cws",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 86,
-      "x": 4756.686538424647,
-      "y": -795.0000000000036
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "ldu780p8",
-      "name": "StaticBody2D57",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "sgatvkje",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 87,
-      "x": 4753.396600710333,
-      "y": -795.0000000000017
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "eb2n6z20",
-      "name": "StaticBody2D58",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "k2sxgg1y",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 88,
-      "x": 4538.396600710333,
-      "y": -795.0000000000017
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "qt6np2ys",
-      "name": "StaticBody2D59",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "2g2r1lz1",
-          "name": "Rect",
-          "x": -1.6865384246472104,
-          "y": -5.00000000000016,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 89,
-      "x": 4541.686538424649,
-      "y": -795.0000000000023
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "00g1vu1m",
-      "name": "StaticBody2D60",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "ewb6tath",
-          "name": "Rect",
-          "x": 1.603399289668772,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "debug": {
-            "on": true
-          }
-        }
-      ],
-      "grouped": true,
-      "color": "#745326",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 90,
-      "x": 4538.396600710336,
-      "y": -795.0000000000001
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "8hsiijwf",
-      "name": "StaticBody2D61",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "3xjmvgoc",
-          "name": "Rect",
-          "x": -156.63184620998223,
-          "y": -7.499999999999574,
-          "shape": {
-            "kind": "rect",
-            "w": 25,
-            "h": 25
-          },
-          "debug": {
-            "on": true
-          }
-        },
-        {
-          "type": "Anchor2D",
-          "id": "205",
-          "name": "Anchor",
-          "x": -158.15624261828347,
-          "y": 5.000000000000426
-        }
-      ],
-      "grouped": true,
-      "color": "#4c3316",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 91,
-      "x": 6409.131846209979,
-      "y": -1120.0000000000005
-    },
-    {
       "type": "Instance",
       "id": "4im7rxmu",
       "name": "RigidBody2D",
       "grouped": true,
-      "x": 6612.628585740134,
-      "y": -1591.3188904821218,
+      "x": 6915.853979553706,
+      "y": -1868.2341479316024,
       "rot": 0.009570558105891441,
       "prefab": "lantern",
       "order": 92
@@ -9169,96 +8118,6 @@
       "order": 93,
       "x": 6009.1318462099825,
       "y": -1120.0000000000002
-    },
-    {
-      "type": "StaticBody2D",
-      "id": "3xwa6rxn",
-      "name": "StaticBody2D63",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "odwqcf3j",
-          "name": "Poly",
-          "shape": {
-            "kind": "poly",
-            "verts": [
-              {
-                "x": 90.35119741328828,
-                "y": 26.46446266481881
-              },
-              {
-                "x": 60.35119741328856,
-                "y": 96.46446266481874
-              },
-              {
-                "x": -34.648802586711724,
-                "y": 96.46446266481874
-              },
-              {
-                "x": -64.64880258671144,
-                "y": 26.46446266481881
-              }
-            ]
-          },
-          "impermeable": true
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "y44amp3u",
-          "name": "Circle",
-          "x": 102.13434279450946,
-          "y": 20.27299649831866,
-          "rot": -2.6179938779914935,
-          "shape": {
-            "kind": "circle",
-            "r": 3.65
-          },
-          "rail": true
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "j2bi89om",
-          "name": "Circle2",
-          "x": -75.99880258671132,
-          "y": 20.114462664820003,
-          "rot": -2.6179938779914935,
-          "shape": {
-            "kind": "circle",
-            "r": 3.65
-          },
-          "rail": true
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "lr1cqlkp",
-          "name": "Circle3",
-          "x": 55.175458727316375,
-          "y": 118.12910503561524,
-          "rot": -2.6179938779914935,
-          "shape": {
-            "kind": "circle",
-            "r": 3.65
-          },
-          "rail": true
-        },
-        {
-          "type": "Model3D",
-          "id": "su3tnh37",
-          "name": "Minecart",
-          "model": "minecart",
-          "x": 11.428571428571798,
-          "y": 124.13644451403066,
-          "scale": 0.5
-        }
-      ],
-      "grouped": true,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 94,
-      "x": 5731.194832247345,
-      "y": -1866.8350497949828,
-      "rot": -3.9269908169872427
     },
     {
       "type": "StaticBody2D",
@@ -9375,173 +8234,6 @@
       "order": 97,
       "x": 5409.131846209985,
       "y": -1640.0000000000014
-    },
-    {
-      "type": "RigidBody2D",
-      "id": "jifnqw54",
-      "name": "RigidBody2D3",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "g7oegvcy",
-          "name": "Poly",
-          "shape": {
-            "kind": "poly",
-            "verts": [
-              {
-                "x": 5.090719754267436,
-                "y": -23.92041289725868
-              },
-              {
-                "x": 3.528658759028705,
-                "y": 8.758530138413652
-              },
-              {
-                "x": 8.860459627394656,
-                "y": 14.55524568303496
-              },
-              {
-                "x": 6.660459627394487,
-                "y": 20.255245683034964
-              },
-              {
-                "x": -6.7395403726056,
-                "y": 20.405245683035112
-              },
-              {
-                "x": -8.989540372605552,
-                "y": 14.405245683034886
-              },
-              {
-                "x": -3.281745382909376,
-                "y": 8.876971949578131
-              },
-              {
-                "x": -5.209280245732518,
-                "y": -23.87041289725858
-              }
-            ]
-          },
-          "impermeable": true,
-          "material": "steel",
-          "thickness": 12,
-          "debug": {
-            "on": true
-          }
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "tn1d73ys",
-          "name": "Curve",
-          "x": -7.6788025918176555,
-          "y": -2.856015669034665,
-          "shape": {
-            "kind": "curve",
-            "width": 3,
-            "verts": [
-              {
-                "x": 3.9870474790904935,
-                "y": -15.81784985472307
-              },
-              {
-                "x": -0.7629525209095384,
-                "y": -13.367849854723012,
-                "inX": 0.7500000000000279,
-                "inY": -0.7500000000001061,
-                "outX": -0.7500000000000279,
-                "outY": 0.7500000000001061
-              },
-              {
-                "x": -3.8629525209096878,
-                "y": 13.232150145276995,
-                "inX": -0.34999999999998366,
-                "inY": -0.34999999999998366,
-                "outX": 0.6999999999999673,
-                "outY": 0.6999999999999673
-              },
-              {
-                "x": 0.6388575627287328,
-                "y": 15.953549564169089
-              }
-            ]
-          },
-          "rail": true,
-          "debug": {
-            "on": true
-          }
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "fwp9lrbf",
-          "name": "Curve2",
-          "x": 7.501199057935539,
-          "y": -2.5643348639771766,
-          "shape": {
-            "kind": "curve",
-            "width": 3,
-            "verts": [
-              {
-                "x": -3.2999999999998453,
-                "y": -15.187500000000206,
-                "inX": -0.24999999999970463,
-                "inY": -0.5000000000003613,
-                "outX": 0.24999999999970463,
-                "outY": 0.5000000000003613
-              },
-              {
-                "x": 0.8999999999999014,
-                "y": -13.587499999999864,
-                "inX": -0.1499999999999755,
-                "inY": -0.9499999999997399,
-                "outX": 0.1499999999999755,
-                "outY": 0.9499999999997399
-              },
-              {
-                "x": 3.849999999999724,
-                "y": 13.162500000000007,
-                "inX": 0.14999999999996405,
-                "inY": -0.6500000000001616,
-                "outX": -0.14999999999996405,
-                "outY": 0.6500000000001616
-              },
-              {
-                "x": -1.4499999999997795,
-                "y": 15.612500000000065
-              }
-            ]
-          },
-          "rail": true,
-          "debug": {
-            "on": true
-          }
-        },
-        {
-          "type": "Light3D",
-          "id": "azsotqjo",
-          "name": "Light",
-          "x": -0.260307859035435,
-          "y": -1.62528215402169,
-          "z": 0,
-          "intensity": 10,
-          "range": 1600,
-          "flicker": 0.1
-        },
-        {
-          "type": "Anchor2D",
-          "id": "206",
-          "name": "Anchor",
-          "x": -0.6015646384582746,
-          "y": -23.892780448750273
-        }
-      ],
-      "grouped": true,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 0.5,
-      "order": 98,
-      "x": 6176.891755112728,
-      "y": -1066.190434766797,
-      "rot": -4.440892098500626e-16
     },
     {
       "type": "RigidBody2D",
@@ -9711,94 +8403,14 @@
       "rot": -4.440892098500626e-16
     },
     {
-      "type": "StaticBody2D",
-      "id": "6w5apwzl",
+      "type": "Instance",
+      "id": "e5956ls2",
       "name": "StaticBody2D66",
-      "children": [
-        {
-          "type": "CollisionShape2D",
-          "id": "ysx3rl5x",
-          "name": "Poly",
-          "shape": {
-            "kind": "poly",
-            "verts": [
-              {
-                "x": 90.35119741328828,
-                "y": 26.46446266481881
-              },
-              {
-                "x": 60.35119741328856,
-                "y": 96.46446266481874
-              },
-              {
-                "x": -34.648802586711724,
-                "y": 96.46446266481874
-              },
-              {
-                "x": -64.64880258671144,
-                "y": 26.46446266481881
-              }
-            ]
-          },
-          "impermeable": true
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "j23imxj1",
-          "name": "Circle",
-          "x": 102.13434279450911,
-          "y": 20.272996498318044,
-          "rot": -2.617993877991493,
-          "shape": {
-            "kind": "circle",
-            "r": 3.65
-          },
-          "rail": true
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "w79brl7m",
-          "name": "Circle2",
-          "x": -75.99880258671193,
-          "y": 20.11446266482067,
-          "rot": -2.617993877991493,
-          "shape": {
-            "kind": "circle",
-            "r": 3.65
-          },
-          "rail": true
-        },
-        {
-          "type": "CollisionShape2D",
-          "id": "2e91xfd8",
-          "name": "Circle3",
-          "x": 55.175458727316936,
-          "y": 118.12910503561498,
-          "rot": -2.617993877991493,
-          "shape": {
-            "kind": "circle",
-            "r": 3.65
-          },
-          "rail": true
-        },
-        {
-          "type": "Model3D",
-          "id": "8wsn7eza",
-          "name": "Minecart",
-          "model": "minecart",
-          "x": 11.428571428571379,
-          "y": 124.13644451403019,
-          "scale": 0.5
-        }
-      ],
       "grouped": true,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "order": 100,
-      "x": 6492.450676547682,
-      "y": -1997.5976742033197,
-      "rot": -2.8797932657906458
+      "x": 6481.951939545266,
+      "y": -2116.1439559976325,
+      "prefab": "minecart",
+      "order": 100
     },
     {
       "type": "StaticBody2D",
@@ -15347,7 +13959,7 @@
         },
         {
           "x": 5906.532097709697,
-          "y": -199.23045745803984,
+          "y": -189.23045745803984,
           "inX": 149.59231462127036,
           "inY": -2.745188553512512,
           "outX": -149.59231462127036,
@@ -15356,7 +13968,7 @@
         },
         {
           "x": 5426.532097709698,
-          "y": -369.23045745803984,
+          "y": -354.2304574580399,
           "inX": 82.74574183731929,
           "inY": 17.54536798247175,
           "outX": -82.74574183731929,
@@ -15365,31 +13977,39 @@
         {
           "x": 5016.532097709697,
           "y": -459.2304574580398,
-          "inX": 154.7993677769469,
-          "inY": 30.862109007936755,
-          "outX": -154.7993677769469,
-          "outY": -30.862109007936667
+          "inX": 151.95386747502155,
+          "inY": 1.2233090872198815,
+          "outX": -151.95386747502155,
+          "outY": -1.2233090872198815
         },
         {
-          "x": 4916.532097709697,
-          "y": -694.2304574580397,
-          "inX": -14.81169701719125,
-          "inY": 53.7035329203583,
-          "outX": 14.81169701719125,
-          "outY": -53.7035329203583,
+          "x": 4682.14069990305,
+          "y": -423.05912708083133,
+          "inX": 162.79961769963904,
+          "inY": 28.697710335461846,
+          "outX": -162.79961769963904,
+          "outY": -28.697710335461846
+        },
+        {
+          "x": 4407.932195650123,
+          "y": -829.0909412298839,
+          "inX": -38.785785652629556,
+          "inY": 265.7772677041384,
+          "outX": 38.785785652629556,
+          "outY": -265.7772677041384,
           "viewportScale": 0.75
         },
         {
-          "x": 5186.532097709697,
-          "y": -854.2304574580398,
-          "inX": -191.79740497367277,
-          "inY": 36.52689560377,
-          "outX": 191.79740497367277,
-          "outY": -36.526895603769916
+          "x": 4761.852489730367,
+          "y": -1090.8290407318318,
+          "inX": -158.3752914149045,
+          "inY": 14.541005527885886,
+          "outX": 158.3752914149045,
+          "outY": -14.541005527885886
         },
         {
-          "x": 5656.532097709697,
-          "y": -749.2304574580398,
+          "x": 5724.319374144625,
+          "y": -1082.8546415293104,
           "inX": -113.81593918890687,
           "inY": -5.39341661545798,
           "outX": 227.63187837781373,
@@ -15638,14 +14258,6 @@
       "order": 0,
       "a": "202",
       "b": "203"
-    },
-    {
-      "type": "Chain",
-      "id": "qba7ao1k",
-      "name": "Chain2",
-      "order": 1,
-      "a": "205",
-      "b": "206"
     },
     {
       "type": "Chain",
@@ -17768,13 +16380,13 @@
         "zxxn5epg": {
           "disabled": true
         },
+        "5vhzq2ct": {
+          "disabled": true
+        },
         "1sldxp3n": {
           "color": null,
           "opacity": null,
           "friction": null
-        },
-        "5vhzq2ct": {
-          "disabled": true
         },
         "qbidrn5n": {
           "disabled": true
@@ -17799,13 +16411,13 @@
         "zxxn5epg": {
           "disabled": true
         },
+        "5vhzq2ct": {
+          "disabled": true
+        },
         "1sldxp3n": {
           "color": null,
           "opacity": null,
           "friction": null
-        },
-        "5vhzq2ct": {
-          "disabled": true
         },
         "qbidrn5n": {
           "disabled": true
@@ -17814,16 +16426,6 @@
           "disabled": true
         }
       }
-    },
-    {
-      "type": "Instance",
-      "id": "5b2vdb3a",
-      "name": "mine-track",
-      "grouped": true,
-      "x": 6528.110026354523,
-      "y": -1692.201619014871,
-      "prefab": "mine-track",
-      "order": 990593
     },
     {
       "type": "Instance",
@@ -18138,66 +16740,6 @@
       "rot": 0.785398163397448
     },
     {
-      "type": "Instance",
-      "id": "l45twlce",
-      "name": "mine-track4",
-      "grouped": true,
-      "x": 6683.110026354499,
-      "y": -1692.2016190148697,
-      "prefab": "mine-track",
-      "order": 16840226
-    },
-    {
-      "type": "Instance",
-      "id": "jyb4r7ti",
-      "name": "mine-track5",
-      "grouped": true,
-      "x": 6838.110026354498,
-      "y": -1692.2016190148697,
-      "prefab": "mine-track",
-      "order": 17830820
-    },
-    {
-      "type": "Instance",
-      "id": "3lq6tzrx",
-      "name": "mine-track6",
-      "grouped": true,
-      "x": 6993.110026354473,
-      "y": -1692.2016190148681,
-      "prefab": "mine-track",
-      "order": 33680453
-    },
-    {
-      "type": "Instance",
-      "id": "biaf2lhq",
-      "name": "mine-track8",
-      "grouped": true,
-      "x": 7148.110026354498,
-      "y": -1692.2016190148697,
-      "prefab": "mine-track",
-      "order": 34671047
-    },
-    {
-      "type": "Instance",
-      "id": "sm2j47vk",
-      "name": "mine-track9",
-      "grouped": true,
-      "x": 7303.110026354473,
-      "y": -1692.2016190148681,
-      "prefab": "mine-track",
-      "order": 50520680
-    },
-    {
-      "type": "Instance",
-      "id": "9q2lehfc",
-      "name": "mine-track10",
-      "grouped": true,
-      "x": 7458.110026354472,
-      "y": -1692.2016190148681,
-      "prefab": "mine-track",
-      "order": 51511274
-    },
-    {
       "type": "StaticBody2D",
       "id": "94y3bazf",
       "name": "StaticBody2D80",
@@ -18226,7 +16768,7 @@
                 "y": -12.54201322010831
               },
               {
-                "x": -44.696273841942165,
+                "x": -44.69627384194217,
                 "y": -15.96295494355077
               },
               {
@@ -18455,7 +16997,7 @@
       "launch": 650,
       "order": 51511518,
       "x": 7388.847213584766,
-      "y": 168.8747384389085,
+      "y": 168.87473843890854,
       "rot": -0.07257877444726882
     },
     {
@@ -18502,9 +17044,9 @@
           "type": "CollisionShape2D",
           "id": "7ptmppow",
           "name": "Circle",
-          "x": 97.533820608666,
-          "y": 28.624268588670304,
-          "rot": -2.617993877991491,
+          "x": 97.53382060866345,
+          "y": 28.62426858866839,
+          "rot": -2.6179938779914913,
           "shape": {
             "kind": "circle",
             "r": 3.65
@@ -18515,9 +17057,9 @@
           "type": "CollisionShape2D",
           "id": "g9nrbna9",
           "name": "Circle2",
-          "x": -74.58990649451587,
-          "y": 28.7873788009446,
-          "rot": -2.617993877991491,
+          "x": -74.58990649451653,
+          "y": 28.78737880094396,
+          "rot": -2.6179938779914913,
           "shape": {
             "kind": "circle",
             "r": 3.65
@@ -18528,9 +17070,9 @@
           "type": "CollisionShape2D",
           "id": "3kjsn716",
           "name": "Circle3",
-          "x": 59.46881439562676,
-          "y": 103.90461005124561,
-          "rot": -2.617993877991491,
+          "x": 61.7508977427231,
+          "y": 104.24308090371872,
+          "rot": -2.6179938779914913,
           "shape": {
             "kind": "circle",
             "r": 3.65
@@ -18542,17 +17084,18 @@
           "id": "zoyc38hc",
           "name": "Minecart",
           "model": "minecart-no-left-wheels",
-          "x": 11.42857142857422,
-          "y": 124.13644451403114,
+          "x": 11.428571428578538,
+          "y": 124.13644451403383,
+          "rot": 6.283185307179585,
           "scale": 0.5
         },
         {
           "type": "CollisionShape2D",
           "id": "le6x0qp3",
           "name": "Circle4",
-          "x": -36.54762089844814,
-          "y": 104.15642511315102,
-          "rot": -2.617993877991491,
+          "x": -39.29213975631513,
+          "y": 104.55533793965853,
+          "rot": -2.6179938779914913,
           "shape": {
             "kind": "circle",
             "r": 3.65
@@ -18565,9 +17108,9 @@
       "opacity": 0.5,
       "friction": 1,
       "order": 51515747,
-      "x": 6572.9707489531975,
-      "y": -1397.6415872714097,
-      "rot": -2.82571771100389
+      "x": 6465.524961637169,
+      "y": -1331.9008485828692,
+      "rot": -3.8014731881729302
     },
     {
       "type": "StaticBody2D",
@@ -18825,8 +17368,8 @@
       "bounce": 1,
       "launch": 650,
       "order": 103027261,
-      "x": 6549.222646346196,
-      "y": -801.46160491714,
+      "x": 6514.222646346198,
+      "y": -871.4616049171409,
       "rot": 0.3681442403821009
     },
     {
@@ -18959,6 +17502,604 @@
       "x": 7142.947212622585,
       "y": -682.7196391485191,
       "rot": -0.15223280777928208
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "fy8072kn",
+      "name": "boulder-8",
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "j87syx6a",
+          "name": "Poly",
+          "x": 671.6789597518572,
+          "y": 651.8494810918801,
+          "shape": {
+            "kind": "poly",
+            "verts": [
+              {
+                "x": -136.192666592073,
+                "y": 83.33004873406684
+              },
+              {
+                "x": 10.658823509969393,
+                "y": -16.11257432120005
+              },
+              {
+                "x": 100.55664411074497,
+                "y": -43.029822614908554
+              },
+              {
+                "x": 129.88087154718036,
+                "y": -12.61590098664415
+              },
+              {
+                "x": 132.15251136334228,
+                "y": 14.69988198302597
+              },
+              {
+                "x": 160.484332947846,
+                "y": 33.39874391103124
+              },
+              {
+                "x": 225.2729611380391,
+                "y": 13.214552762168044
+              },
+              {
+                "x": 273.101834617687,
+                "y": 98.33790920420583
+              },
+              {
+                "x": 200.61603880128155,
+                "y": 127.8119163225671
+              },
+              {
+                "x": -520.9644324810055,
+                "y": 513.7732079131546
+              },
+              {
+                "x": -1237.2202724149674,
+                "y": -790.4559642885223
+              },
+              {
+                "x": -1067.011890136483,
+                "y": -880.4813001798824
+              },
+              {
+                "x": -560.1631577274444,
+                "y": 8.253881564753605
+              },
+              {
+                "x": -460.8443420060839,
+                "y": 11.616511883888458
+              },
+              {
+                "x": -359.0445326406876,
+                "y": -25.698648164310754
+              },
+              {
+                "x": -300.1741756799145,
+                "y": 78.08991995185498
+              }
+            ]
+          },
+          "impermeable": true
+        },
+        {
+          "type": "Formation3D",
+          "id": "wxye54cz",
+          "name": "Formation",
+          "generator": "boulders",
+          "params": {
+            "depth": 4
+          },
+          "guide": {
+            "kind": "collision",
+            "pieces": [
+              {
+                "x": 671.6789597518572,
+                "y": 651.8494810918801,
+                "shape": {
+                  "kind": "poly",
+                  "verts": [
+                    {
+                      "x": -136.192666592073,
+                      "y": 83.33004873406684
+                    },
+                    {
+                      "x": 10.658823509969393,
+                      "y": -16.11257432120005
+                    },
+                    {
+                      "x": 100.55664411074497,
+                      "y": -43.029822614908554
+                    },
+                    {
+                      "x": 129.88087154718036,
+                      "y": -12.61590098664415
+                    },
+                    {
+                      "x": 132.15251136334228,
+                      "y": 14.69988198302597
+                    },
+                    {
+                      "x": 160.484332947846,
+                      "y": 33.39874391103124
+                    },
+                    {
+                      "x": 225.2729611380391,
+                      "y": 13.214552762168044
+                    },
+                    {
+                      "x": 273.101834617687,
+                      "y": 98.33790920420583
+                    },
+                    {
+                      "x": 200.61603880128155,
+                      "y": 127.8119163225671
+                    },
+                    {
+                      "x": -453.47198625619984,
+                      "y": 475.201203823
+                    },
+                    {
+                      "x": -941.1517072444209,
+                      "y": -419.62250837336035
+                    },
+                    {
+                      "x": -797.3567799578134,
+                      "y": -465.5775233695435
+                    },
+                    {
+                      "x": -538.5125226328336,
+                      "y": -4.246118435246381
+                    },
+                    {
+                      "x": -460.8443420060839,
+                      "y": 11.616511883888458
+                    },
+                    {
+                      "x": -359.0445326406876,
+                      "y": -25.698648164310754
+                    },
+                    {
+                      "x": -300.1741756799145,
+                      "y": 78.08991995185498
+                    }
+                  ]
+                },
+                "piece": {
+                  "node": "j87syx6a",
+                  "impermeable": true
+                }
+              }
+            ]
+          },
+          "built": {
+            "hash": "814e5de9e6bf09921da05f13d41f1de175342aa23e9ed45d62c5d4362e984410",
+            "front": 1.8818,
+            "generatorHash": "be1555045d189f4ebdbd628abb8470fa9bdd159b4289544553eb676eab5c122c",
+            "recipeVersion": 2,
+            "tiers": []
+          }
+        }
+      ],
+      "grouped": true,
+      "color": "#0b0e16",
+      "opacity": 0.5,
+      "friction": 1,
+      "order": 154538827,
+      "x": 6101.1404069065475,
+      "y": -1865.8148379029726,
+      "rot": 0.5235987755982983
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "bhmav0ub",
+      "name": "Root4",
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "hfez3cxq",
+          "name": "Root",
+          "shape": {
+            "kind": "curve",
+            "width": 8,
+            "tip": 8,
+            "verts": [
+              {
+                "x": -198.00863572550043,
+                "y": -181.08833749151003,
+                "inX": -8.265875277416068,
+                "inY": -3.1857811474476527,
+                "outX": 8.265875277416068,
+                "outY": 3.1857811474476527
+              },
+              {
+                "x": -158.7461887662471,
+                "y": -148.52655810964313,
+                "inX": -0.6638191973262764,
+                "inY": -0.20399402286206403,
+                "outX": 2.6552767893051055,
+                "outY": 0.8159760914482561
+              },
+              {
+                "x": -96.72936913742518,
+                "y": -157.89364532908525
+              },
+              {
+                "x": -53.75000000000085,
+                "y": -217.50000000000043
+              }
+            ]
+          },
+          "root": {}
+        }
+      ],
+      "grouped": true,
+      "color": "#7a5a40",
+      "opacity": 0.5,
+      "friction": 1,
+      "passable": true,
+      "order": 154539075,
+      "x": 6714.35990211741,
+      "y": -1201.345979970258,
+      "rot": -0.7991494723081234
+    },
+    {
+      "type": "StaticBody2D",
+      "id": "iyapzii8",
+      "name": "StaticBody2D26",
+      "children": [
+        {
+          "type": "CollisionShape2D",
+          "id": "yc43sk7d",
+          "name": "Root2",
+          "x": -27.650603541724482,
+          "y": 109.03012070834475,
+          "shape": {
+            "kind": "curve",
+            "width": 10,
+            "tip": 3,
+            "verts": [
+              {
+                "x": 20.881350537755587,
+                "y": -51.67568161092865
+              },
+              {
+                "x": -17.3493964582768,
+                "y": -6.530120708344667
+              },
+              {
+                "x": -68.03224816888186,
+                "y": 19.91953290593303
+              }
+            ]
+          },
+          "material": "custom",
+          "density": 1200,
+          "root": {
+            "bends": [
+              {
+                "at": 0.06,
+                "freq": 3
+              },
+              {
+                "at": 0.58,
+                "freq": 5
+              }
+            ]
+          }
+        }
+      ],
+      "grouped": true,
+      "color": "#7a5a40",
+      "opacity": 0.5,
+      "friction": 1,
+      "passable": true,
+      "order": 309078229,
+      "x": 6440.424800959542,
+      "y": -1245.5372047938627,
+      "rot": 0.12215930185924226
+    },
+    {
+      "type": "Instance",
+      "id": "s4d8q1a4",
+      "name": "mine-track4",
+      "grouped": true,
+      "x": 6337.379387559557,
+      "y": -1522.9961677038518,
+      "prefab": "mine-track",
+      "order": 326909050
+    },
+    {
+      "type": "Instance",
+      "id": "9azhv4br",
+      "name": "mine-track12",
+      "grouped": true,
+      "x": 6570.101349992478,
+      "y": -1523.1259552692047,
+      "prefab": "mine-track",
+      "order": 343749277
+    },
+    {
+      "type": "Instance",
+      "id": "706falsm",
+      "name": "Bouncy-mushroom-flat2",
+      "grouped": true,
+      "x": 6492.884523055841,
+      "y": -1523.1850567017964,
+      "prefab": "broken-rail-2",
+      "order": 687498557,
+      "overrides": {
+        "4x5g19m0": {
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "g7vbg545",
+      "name": "Bouncy-mushroom-flat3",
+      "grouped": true,
+      "x": 6415.049393532955,
+      "y": -1523.079178627611,
+      "prefab": "broken-rail-2",
+      "order": 1374997115,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-b",
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "3yxp1ndg",
+      "name": "Bouncy-mushroom-flat4",
+      "grouped": true,
+      "x": 6259.110298328582,
+      "y": -1523.1364348173247,
+      "prefab": "broken-rail-2",
+      "order": 2749994231,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-c",
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "8j80xmjm",
+      "name": "mine-track5",
+      "grouped": true,
+      "x": 6103.910237824417,
+      "y": -1523.1530983851667,
+      "prefab": "mine-track",
+      "order": 3076903282
+    },
+    {
+      "type": "Instance",
+      "id": "x5k9x1xa",
+      "name": "Bouncy-mushroom-flat5",
+      "grouped": true,
+      "x": 6181.666081405168,
+      "y": -1523.1886138260643,
+      "prefab": "broken-rail-2",
+      "order": 3764401840,
+      "overrides": {
+        "4x5g19m0": {
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "lle4f3zi",
+      "name": "mine-track6",
+      "grouped": true,
+      "x": 6026.118432001358,
+      "y": -1523.19890081201,
+      "prefab": "mine-track",
+      "order": 6841305123
+    },
+    {
+      "type": "Instance",
+      "id": "9kiq9336",
+      "name": "mine-track8",
+      "grouped": true,
+      "x": 5948.618803689756,
+      "y": -1523.3705039318097,
+      "prefab": "mine-track",
+      "order": 13682610247
+    },
+    {
+      "type": "Instance",
+      "id": "2e87v6sz",
+      "name": "Bouncy-mushroom-flat6",
+      "grouped": true,
+      "x": 5870.925313261198,
+      "y": -1523.5859919329205,
+      "prefab": "broken-rail-2",
+      "order": 15057607363,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-b",
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "9x32audm",
+      "name": "Bouncy-mushroom-flat7",
+      "grouped": true,
+      "x": 6388.960624932165,
+      "y": -1875.1334334440803,
+      "prefab": "broken-rail-2",
+      "order": 15745105921,
+      "overrides": {
+        "4x5g19m0": {
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "j8cdn62n",
+      "name": "Bouncy-mushroom-flat8",
+      "grouped": true,
+      "x": 6311.125495409278,
+      "y": -1875.0275553698948,
+      "prefab": "broken-rail-2",
+      "order": 16432604479,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-b",
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "3yb17pkn",
+      "name": "Bouncy-mushroom-flat9",
+      "grouped": true,
+      "x": 6233.467785608181,
+      "y": -1875.1084562611243,
+      "prefab": "broken-rail-2",
+      "order": 17807601595,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-c",
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "yig6hdy9",
+      "name": "mine-track11",
+      "grouped": true,
+      "x": 6155.986339700731,
+      "y": -1875.1014751274504,
+      "prefab": "mine-track",
+      "order": 18134510646
+    },
+    {
+      "type": "Instance",
+      "id": "2xle5k63",
+      "name": "mine-track13",
+      "grouped": true,
+      "x": 6078.194533877672,
+      "y": -1875.1472775542936,
+      "prefab": "mine-track",
+      "order": 21898912487,
+      "children": [
+        {
+          "type": "Anchor2D",
+          "id": "vno8wvlq",
+          "name": "Anchor",
+          "x": 38.00895112679186,
+          "y": -0.1285015314728355
+        }
+      ]
+    },
+    {
+      "type": "Instance",
+      "id": "cd7bxrx3",
+      "name": "mine-track14",
+      "grouped": true,
+      "x": 6000.69490556607,
+      "y": -1875.3188806740936,
+      "prefab": "mine-track",
+      "order": 28740217611
+    },
+    {
+      "type": "Instance",
+      "id": "y9t6rz1z",
+      "name": "Bouncy-mushroom-flat11",
+      "grouped": true,
+      "x": 5923.001415137513,
+      "y": -1875.5343686752042,
+      "prefab": "broken-rail-2",
+      "order": 30115214727,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-b",
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Vine",
+      "id": "2ex3svkr",
+      "name": "Vine15",
+      "order": 30115214728,
+      "anchor": "vno8wvlq",
+      "length": 216.1027428199496,
+      "stiffness": 0.05,
+      "viscosity": 0,
+      "braidSeed": 1701,
+      "rope": true
+    },
+    {
+      "type": "Instance",
+      "id": "j7ba5r3a",
+      "name": "mine-track9",
+      "grouped": true,
+      "x": 6466.528481237851,
+      "y": -1875.2257330448072,
+      "prefab": "mine-track",
+      "order": 48249725375
+    },
+    {
+      "type": "Instance",
+      "id": "ueuox81q",
+      "name": "Bouncy-mushroom-flat10",
+      "grouped": true,
+      "x": 6699.934172075273,
+      "y": -1875.5930842098212,
+      "prefab": "broken-rail-2",
+      "order": 63994831297,
+      "overrides": {
+        "4x5g19m0": {
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "fnsdiq5a",
+      "name": "Bouncy-mushroom-flat12",
+      "grouped": true,
+      "x": 6622.099042552385,
+      "y": -1875.487206135636,
+      "prefab": "broken-rail-2",
+      "order": 64682329855,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-b",
+          "scale": 0.6
+        }
+      }
+    },
+    {
+      "type": "Instance",
+      "id": "md2qqprf",
+      "name": "Bouncy-mushroom-flat13",
+      "grouped": true,
+      "x": 6544.4413327512875,
+      "y": -1875.5681070268654,
+      "prefab": "broken-rail-2",
+      "order": 66057326971,
+      "overrides": {
+        "4x5g19m0": {
+          "model": "mine-rail-missing-sleepers-c",
+          "scale": 0.6
+        }
+      }
     }
   ]
 }
