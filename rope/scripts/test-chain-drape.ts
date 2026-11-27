@@ -71,9 +71,11 @@ const MIN_WRAPPED_TAUT = 10;
 // Runs that are about the drape thrown about the real level rather than about
 // a piece it wraps (`session-310f`: slack chain swung over the introduction's
 // rocks, where the segment push-out threw nodes metres; `session-256f-jumps`:
-// slack round a rock's corners, thrown 5.4 m off it). Their guard is that the
+// slack round a rock's corners, thrown 5.4 m off it; `session-451f`: the
+// chain taut over a rock's corner, thrown 3.7 m off a sliver of rock beside it
+// and drawn 10 m long to the end of the run). Their guard is that the
 // drape is out for this many frames instead.
-const LOOSE_RUNS = new Set(["session-310f.json", "session-256f-jumps.json"]);
+const LOOSE_RUNS = new Set(["session-310f.json", "session-256f-jumps.json", "session-451f.json"]);
 const MIN_DRAPE_FRAMES = 120;
 // Spacing of the points a segment is tested at, metres: a fifth of the
 // thinnest piece the runs wrap (the box's 10 cm), well under a node's 2.8 cm.

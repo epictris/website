@@ -304,19 +304,16 @@ export function bodyCarried(body: CollisionObject2D, q: Vec2): Vec2 {
 // the chain stayed over it, and as the slack ran out the sag bound hauled it
 // back through: the chain phasing through the box and snapping back.
 //
-// So each segment is held off a piece's vertices as the nodes are held off its
-// faces: by the broad link's half-width, on the side the vertex was on. Which
-// side is the continuous answer, the segment's came-from: the segment is taken
-// to have moved linearly from where its nodes started the step (`from`) to
-// where they are, and a vertex that lay on the moving segment at some moment
-// of that move (`vertexCrossed`, the textbook edge-vertex test: the roots in
-// [0, 1] of the quadratic the cross product makes) went through it, so is put
-// back on the side it started on. A vertex that did not cross is held on the
-// side it is on. Asked in each piece's own frame: for a body that moved the
-// start is carried with it, as the node push-out's came-from is. A segment
-// that crosses a piece without any vertex having crossed it this step was
-// across it when the step began; it is put out on the side away from the
-// piece's centre, which is right for a cut while it is shallow.
+// So each segment is held off each piece as the nodes are held off its faces:
+// by the broad link's half-width, with the whole piece on one side of it
+// (`pieceSide`), the side it was on where the segment was last clear within
+// the step (`from`), asked in the piece's own frame (for a body that moved the
+// start is carried with it, as the node push-out's came-from is). The piece is
+// measured where it projects onto the segment (`stripExtent`), faces as well
+// as corners, and the segment goes out past its furthest point the other way.
+// The side is decided the first round a segment meets a piece and kept for
+// its other rounds in the pass, so the rounds converge on one answer instead
+// of pushing the segment off one corner and back off the next.
 //
 // Except at a corner the solver's chain is wrapped round (`WrapCorner`), whose
 // side is known outright: the outside, the drape going round it as the chain
@@ -327,10 +324,11 @@ export function bodyCarried(body: CollisionObject2D, q: Vec2): Vec2 {
 // on `session-256f-jumps` f187, from which the across rule threw the drape
 // 5.4 m off a 1.6 m sliver of it the next step.
 //
-// The move is the textbook edge-vertex contact: the vertex's projection on the
-// segment moved clear along the segment's normal, shared between the two nodes
-// by where it falls (`1 - t` and `t`, scaled so the point moves the whole way),
-// and the normal velocity killed as the node push-out kills it. Not the
+// The move is the textbook edge-vertex contact: the piece's furthest point's
+// projection on the segment moved clear along the segment's normal, shared
+// between the two nodes by where it falls (`1 - t` and `t`, scaled so the point
+// moves the whole way), and the normal velocity killed as the node push-out
+// kills it. Not the
 // circle the chain is coiled on: the one a drape lies on most is the ball's
 // own rim, whose coil chords sit inside the rim by their sagitta (0.7 mm at
 // 2.8 cm on the 14 cm rim) - held off it, the coil was pushed out on every
@@ -353,8 +351,12 @@ export function pushSegmentsOut(
   wraps: readonly WrapCorner[] = [],
 ): void {
   for (let j = first; j < last; j++) {
+    // The side of the segment each piece it meets is put on, decided the
+    // first round it meets it and kept for the rest (`pieceSide`); most
+    // segments meet none.
+    let sides: Map<Candidate, number> | null = null;
     // Repeated, as the node push-out is, until the segment ends clear: moving
-    // a segment off one vertex turns it, and can lay it over another.
+    // a segment off one piece turns it, and can lay it over another.
     for (let round = 0; round < SEAM_ROUNDS; round++) {
       const a = pos[j]!;
       const b = pos[j + 1]!;
@@ -414,79 +416,53 @@ export function pushSegmentsOut(
           owner = c;
           continue;
         }
-        const verts = c.loop.verts;
-        // The segment's ends where they were last clear, and the box the
-        // segment swept from there, read when the first vertex projecting
-        // into the segment asks: most pieces a segment's box reaches have
-        // none, and a moving piece's carry is two rotations.
-        let a0 = Vec2.ZERO;
-        let b0 = Vec2.ZERO;
-        let sx0 = NaN;
-        let sx1 = 0;
-        let sy0 = 0;
-        let sy1 = 0;
-        // For a segment already across the piece with no vertex crossing it
-        // this step: whether it is (asked once, when first needed), and the
-        // side of the segment the piece's centre is on, which every vertex
-        // is put back on, the segment going out away from the centre.
-        let across: boolean | null = null;
-        let centreSide = 0;
-        for (let k = 0; k < verts.length; k++) {
-          const v = verts[k]!;
-          // In plain numbers, as in `sweptEntry`.
-          const wx = v.x - a.x;
-          const wy = v.y - a.y;
-          const tv = (wx * ux + wy * uy) / len;
-          if (tv <= 0 || tv >= 1) continue;
-          const now = mx * wx + my * wy;
-          let side = now >= 0 ? 1 : -1;
-          if (Number.isNaN(sx0)) {
-            a0 = c.moving && carry[j] ? bodyCarried(c.owner, from[j]!) : from[j]!;
-            b0 = c.moving && carry[j + 1] ? bodyCarried(c.owner, from[j + 1]!) : from[j + 1]!;
-            sx0 = Math.min(minX, a0.x, b0.x);
-            sx1 = Math.max(maxX, a0.x, b0.x);
-            sy0 = Math.min(minY, a0.y, b0.y);
-            sy1 = Math.max(maxY, a0.y, b0.y);
-          }
-          const swept = v.x >= sx0 && v.x <= sx1 && v.y >= sy0 && v.y <= sy1;
-          if (swept && vertexCrossed(a0, b0, a, b, v)) {
-            const was = b0.sub(a0).cross(v.sub(a0));
-            if (was !== 0) side = was > 0 ? 1 : -1;
-            // A corner the chain is wrapped round has its outside known: the
-            // drape goes round it as the chain does, never across it.
-            if (isWrapped(c.shape, v, wraps)) {
-              const p = k === 0 ? verts.length - 1 : k - 1;
-              const ox = c.loop.nx[p]! + c.loop.nx[k]!;
-              const oy = c.loop.ny[p]! + c.loop.ny[k]!;
-              const out = mx * ox + my * oy;
-              if (out !== 0) side = out > 0 ? -1 : 1;
-            }
-          } else {
-            across ??= segmentCrossesLoop(a, b, verts);
-            if (across) {
-              if (centreSide === 0) {
-                let cx = 0;
-                let cy = 0;
-                for (const w of verts) {
-                  cx += w.x;
-                  cy += w.y;
-                }
-                centreSide = mx * (cx / verts.length - a.x) + my * (cy / verts.length - a.y) >= 0 ? 1 : -1;
-              }
-              side = centreSide;
-            }
-          }
-          // The vertex is to be on `side`, NODE_RADIUS off the segment.
-          const need = NODE_RADIUS - side * now;
-          if (need <= depth) continue;
-          if (c.cuffed && cuff !== null && new Vec2(a.x + abx * tv, a.y + aby * tv).distanceTo(cuff.at) < MANACLE_REACH) {
-            continue;
-          }
-          depth = need;
-          t = tv;
-          dir = new Vec2(mx * -side, my * -side);
-          owner = c;
+        // The piece's box first, projected on the segment's line and normal:
+        // most pieces a segment's box reaches are nowhere near the segment
+        // itself. The box is grown by the node's radius, so this rejects only
+        // pieces further off than that. Then the piece where it lies across
+        // the segment's strip, along the segment's normal; clear of it by the
+        // link's half-width on either side is clear.
+        const cx = c.cx - a.x;
+        const cy = c.cy - a.y;
+        const reachM = c.ex * Math.abs(mx) + c.ey * Math.abs(my);
+        if (Math.abs(mx * cx + my * cy) > reachM) continue;
+        const along = ux * cx + uy * cy;
+        const reachU = c.ex * Math.abs(ux) + c.ey * Math.abs(uy);
+        if (along + reachU < 0 || along - reachU > len) continue;
+        const ext = stripNow;
+        if (!stripExtent(a.x, a.y, ux, uy, len, c.loop.verts, ext)) continue;
+        if (ext.lo >= NODE_RADIUS || ext.hi <= -NODE_RADIUS) continue;
+        // A side some event decided is kept for the pass; with none (0), the
+        // shorter move is asked of where the segment is now, every round:
+        // held, it went stale as other pieces moved the segment. On
+        // `session-787f` f553 a segment across a 3.9 m piece by a sliver was
+        // set to clear it by 6 cm, a push off the piece beside it moved it
+        // 12 cm the other way, and the held side then put it out 3.2 m.
+        let side = sides?.get(c);
+        if (side === undefined) {
+          side = pieceSide(c, j, a, b, len, from, carry, ext, wraps);
+          if (side !== 0) (sides ??= new Map()).set(c, side);
         }
+        // Clearing with the piece on the left moves the segment past its
+        // lowest point; with it on the right, past its highest.
+        if (side === 0) side = -ext.lo <= ext.hi ? 1 : -1;
+        // The piece is to be on `side`, NODE_RADIUS off the segment: the
+        // segment goes out past the piece's furthest point the other way.
+        // Within a micrometre counts as clear (`BOUND_ON_FACE`): a node the
+        // node pass left on a face, a half-width off it, reads at the strip's
+        // end as touching it to rounding (1e-16 m), and pushing those cost
+        // the segment a round over its pieces 23 times a step on
+        // `session-310f`.
+        const need = side > 0 ? NODE_RADIUS - ext.lo : NODE_RADIUS + ext.hi;
+        if (need <= depth || need <= BOUND_ON_FACE) continue;
+        const tv = side > 0 ? ext.loT : ext.hiT;
+        if (c.cuffed && cuff !== null && new Vec2(a.x + abx * tv, a.y + aby * tv).distanceTo(cuff.at) < MANACLE_REACH) {
+          continue;
+        }
+        depth = need;
+        t = tv;
+        dir = new Vec2(mx * -side, my * -side);
+        owner = c;
       }
       if (owner === null) break;
       const wa = 1 - t;
@@ -987,6 +963,184 @@ function segmentCrossesLoop(a: Vec2, b: Vec2, verts: readonly Vec2[]): boolean {
     if ((d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0)) return true;
   }
   return false;
+}
+
+// A convex piece clipped to a segment's strip (the points that project onto
+// the segment, `0 <= s <= len` along it), as its extent along the segment's
+// left normal `m`: the lowest and highest points, and where along the segment
+// each lies (0 at a, 1 at b). The clipped piece is convex, so its extremes are
+// at its corners: the piece's own corners inside the strip, and the points
+// where the strip's two end lines cut its edges, which is how a face counts
+// where no corner of it projects onto the segment. Written into `out`, false
+// when nothing of the piece projects onto the segment. Asked of every piece a
+// segment's box reaches on every round, so it allocates nothing.
+interface StripExtent {
+  lo: number;
+  loT: number;
+  hi: number;
+  hiT: number;
+}
+
+const stripNow: StripExtent = { lo: 0, loT: 0, hi: 0, hiT: 0 };
+
+function stripExtent(
+  ax: number, ay: number, ux: number, uy: number, len: number, verts: readonly Vec2[], out: StripExtent,
+): boolean {
+  const mx = -uy;
+  const my = ux;
+  let lo = Infinity;
+  let loS = 0;
+  let hi = -Infinity;
+  let hiS = 0;
+  // In plain numbers, as in `sweptEntry`: each corner projected once, the
+  // edge from the one before it to it cut by the strip's end lines.
+  const last = verts[verts.length - 1]!;
+  let ps = (last.x - ax) * ux + (last.y - ay) * uy;
+  let pn = (last.x - ax) * mx + (last.y - ay) * my;
+  for (let i = 0; i < verts.length; i++) {
+    const q = verts[i]!;
+    const qs = (q.x - ax) * ux + (q.y - ay) * uy;
+    const qn = (q.x - ax) * mx + (q.y - ay) * my;
+    if (qs >= 0 && qs <= len) {
+      if (qn < lo) { lo = qn; loS = qs; }
+      if (qn > hi) { hi = qn; hiS = qs; }
+    }
+    if ((ps < 0) !== (qs < 0)) {
+      const n = pn + ((qn - pn) * -ps) / (qs - ps);
+      if (n < lo) { lo = n; loS = 0; }
+      if (n > hi) { hi = n; hiS = 0; }
+    }
+    if ((ps < len) !== (qs < len)) {
+      const n = pn + ((qn - pn) * (len - ps)) / (qs - ps);
+      if (n < lo) { lo = n; loS = len; }
+      if (n > hi) { hi = n; hiS = len; }
+    }
+    ps = qs;
+    pn = qn;
+  }
+  if (lo === Infinity) return false;
+  out.lo = lo;
+  out.loT = loS / len;
+  out.hi = hi;
+  out.hiT = hiS / len;
+  return true;
+}
+
+// The side of segment `j` (a->b) a convex piece goes on: +1 to the segment's
+// left (`m`), -1 to its right, 0 when no event says (the caller then takes
+// the shorter move from where the segment is). One side for the whole piece: a convex piece
+// with corners on both sides of a segment has no position the segment is clear
+// of it in, and asked corner by corner the rounds pushed the segment one way
+// off one corner and back off the next (`session-189f` f95: a corner put back
+// on the side it came from, then the segment, across the piece, put out the
+// other way, then the corner again, 4.5 cm each time, ending with a node
+// 35 mm in). It is the textbook edge-vertex treatment (Bridson, Fedkiw and
+// Anderson, "Robust treatment of collisions"): sides from events, the shortest
+// move only for what no event explains. A segment whose ends stay outside a
+// convex piece (the node pass's work) becomes across it only by a corner
+// crossing it, so in order:
+//
+// - A corner the solver's chain is wrapped round (`WrapCorner`) that crossed
+//   the segment: its outside, the drape going round it as the chain does.
+//   The came-from is wrong there in a way the sag bound makes (see
+//   `pushSegmentsOut`).
+// - A segment that was already across the piece where it was last clear
+//   (the exact segment-polygon test): the shorter move.
+// - A corner that crossed the segment since it was last clear
+//   (`vertexCrossed`): the side it came from.
+// - A piece the segment is not across: the side it is on.
+// - Across it with nothing to say how: the shorter move (0).
+//
+// Not the side of the piece the last clear segment had it on, as a whole: a
+// strip is the segment's own, and a segment that moved or turned has another,
+// so the side of one strip is not the side of the other. On `session-787f`
+// f727, with two nodes 0.05 mm apart where last clear, the piece read on that
+// speck's right and lay 4 mm off the segment's left now, and the segment was
+// put 3.7 m out across it.
+//
+// The shorter move, not the side away from the
+//   piece's centre, as it was: a long piece cut near one end has its centre
+//   on the far side of the cut. On `session-451f` f312 a segment cut a 1.9 m
+//   sliver of rock by 2.2 cm at a corner it shares with the piece beside it;
+//   clearing it was 4.4 cm one way and 85 cm the other, the centre was on the
+//   85 cm side, and the drape was thrown a metre on that step and on every
+//   step after (the taut bound laying it back on the path each time), drawn
+//   10 m long for 1.4 m of chain. The same throw off a 1.6 m sliver was
+//   `session-256f-jumps` f188. Measured over the clipped piece, not its
+//   corners alone: a segment across the middle of the 20 x 10 cm box has no
+//   corner on one side to weigh, and weighing corners only put segments
+//   through it on the box recordings for up to 340 frames.
+function pieceSide(
+  c: Candidate,
+  j: number,
+  a: Vec2,
+  b: Vec2,
+  len: number,
+  from: readonly Vec2[],
+  carry: readonly boolean[],
+  ext: StripExtent,
+  wraps: readonly WrapCorner[],
+): number {
+  const loop = c.loop!;
+  const verts = loop.verts;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  const mx = -uy;
+  const my = ux;
+  const inStrip = (v: Vec2): boolean => {
+    const s = (v.x - a.x) * ux + (v.y - a.y) * uy;
+    return s > 0 && s < len;
+  };
+  // Where the segment was last clear, carried with a body that moved: which
+  // side the piece came from is a question in the piece's own frame.
+  const a0 = c.moving && carry[j] ? bodyCarried(c.owner, from[j]!) : from[j]!;
+  const b0 = c.moving && carry[j + 1] ? bodyCarried(c.owner, from[j + 1]!) : from[j + 1]!;
+  const sx0 = Math.min(a.x, b.x, a0.x, b0.x);
+  const sx1 = Math.max(a.x, b.x, a0.x, b0.x);
+  const sy0 = Math.min(a.y, b.y, a0.y, b0.y);
+  const sy1 = Math.max(a.y, b.y, a0.y, b0.y);
+  const crossed = (v: Vec2): boolean =>
+    v.x >= sx0 && v.x <= sx1 && v.y >= sy0 && v.y <= sy1 && inStrip(v) && vertexCrossed(a0, b0, a, b, v);
+  // A side a crossing says the piece came from is one the segment can only
+  // be as deep in as it has moved since it was last clear, plus the link's
+  // half-width it was held off by: a crossing that would need more is a
+  // corner the last clear segment all but touched, read across by a hair,
+  // not one the segment came through. On `session-386f` f364 a node level
+  // with a corner 8 mm off read it as crossed, and clearing the piece back
+  // to that side was 236 mm for a segment that had moved 22 mm; the drape
+  // went round the box the other way from the chain for 8 frames.
+  const moved = Math.max(a.distanceTo(a0), b.distanceTo(b0));
+  const reachable = (side: number): boolean =>
+    (side > 0 ? NODE_RADIUS - ext.lo : NODE_RADIUS + ext.hi) <= moved + NODE_RADIUS;
+  // Only a wrapped corner that crossed the segment: one that merely projects
+  // onto it says nothing of it, and asked of every such corner a segment
+  // along the far face of the 20 x 10 cm box was put out through the box
+  // toward the wrapped corner over it (the drape round the box the other way
+  // from the chain on all five box recordings).
+  for (let k = 0; k < verts.length; k++) {
+    const v = verts[k]!;
+    if (!isWrapped(c.shape, v, wraps) || !crossed(v)) continue;
+    const p = k === 0 ? verts.length - 1 : k - 1;
+    const out = mx * (loop.nx[p]! + loop.nx[k]!) + my * (loop.ny[p]! + loop.ny[k]!);
+    const side = out > 0 ? -1 : 1;
+    if (out !== 0 && reachable(side)) return side;
+  }
+  // Already across the piece where it was last clear: no motion explains the
+  // cut, and a corner that crosses it now is the segment shifting on a piece
+  // it was already through, not coming from anywhere. On `session-211f-1`
+  // f91 a segment across the tip of a 3.4 m wedge read the tip as having
+  // come from the far side, and clearing the wedge that way threw a node
+  // 3.7 m.
+  if (segmentCrossesLoop(a0, b0, verts)) return 0;
+  for (const v of verts) {
+    if (!crossed(v)) continue;
+    const was = b0.sub(a0).cross(v.sub(a0));
+    const side = was > 0 ? 1 : -1;
+    if (was !== 0 && reachable(side)) return side;
+  }
+  if (ext.lo >= 0) return 1;
+  if (ext.hi <= 0) return -1;
+  return 0;
 }
 
 // Read-only per-step collision telemetry. Repeated constraint/collision passes
