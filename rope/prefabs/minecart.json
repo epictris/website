@@ -68,19 +68,6 @@
         "rail": true
       },
       {
-        "type": "CollisionShape2D",
-        "id": "2e91xfd8",
-        "name": "Circle3",
-        "x": 55.175458727317626,
-        "y": 118.12910503561484,
-        "rot": -2.617993877991493,
-        "shape": {
-          "kind": "circle",
-          "r": 3.65
-        },
-        "rail": true
-      },
-      {
         "type": "Model3D",
         "id": "8wsn7eza",
         "name": "Minecart",
