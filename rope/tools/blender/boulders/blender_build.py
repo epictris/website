@@ -86,6 +86,13 @@ def alone(obj, collection):
 
 def assemble_rock(rock, destination, source_collection, materials):
     spec = rock["spec"]
+    stamp = time.perf_counter()
+    def checkpoint(label):
+        nonlocal stamp
+        now = time.perf_counter()
+        if spec.get('defer_volume_cleanup'):
+            print(f'Boulder: {label} {now-stamp:.2f}s', flush=True)
+        stamp = now
     pieces = [object_from_part(part, source_collection, materials) for part in rock["parts"]]
     # Out of the scene until the union; `alone` links one in at a time.
     for piece in pieces:
@@ -93,14 +100,15 @@ def assemble_rock(rock, destination, source_collection, materials):
     if "clip" in rock:
         envelope = object_from_part(rock["clip"], source_collection, materials)
         for piece, part in zip(pieces, rock["parts"]):
-            if not part.get("clip_to_outline"):
+            if not part.get("clip_to_outline") and not part.get('chunk_bevel'):
                 continue
             with alone(piece, source_collection):
-                cut = piece.modifiers.new("Camera silhouette constraint", "BOOLEAN")
-                cut.operation = "INTERSECT"
-                cut.solver = "MANIFOLD"
-                cut.object = envelope
-                bpy.ops.object.modifier_apply(modifier=cut.name)
+                if part.get("clip_to_outline") and not spec.get('clip_union'):
+                    cut = piece.modifiers.new("Camera silhouette constraint", "BOOLEAN")
+                    cut.operation = "INTERSECT"
+                    cut.solver = "MANIFOLD"
+                    cut.object = envelope
+                    bpy.ops.object.modifier_apply(modifier=cut.name)
                 if part.get('chunk_bevel') and len(piece.data.polygons):
                     bevel=piece.modifiers.new('Broad broken chunk corners','BEVEL')
                     # Not reduced for game_low_poly: this runs before the union,
@@ -112,7 +120,8 @@ def assemble_rock(rock, destination, source_collection, materials):
                     bpy.ops.object.modifier_apply(modifier=bevel.name)
                     for face in piece.data.polygons:
                         face.material_index=part['material']
-        bpy.data.objects.remove(envelope, do_unlink=True)
+        if not spec.get('clip_union'):
+            bpy.data.objects.remove(envelope, do_unlink=True)
     if spec.get('hybrid_faces'):
         from hybrid_geometry import taper_chunk
         for piece,part in zip(pieces,rock['parts']):
@@ -164,7 +173,19 @@ def assemble_rock(rock, destination, source_collection, materials):
     modifier.solver = "MANIFOLD"
     modifier.use_self = True
     bpy.ops.object.modifier_apply(modifier=modifier.name)
-    print(f"After union: {mesh_health(result)}", flush=True)
+    if spec.get('clip_union') and 'clip' in rock:
+        # Intersection distributes over union. Clip the combined volume once
+        # instead of rebuilding the same envelope for hundreds of slab cuts.
+        # Slab chamfers happen first; voxel finishing softens the cut edges.
+        cut = result.modifiers.new('Constrain the combined slabs', 'BOOLEAN')
+        cut.operation = 'INTERSECT'
+        cut.solver = 'MANIFOLD'
+        cut.object = envelope
+        bpy.ops.object.modifier_apply(modifier=cut.name)
+        bpy.data.objects.remove(envelope, do_unlink=True)
+    union_health = mesh_health(result)
+    print(f"After union: {union_health}", flush=True)
+    checkpoint('slab union and clip')
     bpy.data.collections.remove(cutters)
     if spec.get("construction") == "volume":
         keep_main_body(result)
@@ -186,7 +207,10 @@ def assemble_rock(rock, destination, source_collection, materials):
         remesh.adaptivity = param(spec,'remeshAdaptivity')
         remesh.use_smooth_shade = True
         bpy.ops.object.modifier_apply(modifier=remesh.name)
-        keep_main_body(result)
+        # Boulder checks connectivity after decimation and the final clip.
+        # Avoid walking millions of temporary voxel vertices twice.
+        if not spec.get('defer_volume_cleanup'):
+            keep_main_body(result)
     bevel = result.modifiers.new("Small fractured edge rounding", "BEVEL")
     bevel.width = (0 if spec.get("construction") == "volume" else
                    min(spec["tolerance"] * 0.12, spec["depth"] * 0.006))
@@ -197,14 +221,27 @@ def assemble_rock(rock, destination, source_collection, materials):
         bpy.ops.object.modifier_apply(modifier=bevel.name)
     else:
         result.modifiers.remove(bevel)
-    print(f"After bevel: {mesh_health(result)}", flush=True)
-    # Weld numerical coincidences, consistently orient faces, triangulate export.
-    bm = bmesh.new()
-    bm.from_mesh(result.data)
-    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
-    bmesh.ops.triangulate(bm, faces=list(bm.faces), quad_method="FIXED", ngon_method="EAR_CLIP")
-    bm.to_mesh(result.data)
-    bm.free()
+    if spec.get('defer_volume_cleanup'):
+        print(f"After remesh: {len(result.data.vertices)} vertices, {len(result.data.polygons)} faces", flush=True)
+    else:
+        print(f"After bevel: {mesh_health(result)}", flush=True)
+    checkpoint('volume repair')
+    # Keep the fine voxel resolution around shoulders and intersections.
+    # Native triangulation avoids an editable copy of millions of samples.
+    if spec.get('defer_volume_cleanup'):
+        from triangulation import preserve_surface
+        tri = result.modifiers.new('Triangulate voxel surface', 'TRIANGULATE')
+        tri.quad_method = 'FIXED'
+        tri.ngon_method = 'CLIP'
+        bpy.ops.object.modifier_apply(modifier=tri.name)
+        checkpoint('triangulation')
+    else:
+        bm = bmesh.new()
+        bm.from_mesh(result.data)
+        bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+        bmesh.ops.triangulate(bm, faces=list(bm.faces), quad_method="FIXED", ngon_method="EAR_CLIP")
+        bm.to_mesh(result.data)
+        bm.free()
     result.data.update()
     smooth = result.modifiers.new("Remove tiny voxel ridges", "SMOOTH")
     smooth.factor = param(spec,'smoothFactor')
@@ -225,6 +262,7 @@ def assemble_rock(rock, destination, source_collection, materials):
         weld.mode='VOXEL'; weld.voxel_size=.008; weld.adaptivity=.02
         bpy.ops.object.modifier_apply(modifier=weld.name)
         keep_main_body(result)
+    checkpoint('surface preparation')
     # Simplify the smooth voxel union into larger sculpted planes.
     dec = result.modifiers.new("Broad sculpted facets", "DECIMATE")
     if spec.get('game_low_poly'):
@@ -233,8 +271,14 @@ def assemble_rock(rock, destination, source_collection, materials):
         # budget is faces per FACE_BUDGET_AREA of rock surface, so a facet is
         # the same size on any rock. It was per 8.5 m of outline perimeter,
         # which spread the faces thin over a broad outline's faces.
-        bm=bmesh.new(); bm.from_mesh(result.data)
-        surface=sum(f.calc_area() for f in bm.faces); bm.free()
+        if spec.get('defer_volume_cleanup'):
+            import numpy as np
+            areas = np.empty(len(result.data.polygons), dtype=np.float32)
+            result.data.polygons.foreach_get('area', areas)
+            surface = float(areas.sum(dtype=np.float64))
+        else:
+            bm=bmesh.new(); bm.from_mesh(result.data)
+            surface=sum(f.calc_area() for f in bm.faces); bm.free()
         budget=param(spec,'faceBudget')*surface/FACE_BUDGET_AREA
         if spec.get('legacy_sizing'):
             # Per 8.5 m of outline perimeter, as the rock was first built.
@@ -249,7 +293,13 @@ def assemble_rock(rock, destination, source_collection, materials):
     else:
         dec.ratio = .18 if spec.get('join_undercuts') else (.085 if spec.get('broad_side_chunks') else (.045 if spec.get('hybrid_faces') else .075))
     bpy.context.view_layer.objects.active = result
-    bpy.ops.object.modifier_apply(modifier=dec.name)
+    if spec.get('meshoptError') is not None:
+        result.modifiers.remove(dec)
+        from simplify import simplify
+        stats = simplify(result, budget, spec['meshoptError'])
+        print(f"Boulder: simplified to {stats['triangles']} triangles; error {stats['error']:.6f}", flush=True)
+    else:
+        bpy.ops.object.modifier_apply(modifier=dec.name)
     if spec.get('game_low_poly') and 'clip' in rock:
         # A fixed face budget spread over a large outline leaves long facets
         # that bridge its concave corners and overhang the outline. Cutting
@@ -261,6 +311,7 @@ def assemble_rock(rock, destination, source_collection, materials):
         bpy.ops.object.modifier_apply(modifier=cut.name)
         bpy.data.objects.remove(guard,do_unlink=True)
         keep_main_body(result)
+    checkpoint('surface simplification')
     if rock.get('chunk_seeds'):
         from mathutils.bvhtree import BVHTree
         result.data.update()
@@ -289,8 +340,11 @@ def assemble_rock(rock, destination, source_collection, materials):
     else:
         limit_edge_bevel(result, bevel, math.radians(param(spec,'edgeBevelAngle') if spec.get('game_low_poly') else 27))
         bpy.ops.object.modifier_apply(modifier=bevel.name)
-    tri = result.modifiers.new("Export triangles", "TRIANGULATE")
-    bpy.ops.object.modifier_apply(modifier=tri.name)
+    if spec.get('defer_volume_cleanup'):
+        preserve_surface(result)
+    else:
+        tri = result.modifiers.new("Export triangles", "TRIANGULATE")
+        bpy.ops.object.modifier_apply(modifier=tri.name)
     # Boolean/decimation can leave wire edges with no incident surface faces.
     bm=bmesh.new(); bm.from_mesh(result.data)
     # Remove bevel-generated dangling triangles attached to an otherwise
@@ -326,6 +380,7 @@ def assemble_rock(rock, destination, source_collection, materials):
         result['gameplay_plane']='Depth 0 in camera_basis coordinates; use gameplay_collision.json for 2D collision'
     result["generator"] = "Polygon Rock / rockgen.py"
     result.select_set(False)
+    checkpoint('edge finish')
     return result
 
 

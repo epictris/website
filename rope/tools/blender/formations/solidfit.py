@@ -1,16 +1,19 @@
-"""A SOLID formation: a closed guide mesh cut into stones that fit it, each
-finished as the boulder generator finishes the top of an outline rock.
+"""Solid-guide construction and shared geometric utilities.
+
+Boulder now uses surface_slabs.py: overlapping outline-generator slabs fitted
+to the guide. The cell construction below remains the Cliff implementation
+and the legacy cell utilities used by other generators and their checks.
 
 Jointed rock (2026-11-21, jointed.py) is now the default partition: long,
 slanted primary fractures, smaller breaks at their ends, correlated cleavage
-relief and asymmetric corner loss. Disable jointed for the earlier cells
-and roof taper described below. Both use the same guide intersection and
-closed core. Jointed masters retain planar faces and flat normals, with a
+relief and asymmetric corner loss. Disabling jointed selects the Boulder
+slab builder. Jointed masters retain planar faces and flat normals, with a
 narrow slate shader bevel; the export chip bake is retained.
 
-Two halves, each the better of two generators (Tris, 2026-11-13: "this is the
-best so far ... I'm happy to switch to this new approach"; the study, with
-every render it judged, is in docs/blender-backdrop.md):
+The historical cell construction below combined two generators (Tris,
+2026-11-13: "this is the best so far ... I'm happy to switch to this new
+approach"; the study, with every render it judged, is in
+docs/blender-backdrop.md):
 
 - THE STONES are cut from the guide itself, as recipe F's backdrop did
   (before 2026-11-13 this file was that): every cell of a partition that
@@ -886,7 +889,7 @@ def pillow(ob, voxel, iters, camera=None, power=1.):
                adaptivity=.06 if iters==0 else 0.)
 
 
-def build_core(bm_solid, scale, collection, report, camera=None):
+def build_core(bm_solid, scale, collection, report, camera=None, *, voxel_floor=0.):
     """The solid shrunk CORE_INSET (screen metres) inside: the recessed stone
     a fissure shows. It shrinks in CORE_STEPS steps along its normals with a
     voxel remesh after each, which resolves what a step folds over: in one
@@ -903,11 +906,13 @@ def build_core(bm_solid, scale, collection, report, camera=None):
     # Physical inset follows local stone size; sampling follows the local
     # camera budget. A distant median must not erode a thin foreground roof.
     scale = 1. if camera else scale
-    pillow(ob, 0.025 * scale, fitted.ROUND, camera)
-    _offset(ob, -CORE_INSET * scale, 0.025 * scale, CORE_STEPS, camera)
+    voxel = max(0.025 * scale, voxel_floor)
+    steps = min(CORE_STEPS, max(1, math.ceil(CORE_INSET * scale / (2 * voxel)))) if voxel_floor else CORE_STEPS
+    pillow(ob, voxel, fitted.ROUND, camera)
+    _offset(ob, -CORE_INSET * scale, voxel, steps, camera)
     if len(ob.data.polygons) < 4:
         return ob
-    open_thin(ob, scale, camera)
+    open_thin(ob, scale, camera, voxel_floor=voxel_floor)
     # A coarse remesh and the planar dissolve cannot fold; their faces band
     # along the voxel grid, which on stone seen only down the fissures does
     # not show. Faces go as 1 / voxel ** 2, coarsened with depth.
@@ -1000,14 +1005,15 @@ def _offset(ob, distance, voxel, steps=OPEN_STEPS, camera=None):
             return
 
 
-def open_thin(ob, scale, camera=None):
+def open_thin(ob, scale, camera=None, *, voxel_floor=0.):
     """A morphological opening: shrink by OPEN_RADIUS (screen metres) and grow
     back, so anything thinner than twice that is gone and the mass keeps its
     size."""
-    voxel = 0.02 * scale
-    _offset(ob, -OPEN_RADIUS * scale, voxel, camera=camera)
+    voxel = max(0.02 * scale, voxel_floor)
+    steps = min(OPEN_STEPS, max(1, math.ceil(OPEN_RADIUS * scale / (2 * voxel)))) if voxel_floor else OPEN_STEPS
+    _offset(ob, -OPEN_RADIUS * scale, voxel, steps, camera)
     if len(ob.data.polygons) >= 4:
-        _offset(ob, OPEN_RADIUS * scale, voxel, camera=camera)
+        _offset(ob, OPEN_RADIUS * scale, voxel, steps, camera)
 
 
 def sharp_edges(bm):
@@ -1175,6 +1181,9 @@ def build(solid, camera, params, collection, water_z=None):
     stones' median depth over the plane's). `params`: PARAMS (`resolved`)."""
     bmesh, bpy, Matrix, Vector, BVHTree = _bpy()
     p = resolved(params)
+    if not p['jointed']:
+        from .surface_slabs import build as build_slabs
+        return build_slabs(solid, camera, p, collection)
     # Asset geometry is independent of the camera, water and scene placement.
     boulder, reinforce, limit_edge_bevel = _boulders()
     if p['jointed']:

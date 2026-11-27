@@ -191,6 +191,12 @@ if generator == 'solid' and not (recipe['params'].get('stones') or recipe['param
                    angle=3. if (recipe['params'].get('jointed') or recipe['params'].get('wall')) else None,
                    preserve_topology=True)
 tone_facets(obj, recipe["params"]["seed"])
+if generator == 'solid' and recipe['variant'] == 'boulder':
+    # Independent slabs already own their curved shoulders and chamfers.
+    # Rebuilding them into bowed crease grids duplicates the surface finish
+    # and makes both Generate and the following paint unwrap much denser.
+    recipe['surfaceFinish'] = ['export_creases']
+    obj['formation_recipe'] = json.dumps(recipe, separators=(',', ':'))
 if generator == 'solid' and recipe['params'].get('jointed'):
     from formations.jointed import finish
     finish(obj, recipe['params']['seed'], dst)

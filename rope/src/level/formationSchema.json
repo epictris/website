@@ -246,11 +246,13 @@
         {
           "id": "boulder",
           "label": "Boulder",
-          "description": "Irregular polygon cells with the original boulder surface",
+          "description": "Overlapping irregular slabs fitted along the guide surface, with shallow relief",
           "hidden": [
             "bulgeSize",
+            "curveTurn",
             "edgeRadius",
             "jointAspect",
+            "knub",
             "mergeAngle"
           ],
           "labels": {}

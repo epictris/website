@@ -25,7 +25,8 @@ class Mesh:
         return dict(name=self.name, material=self.material, vertices=self.vertices, faces=self.faces)
 
 
-def make_block(center, width, thickness, length, yaw, rng, index, basis, Mesh, weathering=.7):
+def make_block(center, width, thickness, length, yaw, rng, index, basis, Mesh, weathering=.7,
+               min_end_separation=None):
     """An independently oriented vertical slab with oblique, broken end caps."""
     # An eight-sided cross section avoids rectangular slab corners. The long
     # front planes remain broad, with small irregular chamfers at their sides.
@@ -38,6 +39,17 @@ def make_block(center, width, thickness, length, yaw, rng, index, basis, Mesh, w
     lean = rng.uniform(-.16,.16,2)*length
     top_tilt = rng.uniform(-.48,.48,2)
     bottom_tilt = rng.uniform(-.30,.30,2)
+    if min_end_separation is not None:
+        if not 0 < min_end_separation <= length:
+            raise ValueError('Minimum slab end separation must be positive and no greater than length')
+        # Broad, short slabs can otherwise turn inside out at a corner:
+        # the end-plane difference exceeds their entire longitudinal span.
+        # Keep every corner's ring sequence ordered before any fitting,
+        # Boolean union or remeshing. The default outline slabs are unchanged.
+        excursion = float(np.max(np.abs(cross @ (top_tilt-bottom_tilt))))
+        factor = min(1., (length-min_end_separation)/max(excursion, 1e-12))
+        top_tilt *= factor
+        bottom_tilt *= factor
     # A localized break interrupts the vertical edge without rounding the
     # entire slab. Nearby rings form a small fractured shoulder, not a bulge.
     # Shared cross-joint plane, with local deviations and occasional termination.

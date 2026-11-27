@@ -230,7 +230,9 @@ async function buildGeometry(): Promise<void> {
     }
     writeFileSync(join(scratch, "input.json"), JSON.stringify(worker));
     const gen = await timed("generate", () =>
-      run(python, [join(ROOT, "tools", "blender", "formations", "worker.py"), join(scratch, "input.json"), scratch, "--blender", blender]),
+      run(python, [join(ROOT, "tools", "blender", "formations", "worker.py"), join(scratch, "input.json"), scratch, "--blender", blender], (line) => {
+        if (line.startsWith("Boulder:")) progress.log(`${TAG} ${line}`);
+      }),
     );
     if (gen.status !== 0 || !existsSync(join(scratch, "rock.blend"))) failRun(progress, "the generator", gen, join(scratch, "generate.log"));
     writeFileSync(join(scratch, "generate.log"), gen.out);
@@ -241,7 +243,9 @@ async function buildGeometry(): Promise<void> {
         "-b", join(scratch, "rock.blend"), "--factory-startup", "--python-exit-code", "1",
         "--python", join(ROOT, "tools", "blender", "formation_export.py"), "--", scratch,
         "--triangles", String(triangles), "--map-max", String(mapMax),
-      ]),
+      ], (line) => {
+        if (line.startsWith("[scene_step]") || line.startsWith("[formation_export]")) progress.log(line);
+      }),
     );
     if (exp.status !== 0 || !exp.out.includes("FORMATION_EXPORT_OK")) failRun(progress, "formation_export.py", exp, join(scratch, "export.log"));
 

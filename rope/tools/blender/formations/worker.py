@@ -95,7 +95,7 @@ LEGACY_THICKNESS = 2.6
 
 
 SOLID_VARIANTS = (
-    ('boulder', 'Boulder', 'Irregular polygon cells with the original boulder surface'),
+    ('boulder', 'Boulder', 'Overlapping irregular slabs fitted along the guide surface, with shallow relief'),
     ('cliff', 'Cliff', 'Directional fractures, anchored stones and crisp broad cleavage planes'),
     ('wall', 'Wall', 'Overlapping vertical slabs fused over the guide into one continuous rock face'),
     ('stones', 'Stones', 'Whole stones packed into the guide, each a corner-cut, pillowed, chiselled box: '
@@ -133,14 +133,15 @@ def fingerprint():
     """What built the rock: this adapter and the generators, byte for byte."""
     h = hashlib.sha256()
     for p in [Path(__file__), HERE / "assemble.py", HERE / "fitted.py", HERE / "solidfit.py", HERE / "slate.py",
-              HERE / 'cell_sampling.py', HERE / 'jointed.py', HERE / 'wall.py', HERE / 'stones.py', HERE / 'faceted.py',
+              HERE / 'cell_sampling.py', HERE / 'jointed.py', HERE / 'wall.py', HERE / 'surface_slabs.py',
+              HERE / 'stones.py', HERE / 'faceted.py',
               HERE / 'render.py',
               HERE / 'curve.py', HERE / 'detail.py',
               # The geometry stage: the iteration mesh, the crease rebuild on
               # the rock, and the paint UV every texture layer is laid out by.
               HERE.parent / 'formation_export.py',
               HERE.parent / 'native' / 'src' / 'cells.cpp', HERE.parent / 'native' / '__init__.py',
-              *sorted(GENERATOR.glob("*.py")), GENERATOR / "params.json"]:
+              *sorted(GENERATOR.glob("*.py")), *sorted(GENERATOR.glob("*.mjs")), GENERATOR / "params.json"]:
         h.update(p.name.encode())
         h.update(p.read_bytes())
     return h.hexdigest()

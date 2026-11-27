@@ -41,7 +41,7 @@ VARIANT_FIELDS = {"jointed", "wall", "stones", "faceted"}
 # The solid fields a variant does not use, by its field name.
 _FACETED_ONLY = {"edge_radius", "merge_angle", "bulge_size"}
 HIDDEN = {"cliff": _FACETED_ONLY, "wall": {"knub", "curve_turn"} | _FACETED_ONLY,
-          "boulder": {"joint_aspect"} | _FACETED_ONLY,
+          "boulder": {"joint_aspect", "knub", "curve_turn"} | _FACETED_ONLY,
           "stones": {"knub", "curve_turn", "joint_aspect", "surface_relief"} | _FACETED_ONLY,
           "faceted": {"knub", "curve_turn", "joint_aspect"}}
 # The label a solid field takes under a variant, by its field name.
